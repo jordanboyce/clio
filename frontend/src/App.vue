@@ -820,30 +820,56 @@
     <ShortcutsDialog :open="showShortcuts" @close="showShortcuts = false" />
     <AboutDialog :open="showAbout" @close="showAbout = false" />
 
-    <!-- Embedding model missing: the built-in model is not in the local cache
-         and would have to be downloaded (blocked on this network). Shown until
-         the user fixes the provider or dismisses it. -->
-    <div
-      v-if="statsStore.embeddingModelMissing && !embeddingBannerDismissed"
-      class="fixed top-0 inset-x-0 z-[102] flex justify-center pointer-events-none"
-      role="alert"
-    >
-      <div class="alert alert-warning shadow-lg rounded-t-none rounded-b-lg max-w-xl py-2 pointer-events-auto">
-        <AlertTriangle :size="16" class="shrink-0" aria-hidden="true" />
-        <span class="text-sm">
-          The built-in embedding model isn't available on this server — it would have to be
-          downloaded from the internet, which this network blocks. Add sources and search won't
-          work until you set an embedding provider in Settings → Indexing → Embedding.
-        </span>
-        <button
-          class="btn btn-ghost btn-xs btn-circle shrink-0"
-          aria-label="Dismiss this notice"
-          @click="embeddingBannerDismissed = true"
+    <!-- Search-index readiness. One quiet bar at the top: progress while the
+         model downloads, a way forward when it is missing or failed, nothing
+         at all once it is ready. -->
+    <Transition name="rise">
+      <div
+        v-if="embeddingBanner && !embeddingBannerDismissed"
+        class="fixed top-0 inset-x-0 z-[102] flex justify-center pointer-events-none"
+        :role="embeddingBanner.kind === 'progress' ? 'status' : 'alert'"
+        aria-live="polite"
+      >
+        <div
+          class="notice shadow-lg rounded-t-none rounded-b-xl bg-base-100 ring-1 ring-base-content/10 w-full max-w-xl pointer-events-auto items-start"
+          :class="{ 'notice-warning': embeddingBanner.kind === 'missing', 'notice-error': embeddingBanner.kind === 'error' }"
         >
-          <X class="w-3.5 h-3.5" aria-hidden="true" />
-        </button>
+          <span v-if="embeddingBanner.kind === 'progress'" class="loading loading-spinner loading-xs mt-0.5" aria-hidden="true"></span>
+          <AlertTriangle v-else :size="15" class="mt-0.5" :class="embeddingBanner.kind === 'error' ? 'text-error' : 'text-warning'" aria-hidden="true" />
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-between gap-3">
+              <span class="truncate">{{ embeddingBanner.text }}</span>
+              <span v-if="embeddingBanner.kind === 'progress' && embeddingBanner.percent != null" class="tabular-nums text-base-content/60 flex-shrink-0">{{ embeddingBanner.percent }}%</span>
+            </div>
+            <progress
+              v-if="embeddingBanner.kind === 'progress'"
+              class="progress progress-primary w-full h-1 mt-1.5"
+              :value="embeddingBanner.percent ?? undefined"
+              max="100"
+            ></progress>
+            <div v-else class="flex items-center gap-1.5 mt-1.5">
+              <button
+                v-if="embeddingBanner.canDownload"
+                class="btn btn-xs btn-primary"
+                :disabled="embeddingWarming"
+                @click="downloadEmbeddingModel"
+              >
+                <span v-if="embeddingWarming" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+                {{ embeddingBanner.kind === 'error' ? 'Try again' : 'Download now' }}
+              </button>
+              <button class="btn btn-xs btn-ghost" @click="switchTab('settings')">Choose another provider</button>
+            </div>
+          </div>
+          <button
+            class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content -mr-1"
+            aria-label="Dismiss this notice"
+            @click="embeddingBannerDismissed = true"
+          >
+            <X :size="13" aria-hidden="true" />
+          </button>
+        </div>
       </div>
-    </div>
+    </Transition>
 
     <!-- Create Collection Modal (native showModal: focus trap, Escape, inert background) -->
     <dialog :ref="createModal.dialogRef" class="modal" @close="createModal.onClosed" aria-labelledby="create-collection-title">
@@ -1808,6 +1834,45 @@ const showJobsDrawer = ref(false)
 // Embedding-model-missing banner: the flag comes from /health (via
 // statsStore), but dismissal is a per-session UI concern, not persisted.
 const embeddingBannerDismissed = ref(false)
+const embeddingWarming = ref(false)
+// What the readiness bar says, derived from the stats store's live status.
+const embeddingBanner = computed(() => {
+  const e = statsStore.embedding
+  if (!e) return statsStore.embeddingModelMissing
+    ? { kind: 'missing', text: 'The search model is not on this server yet.', canDownload: false }
+    : null
+  const model = e.model ? ` (${e.model})` : ''
+  if (e.status === 'downloading') {
+    const p = e.progress || {}
+    const mb = (n) => `${Math.round((n || 0) / 1048576)} MB`
+    const detail = p.total_bytes ? ` · ${mb(p.downloaded_bytes)} of ${mb(p.total_bytes)}` : ''
+    return { kind: 'progress', text: `Preparing the search model${model}${detail}`, percent: p.percent ?? null }
+  }
+  if (e.status === 'loading') return { kind: 'progress', text: `Loading the search model${model}`, percent: null }
+  if (e.status === 'missing') {
+    return {
+      kind: 'missing',
+      text: e.can_download
+        ? `The search model${model} is not on this server yet. Download it once and it stays with your data.`
+        : `The search model${model} is not on this server, and this network cannot download it. Choose another provider or pre-seed the model.`,
+      canDownload: !!e.can_download,
+    }
+  }
+  if (e.status === 'error') return { kind: 'error', text: `The search model could not be prepared: ${e.error || 'unknown error'}`, canDownload: true }
+  return null
+})
+// A new problem after a dismissal should show again.
+watch(() => statsStore.embedding?.status, () => { embeddingBannerDismissed.value = false })
+const downloadEmbeddingModel = async () => {
+  embeddingWarming.value = true
+  try {
+    await statsStore.warmEmbedding()
+  } catch (err) {
+    ui.toastError(err, 'Could not start the download')
+  } finally {
+    embeddingWarming.value = false
+  }
+}
 
 // First-run onboarding: a full-screen takeover shown when the user has
 // never configured an AI provider. Resolves the "you installed the app but

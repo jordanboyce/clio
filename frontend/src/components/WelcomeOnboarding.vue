@@ -12,15 +12,40 @@
         <span class="brand-art brand-art-mark block w-16 h-16 mx-auto mb-3" role="img" aria-label="Clio"></span>
         <p class="text-[11px] uppercase tracking-[0.22em] font-semibold text-base-content/40 mb-4">Clio</p>
         <h1 id="welcome-title" class="text-2xl font-semibold tracking-tight">
-          Answers from your sources
+          {{ stage === 'embeddings' ? 'Where should the search index run?' : 'Answers from your sources' }}
         </h1>
         <p class="text-sm text-base-content/60 mt-2 max-w-sm mx-auto leading-relaxed">
-          Add sources, ask questions, and check the citations. Connect a local model for private answers; hosted models receive the context used to answer.
+          <template v-if="stage === 'embeddings'">
+            Every source is turned into searchable vectors. This can happen on this server, in an Ollama you already run, or at a hosted provider you trust.
+          </template>
+          <template v-else>
+            Add sources, ask questions, and check the citations. Connect a local model for private answers; hosted models receive the context used to answer.
+          </template>
         </p>
+        <!-- Step indicator -->
+        <ol class="flex items-center justify-center gap-2 mt-4 text-[11px]" aria-label="Setup steps">
+          <li v-for="(step, i) in STEPS" :key="step" class="flex items-center gap-2">
+            <span
+              class="inline-flex items-center gap-1.5"
+              :class="stepIndex === i ? 'text-base-content font-medium' : stepIndex > i ? 'text-base-content/60' : 'text-base-content/35'"
+              :aria-current="stepIndex === i ? 'step' : undefined"
+            >
+              <span class="inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] tabular-nums"
+                :class="stepIndex > i ? 'bg-success/20 text-success' : stepIndex === i ? 'bg-base-content text-base-100' : 'bg-base-content/10'">
+                <Check v-if="stepIndex > i" :size="10" aria-hidden="true" /><template v-else>{{ i + 1 }}</template>
+              </span>
+              {{ step }}
+            </span>
+            <span v-if="i < STEPS.length - 1" class="w-5 h-px bg-base-content/15" aria-hidden="true"></span>
+          </li>
+        </ol>
       </div>
 
+      <!-- Stage 2: embeddings -->
+      <EmbeddingSetup v-if="stage === 'embeddings'" @done="finish" @skip="finish" />
+
       <!-- Step 1: choose how to connect -->
-      <div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Choose a provider">
+      <div v-if="stage === 'provider'" class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Choose a provider">
         <button
           v-for="card in cards"
           :key="card.id"
@@ -38,8 +63,8 @@
         </button>
       </div>
 
-      <!-- Step 2: inline connect panel -->
-      <div v-if="selected" class="mt-4 space-y-3">
+      <!-- Step 1b: inline connect panel -->
+      <div v-if="stage === 'provider' && selected" class="mt-4 space-y-3">
         <!-- Anthropic / OpenAI: API key -->
         <template v-if="selected === 'anthropic' || selected === 'openai'">
           <input
@@ -178,7 +203,7 @@
       </div>
 
       <!-- Quiet footer: more providers + skip -->
-      <div class="text-center text-xs text-base-content/55 mt-6 leading-relaxed">
+      <div v-if="stage === 'provider'" class="text-center text-xs text-base-content/55 mt-6 leading-relaxed">
         <template v-if="!offline">
           More providers (Gemini, Grok, OpenRouter, GitHub, Ollama Cloud) are available in Settings.
           <span class="text-base-content/30" aria-hidden="true">·</span>
@@ -187,7 +212,7 @@
           This deployment runs air-gapped — only local and self-hosted models are available.
           <span class="text-base-content/30" aria-hidden="true">·</span>
         </template>
-        <button class="link link-hover" @click="emit('skip')">Start with search</button>
+        <button class="link link-hover" @click="skipProvider">Start with search</button>
       </div>
 
       <!-- Trust copy footer -->
@@ -200,7 +225,10 @@
 
 <script setup>
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
+import { Check } from 'lucide-vue-next'
 import http from '../utils/http'
+import EmbeddingSetup from './EmbeddingSetup.vue'
+import { useUserStore } from '../stores/userStore'
 import {
   PROVIDER_DEFS,
   CUSTOM_ENDPOINT_PRESETS,
@@ -216,6 +244,32 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['complete', 'skip'])
+
+// Two stages: the answer model, then the search index. The index step is
+// skipped when it is already ready (the baked Docker image) or when this
+// person cannot change deployment settings (a non-admin on a hosted site).
+const STEPS = ['Answers', 'Search index', 'Sources']
+const stage = ref('provider')
+const stepIndex = computed(() => (stage.value === 'embeddings' ? 1 : 0))
+const userStore = useUserStore()
+let outcome = 'complete'
+
+const needsEmbeddingStep = async () => {
+  if (userStore.privateCollections && !userStore.isAdmin) return false
+  try {
+    const { data } = await http.get('/api/embedding/status')
+    return data.status !== 'ready'
+  } catch {
+    return false
+  }
+}
+const advance = async (kind) => {
+  outcome = kind
+  if (await needsEmbeddingStep()) stage.value = 'embeddings'
+  else emit(outcome)
+}
+const finish = () => emit(outcome)
+const skipProvider = () => advance('skip')
 
 const CARDS = [
   { id: 'anthropic', title: 'Anthropic', desc: 'Claude models' },
@@ -325,7 +379,7 @@ const connectKey = async () => {
   }
   setActiveProviderLS(id)
   busy.value = false
-  emit('complete')
+  advance('complete')
 }
 
 // Ollama: probe the local server for models.
@@ -352,7 +406,7 @@ const connectOllama = () => {
     available: true,
   })
   setActiveProviderLS('ollama')
-  emit('complete')
+  advance('complete')
 }
 
 // Custom endpoint: first click validates + lists models, second click saves.
@@ -389,7 +443,7 @@ const connectCustom = () => {
     isCustom: true,
   })
   setActiveProviderLS(customId.value)
-  emit('complete')
+  advance('complete')
 }
 
 watch(
