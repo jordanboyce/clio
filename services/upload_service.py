@@ -114,6 +114,47 @@ def _size_of(path: Path) -> int:
         return 0
 
 
+@dataclass
+class FolderScan:
+    """What a folder scan picked up: the files to index, and how many were
+    left out because nothing can index them (unsupported name, over the
+    size limit)."""
+    files: List[str]
+    skipped_unsupported: int = 0
+
+    def __iter__(self):
+        return iter(self.files)
+
+    def __len__(self) -> int:
+        return len(self.files)
+
+
+class RepoIndexResult(tuple):
+    """``(job_id, files_found, skipped_unchanged)`` as before, so callers
+    that unpack three values keep working; ``skipped_unsupported`` rides
+    along as an attribute."""
+
+    skipped_unsupported: int
+
+    def __new__(cls, job_id: Optional[int], files_found: int, skipped_unchanged: int,
+                skipped_unsupported: int = 0):
+        self = super().__new__(cls, (job_id, files_found, skipped_unchanged))
+        self.skipped_unsupported = skipped_unsupported
+        return self
+
+    @property
+    def job_id(self) -> Optional[int]:
+        return self[0]
+
+    @property
+    def files_found(self) -> int:
+        return self[1]
+
+    @property
+    def skipped_unchanged(self) -> int:
+        return self[2]
+
+
 class UploadService:
     """Manages background document upload and indexing.
 
@@ -497,7 +538,8 @@ class UploadService:
         collection_id: str = "default",
         copy_to_library: bool = False,
         uploaded_by: Optional[str] = None,
-    ) -> int:
+        incremental: bool = False,
+    ) -> Optional[int]:
         """Start a background job to index local files.
 
         Args:
@@ -507,10 +549,23 @@ class UploadService:
             uploaded_by: Identity that started the job. Captured here, on the
                 request thread, because the worker thread has no request
                 context to read it from; recorded on every document row.
+            incremental: Hash the files first and leave out those whose
+                bytes are already in the collection. Off by default: the
+                existing callers expect a job for every call.
 
         Returns:
-            Job ID for tracking progress
+            Job ID for tracking progress, or None when ``incremental`` found
+            nothing new to index (no job is created then).
         """
+        if incremental:
+            file_paths, unchanged, _ = self._split_unchanged(list(file_paths), collection_id)
+            if not file_paths:
+                logger.info(
+                    f"Local index into '{collection_id}' is up to date: "
+                    f"{len(unchanged)} unchanged files, nothing queued"
+                )
+                return None
+
         self._check_queue_capacity()
 
         # Create job record with job_type='index' for local file indexing
@@ -672,6 +727,234 @@ class UploadService:
         works = [make_work(url) for url in urls]
         self._process_bulk_job(job_id, works, collection_id, uploaded_by=uploaded_by)
 
+    # Folder-synced documents carry this source_type so a later sync of the
+    # same folder can tell its own documents apart from uploads and from
+    # in-place local references that happen to live under the same path.
+    FOLDER_SYNC_SOURCE_TYPE = "folder_sync"
+
+    # Default exclude patterns for common non-code directories, build
+    # output, caches, lockfiles, binaries, archives and fonts. SVG is out
+    # too: generated SVGs run to megabytes; a picture uploaded on its own
+    # still goes through the image path.
+    DEFAULT_REPO_EXCLUDES = [
+        '**/node_modules/**', '**/.git/**', '**/__pycache__/**',
+        '**/venv/**', '**/.venv/**', '**/dist/**', '**/build/**',
+        '**/*.pyc', '**/.DS_Store', '**/Thumbs.db',
+        # IDE and framework output
+        '**/.idea/**', '**/.vscode/**', '**/.next/**', '**/.nuxt/**',
+        '**/.svelte-kit/**', '**/coverage/**', '**/target/**', '**/bin/**',
+        '**/obj/**', '**/.terraform/**', '**/.tox/**', '**/.mypy_cache/**',
+        '**/.pytest_cache/**', '**/.ruff_cache/**',
+        # Generated / lock files
+        '**/*.min.js', '**/*.min.css', '**/*.map', '**/*.lock',
+        '**/package-lock.json', '**/yarn.lock', '**/pnpm-lock.yaml',
+        '**/Cargo.lock', '**/poetry.lock',
+        # Binaries and archives
+        '**/*.pyo', '**/*.so', '**/*.dll', '**/*.dylib', '**/*.exe', '**/*.o',
+        '**/*.a', '**/*.class', '**/*.jar', '**/*.war', '**/*.zip', '**/*.tar',
+        '**/*.gz', '**/*.7z', '**/*.rar',
+        # Fonts and icons
+        '**/*.woff', '**/*.woff2', '**/*.ttf', '**/*.eot', '**/*.ico', '**/*.svg',
+    ]
+
+    # Files larger than this are left out of a folder scan: they are not
+    # source code, and extracting them would stall the job.
+    SCAN_MAX_FILE_BYTES = 25 * 1024 * 1024
+
+    @staticmethod
+    def _scan_folder(
+        repo: Path,
+        recursive: bool = True,
+        file_extensions: Optional[List[str]] = None,
+        exclude_patterns: Optional[List[str]] = None,
+    ) -> "FolderScan":
+        """Walk a folder and return the files a repo index would pick up.
+
+        Without an explicit ``file_extensions`` filter, files the extractor
+        cannot index (judged by name: suffix or well-known basename) and
+        files over 25 MiB are skipped and counted in
+        ``FolderScan.skipped_unsupported`` rather than queued to fail.
+        Symlinks pointing outside the folder are never followed.
+        """
+        import os
+        import fnmatch
+        from services.document_extractor import is_supported_filename
+
+        excludes = (exclude_patterns or []) + UploadService.DEFAULT_REPO_EXCLUDES
+        extensions = {e.lower() for e in (file_extensions or [])}
+        root_resolved = repo.resolve()
+        max_bytes = UploadService.SCAN_MAX_FILE_BYTES
+
+        def should_exclude(path: Path, is_dir: bool = False) -> bool:
+            # `**/x/**` patterns need a slash before and after `x`, which a
+            # top-level entry's relative path lacks: test it with those too.
+            rel = path.relative_to(repo).as_posix()
+            candidates = [rel, '/' + rel]
+            if is_dir:
+                candidates += [rel + '/', '/' + rel + '/']
+            return any(
+                fnmatch.fnmatch(candidate, pattern)
+                for pattern in excludes for candidate in candidates
+            )
+
+        def should_include(path: Path) -> bool:
+            if extensions:
+                return path.suffix.lower() in extensions
+            return True  # Include all if no filter
+
+        def inside_root(path: Path) -> bool:
+            """A symlink that resolves outside the folder is not part of it."""
+            if not path.is_symlink():
+                return True
+            try:
+                return path.resolve().is_relative_to(root_resolved)
+            except OSError:
+                return False
+
+        skipped_unsupported = 0
+
+        def admit(fp: Path) -> Optional[bool]:
+            """True to index, False to count as skipped, None to ignore."""
+            nonlocal skipped_unsupported
+            if should_exclude(fp) or not should_include(fp):
+                return None
+            if not inside_root(fp):
+                return None
+            if extensions:
+                return True  # the caller asked for these by name
+            if not is_supported_filename(fp.name):
+                skipped_unsupported += 1
+                return False
+            try:
+                if fp.stat().st_size > max_bytes:
+                    skipped_unsupported += 1
+                    return False
+            except OSError:
+                return None
+            return True
+
+        files: List[str] = []
+        if recursive:
+            for root, dirs, names in os.walk(repo):
+                dirs[:] = [
+                    d for d in dirs
+                    if not should_exclude(Path(root) / d, is_dir=True) and inside_root(Path(root) / d)
+                ]
+                for f in names:
+                    fp = Path(root) / f
+                    if admit(fp):
+                        files.append(str(fp))
+        else:
+            for fp in repo.iterdir():
+                if fp.is_file() and admit(fp):
+                    files.append(str(fp))
+        return FolderScan(files=files, skipped_unsupported=skipped_unsupported)
+
+    @staticmethod
+    def _hash_files(file_paths: List[str]) -> Dict[str, str]:
+        """``{path: sha256}`` for every readable file, streamed in blocks.
+
+        The same hash the indexer admits documents by, so a match here means
+        the exact bytes are already in the index. Unreadable files are left
+        out and go through the job, which reports the failure properly.
+        """
+        from services.governance import content_hash_of
+
+        hashes: Dict[str, str] = {}
+        for fp in file_paths:
+            try:
+                hashes[fp] = content_hash_of(Path(fp))
+            except OSError as e:
+                logger.warning(f"Could not hash {fp}: {e}")
+        return hashes
+
+    @staticmethod
+    def _split_unchanged(
+        file_paths: List[str], collection_id: str
+    ) -> Tuple[List[str], List[str], Dict[str, str]]:
+        """Partition files into (to_index, unchanged, hashes) against a collection.
+
+        A file is unchanged when a document with its content hash is already
+        in the collection, whatever name or path it was added under.
+        """
+        hashes = UploadService._hash_files(file_paths)
+        store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store
+        existing = store.get_document_ids_by_content_hashes(hashes.values())
+        to_index: List[str] = []
+        unchanged: List[str] = []
+        for fp in file_paths:
+            if hashes.get(fp) in existing:
+                unchanged.append(fp)
+            else:
+                to_index.append(fp)
+        return to_index, unchanged, hashes
+
+    def _queue_repo_job(
+        self,
+        files_to_index: List[str],
+        repo_path: str,
+        collection_id: str,
+        uploaded_by: Optional[str],
+        audit_detail: Dict[str, Any],
+    ) -> int:
+        """Create the job row for a folder index and put it on the queue."""
+        self._check_queue_capacity()
+        job_id = app_db.create_upload_job(collection_id, len(files_to_index), job_type="index")
+        audit.record("document.index_job", actor=uploaded_by, collection_id=collection_id,
+                     target=str(job_id), detail={"kind": "repo", "path": repo_path, **audit_detail})
+        self._submit(_QueuedJob(
+            job_id=job_id,
+            collection_id=collection_id,
+            target=self._run_repo_index,
+            args=(job_id, files_to_index, repo_path, collection_id, uploaded_by),
+        ))
+        logger.info(
+            f"Submitted repo index job {job_id}: {len(files_to_index)} files from {repo_path}"
+        )
+        return job_id
+
+    # ── Sync memory ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _sync_memory_key(collection_id: str) -> str:
+        return f"sync_folders:{collection_id}"
+
+    def list_sync_folders(self, collection_id: str) -> List[Dict[str, Any]]:
+        """Folders that were indexed or synced into a collection, newest first.
+
+        Each entry carries the path, the options it was synced with and the
+        counts from the last run, so the UI can offer "Sync again" without
+        the person finding the folder a second time.
+        """
+        remembered = app_db.get_config(self._sync_memory_key(collection_id), {}) or {}
+        if not isinstance(remembered, dict):
+            return []
+        entries = [dict(v, path=k) for k, v in remembered.items() if isinstance(v, dict)]
+        entries.sort(key=lambda e: e.get("last_synced_at") or "", reverse=True)
+        return entries
+
+    def _remember_sync(self, collection_id: str, root: Path, **fields: Any) -> Dict[str, Any]:
+        remembered = app_db.get_config(self._sync_memory_key(collection_id), {}) or {}
+        if not isinstance(remembered, dict):
+            remembered = {}
+        entry = {"last_synced_at": datetime.utcnow().isoformat(), **fields}
+        remembered[str(root)] = entry
+        app_db.set_config(self._sync_memory_key(collection_id), remembered)
+        return dict(entry, path=str(root))
+
+    def forget_sync_folder(self, collection_id: str, path: str) -> bool:
+        """Drop a remembered folder. Documents are untouched."""
+        key = self._sync_memory_key(collection_id)
+        remembered = app_db.get_config(key, {}) or {}
+        root = str(Path(path).resolve())
+        if not isinstance(remembered, dict) or root not in remembered:
+            return False
+        remembered.pop(root)
+        app_db.set_config(key, remembered)
+        return True
+
+    # ── Repo / folder indexing ───────────────────────────────────────────
+
     def start_repo_index(
         self,
         repo_path: str,
@@ -680,7 +963,8 @@ class UploadService:
         file_extensions: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None,
         uploaded_by: Optional[str] = None,
-    ) -> Tuple[int, int]:
+        incremental: bool = True,
+    ) -> "RepoIndexResult":
         """Start a background job to index a repository/folder.
 
         Args:
@@ -689,74 +973,185 @@ class UploadService:
             recursive: Whether to scan subdirectories
             file_extensions: List of extensions to include (e.g., ['.py', '.js'])
             exclude_patterns: Glob patterns to exclude
+            incremental: Skip files whose exact bytes are already in the
+                collection (looked up by content hash), so re-adding the
+                same folder does not re-extract and re-embed everything.
 
         Returns:
-            (job_id, files_found) - the caller needs the count to tell the
-            person what was picked up; the job row carries it too, but not
-            before the response goes out.
+            (job_id, files_found, skipped_unchanged) - the caller needs the
+            counts to tell the person what was picked up; the job row carries
+            the indexed count too, but not before the response goes out.
+            ``job_id`` is None when every file was unchanged: nothing was
+            queued and the collection is already up to date. The result
+            unpacks as that 3-tuple; its ``skipped_unsupported`` attribute
+            is the number of files the scan left out as unindexable.
         """
-        import os
-        import fnmatch
-
         repo = Path(repo_path)
         if not repo.exists() or not repo.is_dir():
             raise ValueError(f"Invalid repository path: {repo_path}")
 
-        # Default exclude patterns for common non-code directories
-        default_excludes = [
-            '**/node_modules/**', '**/.git/**', '**/__pycache__/**',
-            '**/venv/**', '**/.venv/**', '**/dist/**', '**/build/**',
-            '**/*.pyc', '**/.DS_Store', '**/Thumbs.db'
-        ]
-        excludes = (exclude_patterns or []) + default_excludes
-
-        # Collect files to index
-        files_to_index = []
-
-        def should_exclude(path: Path) -> bool:
-            rel = str(path.relative_to(repo))
-            for pattern in excludes:
-                if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(rel.replace('\\', '/'), pattern):
-                    return True
-            return False
-
-        def should_include(path: Path) -> bool:
-            if file_extensions:
-                return path.suffix.lower() in file_extensions
-            return True  # Include all if no filter
-
-        if recursive:
-            for root, dirs, files in os.walk(repo):
-                dirs[:] = [d for d in dirs if not should_exclude(Path(root) / d)]
-                for f in files:
-                    fp = Path(root) / f
-                    if not should_exclude(fp) and should_include(fp):
-                        files_to_index.append(str(fp))
-        else:
-            for fp in repo.iterdir():
-                if fp.is_file() and not should_exclude(fp) and should_include(fp):
-                    files_to_index.append(str(fp))
-
-        if not files_to_index:
+        scan = self._scan_folder(repo, recursive, file_extensions, exclude_patterns)
+        files_found = scan.files
+        if not files_found:
+            if scan.skipped_unsupported:
+                raise ValueError(
+                    f"No indexable files found in {repo_path} "
+                    f"({scan.skipped_unsupported} unsupported or oversized files skipped)"
+                )
             raise ValueError(f"No matching files found in {repo_path}")
 
-        self._check_queue_capacity()
+        if incremental:
+            files_to_index, unchanged, _ = self._split_unchanged(files_found, collection_id)
+        else:
+            files_to_index, unchanged = list(files_found), []
 
-        # Create job record
-        job_id = app_db.create_upload_job(collection_id, len(files_to_index), job_type="index")
-        audit.record("document.index_job", actor=uploaded_by, collection_id=collection_id,
-                     target=str(job_id),
-                     detail={"kind": "repo", "path": repo_path, "files": len(files_to_index)})
+        job_id: Optional[int] = None
+        if files_to_index:
+            job_id = self._queue_repo_job(
+                files_to_index, repo_path, collection_id, uploaded_by,
+                {"files": len(files_to_index), "skipped_unchanged": len(unchanged),
+                 "skipped_unsupported": scan.skipped_unsupported},
+            )
+        else:
+            logger.info(
+                f"Repo index of {repo_path} into '{collection_id}' is up to date: "
+                f"{len(unchanged)} unchanged files, nothing queued"
+            )
 
-        self._submit(_QueuedJob(
-            job_id=job_id,
-            collection_id=collection_id,
-            target=self._run_repo_index,
-            args=(job_id, files_to_index, repo_path, collection_id, uploaded_by),
-        ))
-        logger.info(f"Submitted repo index job {job_id}: {len(files_to_index)} files from {repo_path}")
+        try:
+            self._remember_sync(
+                collection_id, repo.resolve(), job_id=job_id,
+                files_found=len(files_found), queued=len(files_to_index),
+                skipped_unchanged=len(unchanged), replaced_count=0, pruned_count=0,
+                skipped_unsupported=scan.skipped_unsupported,
+                recursive=recursive, file_extensions=file_extensions,
+                exclude_patterns=exclude_patterns, prune_missing=False,
+            )
+        except Exception as e:  # memory is a convenience; never fail the index over it
+            logger.warning(f"Could not remember sync folder {repo_path}: {e}")
 
-        return job_id, len(files_to_index)
+        return RepoIndexResult(job_id, len(files_found), len(unchanged),
+                               skipped_unsupported=scan.skipped_unsupported)
+
+    def sync_folder(
+        self,
+        path: str,
+        collection_id: str = "default",
+        recursive: bool = True,
+        file_extensions: Optional[List[str]] = None,
+        exclude_patterns: Optional[List[str]] = None,
+        prune_missing: bool = False,
+        uploaded_by: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Bring a collection up to date with a folder on disk.
+
+        Three passes, cheapest first, all decided on the request thread:
+
+        * files whose bytes are already indexed are skipped;
+        * a file this folder was synced from before, whose bytes changed, has
+          its old document removed before the new one is queued (otherwise
+          both versions would answer questions);
+        * with ``prune_missing``, documents this folder was synced from whose
+          file is gone are removed from the index.
+
+        Only new and changed files go through the indexing job. Returns the
+        counts the endpoint reports; ``job_id`` is None when nothing needed
+        indexing.
+        """
+        from services import governance
+
+        repo = Path(path)
+        if not repo.exists() or not repo.is_dir():
+            raise ValueError(f"Invalid folder path: {path}")
+        root = repo.resolve()
+
+        scan = self._scan_folder(root, recursive, file_extensions, exclude_patterns)
+        files_found = scan.files
+        files_to_index, unchanged, hashes = self._split_unchanged(files_found, collection_id)
+        # Hashing resolved nothing, so compare on the resolved path too.
+        current_hashes = {str(Path(fp).resolve()): h for fp, h in hashes.items()}
+
+        store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store
+        tracked = store.list_documents_under_source_root(
+            str(root), source_type=self.FOLDER_SYNC_SOURCE_TYPE
+        )
+
+        replaced: List[str] = []
+        pruned: List[str] = []
+        removed_ids: set = set()
+        for doc in tracked:
+            doc_id = doc["document_id"]
+            if doc_id in removed_ids:
+                continue
+            source_path = doc.get("source_path") or ""
+            current = current_hashes.get(source_path)
+            if current is not None:
+                if current == doc.get("content_hash"):
+                    continue  # still the same bytes
+                action, bucket = "document.sync_replace", replaced
+            elif prune_missing and not Path(source_path).exists():
+                action, bucket = "document.sync_prune", pruned
+            else:
+                continue  # excluded by the filters this time, or prune is off
+            try:
+                governance.remove_document(
+                    collection_id, doc_id, actor=uploaded_by, action=action,
+                )
+            except KeyError:
+                continue  # already gone
+            removed_ids.add(doc_id)
+            bucket.append(doc.get("filename") or Path(source_path).name)
+
+        job_id: Optional[int] = None
+        if files_to_index:
+            job_id = self._queue_repo_job(
+                files_to_index, str(root), collection_id, uploaded_by,
+                {"files": len(files_to_index), "skipped_unchanged": len(unchanged),
+                 "skipped_unsupported": scan.skipped_unsupported,
+                 "replaced": len(replaced), "pruned": len(pruned), "sync": True},
+            )
+
+        audit.record("document.sync_folder", actor=uploaded_by, collection_id=collection_id,
+                     target=str(root),
+                     detail={"files_found": len(files_found), "queued": len(files_to_index),
+                             "skipped_unchanged": len(unchanged),
+                             "skipped_unsupported": scan.skipped_unsupported,
+                             "replaced": len(replaced),
+                             "pruned": len(pruned), "prune_missing": prune_missing,
+                             "job_id": job_id})
+
+        remembered: Dict[str, Any] = {}
+        try:
+            remembered = self._remember_sync(
+                collection_id, root, job_id=job_id,
+                files_found=len(files_found), queued=len(files_to_index),
+                skipped_unchanged=len(unchanged), replaced_count=len(replaced),
+                pruned_count=len(pruned), skipped_unsupported=scan.skipped_unsupported,
+                recursive=recursive,
+                file_extensions=file_extensions, exclude_patterns=exclude_patterns,
+                prune_missing=prune_missing,
+            )
+        except Exception as e:
+            logger.warning(f"Could not remember sync folder {root}: {e}")
+
+        logger.info(
+            f"Folder sync {root} -> '{collection_id}': {len(files_to_index)} queued, "
+            f"{len(unchanged)} unchanged, {len(replaced)} replaced, {len(pruned)} pruned"
+        )
+        return {
+            "status": "queued" if job_id is not None else "up_to_date",
+            "job_id": job_id,
+            "path": str(root),
+            "files_found": len(files_found),
+            "queued": len(files_to_index),
+            "skipped_unchanged": len(unchanged),
+            "skipped_unsupported": scan.skipped_unsupported,
+            "replaced": replaced,
+            "replaced_count": len(replaced),
+            "pruned": pruned,
+            "pruned_count": len(pruned),
+            "last_synced_at": remembered.get("last_synced_at"),
+        }
 
     def _run_repo_index(
         self,
@@ -769,6 +1164,7 @@ class UploadService:
         """Run repository indexing in background thread."""
         documents_dir = indexer_manager.get_documents_path(collection_id)
         repo = Path(repo_path)
+        source_type = self.FOLDER_SYNC_SOURCE_TYPE
 
         def make_work(source_path: Path) -> _BulkFileWork:
             # Create safe filename preserving relative path structure
@@ -778,10 +1174,20 @@ class UploadService:
             except ValueError:
                 safe_filename = source_path.name
             dest_path = documents_dir / safe_filename
+            # Where the bytes came from, so a later sync of the same folder
+            # can find this document again when the file changes or goes away.
+            original = str(source_path.resolve())
 
             def stage() -> Path:
                 shutil.copy2(str(source_path), str(dest_path))
                 return dest_path
+
+            def finalize(indexer, doc_metadata):
+                indexer.vector_store.metadata_store.update_document_source(
+                    doc_metadata.document_id, source_path=original, source_type=source_type,
+                )
+                doc_metadata.source_path = original
+                doc_metadata.source_type = source_type
 
             def cleanup():
                 # Clean up copied file
@@ -791,8 +1197,8 @@ class UploadService:
                 except Exception:
                     pass
 
-            return _BulkFileWork(display_name=safe_filename, stage=stage, cleanup=cleanup,
-                                 size_bytes=_size_of(source_path))
+            return _BulkFileWork(display_name=safe_filename, stage=stage, finalize=finalize,
+                                 cleanup=cleanup, size_bytes=_size_of(source_path))
 
         logger.info(
             f"Starting repo index job {job_id}: {len(file_paths)} files from {repo_path}"

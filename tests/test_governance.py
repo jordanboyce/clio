@@ -33,6 +33,7 @@ from services.indexing import DocumentIndexer
 from services.metadata_store import MetadataStore
 from services.vector_store import VectorStore
 from models.schemas import SearchMode
+from services.metadata_store import SCHEMA_VERSION
 
 EMBED_DIM = 8
 ADMIN = "admin@example.com"
@@ -247,7 +248,7 @@ def test_metadata_store_migrates_pre_governance_db(tmp_path):
             injection_warnings TEXT)""")
         conn.execute("INSERT INTO documents (document_id, filename, num_pages, num_chunks, upload_timestamp) VALUES ('old', 'old.pdf', 1, 1, '2025-01-01')")
     s = MetadataStore(path)
-    assert s.get_schema_version() == "3.5"
+    assert s.get_schema_version() == SCHEMA_VERSION
     old = s.get_document_info("old")
     assert old["policy_status"] == "clear"
     assert old["uploaded_by"] is None

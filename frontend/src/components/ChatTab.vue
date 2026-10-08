@@ -121,11 +121,11 @@
 
       <!-- Source scope: what this conversation is allowed to read. -->
       <div
-        class="flex items-center gap-2 flex-shrink-0 mb-1.5 px-2.5 py-1.5 rounded-md border border-base-300 bg-base-100 text-xs"
+        class="flex items-center gap-2 flex-shrink-0 mb-1 px-1 py-1 text-xs text-base-content/60"
         role="status"
         aria-live="polite"
       >
-        <ListTree :size="13" class="text-primary flex-shrink-0" aria-hidden="true" />
+        <ListTree :size="13" class="text-base-content/40 flex-shrink-0" aria-hidden="true" />
         <span class="flex-1 min-w-0">
           <template v-if="scope === 'all'">
             All accessible collections<span v-if="selectionActive"> · Your source selection does not apply.</span>
@@ -144,11 +144,9 @@
       </div>
 
       <!-- No providers configured notice (inline, always visible) -->
-      <div v-if="!hasAnyProvider" class="flex items-center gap-3 rounded-lg bg-info/10 border border-info/30 px-3 py-2 flex-shrink-0">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-info shrink-0 w-4 h-4">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-        </svg>
-        <span class="text-sm flex-1">Connect a model to ask questions, or find passages without one.</span>
+      <div v-if="!hasAnyProvider" class="notice notice-info flex-shrink-0">
+        <Info :size="15" class="text-info" aria-hidden="true" />
+        <span class="flex-1">Connect a model to ask questions, or find passages without one.</span>
         <button class="btn btn-xs btn-primary" @click="$emit('switch-tab', 'settings')">Connect a model</button>
         <button class="btn btn-xs btn-ghost" @click="$emit('switch-tab', 'search')">Find passages</button>
       </div>
@@ -199,98 +197,116 @@
       </AISettingsDrawer>
 
       <!-- No data notice / mid-ingest status -->
-      <div v-if="documentCount === 0 && indexingActive" class="alert alert-info flex-shrink-0 py-2" role="status">
+      <div v-if="documentCount === 0 && indexingActive" class="notice flex-shrink-0" role="status">
         <span class="loading loading-spinner loading-xs" aria-hidden="true"></span>
-        <span class="text-sm">Indexing in progress — chat becomes available as documents land.</span>
+        <span>Indexing in progress — chat becomes available as documents land.</span>
       </div>
-      <div v-else-if="documentCount === 0" class="alert alert-warning flex-shrink-0 py-2">
-        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-        </svg>
-        <span class="text-sm flex-1">Add sources to this collection to start asking questions.</span>
-        <button class="btn btn-xs" @click="$emit('show-sources')">Add sources</button>
-      </div>
-      <div v-else-if="indexingActive" class="alert alert-info flex-shrink-0 py-2" role="status">
+      <div v-else-if="indexingActive" class="notice flex-shrink-0" role="status">
         <span class="loading loading-spinner loading-xs" aria-hidden="true"></span>
-        <span class="text-sm">{{ documentCount.toLocaleString() }} {{ documentCount === 1 ? 'source' : 'sources' }} indexed so far — indexing continues in the background.</span>
+        <span>{{ documentCount.toLocaleString() }} {{ documentCount === 1 ? 'source' : 'sources' }} indexed so far — indexing continues in the background.</span>
       </div>
 
       <!-- Error -->
-      <div v-if="error" class="alert alert-error flex-shrink-0 py-2" role="alert">
-        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24" aria-hidden="true">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
+      <div v-if="error" class="notice notice-error flex-shrink-0 items-start" role="alert">
+        <CircleAlert :size="15" class="text-error mt-0.5" aria-hidden="true" />
         <div class="min-w-0 flex-1">
-          <p class="text-sm">{{ error }}</p>
+          <p>{{ error }}</p>
           <details v-if="errorDetail" class="mt-1 text-xs text-base-content/70">
             <summary class="cursor-pointer hover:text-base-content">Provider details</summary>
             <pre class="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words font-sans">{{ errorDetail }}</pre>
           </details>
         </div>
-        <button class="btn btn-xs btn-ghost" @click="dismissError" aria-label="Dismiss error">✕</button>
+        <button class="side-icon-btn side-icon-btn-sm text-base-content/60" @click="dismissError" aria-label="Dismiss error"><X :size="13" aria-hidden="true" /></button>
       </div>
 
       <!-- Message list -->
       <div ref="messagesContainer" class="flex-1 overflow-y-auto space-y-4 min-h-0 pr-1">
 
         <!-- Empty state -->
-        <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full text-center gap-5 py-8 px-4">
-          <div v-if="hasAnyProvider && documentCount > 0" class="flex flex-col items-center gap-5 max-w-md">
-            <div class="flex flex-col items-center gap-2">
-              <div class="w-11 h-11 rounded-full bg-base-200 flex items-center justify-center">
-                <Bot :size="20" class="text-base-content/50" aria-hidden="true" />
+        <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full py-8 px-4">
+          <Transition name="rise" appear>
+            <div v-if="hasAnyProvider && documentCount > 0" class="w-full max-w-xl">
+              <h3 class="text-[22px] leading-tight font-semibold tracking-tight text-base-content/90">
+                {{ collectionStore.currentCollection?.name || 'Your collection' }}
+              </h3>
+              <p class="mt-1 text-sm text-base-content/55">
+                <span class="tabular-nums">{{ documentCount.toLocaleString() }}</span> {{ documentCount === 1 ? 'source' : 'sources' }} ready.
+                Ask a question, then open its citations to check the evidence.
+              </p>
+              <div class="mt-6" aria-live="polite">
+                <p v-if="starters.length || startersLoading" class="side-label text-base-content/45 mb-1.5">From your sources</p>
+                <template v-if="startersLoading && !starters.length">
+                  <div class="space-y-2">
+                    <div v-for="n in 3" :key="n" class="skeleton h-9 w-full rounded-lg" aria-hidden="true"></div>
+                  </div>
+                  <span class="sr-only">Reading your sources for suggested questions</span>
+                </template>
+                <ul v-else class="divide-y divide-base-300/50">
+                  <li v-for="suggestion in starterList" :key="suggestion">
+                    <button
+                      type="button"
+                      class="group w-full text-left py-2.5 flex items-start gap-3 text-[15px] leading-snug text-base-content/80 hover:text-base-content disabled:opacity-50"
+                      :disabled="loading"
+                      @click="askQuestion(suggestion)"
+                    >
+                      <ArrowUp :size="14" class="mt-1 flex-shrink-0 rotate-45 text-base-content/30 group-hover:text-primary transition-colors" aria-hidden="true" />
+                      <span>{{ suggestion }}</span>
+                    </button>
+                  </li>
+                </ul>
               </div>
-              <h3 class="text-sm font-medium text-base-content/80">Ask about your documents</h3>
-              <p class="text-sm text-base-content/70">Ask a question, then open its citations to check the evidence.</p>
+              <p class="mt-8 text-xs text-base-content/40 hidden sm:block">
+                <span class="kbd-hint">/</span> for commands in the box
+                <span class="mx-1.5 text-base-content/25">·</span>
+                <span class="kbd-hint">{{ MOD }}</span> <span class="kbd-hint">K</span> to jump anywhere
+              </p>
             </div>
-            <div class="flex flex-col gap-1.5 w-full" aria-live="polite">
-              <p v-if="starters.length" class="text-xs text-base-content/50 text-left px-1">Suggested from your sources</p>
-              <template v-if="startersLoading && !starters.length">
-                <div v-for="n in 3" :key="n" class="skeleton h-8 w-full rounded-lg" aria-hidden="true"></div>
-                <span class="sr-only">Reading your sources for suggested questions</span>
-              </template>
-              <template v-else>
-                <button
-                  v-for="suggestion in starterList"
-                  :key="suggestion"
-                  class="btn btn-sm btn-ghost justify-start font-normal text-base-content/70 hover:text-base-content border border-base-300 hover:border-base-content/20 h-auto min-h-8 py-1.5 text-left"
-                  :disabled="loading"
-                  @click="askQuestion(suggestion)"
-                >
-                  <Sparkles :size="13" class="text-base-content/30 flex-shrink-0" aria-hidden="true" />
-                  <span class="line-clamp-2">{{ suggestion }}</span>
-                </button>
-              </template>
+            <!-- Nothing indexed yet: one quiet invitation, not a warning. -->
+            <div v-else-if="documentCount === 0 && !indexingActive" class="w-full max-w-md text-center">
+              <div class="mx-auto w-12 h-12 rounded-2xl bg-base-content/[0.06] flex items-center justify-center">
+                <FileText :size="20" class="text-base-content/45" aria-hidden="true" />
+              </div>
+              <h3 class="mt-4 text-[17px] font-semibold tracking-tight text-base-content/90">
+                {{ collectionStore.currentCollection?.name || 'This collection' }} is empty
+              </h3>
+              <p class="mt-1.5 text-sm text-base-content/55 leading-relaxed">
+                Add documents, a folder, a link or a recording. Clio indexes them locally and every answer cites the passage it came from.
+              </p>
+              <button type="button" class="btn btn-sm btn-primary mt-5 gap-1.5" @click="$emit('show-sources'); $emit('add-sources')">
+                <Plus :size="14" aria-hidden="true" />
+                Add sources
+              </button>
+              <p class="mt-3 text-xs text-base-content/40 hidden sm:block"><span class="kbd-hint">{{ MOD }}</span> <span class="kbd-hint">U</span> from anywhere</p>
             </div>
-          </div>
+          </Transition>
         </div>
 
-        <!-- Messages -->
-        <template v-for="(msg, index) in messages" :key="index">
+        <!-- Messages: the reading room. A question is a quiet block on the
+             right; the answer is prose on the page with no bubble, no avatar.
+             New turns rise in; the list is keyed by position because it is
+             append-only until it is cleared. -->
+        <TransitionGroup name="rise" tag="div" class="space-y-7 max-w-3xl mx-auto w-full">
+        <div v-for="(msg, index) in messages" :key="index">
 
           <!-- User message -->
           <div v-if="msg.role === 'user'" class="flex justify-end">
-            <div class="max-w-[88%] sm:max-w-[80%] rounded-2xl rounded-tr-sm bg-primary text-primary-content px-3 py-2.5 sm:px-4 sm:py-3 shadow-sm">
-              <p class="text-sm whitespace-pre-wrap">{{ msg.content }}</p>
+            <div class="max-w-[88%] sm:max-w-[75%] rounded-xl bg-base-content/[0.07] px-4 py-2.5">
+              <p class="text-[15px] leading-relaxed whitespace-pre-wrap">{{ msg.content }}</p>
             </div>
           </div>
 
           <!-- Assistant message -->
           <div v-else class="flex flex-col gap-1">
-            <div class="flex items-start gap-2 max-w-full sm:max-w-[90%]">
-              <!-- Avatar: phones give the width to the answer instead -->
-              <div class="flex-shrink-0 w-7 h-7 rounded-full bg-base-300 hidden sm:flex items-center justify-center mt-1">
-                <Bot :size="14" class="text-base-content/60" />
-              </div>
-              <div class="rounded-2xl rounded-tl-sm bg-base-200 border border-base-300 px-3 py-2.5 sm:px-4 sm:py-3 shadow-sm flex-1 min-w-0">
+            <div class="flex items-start max-w-full">
+              <div class="answer-block flex-1 min-w-0">
                 <div
                   v-if="msg.slashCommand"
-                  class="prose prose-sm max-w-none whitespace-pre-wrap font-mono text-xs leading-snug"
+                  class="whitespace-pre-wrap font-mono text-xs leading-snug rounded-lg bg-base-content/[0.05] px-3 py-2.5"
                 >{{ msg.content }}</div>
 
                 <!-- Initial "Thinking…" placeholder before any content arrives -->
                 <div v-else-if="msg.streaming && !msg.content && (!msg.structuredResults || msg.structuredResults.length === 0)"
-                  class="flex items-center gap-2 text-xs text-base-content/50 py-0.5">
+                  class="flex items-center gap-2 text-sm text-base-content/50 py-0.5">
                   <span class="loading loading-dots loading-xs text-primary"></span>
                   <span>Thinking…</span>
                 </div>
@@ -469,13 +485,9 @@
                      auto-scroll keeps the final response visible. -->
                 <div v-if="!msg.slashCommand && (msg.content || msg.streaming)" class="relative"
                   :class="{ 'mt-3': msg.structuredResults && msg.structuredResults.length > 0 }">
-                  <AnswerEvidence :content="msg.content" :sources="msg.sources || []" :streaming="msg.streaming" />
+                  <AnswerEvidence :content="msg.content" :sources="msg.sources || []" :streaming="msg.streaming" answer />
                   <!-- Blinking cursor while streaming -->
-                  <span
-                    v-if="msg.streaming && msg.content"
-                    class="inline-block w-0.5 h-4 bg-primary align-middle ml-0.5 animate-pulse"
-                    aria-hidden="true"
-                  ></span>
+                  <span v-if="msg.streaming && msg.content" class="answer-caret" aria-hidden="true"></span>
                   <!-- Post-tool "Synthesizing…" hint: tools finished, prose not started -->
                   <div
                     v-if="msg.streaming && !msg.content && msg.structuredResults?.length > 0 && !msg.structuredResults.some(sr => sr.pending)"
@@ -486,39 +498,31 @@
                   </div>
                 </div>
 
-                <!-- Footer row: provider badges + copy button -->
+                <!-- Footer: one muted line of provenance, actions on the right -->
                 <div
                   v-if="!msg.streaming && (msg.aiUsage || msg.content)"
-                  class="flex items-center gap-2 mt-2 flex-wrap"
+                  class="flex items-center gap-x-2 gap-y-1 mt-2.5 flex-wrap text-xs text-base-content/45"
                 >
+                  <span v-if="msg.depth" class="inline-flex items-center gap-1" :title="msg.depth === 'quick' ? 'Quick answer: one pass from the retrieved passages' : 'Research answer: document searches and verification ran before answering'">
+                    <Zap v-if="msg.depth === 'quick'" :size="10" aria-hidden="true" />
+                    <Search v-else :size="10" aria-hidden="true" />
+                    {{ msg.depth === 'quick' ? 'Quick' : 'Research' }}
+                  </span>
                   <template v-if="msg.cached">
-                    <span
-                      class="badge badge-xs badge-outline"
-                      :title="msg.cachedQuestion ? `Cached answer originally generated for: ${msg.cachedQuestion}` : 'Served from the answer cache'"
-                    >cached · 0 tokens<template v-if="msg.cachedSimilarity != null && msg.cachedSimilarity < 0.9995"> · {{ Math.round(msg.cachedSimilarity * 100) }}% match</template></span>
+                    <span aria-hidden="true">·</span>
+                    <span :title="msg.cachedQuestion ? `Cached answer originally generated for: ${msg.cachedQuestion}` : 'Served from the answer cache'">
+                      cached<template v-if="msg.cachedSimilarity != null && msg.cachedSimilarity < 0.9995"> · {{ Math.round(msg.cachedSimilarity * 100) }}% match</template>
+                    </span>
                   </template>
                   <template v-else-if="msg.aiUsage">
-                    <span class="badge badge-xs" :class="providerBadgeClass(msg.provider || selectedProvider)">
-                      {{ providerDisplayName(msg.provider || selectedProvider) }}
-                    </span>
-                    <span class="text-xs text-base-content/40">
-                      {{ msg.aiUsage.total_input_tokens + msg.aiUsage.total_output_tokens }} tokens
-                    </span>
-                    <span v-if="msg.aiUsage.features_used?.includes('reranking')" class="badge badge-xs badge-outline">reranked</span>
-                    <span v-if="msg.aiUsage.features_used?.includes('structured_tools')" class="badge badge-xs badge-success gap-0.5">
-                      <Table2 :size="9" /> sql
-                    </span>
-                    <span v-if="msg.scope === 'all'" class="badge badge-xs badge-secondary badge-outline">all collections</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{{ providerDisplayName(msg.provider || selectedProvider) }}</span>
+                    <span aria-hidden="true">·</span>
+                    <span class="tabular-nums" :title="`${msg.aiUsage.total_input_tokens} in · ${msg.aiUsage.total_output_tokens} out`">{{ formatTokens(msg.aiUsage.total_input_tokens + msg.aiUsage.total_output_tokens) }} tokens</span>
+                    <template v-if="msg.aiUsage.features_used?.includes('reranking')"><span aria-hidden="true">·</span><span>reranked</span></template>
+                    <template v-if="msg.aiUsage.features_used?.includes('structured_tools')"><span aria-hidden="true">·</span><span class="inline-flex items-center gap-1"><Table2 :size="10" aria-hidden="true" />tables</span></template>
+                    <template v-if="msg.scope === 'all'"><span aria-hidden="true">·</span><span>all collections</span></template>
                   </template>
-                  <span
-                    v-if="msg.depth"
-                    class="badge badge-xs badge-ghost gap-0.5"
-                    :title="msg.depth === 'quick' ? 'Quick answer: one pass from the retrieved passages' : 'Research answer: document searches and verification ran before answering'"
-                  >
-                    <Zap v-if="msg.depth === 'quick'" :size="9" aria-hidden="true" />
-                    <Search v-else :size="9" aria-hidden="true" />
-                    {{ msg.depth === 'quick' ? 'quick' : 'research' }}
-                  </span>
                   <span class="ml-auto"></span>
                   <template v-if="msg.content && index === lastAssistantIndex">
                     <button
@@ -584,20 +588,14 @@
 
           </div>
 
-        </template>
-
-        <!-- Typing indicator — only show while waiting for the first SSE event -->
-        <div v-if="loading && !hasStreamingMessage" class="flex items-start gap-2">
-          <div class="flex-shrink-0 w-7 h-7 rounded-full bg-base-300 hidden sm:flex items-center justify-center">
-            <Bot :size="14" class="text-base-content/60" />
-          </div>
-          <div class="rounded-2xl rounded-tl-sm bg-base-200 border border-base-300 px-4 py-3 shadow-sm">
-            <div class="flex items-center gap-2">
-              <span class="loading loading-dots loading-xs text-primary"></span>
-              <span class="text-xs text-base-content/50">Connecting…</span>
-            </div>
-          </div>
         </div>
+
+        <!-- Waiting for the first SSE event -->
+        <div v-if="loading && !hasStreamingMessage" key="connecting" class="flex items-center gap-2 text-sm text-base-content/50 max-w-3xl mx-auto w-full">
+          <span class="loading loading-dots loading-xs text-primary"></span>
+          <span>Connecting…</span>
+        </div>
+        </TransitionGroup>
 
         <div ref="messagesEnd"></div>
       </div>
@@ -623,9 +621,9 @@
             id="chat-input"
             ref="chatInputRef"
             v-model="inputMessage"
-            class="w-full bg-transparent border-none outline-none resize-none text-sm px-4 pt-3 pb-2 placeholder:text-base-content/30"
-            rows="2"
-            placeholder="Ask a question about your documents..."
+            class="composer-input w-full bg-transparent border-none outline-none resize-none text-[15px] leading-relaxed px-4 pt-3 pb-1 placeholder:text-base-content/35"
+            rows="1"
+            placeholder="Ask about your sources…"
             :disabled="loading"
             @input="onInputChange"
             @keydown="onKeydown"
@@ -695,21 +693,34 @@
               <span v-if="rerank" class="badge badge-xs badge-outline badge-primary hidden sm:inline-flex">Rerank</span>
             </div>
 
-            <!-- Right: send button -->
+            <!-- Right: send, or stop while an answer is streaming -->
             <button
+              v-if="loading"
+              type="button"
+              class="btn btn-circle btn-sm btn-neutral transition-all"
+              @click="stopStreaming"
+              title="Stop generating"
+              aria-label="Stop generating"
+            >
+              <Square :size="12" fill="currentColor" aria-hidden="true" />
+            </button>
+            <button
+              v-else
+              type="button"
               class="btn btn-circle btn-sm btn-primary transition-all"
               :class="{ 'btn-disabled opacity-40': sendDisabled }"
               :disabled="sendDisabled"
               @click="sendMessage"
               title="Send message"
-              :aria-label="loading ? 'Sending message' : 'Send message'"
+              aria-label="Send message"
             >
-              <span v-if="loading" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
-              <ArrowUp v-else :size="16" aria-hidden="true" />
+              <ArrowUp :size="16" aria-hidden="true" />
             </button>
           </div>
         </div>
-        <p class="hidden sm:block text-xs text-base-content/30 mt-1.5 text-center">Enter to send · Shift+Enter for new line · Try /tools, /stats, /docs, /help</p>
+        <p class="hidden sm:block text-[11px] text-base-content/30 mt-1.5 text-center">
+          <span class="kbd-hint">Enter</span> to send · <span class="kbd-hint">Shift</span> <span class="kbd-hint">Enter</span> for a new line · <span class="kbd-hint">/</span> for commands
+        </p>
       </div>
 
   </div>
@@ -720,7 +731,7 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import http from '../utils/http'
 import AnswerEvidence from './AnswerEvidence.vue'
 import { answerWithReferences } from '../utils/answerEvidence'
-import { Bot, FileText, ArrowUp, Trash2, Layers, Database, Plus, History, ChevronDown, SlidersHorizontal, Table2, Search, BookOpen, ListTree, Wrench, Sparkles, Copy, Check, RefreshCw, Zap, Download } from 'lucide-vue-next'
+import { Bot, FileText, ArrowUp, Trash2, Layers, Database, Plus, History, ChevronDown, SlidersHorizontal, Table2, Search, BookOpen, ListTree, Wrench, Sparkles, Copy, Check, RefreshCw, Zap, Download, Square, Info, CircleAlert, X } from 'lucide-vue-next'
 import { useChatStore } from '../stores/chatStore'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
@@ -730,6 +741,7 @@ import { useSelectionStore } from '../stores/selectionStore'
 import SlashCommandPicker from './SlashCommandPicker.vue'
 import AISettingsDrawer from './AISettingsDrawer.vue'
 import { runSlashCommand, isSlashCommand } from '../utils/slashCommands'
+import { MOD } from '../utils/shortcuts'
 import { presentChatError } from '../utils/chatErrors'
 import {
   getConfiguredProviderIds,
@@ -741,7 +753,7 @@ import {
   setProviderOverride,
 } from '../utils/aiProviders.js'
 
-const emit = defineEmits(['switch-tab', 'show-sources'])
+const emit = defineEmits(['switch-tab', 'show-sources', 'add-sources'])
 
 const chatStore = useChatStore()
 const collectionStore = useCollectionStore()
@@ -1146,7 +1158,18 @@ const toggleSlashPicker = () => {
   }
 }
 
+// Browsers without `field-sizing: content` (Firefox, older Safari) get the
+// same grow-with-the-message behaviour from a measured height.
+const autoGrow = () => {
+  const ta = chatInputRef.value
+  if (!ta || CSS.supports?.('field-sizing', 'content')) return
+  ta.style.height = 'auto'
+  ta.style.height = `${Math.min(ta.scrollHeight, 224)}px`
+}
+watch(inputMessage, () => nextTick(autoGrow))
+
 const onInputChange = () => {
+  autoGrow()
   // Open the picker as soon as the input starts with "/" so suggestions
   // appear while the user is typing; close it again if they erase the slash.
   slashPickerOpen.value = inputMessage.value.trimStart().startsWith('/')
@@ -1270,10 +1293,12 @@ const sendMessage = async () => {
       .filter(m => !m.streaming)
       .map(m => ({ role: m.role, content: m.content }))
 
+    abortController = new AbortController()
     const response = await fetch(
       `/api/chat/stream?collection_id=${collectionId}`,
       {
         method: 'POST',
+        signal: abortController.signal,
         headers: { 'Content-Type': 'application/json', ...providerHeaders },
         body: JSON.stringify({
           messages: apiMessages,
@@ -1372,11 +1397,33 @@ const sendMessage = async () => {
       }
     }
   } catch (err) {
-    chatStore.removeLastStreamingMessage(collectionId)
-    setChatError(err.message)
+    if (err?.name === 'AbortError') {
+      // The reader stopped: keep whatever prose arrived, drop an empty turn.
+      const partial = messages.value.find(m => m.streaming)
+      if (partial?.content) chatStore.finalizeStreamingMessage(collectionId, { depth: depthOverride.value || depth.value })
+      else chatStore.removeLastStreamingMessage(collectionId)
+    } else {
+      chatStore.removeLastStreamingMessage(collectionId)
+      setChatError(err.message)
+    }
   } finally {
+    abortController = null
     loading.value = false
   }
+}
+
+// Stop the in-flight answer. Aborting the fetch closes the SSE reader; the
+// server notices the dropped connection and stops the provider call.
+let abortController = null
+const stopStreaming = () => {
+  abortController?.abort()
+}
+
+const formatTokens = (n) => {
+  if (!Number.isFinite(n)) return '0'
+  if (n >= 10000) return `${(n / 1000).toFixed(0)}k`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
 }
 
 const setChatError = (message) => {

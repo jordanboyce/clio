@@ -8,12 +8,12 @@ from typing import List, Optional
 from pathlib import Path
 import shutil
 
-from fastapi import HTTPException, UploadFile, File, status
+from fastapi import HTTPException, Response, UploadFile, File, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 import config
-from services.document_extractor import DocumentExtractor
+from services.document_extractor import is_supported_filename
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
 from models.schemas import (
@@ -25,6 +25,10 @@ from models.schemas import (
     DocumentChunkView,
     RepoUploadRequest,
     RepoUploadResponse,
+    SyncFolderRequest,
+    SyncFolderResponse,
+    SyncFolderRecord,
+    SyncFoldersResponse,
 )
 from services.upload_service import upload_service
 from services.form_field_extractor import (
@@ -155,18 +159,16 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
     document_dir = indexer_manager.get_documents_path(collection_id)
 
     # Validate all files have supported extensions and safe names
-    SUPPORTED_EXTENSIONS = DocumentExtractor.SUPPORTED_EXTENSIONS
     for file in files:
         if not file.filename:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Every uploaded file must have a filename",
             )
-        file_ext = Path(file.filename).suffix.lower()
-        if file_ext not in SUPPORTED_EXTENSIONS:
+        if not is_supported_filename(file.filename):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File {file.filename} has unsupported type. Supported: PDF, TXT, DOCX, CSV, XLSX, XLS, MD, JSON, JSONL, images (PNG/JPG/WEBP/TIFF), audio, and source code files",
+                detail=f"File {file.filename} has unsupported type. Supported: PDF, TXT, DOCX, CSV, XLSX, XLS, MD, JSON, JSONL, images (PNG/JPG/WEBP/TIFF), audio, and source code files (by extension or well-known name such as Makefile)",
             )
 
     indexed_docs = []
@@ -314,7 +316,6 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
     document_dir = indexer_manager.get_documents_path(collection_id)
-    SUPPORTED_EXTENSIONS = DocumentExtractor.SUPPORTED_EXTENSIONS
 
     # Staging is the transfer half of a background upload: refuse the batch
     # before writing it rather than accepting files the index job would then
@@ -330,7 +331,7 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
         if not file.filename:
             failed.append({"filename": "", "error": "missing filename"})
             continue
-        if Path(file.filename).suffix.lower() not in SUPPORTED_EXTENSIONS:
+        if not is_supported_filename(file.filename):
             failed.append({"filename": file.filename, "error": "unsupported type"})
             continue
         raw_filename = file.filename.replace('\\', '/').lstrip('/')
@@ -687,12 +688,18 @@ async def cancel_upload_job(job_id: int):
 )
 def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool, not on the event loop
     request: RepoUploadRequest,
+    response: Response,
 ) -> RepoUploadResponse:
     """
     Scan a local repository or folder and start indexing in the background.
 
     This endpoint returns immediately with a job_id. Use GET /upload-jobs/{job_id}
     to track progress.
+
+    Indexing is incremental: files whose exact bytes are already in the
+    collection are skipped (``skipped_unchanged``). When every file is
+    unchanged no job is created and the response is 200 with
+    ``status: "up_to_date"`` and ``job_id: null``.
 
     **Supported file types:**
     - Documents: PDF, TXT, DOCX, CSV, MD, JSON
@@ -751,7 +758,7 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
 
     try:
         # Start background job
-        job_id, files_found = upload_service.start_repo_index(
+        scan = upload_service.start_repo_index(
             repo_path=request.path,
             collection_id=request.collection_id,
             recursive=request.recursive,
@@ -759,23 +766,46 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
             exclude_patterns=request.exclude_patterns,
             uploaded_by=get_request_user(),
         )
+        job_id, files_found, skipped_unchanged = scan
+        skipped_unsupported = getattr(scan, "skipped_unsupported", 0)
+        unsupported_note = f"; {skipped_unsupported} unsupported file(s) skipped" if skipped_unsupported else ""
+
+        if job_id is None:
+            # Every file is already in the collection: nothing to wait for,
+            # so no 202 and no job to poll.
+            response.status_code = status.HTTP_200_OK
+            return RepoUploadResponse(
+                message=(
+                    f"Already up to date: all {skipped_unchanged} file(s) are in the collection{unsupported_note}."
+                ),
+                status="up_to_date",
+                job_id=None,
+                files_found=files_found,
+                skipped_unchanged=skipped_unchanged,
+                skipped_unsupported=skipped_unsupported,
+            )
 
         # The count matters to the caller: the UI used to read files_indexed
         # off this response, get the 0 that was always there, and tell the
         # person their folder had added nothing while the job ran fine.
+        to_index = files_found - skipped_unchanged
+        unchanged_note = f" ({skipped_unchanged} unchanged, skipped{unsupported_note})" if skipped_unchanged else (f" ({skipped_unsupported} unsupported file(s) skipped)" if skipped_unsupported else "")
         queued_behind = upload_service.queue_position(job_id)
         if queued_behind:
             message = (
-                f"{files_found} file(s) found. Queued behind "
+                f"{to_index} file(s) to index{unchanged_note}. Queued behind "
                 f"{queued_behind} other job(s); indexing starts automatically."
             )
         else:
-            message = f"Indexing {files_found} file(s) in the background."
+            message = f"Indexing {to_index} file(s) in the background{unchanged_note}."
 
         return RepoUploadResponse(
             message=message,
+            status="queued",
             job_id=job_id,
             files_found=files_found,
+            skipped_unchanged=skipped_unchanged,
+            skipped_unsupported=skipped_unsupported,
         )
 
     except ValueError as e:
@@ -790,6 +820,115 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
         )
+
+@router.post(
+    "/documents/sync-folder",
+    response_model=SyncFolderResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Sync a folder into a collection (incremental, optional prune)",
+    tags=["documents"],
+)
+def sync_folder(  # sync: hashing and pruning run in FastAPI's threadpool, not on the event loop
+    request: SyncFolderRequest,
+    response: Response,
+) -> SyncFolderResponse:
+    """
+    Bring a collection up to date with a folder on disk.
+
+    Files whose bytes are already indexed are skipped; a file that changed
+    since the last sync has its old document replaced; with
+    ``prune_missing`` documents whose file has disappeared from the folder
+    are removed. Only new and changed files go through a background job.
+
+    Returns 202 with ``status: "queued"`` and a ``job_id`` when something
+    was queued, or 200 with ``status: "up_to_date"`` (``job_id: null``)
+    when nothing needed indexing — pruning may still have happened, see
+    ``pruned``.
+    """
+    folder = Path(request.path)
+    if not folder.exists():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Path does not exist: {request.path}",
+        )
+    if not folder.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Path is not a directory: {request.path}",
+        )
+
+    # Same gate as /documents/upload-repo: write access plus the AUP, and
+    # the collection must exist. Pruning deletes documents, which the
+    # write gate already covers.
+    _require_ingest(request.collection_id)
+    try:
+        get_indexer(request.collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    file_extensions = None
+    if request.file_extensions:
+        file_extensions = [
+            e.lower() if e.startswith(".") else "." + e.lower()
+            for e in request.file_extensions
+        ]
+
+    try:
+        outcome = upload_service.sync_folder(
+            path=request.path,
+            collection_id=request.collection_id,
+            recursive=request.recursive,
+            file_extensions=file_extensions,
+            exclude_patterns=request.exclude_patterns,
+            prune_missing=request.prune_missing,
+            uploaded_by=get_request_user(),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except RuntimeError as e:
+        # The waiting list is full
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    parts = []
+    if outcome["queued"]:
+        parts.append(f"indexing {outcome['queued']} new or changed file(s)")
+    if outcome["skipped_unchanged"]:
+        parts.append(f"{outcome['skipped_unchanged']} unchanged")
+    if outcome["replaced_count"]:
+        parts.append(f"{outcome['replaced_count']} replaced")
+    if outcome["pruned_count"]:
+        parts.append(f"{outcome['pruned_count']} removed")
+    if outcome["job_id"] is None:
+        response.status_code = status.HTTP_200_OK
+        message = "Up to date" + (f": {', '.join(parts)}." if parts else ".")
+    else:
+        message = ", ".join(parts).capitalize() + "."
+
+    return SyncFolderResponse(message=message, **outcome)
+
+
+@router.get(
+    "/documents/sync-folders",
+    response_model=SyncFoldersResponse,
+    summary="Folders previously synced or indexed into a collection",
+    tags=["documents"],
+)
+def list_sync_folders(collection_id: str = "default") -> SyncFoldersResponse:
+    """The folders a collection was synced from, newest first, with the
+    options and counts of each one's last run — what a "Sync again"
+    button needs. ``exists`` is false for a folder that has since gone."""
+    try:
+        get_indexer(collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    folders = []
+    for entry in upload_service.list_sync_folders(collection_id):
+        known = {k: v for k, v in entry.items() if k in SyncFolderRecord.model_fields}
+        known["exists"] = Path(entry["path"]).is_dir()
+        folders.append(SyncFolderRecord(**known))
+    return SyncFoldersResponse(collection_id=collection_id, folders=folders)
+
 
 class IndexLocalAsyncRequest(BaseModel):
     """Request body for async local file indexing."""
@@ -819,7 +958,6 @@ async def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobR
         UploadJobResponse with job_id for tracking progress
     """
 
-    SUPPORTED_EXTENSIONS = DocumentExtractor.SUPPORTED_EXTENSIONS
 
     # Sort the batch rather than refusing it. One unreadable path used to
     # abort the whole submission, which on a folder drop of thousands of
@@ -835,7 +973,7 @@ async def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobR
         if not path.is_file():
             skipped.append({"filename": path.name or file_path, "error": "not a file"})
             continue
-        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        if not is_supported_filename(path.name):
             skipped.append({
                 "filename": path.name,
                 "error": f"unsupported file type ({path.suffix.lower() or 'no extension'})",
@@ -1012,6 +1150,7 @@ async def list_documents(
     limit: int = 0,
     offset: int = 0,
     q: str = "",
+    kind: str = "",
 ) -> DocumentListResponse:
     """
     List indexed documents with their metadata.
@@ -1044,12 +1183,39 @@ async def list_documents(
         document_dir = indexer_manager.get_documents_path(collection_id)
         collection = collection_service.get_collection(collection_id)
 
+        # `kind` narrows a paged list to one family (code / docs / data /
+        # media / other); the per-kind totals always describe the whole
+        # (substring-filtered) set so the chips keep their numbers.
+        from services import file_kinds
+        kind = (kind or "").strip().lower()
+        keys = None
+        kind_counts = None
+        if kind and kind != "all":
+            if kind == "other":
+                known = set()
+                for k in file_kinds.KINDS:
+                    known |= file_kinds.extensions_for_kind(k)
+                key_counts = indexer.vector_store.metadata_store.count_documents_by_key(q=q)
+                keys = [k for k in key_counts if k not in known]
+            elif kind in file_kinds.KINDS:
+                keys = file_kinds.keys_for_kind(kind)
+            else:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                    detail=f"Unknown kind {kind!r}; use one of {', '.join(file_kinds.KINDS)}, other")
+
         paged = limit > 0
         if paged:
-            documents = indexer.list_documents_page(limit, offset=offset, q=q)
-            total_documents = indexer.count_documents(q=q)
+            documents = indexer.list_documents_page(limit, offset=offset, q=q, keys=keys)
+            total_documents = indexer.count_documents(q=q, keys=keys)
+            kind_counts = file_kinds.kind_counts(
+                indexer.vector_store.metadata_store.count_documents_by_key(q=q)
+            )
         else:
             documents = indexer.list_documents()
+            if keys is not None:
+                wanted = set(keys)
+                documents = [d for d in documents
+                             if file_kinds.kind_key_for_filename(d.get("filename", "")) in wanted]
             total_documents = len(documents)
 
         # Convert to DocumentMetadata objects
@@ -1104,8 +1270,11 @@ async def list_documents(
         return DocumentListResponse(
             documents=doc_metadata_list,
             total_documents=total_documents,
+            kind_counts=kind_counts,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list documents: {e}")
         raise HTTPException(
@@ -1306,6 +1475,11 @@ async def get_document_chunks(
                     text=chunk["text"],
                     source_format=chunk.get("source_format"),
                     extraction_method=chunk_method,
+                    language=chunk.get("language"),
+                    symbol_name=chunk.get("symbol_name"),
+                    symbol_type=chunk.get("symbol_type"),
+                    line_start=chunk.get("line_start"),
+                    line_end=chunk.get("line_end"),
                     extracted_fields=extracted_fields,
                     form_score=round(form_score, 3) if form_score is not None else None,
                     form_like=form_like,

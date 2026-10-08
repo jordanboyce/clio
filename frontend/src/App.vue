@@ -126,9 +126,29 @@
             </a>
           </li>
           <li>
+            <button @click="showPalette = true">
+              <Command :size="14" />
+              Command palette
+              <span class="ml-auto flex items-center gap-0.5" aria-hidden="true"><span class="kbd-hint">{{ MOD }}</span><span class="kbd-hint">K</span></span>
+            </button>
+          </li>
+          <li>
+            <button @click="showShortcuts = true">
+              <Keyboard :size="14" />
+              Keyboard shortcuts
+              <span class="ml-auto kbd-hint" aria-hidden="true">?</span>
+            </button>
+          </li>
+          <li>
             <button @click="showOnboarding = true">
               <Sparkles :size="14" />
               Run setup again
+            </button>
+          </li>
+          <li>
+            <button @click="showAbout = true">
+              <Info :size="14" />
+              About Clio
             </button>
           </li>
         </ul>
@@ -208,6 +228,12 @@
               Run setup again
             </button>
           </li>
+          <li>
+            <button @click="showAbout = true; closeMenus()">
+              <Info :size="14" />
+              About Clio
+            </button>
+          </li>
           <li v-if="me.authenticated_via === 'cloudflare-access'">
             <a :href="me.logout_url" class="text-error">
               <LogOut :size="14" />
@@ -279,7 +305,7 @@
         >
           <!-- Chat gets full height, no padding wrapper -->
           <div v-if="activeTab === 'chat'" class="h-full p-3 md:p-4">
-            <ChatTab @switch-tab="switchTab" @show-sources="sourcesSidebarOpen = true" />
+            <ChatTab @switch-tab="switchTab" @show-sources="sourcesSidebarOpen = true" @add-sources="openAddSources" />
           </div>
 
           <!-- All other tabs: padded scroll container -->
@@ -787,6 +813,12 @@
 
     <!-- Global toast stack + backend-unreachable banner -->
     <Toaster />
+
+    <!-- Command palette, shortcuts sheet and About: the three things the
+         Help menu and the keyboard open from anywhere. -->
+    <CommandPalette :open="showPalette" :commands="paletteCommands" @close="showPalette = false" />
+    <ShortcutsDialog :open="showShortcuts" @close="showShortcuts = false" />
+    <AboutDialog :open="showAbout" @close="showAbout = false" />
 
     <!-- Embedding model missing: the built-in model is not in the local cache
          and would have to be downloaded (blocked on this network). Shown until
@@ -1333,8 +1365,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue'
-import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose } from 'lucide-vue-next'
+import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
+import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus } from 'lucide-vue-next'
+import CommandPalette from './components/CommandPalette.vue'
+import ShortcutsDialog from './components/ShortcutsDialog.vue'
+import AboutDialog from './components/AboutDialog.vue'
+import { isTypingTarget, isMod, MOD } from './utils/shortcuts'
+import { useChatStore } from './stores/chatStore'
 import http from './utils/http'
 import { useModal } from './composables/useModal'
 import { lazyView } from './utils/lazyView'
@@ -1906,6 +1943,129 @@ const switchTab = (tabName) => {
   activeTab.value = tabName
 }
 
+// ── Command palette and global shortcuts ──
+// The palette is the one place every destination and action is listed, so
+// anything reachable from the header is reachable from the keyboard too.
+const chatStore = useChatStore()
+const showPalette = ref(false)
+const showShortcuts = ref(false)
+const showAbout = ref(false)
+
+const THEME_CHOICES = [
+  { id: 'light', label: 'Light', icon: SunMedium },
+  { id: 'dark', label: 'Dark', icon: Moon },
+  { id: 'cupcake', label: 'Cupcake', icon: Palette },
+  { id: 'nord', label: 'Nord', icon: Palette },
+  { id: 'dracula', label: 'Dracula', icon: Palette },
+]
+const setTheme = (id) => {
+  if (id) localStorage.setItem('theme', id)
+  else localStorage.removeItem('theme')
+  window.dispatchEvent(new CustomEvent('theme-changed'))
+}
+
+const focusChatInput = () => {
+  switchTab('chat')
+  nextTick(() => document.getElementById('chat-input')?.focus())
+}
+const focusSearchInput = () => {
+  switchTab('search')
+  nextTick(() => document.getElementById('search-query')?.focus())
+}
+const newChat = () => {
+  chatStore.newSession(collectionStore.currentCollectionId)
+  focusChatInput()
+}
+// The Sources panel owns its Add-sources flow; it listens for this event.
+const openAddSources = () => {
+  if (!isWorkspaceView.value) switchTab(chatTabEnabled.value ? 'chat' : 'search')
+  sourcesSidebarOpen.value = true
+  nextTick(() => window.dispatchEvent(new CustomEvent('clio:add-sources')))
+}
+
+const paletteCommands = computed(() => {
+  const current = collectionStore.currentCollectionId
+  const currentTheme = localStorage.getItem('theme')
+  const cmds = []
+  const add = (group, label, icon, run, extra = {}) => cmds.push({ id: `${group}:${label}`, group, label, icon, run, ...extra })
+
+  if (chatTabEnabled.value) add('Go to', 'Ask', MessageSquare, () => switchTab('chat'), { keys: ['G', 'A'], keywords: 'chat question' })
+  add('Go to', 'Find', Search, () => switchTab('search'), { keys: ['G', 'F'], keywords: 'search passages' })
+  add('Go to', 'Connect', Plug, () => switchTab('mcp'), { keys: ['G', 'C'], keywords: 'mcp token claude chatgpt client' })
+  add('Go to', 'Reports', FileText, () => switchTab('generate'), { keywords: 'generate briefing summary' })
+  add('Go to', 'Saved instructions', BookOpen, () => switchTab('expertise'), { keywords: 'expertise packs' })
+  if (userStore.adminConsole) add('Go to', 'Administration', Gauge, () => switchTab('admin'), { keywords: 'admin audit access' })
+  add('Go to', 'Collections', Layers, () => switchTab('collections'), { keys: ['G', 'O'], keywords: 'overview all' })
+  add('Go to', 'Settings', Settings, () => switchTab('settings'), { keys: ['G', 'S'], keywords: 'preferences provider model theme' })
+
+  if (chatTabEnabled.value) {
+    add('Ask', 'New chat', MessageSquarePlus, newChat, { keys: [MOD, 'J'] })
+    add('Ask', 'Focus the question box', MessageSquare, focusChatInput)
+    for (const session of chatStore.getSessions(current).slice(0, 8)) {
+      if (!session.messages?.length) continue
+      add('Recent chats', session.title || 'New chat', History, () => {
+        chatStore.selectSession(current, session.id)
+        switchTab('chat')
+      }, { detail: `${session.messages.length} message${session.messages.length === 1 ? '' : 's'}`, keywords: 'chat session history' })
+    }
+  }
+  add('Find', 'Search passages', Search, focusSearchInput, { keywords: 'find exact' })
+
+  add('Sources', 'Add sources', FolderPlus, openAddSources, { keys: [MOD, 'U'], keywords: 'upload index file folder link' })
+  add('Sources', sourcesPanelShown.value ? 'Hide sources panel' : 'Show sources panel', PanelLeft, toggleSources, { keys: [MOD, '\\'] })
+  if (!isCompact.value) add('Sources', notesPanelShown.value ? 'Hide notes and tools' : 'Show notes and tools', StickyNote, toggleNotes, { keys: [MOD, '.'] })
+  add('Sources', 'Background jobs', Bell, () => { showJobsDrawer.value = true }, { keywords: 'indexing progress' })
+
+  for (const c of collectionStore.sortedCollections) {
+    if (c.id === current) continue
+    add('Switch collection', c.name, Layers, () => selectCollectionAndNavigate(c.id), {
+      swatch: c.color,
+      detail: `${c.document_count || 0} ${(c.document_count || 0) === 1 ? 'doc' : 'docs'}`,
+      keywords: 'collection switch open',
+    })
+  }
+  add('Switch collection', 'New collection', Plus, () => { switchTab('collections'); nextTick(openCreateCollectionModal) }, { keywords: 'create' })
+
+  for (const t of THEME_CHOICES) {
+    add('Theme', t.label, t.icon, () => setTheme(t.id), { hint: currentTheme === t.id ? 'current' : undefined, keywords: 'theme appearance colour color' })
+  }
+  add('Theme', 'Follow system', MonitorCog, () => setTheme(null), { hint: !currentTheme ? 'current' : undefined, keywords: 'theme auto os' })
+
+  add('Help', 'Keyboard shortcuts', Keyboard, () => { showShortcuts.value = true }, { keys: ['?'] })
+  add('Help', 'Documentation', BookOpen, () => window.open('https://github.com/jordanboyce/clio#readme', '_blank', 'noopener'))
+  add('Help', 'Run setup again', Sparkles, () => { showOnboarding.value = true })
+  add('Help', 'About Clio', Info, () => { showAbout.value = true }, { keywords: 'version whats new' })
+  return cmds
+})
+
+// Two-key "go to" sequences (g then a letter) live here; the pending prefix
+// expires quickly so a stray g never arms a later keystroke.
+let goPrefixUntil = 0
+const onGlobalKeydown = (e) => {
+  if (e.defaultPrevented) return
+  const key = e.key
+  if (isMod(e) && !e.shiftKey && key.toLowerCase() === 'k') {
+    e.preventDefault()
+    showPalette.value = !showPalette.value
+    return
+  }
+  if (showPalette.value) return
+  if (isMod(e) && !e.shiftKey && key.toLowerCase() === 'j' && chatTabEnabled.value) { e.preventDefault(); newChat(); return }
+  if (isMod(e) && !e.shiftKey && key === '\\') { e.preventDefault(); toggleSources(); return }
+  if (isMod(e) && !e.shiftKey && key === '.' && !isCompact.value) { e.preventDefault(); toggleNotes(); return }
+  if (isMod(e) && !e.shiftKey && key.toLowerCase() === 'u') { e.preventDefault(); openAddSources(); return }
+
+  if (isTypingTarget(e.target) || e.ctrlKey || e.metaKey || e.altKey) return
+  if (key === '?') { e.preventDefault(); showShortcuts.value = !showShortcuts.value; return }
+  const now = Date.now()
+  if (key === 'g' || key === 'G') { goPrefixUntil = now + 1200; return }
+  if (goPrefixUntil > now) {
+    goPrefixUntil = 0
+    const target = { a: chatTabEnabled.value ? 'chat' : null, f: 'search', c: 'mcp', o: 'collections', s: 'settings' }[key.toLowerCase()]
+    if (target) { e.preventDefault(); switchTab(target) }
+  }
+}
+
 const selectCollectionAndNavigate = (collectionId) => {
   collectionStore.setCurrentCollection(collectionId)
   activeTab.value = chatTabEnabled.value ? 'chat' : 'search'
@@ -2168,6 +2328,7 @@ onMounted(async () => {
   backgroundJobsStore.checkActiveJobs()
   window.addEventListener('visibilitychange', refreshJobsOnReturn)
   window.addEventListener('focus', refreshJobsOnReturn)
+  window.addEventListener('keydown', onGlobalKeydown)
 
   // Initialize theme
   updateThemeFromStorage()
@@ -2196,5 +2357,6 @@ onBeforeUnmount(() => {
   backgroundJobsStore.cleanup()
   window.removeEventListener('visibilitychange', refreshJobsOnReturn)
   window.removeEventListener('focus', refreshJobsOnReturn)
+  window.removeEventListener('keydown', onGlobalKeydown)
 })
 </script>

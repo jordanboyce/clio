@@ -248,6 +248,9 @@ class DocumentListResponse(BaseModel):
 
     documents: List[DocumentMetadata] = Field(..., description="List of indexed documents")
     total_documents: int = Field(..., description="Total number of documents")
+    kind_counts: Optional[Dict[str, int]] = Field(
+        None, description="Documents per kind (code, docs, data, media, other) for the unfiltered-by-kind set"
+    )
 
 
 class DocumentChunkView(BaseModel):
@@ -259,6 +262,12 @@ class DocumentChunkView(BaseModel):
     text: str = Field(..., description="Chunk text")
     source_format: Optional[str] = Field(None, description="Source format")
     extraction_method: Optional[str] = Field(None, description="Extraction method")
+    # Code chunks: which symbol the passage is, and where it sits in the file
+    language: Optional[str] = Field(None, description="Programming language for code chunks")
+    symbol_name: Optional[str] = Field(None, description="Function/class/procedure name for code chunks")
+    symbol_type: Optional[str] = Field(None, description="Symbol kind: function, class, method, code_block, ...")
+    line_start: Optional[int] = Field(None, description="First source line of the chunk (1-based)")
+    line_end: Optional[int] = Field(None, description="Last source line of the chunk (1-based)")
     extracted_fields: Optional[Dict[str, str]] = Field(
         None,
         description="Heuristically extracted field/value pairs from chunk text"
@@ -434,8 +443,16 @@ class RepoUploadResponse(BaseModel):
     """Response from repository upload endpoint."""
 
     message: str = Field(..., description="Status message")
+    status: str = Field(
+        "queued",
+        description="'queued' when a job was started; 'up_to_date' when every file was already indexed",
+    )
     job_id: Optional[int] = Field(None, description="Background job ID for async processing")
     files_found: int = Field(0, description="Total files found matching patterns")
+    skipped_unchanged: int = Field(
+        0, description="Files left out because their exact bytes are already in the collection"
+    )
+    skipped_unsupported: int = Field(0, description="Files skipped because their type cannot be indexed")
     files_indexed: int = Field(0, description="Files successfully indexed")
     files_failed: int = Field(0, description="Files that failed to index")
     total_chunks: int = Field(0, description="Total chunks created")
@@ -483,3 +500,62 @@ class SetCollectionExpertiseRequest(BaseModel):
     """Request body for replacing a collection's attached pack list."""
 
     pack_ids: List[str] = Field(..., description="Full set of pack IDs to attach (replaces existing)")
+
+
+class SyncFolderRequest(BaseModel):
+    """Request for bringing a collection up to date with a folder on disk."""
+
+    path: str = Field(..., description="Local filesystem path to the folder")
+    collection_id: str = Field("default", description="Collection to sync into")
+    recursive: bool = Field(True, description="Recursively scan subdirectories")
+    file_extensions: Optional[List[str]] = Field(
+        None, description="Extensions to include (e.g. ['.py', '.md']). All files when unset."
+    )
+    exclude_patterns: Optional[List[str]] = Field(
+        None, description="Glob patterns to exclude, on top of the built-in defaults"
+    )
+    prune_missing: bool = Field(
+        False,
+        description="Remove documents this folder was synced from whose file no longer exists",
+    )
+
+
+class SyncFolderResponse(BaseModel):
+    """Outcome of a folder sync. Only new and changed files are queued."""
+
+    status: str = Field(..., description="'queued' when a job was started, 'up_to_date' otherwise")
+    job_id: Optional[int] = Field(None, description="Background job ID, when something was queued")
+    path: str = Field(..., description="The folder that was synced (resolved)")
+    files_found: int = Field(0, description="Files matched in the folder")
+    queued: int = Field(0, description="New or changed files handed to the indexing job")
+    skipped_unchanged: int = Field(0, description="Files whose bytes were already indexed")
+    skipped_unsupported: int = Field(0, description="Files the scan left out because Clio cannot index their type")
+    replaced: List[str] = Field(default_factory=list, description="Documents removed because their file changed")
+    replaced_count: int = Field(0)
+    pruned: List[str] = Field(default_factory=list, description="Documents removed because their file is gone")
+    pruned_count: int = Field(0)
+    last_synced_at: Optional[str] = Field(None, description="ISO timestamp of this sync")
+    message: str = Field("", description="Status message")
+
+
+class SyncFolderRecord(BaseModel):
+    """A folder remembered for a collection, with the counts of its last sync."""
+
+    path: str
+    last_synced_at: Optional[str] = None
+    job_id: Optional[int] = None
+    files_found: int = 0
+    queued: int = 0
+    skipped_unchanged: int = 0
+    replaced_count: int = 0
+    pruned_count: int = 0
+    recursive: bool = True
+    file_extensions: Optional[List[str]] = None
+    exclude_patterns: Optional[List[str]] = None
+    prune_missing: bool = False
+    exists: bool = Field(True, description="Whether the folder is still present on disk")
+
+
+class SyncFoldersResponse(BaseModel):
+    collection_id: str
+    folders: List[SyncFolderRecord] = Field(default_factory=list)

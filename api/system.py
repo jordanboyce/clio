@@ -8,7 +8,6 @@ from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
 
 from config import settings
-from services.document_extractor import DocumentExtractor
 from services.ai_service import detect_ollama
 from services.config_manager import config_manager
 from services.indexer_manager import indexer_manager
@@ -156,6 +155,36 @@ async def get_capabilities():
     }
 
 
+@router.get(
+    "/api/about",
+    summary="Version and deployment facts for the About dialog",
+    tags=["system"],
+)
+async def get_about():
+    """What the About dialog shows: the running version (the image's
+    CLIO_VERSION, or the git describe of a source checkout, or "dev"), the
+    embedding model in use, and whether MCP and offline mode are on. No
+    secrets, no paths — it is readable by anyone who can open the app."""
+    import os
+    import subprocess
+    version = os.environ.get("CLIO_VERSION", "").strip()
+    if not version:
+        try:
+            version = subprocess.run(
+                ["git", "describe", "--tags", "--always", "--dirty"],
+                capture_output=True, text=True, timeout=2,
+                cwd=str(Path(__file__).resolve().parent.parent),
+            ).stdout.strip() or "dev"
+        except Exception:
+            version = "dev"
+    return {
+        "version": version,
+        "embedding_model": settings.embedding_model,
+        "mcp_enabled": settings.enable_mcp,
+        "offline_mode": settings.offline_mode,
+    }
+
+
 class ScanFolderRequest(BaseModel):
     """Request body for scanning a folder."""
     path: str
@@ -201,8 +230,13 @@ def scan_folder(request: ScanFolderRequest):  # sync: filesystem walk runs in th
     ]
 
     # Determine which extensions to look for
-    all_supported = DocumentExtractor.SUPPORTED_EXTENSIONS
-    extensions_filter = set(request.file_extensions) if request.file_extensions else all_supported
+    from services.document_extractor import is_supported_filename
+    extensions_filter = set(e.lower() for e in request.file_extensions) if request.file_extensions else None
+
+    def wanted(path: Path) -> bool:
+        if extensions_filter is not None:
+            return path.suffix.lower() in extensions_filter
+        return is_supported_filename(path.name)
 
     files_found = []
 
@@ -216,7 +250,7 @@ def scan_folder(request: ScanFolderRequest):  # sync: filesystem walk runs in th
 
             for filename in files:
                 file_path = Path(root) / filename
-                if file_path.suffix.lower() in extensions_filter:
+                if wanted(file_path):
                     files_found.append({
                         "path": str(file_path),
                         "name": filename,
@@ -225,7 +259,7 @@ def scan_folder(request: ScanFolderRequest):  # sync: filesystem walk runs in th
                     })
     else:
         for file_path in folder_path.iterdir():
-            if file_path.is_file() and file_path.suffix.lower() in extensions_filter:
+            if file_path.is_file() and wanted(file_path):
                 files_found.append({
                     "path": str(file_path),
                     "name": file_path.name,

@@ -77,10 +77,12 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 /* We don't pull in @tailwindcss/typography (extra weight, opinionated),
    so these rules style the markdown output in the chat message bubble. */
 .chat-markdown {
-  font-size: 0.875rem;
-  line-height: 1.6;
+  font-size: 0.9375rem;
+  line-height: 1.7;
   color: inherit;
 }
+/* Long-form answers get a reading measure; tool surfaces keep their density. */
+.chat-markdown.is-answer { max-width: 72ch; }
 .chat-markdown > * + * { margin-top: 0.75rem; }
 .chat-markdown h1,
 .chat-markdown h2,
@@ -95,7 +97,7 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .chat-markdown h1 { font-size: 1.15rem; }
 .chat-markdown h2 { font-size: 1.05rem; }
 .chat-markdown h3 { font-size: 0.975rem; }
-.chat-markdown h4 { font-size: 0.9rem; color: oklch(var(--bc) / 0.8); }
+.chat-markdown h4 { font-size: 0.9rem; color: color-mix(in oklch, var(--color-base-content) 80%, transparent); }
 .chat-markdown p { margin: 0; }
 .chat-markdown strong { font-weight: 600; }
 .chat-markdown em { font-style: italic; }
@@ -113,12 +115,12 @@ h1, h2, h3 { letter-spacing: -0.01em; }
   font-size: 0.85em;
   padding: 0.1rem 0.35rem;
   border-radius: 0.25rem;
-  background: oklch(var(--b3) / 0.6);
-  color: oklch(var(--bc) / 0.9);
+  background: color-mix(in oklch, var(--color-base-content) 8%, transparent);
+  color: color-mix(in oklch, var(--color-base-content) 90%, transparent);
 }
 .chat-markdown pre {
-  background: oklch(var(--b3) / 0.5);
-  border: 1px solid oklch(var(--bc) / 0.1);
+  background: color-mix(in oklch, var(--color-base-content) 5%, transparent);
+  border: 1px solid color-mix(in oklch, var(--color-base-content) 10%, transparent);
   border-radius: 0.5rem;
   padding: 0.75rem 1rem;
   overflow-x: auto;
@@ -130,22 +132,22 @@ h1, h2, h3 { letter-spacing: -0.01em; }
   font-size: inherit;
 }
 .chat-markdown blockquote {
-  border-left: 3px solid oklch(var(--bc) / 0.2);
+  border-left: 3px solid color-mix(in oklch, var(--color-base-content) 20%, transparent);
   padding-left: 0.75rem;
-  color: oklch(var(--bc) / 0.7);
+  color: color-mix(in oklch, var(--color-base-content) 70%, transparent);
   font-style: italic;
 }
 .chat-markdown hr {
   border: 0;
-  border-top: 1px solid oklch(var(--bc) / 0.15);
+  border-top: 1px solid color-mix(in oklch, var(--color-base-content) 15%, transparent);
   margin: 1rem 0;
 }
 .chat-markdown a {
-  color: oklch(var(--p));
+  color: var(--color-primary);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.chat-markdown a:hover { color: oklch(var(--pf)); }
+.chat-markdown a:hover { color: color-mix(in oklch, var(--color-primary) 85%, var(--color-base-content)); }
 .chat-markdown table {
   border-collapse: collapse;
   width: 100%;
@@ -154,11 +156,11 @@ h1, h2, h3 { letter-spacing: -0.01em; }
   overflow-x: auto;
 }
 .chat-markdown thead {
-  background: oklch(var(--b3) / 0.5);
+  background: color-mix(in oklch, var(--color-base-content) 5%, transparent);
 }
 .chat-markdown th,
 .chat-markdown td {
-  border: 1px solid oklch(var(--bc) / 0.12);
+  border: 1px solid color-mix(in oklch, var(--color-base-content) 12%, transparent);
   padding: 0.4rem 0.6rem;
   text-align: left;
   vertical-align: top;
@@ -352,4 +354,160 @@ html, body { overscroll-behavior-y: none; }
 .brand-art-mark {
   --brand-art-light: url("/clio-mark.png");
   --brand-art-dark: url("/clio-mark-dark.png");
+}
+
+/* ─── Motion ────────────────────────────────────────────────────────────── */
+/* One short, quiet vocabulary: things fade and settle, nothing bounces.
+   Names are consumed by Vue <Transition name="…">. The reduced-motion rule
+   above collapses all of them to ~0ms. */
+.fade-enter-active, .fade-leave-active { transition: opacity 140ms ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+.rise-enter-active { transition: opacity 160ms ease, transform 160ms ease; }
+.rise-leave-active { transition: opacity 100ms ease, transform 100ms ease; }
+.rise-enter-from, .rise-leave-to { opacity: 0; transform: translateY(6px); }
+
+.pop-enter-active { transition: opacity 120ms ease, transform 120ms cubic-bezier(.2,.8,.2,1); }
+.pop-leave-active { transition: opacity 90ms ease, transform 90ms ease; }
+.pop-enter-from, .pop-leave-to { opacity: 0; transform: translateY(-4px) scale(0.985); }
+
+/* Toast stack: slide in from the edge, settle, fade out. */
+.toast-enter-active { transition: opacity 180ms ease, transform 180ms cubic-bezier(.2,.8,.2,1); }
+.toast-leave-active { transition: opacity 140ms ease, transform 140ms ease; position: absolute; right: 0; }
+.toast-move { transition: transform 180ms ease; }
+.toast-enter-from { opacity: 0; transform: translateX(12px); }
+.toast-leave-to { opacity: 0; transform: translateY(6px); }
+
+/* ─── Keyboard hint ─────────────────────────────────────────────────────── */
+/* A real keycap, for the places that teach a shortcut (palette, help sheet).
+   Mixed from base-content so it sits on any theme. */
+.kbd-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.375rem;
+  height: 1.25rem;
+  padding: 0 0.3125rem;
+  border-radius: 0.3125rem;
+  font-size: 0.6875rem;
+  line-height: 1;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  letter-spacing: 0.02em;
+  color: color-mix(in oklch, var(--color-base-content) 70%, transparent);
+  background-color: color-mix(in oklch, var(--color-base-content) 6%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in oklch, var(--color-base-content) 14%, transparent),
+              0 0 0 1px color-mix(in oklch, var(--color-base-content) 10%, transparent);
+}
+
+/* ─── Command palette ───────────────────────────────────────────────────── */
+/* A single floating sheet: a field on top, grouped rows under it. It reuses
+   the side-panel row language so it reads as part of the same product. */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 1rem 1rem;
+  background-color: color-mix(in oklch, var(--color-base-content) 22%, transparent);
+  backdrop-filter: blur(2px);
+}
+.palette {
+  width: 100%;
+  max-width: 36rem;
+  max-height: min(70vh, 32rem);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 0.875rem;
+  background-color: var(--color-base-100);
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-base-content) 12%, transparent),
+              0 24px 64px -12px color-mix(in oklch, var(--color-base-content) 35%, transparent);
+}
+.palette-field {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  height: 3rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid color-mix(in oklch, var(--color-base-content) 10%, transparent);
+}
+.palette-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  font-size: 0.9375rem;
+}
+.palette-field input:focus { outline: none; }
+.palette-list { overflow-y: auto; padding: 0.375rem; }
+.palette-group {
+  padding: 0.5rem 0.625rem 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: color-mix(in oklch, var(--color-base-content) 45%, transparent);
+}
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.375rem 0.625rem;
+  border-radius: 0.5rem;
+  text-align: left;
+  font-size: 0.875rem;
+  line-height: 1.25;
+  cursor: pointer;
+}
+.palette-row.is-active { background-color: color-mix(in oklch, var(--color-base-content) 8%, transparent); }
+.palette-row .palette-hint {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: color-mix(in oklch, var(--color-base-content) 45%, transparent);
+  white-space: nowrap;
+}
+
+/* ─── Quiet notice ──────────────────────────────────────────────────────── */
+/* Inline status that informs without shouting: a tint, an icon, one line.
+   Replaces the full-colour DaisyUI alerts in the reading surfaces. */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.625rem;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  background-color: color-mix(in oklch, var(--color-base-content) 5%, transparent);
+}
+.notice-warning { background-color: color-mix(in oklch, var(--color-warning) 14%, transparent); }
+.notice-error { background-color: color-mix(in oklch, var(--color-error) 12%, transparent); }
+.notice-info { background-color: color-mix(in oklch, var(--color-info) 12%, transparent); }
+.notice > svg { flex: none; }
+
+/* ─── Reading-room answers ──────────────────────────────────────────────── */
+/* The answer is prose on the page, not a bubble. A hairline on the left of a
+   streaming answer is the only chrome; it fades once the text has landed. */
+.answer-block { position: relative; padding-left: 0; }
+.answer-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background-color: var(--color-primary);
+  animation: caret-blink 1s steps(2, start) infinite;
+}
+@keyframes caret-blink { to { visibility: hidden; } }
+
+/* Composer: the field grows with the message and stops at a reading height. */
+.composer-input {
+  min-height: 2.75rem;
+  max-height: 14rem;
+  field-sizing: content;
 }

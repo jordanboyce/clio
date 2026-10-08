@@ -233,6 +233,44 @@
             Reading folder…
           </div>
 
+          <!-- Folders synced before: one click brings them up to date.
+               Unchanged files are skipped; "prune" also drops documents whose
+               file has gone from disk. -->
+          <div v-if="syncFolders.length > 0 && selectedPaths.length === 0" class="space-y-0.5" data-testid="synced-folders">
+            <div class="flex items-center justify-between px-0.5">
+              <span class="side-label text-base-content/50">Synced folders</span>
+            </div>
+            <div
+              v-for="folder in syncFolders"
+              :key="folder.path"
+              class="group flex items-center gap-1.5 text-xs rounded-md px-1 py-1 hover:bg-base-content/[0.05]"
+            >
+              <FolderSync :size="12" class="flex-shrink-0 text-base-content/45" aria-hidden="true" />
+              <span class="flex-1 min-w-0">
+                <span class="block truncate text-base-content/80" :title="folder.path">{{ folderLabel(folder.path) }}</span>
+                <span class="block text-[10px] text-base-content/45 truncate">
+                  <template v-if="!folder.exists">Folder not found</template>
+                  <template v-else-if="folder.last_synced_at">Synced {{ formatSyncTime(folder.last_synced_at) }}<template v-if="folder.pruned_count"> · {{ folder.pruned_count }} pruned</template></template>
+                </span>
+              </span>
+              <button
+                class="btn btn-ghost btn-xs h-6 min-h-0 px-1.5 hover-reveal"
+                :disabled="indexing || syncingPath === folder.path || !folder.exists"
+                :title="`Index new and changed files in ${folder.path}`"
+                @click="runFolderSync(folder, false)"
+              >
+                <span v-if="syncingPath === folder.path" class="loading loading-spinner loading-xs"></span>
+                <template v-else>Sync</template>
+              </button>
+              <button
+                class="btn btn-ghost btn-xs h-6 min-h-0 px-1.5 hover-reveal text-base-content/60"
+                :disabled="indexing || syncingPath === folder.path || !folder.exists"
+                title="Sync, and remove documents whose file was deleted from this folder"
+                @click="runFolderSync(folder, true)"
+              >Prune</button>
+            </div>
+          </div>
+
           <!-- Selected paths -->
           <div v-if="selectedPaths.length > 0" class="space-y-1.5">
             <div class="flex items-center justify-between">
@@ -453,6 +491,37 @@
         >Chat and reports use only the selected sources.</p>
       </div>
 
+      <!-- Type chips: what kinds of sources are here, and a one-tap filter.
+           Counts come from the server so they describe the whole collection,
+           not just the loaded page. Shown once there is more than one kind. -->
+      <div
+        v-if="kindChips.length > 1 || docKind"
+        class="flex items-center gap-1 px-2.5 pb-1.5 flex-wrap"
+        role="group"
+        aria-label="Filter sources by type"
+        data-testid="kind-chips"
+      >
+        <button
+          type="button"
+          class="btn btn-xs h-5 min-h-0 px-1.5 rounded-full font-normal gap-1"
+          :class="!docKind ? 'btn-neutral' : 'btn-ghost text-base-content/60'"
+          :aria-pressed="!docKind"
+          @click="setDocKind('')"
+        >All <span class="tabular-nums opacity-70">{{ kindTotal.toLocaleString() }}</span></button>
+        <button
+          v-for="chip in kindChips"
+          :key="chip.kind"
+          type="button"
+          class="btn btn-xs h-5 min-h-0 px-1.5 rounded-full font-normal gap-1"
+          :class="docKind === chip.kind ? 'btn-neutral' : 'btn-ghost text-base-content/60'"
+          :aria-pressed="docKind === chip.kind"
+          @click="setDocKind(chip.kind)"
+        >
+          <component :is="FAMILIES[chip.kind].icon" :size="10" aria-hidden="true" />
+          {{ FAMILIES[chip.kind].label }} <span class="tabular-nums opacity-70">{{ chip.count.toLocaleString() }}</span>
+        </button>
+      </div>
+
       <!-- Loading spinner -->
       <div v-if="loading" class="flex justify-center py-8">
         <span class="loading loading-spinner loading-sm"></span>
@@ -465,6 +534,7 @@
           <p class="text-xs text-base-content/50 mt-2">Syncing sources…</p>
         </template>
         <p v-else-if="docSearch" class="text-xs text-base-content/50">No sources match “{{ docSearch }}”.</p>
+        <p v-else-if="docKind" class="text-xs text-base-content/50">No {{ FAMILIES[docKind]?.label.toLowerCase() || docKind }} sources here.</p>
         <p v-else class="text-xs text-base-content/50">No sources yet. Use Add Sources above to get started.</p>
       </div>
 
@@ -487,15 +557,25 @@
           />
 
           <!-- File icon -->
-          <div class="flex items-center justify-center w-7 h-7 rounded flex-shrink-0 mt-0.5" :class="isLinkDoc(doc) ? 'bg-info/20' : getFileIconClass(doc.filename)">
-            <component :is="isLinkDoc(doc) ? Globe : getFileIcon(doc.filename)" :size="14" :class="isLinkDoc(doc) ? 'text-info' : getFileIconTextClass(doc.filename)" />
+          <div
+            class="relative flex items-center justify-center w-7 h-7 rounded-md flex-shrink-0 mt-0.5"
+            :class="fileInfo(doc).tile"
+            :title="`${FAMILIES[fileInfo(doc).family].label}${fileInfo(doc).label ? ' · ' + fileInfo(doc).label : ''}`"
+          >
+            <component :is="fileInfo(doc).icon" :size="14" aria-hidden="true" />
           </div>
 
           <!-- Info -->
           <div class="flex-1 min-w-0">
             <div class="text-xs font-semibold truncate leading-tight" :title="isLinkDoc(doc) ? doc.source_path : doc.filename">{{ doc.filename }}</div>
             <div class="flex items-center gap-1 mt-0.5 flex-wrap">
-              <span class="text-xs text-base-content/50">{{ doc.total_pages }}p · {{ doc.total_chunks }}ch</span>
+              <span
+                v-if="fileInfo(doc).label"
+                class="font-mono text-[10px] leading-none px-1 py-0.5 rounded bg-base-content/[0.07] text-base-content/70"
+                :aria-label="`File type ${fileInfo(doc).label}`"
+              >{{ fileInfo(doc).label }}</span>
+              <span v-if="isCodeDoc(doc)" class="text-xs text-base-content/50 tabular-nums">{{ doc.total_chunks }} {{ doc.total_chunks === 1 ? 'symbol' : 'symbols' }}</span>
+              <span v-else class="text-xs text-base-content/50 tabular-nums">{{ doc.total_pages }}p · {{ doc.total_chunks }}ch</span>
               <span
                 class="badge badge-xs"
                 :class="isLinkDoc(doc) ? 'badge-info' : (doc.source_type === 'local_reference' ? 'badge-ghost' : 'badge-primary')"
@@ -652,7 +732,15 @@
                 <div class="flex items-center justify-between flex-wrap gap-2">
                   <div class="font-mono text-xs text-base-content/60">{{ chunk.chunk_id }}</div>
                   <div class="flex gap-2">
-                    <span class="badge badge-sm">p{{ chunk.page_number }} c{{ chunk.chunk_index }}</span>
+                    <template v-if="chunk.symbol_name || chunk.line_start">
+                      <span v-if="chunk.symbol_name" class="badge badge-sm badge-primary badge-outline font-mono gap-1" :title="chunk.symbol_type || 'symbol'">
+                        <span class="opacity-60 font-sans">{{ chunk.symbol_type || 'symbol' }}</span>{{ chunk.symbol_name }}
+                      </span>
+                      <span v-else-if="chunk.symbol_type" class="badge badge-sm badge-ghost">{{ chunk.symbol_type.replace(/_/g, ' ') }}</span>
+                      <span v-if="chunk.line_start" class="badge badge-sm badge-ghost tabular-nums">L{{ chunk.line_start }}<template v-if="chunk.line_end && chunk.line_end !== chunk.line_start">–{{ chunk.line_end }}</template></span>
+                      <span v-if="chunk.language" class="badge badge-sm badge-ghost">{{ chunk.language }}</span>
+                    </template>
+                    <span v-else class="badge badge-sm">p{{ chunk.page_number }} c{{ chunk.chunk_index }}</span>
                     <span v-if="chunk.extraction_method === 'ocr'" class="badge badge-warning badge-sm">OCR</span>
                     <span v-else-if="chunk.extraction_method === 'hybrid'" class="badge badge-info badge-sm">Hybrid</span>
                     <span v-if="chunkFieldCount(chunk) > 0" class="badge badge-success badge-sm">{{ chunkFieldCount(chunk) }} fields</span>
@@ -821,7 +909,7 @@
 <script setup>
 import { ref, computed, markRaw, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import http from '../utils/http'
-import { FileText, Eye, Trash2, RefreshCw, X, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe } from 'lucide-vue-next'
+import { FileText, Eye, Trash2, RefreshCw, X, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useUiStore } from '../stores/uiStore'
 import { useUserStore } from '../stores/userStore'
@@ -831,6 +919,7 @@ import { useExpertiseStore } from '../stores/expertiseStore'
 import { useSelectionStore } from '../stores/selectionStore'
 import { useStatsStore } from '../stores/statsStore'
 import { formatBytes, describeStorage } from '../utils/format'
+import { describeFile, FAMILIES, isTabularFile } from '../utils/fileTypes'
 
 const emit = defineEmits(['document-deleted', 'open', 'background-job-started', 'clone-collection'])
 
@@ -1255,10 +1344,11 @@ const openFolderPicker = async () => {
       const folderPath = response.data.path
 
       // Scan folder for supported document types, add individual files
+      // No extension filter: the server scans for everything it can index,
+      // source code included, and skips what it cannot.
       const scanResponse = await http.post('/api/scan-folder', {
         path: folderPath,
         recursive: true,
-        file_extensions: ['.pdf', '.txt', '.docx', '.csv', '.xlsx', '.xls', '.md', '.json', '.jsonl']
       })
 
       if (scanResponse.data.files && scanResponse.data.files.length > 0) {
@@ -1272,7 +1362,7 @@ const openFolderPicker = async () => {
           }
         }
       } else {
-        indexError.value = 'No supported files found (.pdf, .txt, .docx, .csv, .xlsx, .xls, .md, .json)'
+        indexError.value = 'No supported files found in that folder.'
       }
     }
   } catch (err) {
@@ -1317,6 +1407,7 @@ const indexFiles = async () => {
 
   const errors = []
   let jobsStarted = 0
+  let upToDate = 0
   let filesQueued = 0
 
   const describe = (err, fallback) => err?.message || fallback
@@ -1411,16 +1502,22 @@ const indexFiles = async () => {
             job_id: data.job_id,
             collection_id: collectionId,
             status: 'pending',
-            total_files: data.files_found || 0,
+            total_files: (data.files_found || 0) - (data.skipped_unchanged || 0),
             processed_files: 0,
             progress_percent: 0,
             job_type: 'index',
           })
           jobsStarted += 1
-          filesQueued += data.files_found || 0
+          filesQueued += (data.files_found || 0) - (data.skipped_unchanged || 0)
+          if (data.skipped_unchanged) ui.notify(`${folder.name}: ${data.skipped_unchanged.toLocaleString()} unchanged ${data.skipped_unchanged === 1 ? 'file' : 'files'} skipped`, 'info')
+        } else if (data.status === 'up_to_date') {
+          // Every file was already indexed: not an error, just nothing to do.
+          ui.notify(`${folder.name} is up to date — ${(data.skipped_unchanged || 0).toLocaleString()} ${data.skipped_unchanged === 1 ? 'file' : 'files'} already indexed`, 'success')
+          upToDate += 1
         } else {
           errors.push(`${folder.name}: ${data.message || 'no files matched'}`)
         }
+        loadSyncFolders()
       } catch (err) {
         errors.push(`${folder.name}: ${describe(err, 'could not be added')}`)
       }
@@ -1429,6 +1526,12 @@ const indexFiles = async () => {
     indexing.value = false
     currentIndexingFile.value = ''
     indexProgressPercent.value = 0
+  }
+
+  if (jobsStarted === 0 && upToDate > 0 && errors.length === 0) {
+    selectedPaths.value = []
+    addSectionOpen.value = false
+    return
   }
 
   if (jobsStarted > 0) {
@@ -1510,12 +1613,27 @@ const DOC_PAGE = 200
 const docTotal = ref(0)
 const docSearch = ref('')
 const loadingMore = ref(false)
+// Type filter (code / docs / data / media / other) and the server's per-kind
+// counts for the current collection and filename filter.
+const docKind = ref('')
+const kindCounts = ref({})
+const KIND_ORDER = ['code', 'docs', 'data', 'media', 'web', 'other']
+const kindChips = computed(() =>
+  KIND_ORDER.filter(k => (kindCounts.value[k] || 0) > 0 && FAMILIES[k]).map(k => ({ kind: k, count: kindCounts.value[k] }))
+)
+const kindTotal = computed(() => Object.values(kindCounts.value).reduce((a, b) => a + (b || 0), 0))
+const setDocKind = (kind) => {
+  if (docKind.value === kind) return
+  docKind.value = kind
+  loadDocuments()
+}
 
 const _docParams = (offset) => ({
   collection_id: collectionStore.currentCollectionId,
   limit: DOC_PAGE,
   offset,
   ...(docSearch.value ? { q: docSearch.value } : {}),
+  ...(docKind.value ? { kind: docKind.value } : {}),
 })
 
 const loadDocuments = async () => {
@@ -1526,6 +1644,7 @@ const loadDocuments = async () => {
     const response = await http.get('/documents', { params: _docParams(0) })
     documents.value = response.data.documents || []
     docTotal.value = response.data.total_documents ?? documents.value.length
+    if (response.data.kind_counts) kindCounts.value = response.data.kind_counts
     if (docTotal.value > 0) justIndexed.value = false
   } catch (err) {
     error.value = err?.message || 'Failed to load sources'
@@ -1576,18 +1695,14 @@ const openAddSources = () => {
   ui.highlightAddSources = false
 }
 
-// `/` focuses the filter and Ctrl/⌘+U opens Add sources — the two things
-// this panel is for. Neither fires while the caret is in a field.
+// `/` focuses the filter — the thing this panel is for. Ctrl/⌘+U (Add
+// sources) is bound by the app shell, which asks this panel to open the
+// flow through the `clio:add-sources` event so it works from any tab.
 const onSidebarKeydown = (e) => {
   const el = e.target
   const typing = el instanceof HTMLElement && (
     el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
   )
-  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'u') {
-    e.preventDefault()
-    openAddSources()
-    return
-  }
   if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault()
     openFilter()
@@ -1633,29 +1748,10 @@ const closeChunksModal = () => {
   chunksModal.value?.close()
 }
 
-// Code file extensions for icon display
-const CODE_EXTENSIONS = ['.pas', '.dpr', '.dpk', '.pp', '.inc', '.dfm', '.mod', '.def', '.mi', '.asm', '.s']
-const TABULAR_EXTENSIONS = ['.csv', '.xlsx', '.xls']
-
-const getExt = (filename) => '.' + (filename || '').split('.').pop().toLowerCase()
-
-const isCodeFile = (filename) => CODE_EXTENSIONS.includes(getExt(filename))
-const isTabularFile = (filename) => TABULAR_EXTENSIONS.includes(getExt(filename))
-
-const getFileIcon = (filename) => {
-  if (isTabularFile(filename)) return Table2
-  return isCodeFile(filename) ? FileCode : FileText
-}
-
-const getFileIconClass = (filename) => {
-  if (isTabularFile(filename)) return 'bg-success/20'
-  return isCodeFile(filename) ? 'bg-primary/20' : 'bg-error/20'
-}
-
-const getFileIconTextClass = (filename) => {
-  if (isTabularFile(filename)) return 'text-success'
-  return isCodeFile(filename) ? 'text-primary' : 'text-error'
-}
+// What each source is, for the tile and the type chips. The family
+// boundaries are the server's (services/file_kinds.py); this only draws.
+const fileInfo = (doc) => describeFile(doc?.filename, { isWeb: isLinkDoc(doc) })
+const isCodeDoc = (doc) => fileInfo(doc).family === 'code'
 
 const confirmDelete = (doc) => {
   documentToDelete.value = doc
@@ -1726,8 +1822,73 @@ const deleteBulk = async () => {
 }
 
 // Watch for collection changes
+// Folders synced into this collection before (server-side memory).
+const syncFolders = ref([])
+const syncingPath = ref('')
+const folderLabel = (path) => {
+  const parts = String(path || '').split(/[\\/]/).filter(Boolean)
+  return parts.slice(-2).join('/') || path
+}
+const formatSyncTime = (iso) => {
+  const ts = new Date(/[zZ]|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`).getTime()
+  if (!Number.isFinite(ts)) return ''
+  const mins = Math.max(0, Math.floor((Date.now() - ts) / 60000))
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  return days < 7 ? `${days}d ago` : new Date(ts).toLocaleDateString()
+}
+const loadSyncFolders = async () => {
+  if (!collectionStore.canEditCurrent) { syncFolders.value = []; return }
+  try {
+    const { data } = await http.get('/documents/sync-folders', { params: { collection_id: collectionStore.currentCollectionId } })
+    syncFolders.value = data.folders || []
+  } catch { syncFolders.value = [] }
+}
+const runFolderSync = async (folder, prune) => {
+  const collectionId = collectionStore.currentCollectionId
+  syncingPath.value = folder.path
+  try {
+    const { data } = await http.post('/documents/sync-folder', {
+      path: folder.path,
+      collection_id: collectionId,
+      recursive: folder.recursive !== false,
+      file_extensions: folder.file_extensions || null,
+      exclude_patterns: folder.exclude_patterns || null,
+      prune_missing: prune,
+    }, { timeout: 0 })
+    const bits = []
+    if (data.queued) bits.push(`${data.queued.toLocaleString()} ${data.queued === 1 ? 'file' : 'files'} queued`)
+    if (data.replaced_count) bits.push(`${data.replaced_count} replaced`)
+    if (data.pruned_count) bits.push(`${data.pruned_count} removed`)
+    if (data.skipped_unchanged) bits.push(`${data.skipped_unchanged.toLocaleString()} unchanged`)
+    if (data.job_id) {
+      backgroundJobsStore.addUploadJob({
+        job_id: data.job_id, collection_id: collectionId, status: 'pending',
+        total_files: data.queued || 0, processed_files: 0, progress_percent: 0, job_type: 'index',
+      })
+      emit('background-job-started')
+    }
+    ui.notify(`${folderLabel(folder.path)}: ${bits.join(' · ') || 'up to date'}`, data.job_id ? 'info' : 'success')
+    if (data.pruned_count || data.replaced_count) {
+      await loadDocuments()
+      emit('document-deleted')
+    }
+  } catch (err) {
+    ui.toastError(err, 'Folder sync failed')
+  } finally {
+    syncingPath.value = ''
+    loadSyncFolders()
+  }
+}
+
 watch(() => collectionStore.currentCollectionId, (newId) => {
+  docKind.value = ''
+  kindCounts.value = {}
   loadDocuments()
+  loadSyncFolders()
   // The selection is kept per collection (selectionStore), so switching
   // collections shows that collection's own selection rather than wiping it.
   loadExpertise(newId)
@@ -1789,6 +1950,7 @@ watch(() => backgroundJobsStore.dataRefreshTick, async () => {
     const response = await http.get('/documents', { params: _docParams(0) })
     documents.value = response.data.documents || []
     docTotal.value = response.data.total_documents ?? documents.value.length
+    if (response.data.kind_counts) kindCounts.value = response.data.kind_counts
     if (docTotal.value > 0) justIndexed.value = false
   } catch {
     // transient mid-job failure — the next throttled tick retries
@@ -1830,8 +1992,10 @@ const beforeUnloadHandler = (e) => {
 onMounted(async () => {
   loadDocuments()
   loadExpertise()
+  loadSyncFolders()
   window.addEventListener('beforeunload', beforeUnloadHandler)
   window.addEventListener('keydown', onSidebarKeydown)
+  window.addEventListener('clio:add-sources', openAddSources)
   try {
     const resp = await http.get('/api/capabilities')
     capabilities.value = resp.data
@@ -1843,6 +2007,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', beforeUnloadHandler)
   window.removeEventListener('keydown', onSidebarKeydown)
+  window.removeEventListener('clio:add-sources', openAddSources)
   if (isRecording.value) {
     cancelled = true
     try { mediaRecorder?.stop() } catch (_) { /* ignore */ }

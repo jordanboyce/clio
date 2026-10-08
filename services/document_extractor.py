@@ -522,13 +522,18 @@ class DocumentExtractor:
         """
         file_ext = file_path.suffix.lower()
 
-        if file_ext not in self.SUPPORTED_EXTENSIONS:
+        if not is_supported_filename(file_path.name):
             raise ValueError(
-                f"Unsupported file type: {file_ext}. "
-                f"Supported types: {', '.join(self.SUPPORTED_EXTENSIONS)}"
+                f"Unsupported file type: {file_ext or file_path.name}. "
+                f"Supported types: {', '.join(sorted(self.SUPPORTED_EXTENSIONS))}"
             )
 
-        logger.info(f"Extracting text from {file_ext} file: {file_path.name}")
+        logger.info(f"Extracting text from {file_ext or file_path.name} file: {file_path.name}")
+
+        # Code files (by suffix or well-known basename such as CMakeLists.txt)
+        # are skipped for injection scanning (high false-positive rate).
+        if is_code_file(file_path.name):
+            return self._extract_code(file_path)
 
         # Audio files route through Whisper for transcription and then flow
         # through the normal indexing pipeline as a single-"page" document.
@@ -550,9 +555,6 @@ class DocumentExtractor:
             self._scan_policy(result, file_path)
             return result
 
-        # Code files are skipped for injection scanning (high false-positive rate)
-        skip_injection_scan = is_code_file(str(file_path))
-
         if file_ext == '.pdf':
             result = self._extract_pdf(file_path, force_ocr=force_ocr)
         elif file_ext == '.txt':
@@ -571,15 +573,12 @@ class DocumentExtractor:
             result = ExtractionResult(self._extract_json(file_path), method="text")
         elif file_ext == '.jsonl':
             result = ExtractionResult(self._extract_jsonl(file_path), method="text")
-        elif is_code_file(str(file_path)):
-            return self._extract_code(file_path)
         else:
             raise ValueError(f"Unsupported file extension: {file_ext}")
 
-        if not skip_injection_scan:
-            result.injection_warnings = self._injection_detector.scan_pages(
-                result.page_texts, filename=file_path.name
-            )
+        result.injection_warnings = self._injection_detector.scan_pages(
+            result.page_texts, filename=file_path.name
+        )
         self._scan_policy(result, file_path)
 
         return result
@@ -1574,6 +1573,8 @@ class DocumentExtractor:
             raise ValueError(f"Not a supported code file: {file_path}")
 
         content, language, unit_name = self._code_extractor.extract_file(str(file_path))
+        if not content.strip():
+            raise ValueError(f"Code file {file_path.name} is empty")
 
         chunks = self._code_extractor.chunk_code(
             content=content,
@@ -1593,4 +1594,24 @@ class DocumentExtractor:
     def is_code_file(self, file_path: Union[str, Path]) -> bool:
         """Check if a file is a supported code file."""
         return is_code_file(str(file_path))
+
+    @staticmethod
+    def is_supported_filename(name: Union[str, Path]) -> bool:
+        """Whether a filename can be indexed, by suffix or well-known basename."""
+        return is_supported_filename(name)
+
+
+def is_supported_filename(name: Union[str, Path]) -> bool:
+    """Whether a file can be indexed, judged by its name alone.
+
+    True for every suffix in ``DocumentExtractor.SUPPORTED_EXTENSIONS`` and
+    for the extension-less code files recognised by basename (``Makefile``,
+    ``Dockerfile``, ``CMakeLists.txt``, ``.gitignore``, ...). ``.env`` is
+    not supported: it holds secrets. Upload gates should use this instead
+    of a bare suffix lookup.
+    """
+    path = Path(str(name))
+    if path.suffix.lower() in DocumentExtractor.SUPPORTED_EXTENSIONS:
+        return True
+    return is_code_file(path.name)
 
