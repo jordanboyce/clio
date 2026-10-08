@@ -20,6 +20,7 @@ an index holds — see `embedding_signature`.
 import functools
 import json
 import logging
+import time
 import os
 import threading
 import urllib.request
@@ -967,6 +968,7 @@ from services.embedding_providers import (  # noqa: E402
     CLOUD_EMBEDDING_PROVIDERS,
     OLLAMA_CLOUD_BASE_URL,
     get_provider,
+    local_model_entry,
 )
 
 
@@ -1068,6 +1070,129 @@ def describe_embedding(service) -> dict:
         if isinstance(value, str) and value:
             info[attr.lstrip("_")] = value
     return info
+
+
+class EmbeddingUnavailable(RuntimeError):
+    """The configured embedding model cannot be built right now.
+
+    Raised by DeferredEmbeddingService when a vector is actually needed and
+    the model still is not there (hub blocked, backend missing, bad key).
+    The API maps it to 503 with the message, so the person sees what to fix
+    rather than a stack trace, and every read path that needs no vectors
+    (listing sources, settings, the onboarding) keeps working meanwhile.
+    """
+
+
+def known_embedding_dim(model_name: Optional[str] = None, index_dir=None,
+                        provider: Optional[str] = None) -> Optional[int]:
+    """The vector dimension the configured model produces, without loading it.
+
+    Tries the catalog first (every curated local and hosted model records
+    its dimension), then an existing FAISS index in `index_dir` (vectors
+    already on disk fix the dimension whatever the catalog says). None when
+    neither knows, in which case the model has to be loaded to find out.
+    """
+    from config import settings
+
+    provider = provider or settings.embedding_provider
+    if provider == "local":
+        entry = local_model_entry(model_name or settings.embedding_model)
+        if entry and entry.get("dimensions"):
+            return int(entry["dimensions"])
+    else:
+        prov = get_provider(provider) or {}
+        wanted = model_name or settings.remote_embedding_model or prov.get("default_model")
+        for m in prov.get("models", []):
+            if m.get("id") == wanted and m.get("dimensions"):
+                return int(m["dimensions"])
+    if index_dir is not None:
+        try:
+            path = Path(index_dir) / "faiss.index"
+            if path.exists() and path.stat().st_size > 0:
+                import faiss
+                return int(faiss.read_index(str(path)).d)
+        except Exception as e:  # unreadable index: let the loader deal with it
+            logger.debug(f"Could not read index dimension from {index_dir}: {e}")
+    return None
+
+
+class DeferredEmbeddingService:
+    """A stand-in for an embedding service that could not be built yet.
+
+    Behind a corporate firewall the model download may fail, or a backend
+    may be missing; that must not stop the person from opening the app,
+    browsing what is already indexed, or choosing another provider. This
+    object carries the model name and dimension (known from the catalog or
+    the existing index) so the indexer and vector store can be constructed,
+    and builds the real service on the first call that needs vectors. If
+    that still fails it raises EmbeddingUnavailable with the reason, and
+    waits a little before trying the hub again so a search storm does not
+    turn into a download storm.
+    """
+
+    backend = None
+    RETRY_AFTER_SECONDS = 20.0
+
+    def __init__(self, model_name: str, embedding_dim: int, factory, reason: str = ""):
+        self.model_name = model_name
+        self.embedding_dim = int(embedding_dim)
+        self._factory = factory
+        self._real = None
+        self._lock = threading.Lock()
+        self.last_error: Optional[str] = reason or None
+        self._last_attempt = 0.0
+        self.signature = None
+
+    @property
+    def available(self) -> bool:
+        return self._real is not None
+
+    @property
+    def real(self):
+        return self._real
+
+    def _ensure(self):
+        if self._real is not None:
+            return self._real
+        with self._lock:
+            if self._real is not None:
+                return self._real
+            now = time.monotonic()
+            if self.last_error and now - self._last_attempt < self.RETRY_AFTER_SECONDS:
+                raise EmbeddingUnavailable(self.last_error)
+            self._last_attempt = now
+            try:
+                service = self._factory()
+            except Exception as e:
+                self.last_error = str(e) or e.__class__.__name__
+                raise EmbeddingUnavailable(self.last_error) from e
+            real_dim = int(getattr(service, "embedding_dim", self.embedding_dim) or self.embedding_dim)
+            if real_dim != self.embedding_dim:
+                self.last_error = (
+                    f"The loaded model '{getattr(service, 'model_name', self.model_name)}' produces "
+                    f"{real_dim}-dimensional vectors but this collection's index expects "
+                    f"{self.embedding_dim}; re-index the collection to switch models."
+                )
+                raise EmbeddingUnavailable(self.last_error)
+            self._real = service
+            self.backend = getattr(service, "backend", None)
+            self.signature = getattr(service, "signature", self.signature)
+            self.last_error = None
+            logger.info(f"Embedding model '{self.model_name}' is now available")
+            return service
+
+    def embed_texts(self, texts, progress_callback=None):
+        return self._ensure().embed_texts(texts, progress_callback=progress_callback)
+
+    def embed_query(self, query):
+        return self._ensure().embed_query(query)
+
+    def __getattr__(self, name):
+        # Prompt names and other advisory attributes read by describe_embedding.
+        real = self.__dict__.get("_real")
+        if real is not None and name.startswith("_") and not name.startswith("__"):
+            return getattr(real, name)
+        raise AttributeError(name)
 
 
 def create_embedding_service(

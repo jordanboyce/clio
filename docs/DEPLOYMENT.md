@@ -463,3 +463,14 @@ Stop the container first, or snapshot the volume, so SQLite is not mid-write.
       `CONTENT_POLICY_ACTION` / `AUP_REQUIRED` match what you told people
       the rules are (see [Content governance](#content-governance))
 - [ ] The data directory is backed up
+
+### Behind a firewall that blocks huggingface.co
+
+Neither the image build nor the first start depends on the download succeeding.
+`docker compose build` prints a warning and continues when the bake cannot reach
+the hub; at runtime the app opens, lists existing sources and serves settings,
+while search and indexing return HTTP 503 with the reason until a model is
+available. From the readiness bar (or Settings → Indexing → Embedding) choose
+one of: retry the download once the proxy allows it, pre-seed the cache from a
+connected machine (docs/AIRGAP.md), point `EMBEDDING_PROVIDER` at an Ollama you
+run, or at a hosted API you trust.

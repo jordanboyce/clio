@@ -4,6 +4,7 @@ import logging
 import json
 import asyncio
 
+from services.embedder import EmbeddingUnavailable
 from fastapi import Header, HTTPException, status, Request
 
 from services.ai_service import AIService, create_provider
@@ -204,6 +205,10 @@ async def search_documents(
             ai_usage=search_result.get("ai_usage"),
         )
 
+    except EmbeddingUnavailable:
+        # The model is not here yet (firewall, missing backend): 503 with the
+        # reason via the app-level handler, not a 500.
+        raise
     except Exception as e:
         logger.error(f"Search failed: {e}")
         raise HTTPException(

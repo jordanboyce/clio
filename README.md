@@ -348,7 +348,10 @@ python main.py
 ```
 
 **First run:** the search model downloads in the background (about 90 MB, one to two
-minutes) and the app shows a progress bar until it is ready. The core install runs embeddings
+minutes) and the app shows a progress bar until it is ready. If a corporate firewall blocks
+the download, nothing else stops: the app opens, existing sources list and settings work,
+search and indexing answer with the reason (HTTP 503) until a model is available, and the
+readiness bar offers a retry or another provider (an Ollama you run, or a hosted API). The core install runs embeddings
 on a small ONNX runtime (`fastembed`); the PyTorch-based `sentence-transformers` backend, which
 unlocks the wider model catalog, is optional:
 
