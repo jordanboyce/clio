@@ -12,6 +12,7 @@ from services.ai_service import detect_ollama
 from services.config_manager import config_manager
 from services.indexer_manager import indexer_manager
 from services.embedder import embedding_availability
+from services.embedding_status import embedding_status
 from api.deps import require_admin
 
 from fastapi import APIRouter
@@ -19,6 +20,20 @@ from fastapi import APIRouter
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _health_embedding() -> dict:
+    """The cheap embedding readiness block: the cache probe plus whatever the
+    warm-up singleton already knows (no model load, no network)."""
+    info = embedding_availability()
+    st = embedding_status.status()
+    info.update({
+        "status": st["status"],
+        "backend": st["backend"],
+        "progress": st["progress"],
+        "error": st["error"],
+    })
+    return info
 
 
 @router.get("/health", tags=["health"])
@@ -33,7 +48,7 @@ async def health(collection_id: str = "default"):
             "indexed_chunks": stats["total_chunks"],
             "total_documents": stats["total_documents"],
             "total_pages": stats["total_pages"],
-            "embedding": embedding_availability(),
+            "embedding": _health_embedding(),
         }
     except Exception as e:
         return {
@@ -41,7 +56,7 @@ async def health(collection_id: str = "default"):
             "offline_mode": settings.offline_mode,
             "indexed_chunks": 0,
             "error": str(e),
-            "embedding": embedding_availability(),
+            "embedding": _health_embedding(),
         }
 
 @router.post(
@@ -446,6 +461,26 @@ class EmbeddingTestRequest(BaseModel):
     ollama_base_url: Optional[str] = None
 
 
+def _embedding_key_source(p: dict) -> Optional[str]:
+    """Where a usable key for a catalog entry would come from: "embedding"
+    (the embedding-specific key, when this is the current provider),
+    "provider_card" (the team key saved under AI Providers), or None."""
+    if not (p["needs_key"] or p["id"] == "openai_compatible"):
+        return None
+    if settings.embedding_api_key and p["id"] == settings.embedding_provider:
+        return "embedding"
+    if p["id"] == "ollama_cloud" and settings.ollama_cloud_api_key:
+        return "embedding"
+    if p.get("key_provider"):
+        try:
+            from services.app_database import app_db
+            if app_db.get_agent_api_key(p["key_provider"]):
+                return "provider_card"
+        except Exception:
+            pass
+    return None
+
+
 @router.get(
     "/api/embedding/providers",
     summary="Embedding providers the picker can offer",
@@ -468,19 +503,7 @@ async def list_embedding_providers():
     for p in EMBEDDING_PROVIDERS:
         if p.get("hidden") and p["id"] != current:
             continue
-        key_source = None
-        if p["needs_key"] or p["id"] == "openai_compatible":
-            if settings.embedding_api_key and p["id"] == current:
-                key_source = "embedding"
-            elif p["id"] == "ollama_cloud" and settings.ollama_cloud_api_key:
-                key_source = "embedding"
-            elif p.get("key_provider"):
-                try:
-                    from services.app_database import app_db
-                    if app_db.get_agent_api_key(p["key_provider"]):
-                        key_source = "provider_card"
-                except Exception:
-                    pass
+        key_source = _embedding_key_source(p)
         entry = {k: v for k, v in p.items()}
         entry["key_configured"] = key_source is not None
         entry["key_source"] = key_source
@@ -536,3 +559,264 @@ async def test_embedding_settings(req: EmbeddingTestRequest):
         return await asyncio.to_thread(probe)
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ── First-run experience: readiness, options, selection ─────────────────────
+
+
+def _huggingface_reachable(timeout: float = 3.0) -> bool:
+    """HEAD https://huggingface.co — can this host download a model at all?"""
+    import httpx
+
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            resp = client.head("https://huggingface.co")
+            return resp.status_code < 500
+    except Exception:
+        return False
+
+
+def _ollama_tags(base_url: str, timeout: float = 2.0) -> Optional[List[str]]:
+    """Model names an Ollama server lists, or None when it does not answer."""
+    import httpx
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(f"{base_url.rstrip('/')}/api/tags")
+            resp.raise_for_status()
+            return [m.get("name", "") for m in resp.json().get("models", []) if m.get("name")]
+    except Exception:
+        return None
+
+
+_OLLAMA_EMBED_HINTS = ("embed", "minilm", "bge", "e5")
+
+
+def _looks_like_embedding_model(name: str) -> bool:
+    lowered = name.lower()
+    return any(h in lowered for h in _OLLAMA_EMBED_HINTS)
+
+
+@router.get(
+    "/api/embedding/status",
+    summary="Is the embedding model ready, loading, downloading, missing?",
+    tags=["config"],
+)
+async def get_embedding_status():
+    """The warm-up singleton's view (see services/embedding_status.py) plus
+    whether the deployment is offline. Cheap: no probing, no model load."""
+    return {**embedding_status.status(), "offline_mode": settings.offline_mode}
+
+
+@router.post(
+    "/api/embedding/warm",
+    summary="Download/load the configured embedding model now",
+    tags=["config"],
+)
+async def warm_embedding():
+    """Starts (or restarts) the warm-up in the background and returns the
+    status right away; poll GET /api/embedding/status for progress. A
+    download is a deployment-wide action, so this is admin-gated like
+    saving settings."""
+    require_admin("download the embedding model")
+    return embedding_status.warm(force=True)
+
+
+@router.get(
+    "/api/embedding/options",
+    summary="What the first-run picker can offer on this host",
+    tags=["config"],
+)
+async def embedding_options():
+    """
+    Everything the first-run screen needs in one call: which local backend
+    is installed and whether its model is already on disk, whether
+    huggingface.co is reachable (null when offline — not probed), whether an
+    Ollama server answers and which embedding models it has, which hosted
+    providers already have a key, and a single recommendation.
+    """
+    import asyncio
+
+    from services.embedder import (
+        fastembed_importable,
+        local_model_cached,
+        resolve_local_backend,
+        sentence_transformers_importable,
+        INSTALL_FASTEMBED,
+        INSTALL_TORCH,
+    )
+    from services.embedding_providers import (
+        EMBEDDING_PROVIDERS,
+        CLOUD_EMBEDDING_PROVIDERS,
+        get_provider,
+        local_model_entry,
+    )
+
+    offline = settings.offline_mode
+    current_provider = settings.embedding_provider
+    if current_provider == "local":
+        current_model = settings.embedding_model
+    else:
+        current_model = settings.remote_embedding_model or (get_provider(current_provider) or {}).get("default_model", "")
+
+    # Local backend
+    local_model = settings.embedding_model or (get_provider("local") or {}).get("default_model", "")
+    backend: Optional[str] = None
+    install_hint: Optional[str] = None
+    try:
+        backend = resolve_local_backend(local_model)
+    except RuntimeError as e:
+        install_hint = str(e)
+        if not fastembed_importable() and not sentence_transformers_importable():
+            install_hint = f"{INSTALL_FASTEMBED} (recommended) or {INSTALL_TORCH}"
+    available = backend is not None
+    cached = local_model_cached(local_model, backend) if available else False
+    entry = local_model_entry(local_model) or {}
+
+    hf_reachable: Optional[bool]
+    tags: Optional[List[str]]
+    if offline:
+        hf_reachable = None
+        tags = await asyncio.to_thread(_ollama_tags, settings.ollama_base_url)
+    else:
+        hf_reachable, tags = await asyncio.gather(
+            asyncio.to_thread(_huggingface_reachable),
+            asyncio.to_thread(_ollama_tags, settings.ollama_base_url),
+        )
+
+    hosted = []
+    for p in EMBEDDING_PROVIDERS:
+        if p["id"] not in CLOUD_EMBEDDING_PROVIDERS or p.get("hidden"):
+            continue
+        hosted.append({
+            "id": p["id"],
+            "label": p["label"],
+            "key_configured": _embedding_key_source(p) is not None,
+            "default_model": p["default_model"],
+            "blocked_offline": bool(offline),
+        })
+
+    ollama_reachable = tags is not None
+    if available and (cached or hf_reachable):
+        recommended = "local"
+    elif ollama_reachable:
+        recommended = "ollama"
+    elif any(h["key_configured"] for h in hosted) and not offline:
+        recommended = "hosted"
+    else:
+        recommended = "local"
+
+    status_backend = embedding_status.status().get("backend")
+    return {
+        "current": {
+            "provider": current_provider,
+            "model": current_model,
+            "backend": status_backend if current_provider == "local" else None,
+        },
+        "offline_mode": offline,
+        "recommended": recommended,
+        "local": {
+            "available": available,
+            "backend": backend,
+            "model": local_model,
+            "model_label": entry.get("label") or local_model,
+            "size_mb": int(entry.get("size_mb") or 0),
+            "cached": cached,
+            "huggingface_reachable": hf_reachable,
+            "install_hint": install_hint,
+        },
+        "ollama": {
+            "reachable": ollama_reachable,
+            "base_url": settings.ollama_base_url,
+            "embedding_models": [t for t in (tags or []) if _looks_like_embedding_model(t)],
+            "suggested": "nomic-embed-text",
+        },
+        "hosted": hosted,
+    }
+
+
+class EmbeddingSelectRequest(BaseModel):
+    """One choice from the first-run picker."""
+
+    provider: str
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    warm: bool = True
+
+
+@router.post(
+    "/api/embedding/select",
+    summary="Choose the embedding provider and start warming it",
+    tags=["config"],
+)
+async def select_embedding(req: EmbeddingSelectRequest):
+    """
+    Saves the choice through the same path as POST /api/config (so the
+    re-index rule is the same: `needs_reindex` is true only when something
+    that changes the vectors actually changed), then kicks off the warm-up
+    unless `warm` is false. Admin-gated like every deployment-wide setting.
+    """
+    from services.config_manager import MASKED_SECRET
+    from services.embedding_providers import CLOUD_EMBEDDING_PROVIDERS, get_provider
+
+    require_admin("change the embedding provider")
+
+    entry = get_provider(req.provider)
+    if entry is None:
+        raise HTTPException(status_code=400, detail=f"Unknown embedding provider: {req.provider}")
+    if settings.offline_mode and req.provider in CLOUD_EMBEDDING_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{entry['label']} sends document text to an external service, which this "
+                f"deployment forbids (OFFLINE_MODE). Choose the built-in model, Ollama, or a "
+                f"self-hosted endpoint."
+            ),
+        )
+
+    updates: dict = {"embedding_provider": req.provider}
+    if req.model is not None:
+        updates["embedding_model" if req.provider == "local" else "remote_embedding_model"] = req.model
+    if req.api_key is not None and req.api_key != MASKED_SECRET:
+        updates["embedding_api_key"] = req.api_key
+    if req.base_url is not None:
+        # Ollama's address lives in its own field; every other custom
+        # endpoint is EMBEDDING_BASE_URL.
+        updates["ollama_base_url" if req.provider == "ollama" else "embedding_base_url"] = req.base_url
+
+    result = config_manager.update_config(updates)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail="; ".join(result.get("errors") or ["could not save"]))
+
+    if req.warm:
+        status = embedding_status.warm(force=True)
+    else:
+        embedding_status.reset()
+        status = embedding_status.status()
+    return {
+        "saved": True,
+        "needs_reindex": bool(result.get("requires_reindex")),
+        "status": status,
+    }
+
+
+class OllamaPullRequest(BaseModel):
+    model: str
+
+
+@router.post(
+    "/api/embedding/ollama/pull",
+    summary="Pull an embedding model on the Ollama server",
+    tags=["config"],
+)
+async def pull_ollama_embedding_model(req: OllamaPullRequest):
+    """Starts `ollama pull <model>` on the configured Ollama server in the
+    background and returns the status; while the provider is `ollama` the
+    pull's byte counts show up as `downloading` progress, and the warm-up
+    re-runs when the pull finishes."""
+    require_admin("pull an Ollama model")
+    model = (req.model or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
+    return embedding_status.pull_ollama_model(model)

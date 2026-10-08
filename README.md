@@ -198,7 +198,10 @@ API and MCP clients then authenticate with `Authorization: Bearer <AUTH_PASSWORD
 - **API Endpoint**: http://localhost:8473/api - REST API for programmatic access
 - **MCP Endpoint**: http://localhost:8473/mcp - Streamable-HTTP MCP server for external agents
 
-**First time setup**: The embedding model (~90MB) will download automatically on first run.
+**First time setup**: the search model (about 90 MB) downloads in the background the first
+time the server starts, with progress shown in the app. Setup also asks where you want the
+search index to run: on this machine, in an Ollama you already run, or at a hosted provider
+you trust.
 
 **SSL/TLS Support**: For corporate environments with custom CA certificates, see the [Corporate SSL Configuration](#corporate-ssl-configuration) section below.
 
@@ -344,7 +347,17 @@ cp .env.example .env
 python main.py
 ```
 
-**First run:** The embedding model downloads automatically (~90MB, 1-2 minutes).
+**First run:** the search model downloads in the background (about 90 MB, one to two
+minutes) and the app shows a progress bar until it is ready. The core install runs embeddings
+on a small ONNX runtime (`fastembed`); the PyTorch-based `sentence-transformers` backend, which
+unlocks the wider model catalog, is optional:
+
+```bash
+pip install -r requirements-torch.txt   # optional: PyTorch backend, wider model catalog
+```
+
+Set `LOCAL_EMBEDDING_BACKEND=fastembed|sentence-transformers` to pick one explicitly; `auto`
+(the default) uses `fastembed` when it serves the chosen model and PyTorch otherwise.
 
 **You'll see:**
 ```
@@ -479,6 +492,7 @@ DATA_DIR=./data                          # Where documents and indexes are store
 # Embeddings — see "Choosing where embeddings run" below
 EMBEDDING_PROVIDER=local                # local | google | mistral | voyage | jina | openrouter | openai | ollama | openai_compatible
 EMBEDDING_MODEL=all-MiniLM-L6-v2        # model for the local provider
+LOCAL_EMBEDDING_BACKEND=auto            # auto | fastembed (ONNX, light) | sentence-transformers (PyTorch)
 REMOTE_EMBEDDING_MODEL=                 # model for any other provider (blank = its recommended one)
 EMBEDDING_API_KEY=                      # blank = reuse the matching AI Providers key
 
@@ -782,9 +796,12 @@ pip install faiss-cpu
 **Solutions:**
 - Wait 1-2 minutes (one-time download)
 - Check your internet connection
-- If behind corporate firewall, download manually:
-  1. Get model from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
-  2. Place in `~/.cache/torch/sentence_transformers/`
+- If behind corporate firewall, pre-seed the model from a connected machine and copy the
+  cache folder over: `<DATA_DIR>/models/fastembed/` for the default ONNX backend, or the
+  Hugging Face cache (`~/.cache/huggingface/hub/`) for the PyTorch backend. See
+  [docs/AIRGAP.md](docs/AIRGAP.md). The app also shows a **Download now** button once the
+  network is fixed, and Settings → Indexing → Embedding can switch to Ollama or a hosted
+  provider instead.
 
 #### 4. "SSL certificate error" downloading the model
 
@@ -955,9 +972,21 @@ echo "CHUNK_OVERLAP=150" >> .env
 
 Every document chunk and every search query is turned into a vector by an
 embedding model. By default that model runs inside the app on the server's
-CPU — free and private, but slow on small hosting plans, where it is also
-what makes the container heavy. **Settings → Indexing → Embedding** lets you
-move that work to a hosted API instead:
+CPU through a small ONNX runtime — free and private, and light enough for a
+laptop. First-run setup asks where the index should run and shows the
+download as it happens; **Settings → Indexing → Embedding** changes it later
+(changing the model re-embeds the collection). Good local choices:
+
+| Model | Size | Backend | Notes |
+|---|---|---|---|
+| `all-MiniLM-L6-v2` (default) | 90 MB | ONNX or PyTorch | Fast on any CPU, English |
+| `BAAI/bge-small-en-v1.5` | 130 MB | ONNX or PyTorch | Same size class, noticeably better retrieval |
+| `nomic-ai/nomic-embed-text-v1.5` | 270 MB | ONNX or PyTorch | 8k context, strong on code and long passages |
+| `jinaai/jina-embeddings-v2-base-code` | 320 MB | ONNX or PyTorch | Built for source code |
+| `paraphrase-multilingual-MiniLM-L12-v2` | 470 MB | ONNX or PyTorch | 50+ languages |
+| `intfloat/multilingual-e5-small` | 470 MB | PyTorch only | 100 languages (`pip install -r requirements-torch.txt`) |
+
+Or move the work to an Ollama you already run, or to a hosted API:
 
 | Option | Cost | Key | Notes |
 |---|---|---|---|
@@ -1220,7 +1249,7 @@ A: Yes. Search and embeddings are local after the first run (the model downloads
 A: Very good for finding concepts, not exact strings. ~80-90% accuracy for most queries.
 
 **Q: Can I delete the embedding model cache?**
-A: It's in `~/.cache/torch/sentence_transformers/`. You can delete it but it'll re-download.
+A: The default ONNX backend keeps it in `<DATA_DIR>/models/fastembed/` (or `/opt/clio/models/fastembed/` inside the Docker image); the PyTorch backend uses the Hugging Face cache under `~/.cache/huggingface/hub/`. You can delete either; it re-downloads on the next start, with progress shown in the app.
 
 **Q: What's the largest PDF it can handle?**
 A: Tested up to 1000+ pages. Limited by RAM.

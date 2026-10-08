@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     embedding_provider: str = "local"
     # Model for the "local" provider (a sentence-transformers name).
     embedding_model: str = "all-MiniLM-L6-v2"
+    # Which in-process runtime serves the "local" provider:
+    #   auto                  fastembed (ONNX, no PyTorch) when it is installed
+    #                         and knows the model, else sentence-transformers
+    #   fastembed             only fastembed (`pip install fastembed`)
+    #   sentence-transformers only the PyTorch backend
+    #                         (`pip install -r requirements-torch.txt`)
+    # Both backends run the same weights, so switching never forces a
+    # re-index (see services/embedder.py: embedding_signature).
+    local_embedding_backend: Literal["auto", "fastembed", "sentence-transformers"] = "auto"
     # Model for every non-local provider; empty = the provider's default.
     # OLLAMA_EMBEDDING_MODEL is the pre-2026-09 name and still works.
     remote_embedding_model: str = Field(

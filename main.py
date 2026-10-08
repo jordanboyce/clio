@@ -162,14 +162,20 @@ async def lifespan(app: FastAPI):
         from services.upload_service import upload_service
         upload_service.recover_orphaned_jobs()
 
-        # Initialize default collection's indexer to pre-load embedding model
-        logger.info("Loading default collection indexer...")
-        try:
-            default_indexer = indexer_manager.get_indexer("default")
-            total_chunks = default_indexer.vector_store.get_total_chunks()
-            logger.info(f"Default collection indexed chunks: {total_chunks}")
-        except Exception as e:
-            logger.warning(f"Could not load default indexer: {e}")
+        # Get the embedding model ready in the background with visible
+        # progress (GET /api/embedding/status) instead of blocking startup on
+        # a download; the job opens the default collection once the model is
+        # loaded. Skipped under pytest or CLIO_SKIP_EMBEDDING_WARMUP=1, in
+        # which case the default indexer is pre-loaded inline as before.
+        from services.embedding_status import embedding_status
+        if not embedding_status.warm_on_startup():
+            logger.info("Loading default collection indexer...")
+            try:
+                default_indexer = indexer_manager.get_indexer("default")
+                total_chunks = default_indexer.vector_store.get_total_chunks()
+                logger.info(f"Default collection indexed chunks: {total_chunks}")
+            except Exception as e:
+                logger.warning(f"Could not load default indexer: {e}")
 
         # Set up reload callback for re-indexing service (collection-aware)
         def reload_indexer(collection_id: str = "default"):

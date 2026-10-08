@@ -12,7 +12,9 @@ The catalog must stay importable without touching config or the database:
 config.py validates EMBEDDING_PROVIDER against PROVIDER_IDS at startup.
 
 Provider `kind` decides the transport:
-  - "local"              sentence-transformers in-process (EmbeddingService)
+  - "local"              in-process: fastembed (ONNX, FastEmbedService) or
+                         sentence-transformers (PyTorch, EmbeddingService);
+                         services/embedder.py picks per LOCAL_EMBEDDING_BACKEND
   - "ollama"             Ollama's /api/embed (OllamaEmbeddingService)
   - "openai_compatible"  POST {base_url}/embeddings, the shape OpenAI made
                          standard and most hosted embedding APIs copy
@@ -59,13 +61,21 @@ EMBEDDING_PROVIDERS: List[Dict[str, Any]] = [
         "base_url": None,
         "default_model": "all-MiniLM-L6-v2",
         "models": [
-            {"id": "all-MiniLM-L6-v2", "label": "MiniLM L6 — fast, small (default)", "dimensions": 384, "size_mb": 90, "language": "English"},
-            {"id": "all-MiniLM-L12-v2", "label": "MiniLM L12 — balanced", "dimensions": 384, "size_mb": 120, "language": "English"},
-            {"id": "BAAI/bge-base-en-v1.5", "label": "BGE base — stronger English search", "dimensions": 768, "size_mb": 420, "language": "English"},
-            {"id": "all-mpnet-base-v2", "label": "MPNet base — high quality, slower", "dimensions": 768, "size_mb": 420, "language": "English"},
-            {"id": "paraphrase-multilingual-MiniLM-L12-v2", "label": "Multilingual MiniLM — 50+ languages", "dimensions": 384, "size_mb": 470, "language": "Multilingual"},
-            {"id": "Qwen/Qwen3-Embedding-0.6B", "label": "Qwen3 Embedding 0.6B — best quality, heavy", "dimensions": 1024, "size_mb": 1300, "language": "Multilingual"},
-            {"id": "paraphrase-MiniLM-L3-v2", "label": "MiniLM L3 — fastest, lower quality", "dimensions": 384, "size_mb": 60, "language": "English"},
+            # `backends` names the in-process runtime(s) that can serve the
+            # model: "fastembed" (ONNX, no PyTorch) and/or
+            # "sentence-transformers" (PyTorch). Both produce the same vectors
+            # for a given model, so the choice never forces a re-index.
+            {"id": "all-MiniLM-L6-v2", "label": "MiniLM L6 — fast, small (default)", "dimensions": 384, "size_mb": 90, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "BAAI/bge-small-en-v1.5", "label": "BGE small — stronger than MiniLM, same size class", "dimensions": 384, "size_mb": 130, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "all-MiniLM-L12-v2", "label": "MiniLM L12 — balanced", "dimensions": 384, "size_mb": 120, "language": "English", "backends": ["sentence-transformers"]},
+            {"id": "BAAI/bge-base-en-v1.5", "label": "BGE base — stronger English search", "dimensions": 768, "size_mb": 420, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "nomic-ai/nomic-embed-text-v1.5", "label": "Nomic Embed v1.5 — 8k context, good for code and long passages", "dimensions": 768, "size_mb": 270, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "jinaai/jina-embeddings-v2-base-code", "label": "Jina Code v2 — source code", "dimensions": 768, "size_mb": 320, "language": "Code", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "all-mpnet-base-v2", "label": "MPNet base — high quality, slower", "dimensions": 768, "size_mb": 420, "language": "English", "backends": ["sentence-transformers"]},
+            {"id": "paraphrase-multilingual-MiniLM-L12-v2", "label": "Multilingual MiniLM — 50+ languages", "dimensions": 384, "size_mb": 470, "language": "Multilingual", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "intfloat/multilingual-e5-small", "label": "Multilingual E5 small — 100 languages", "dimensions": 384, "size_mb": 470, "language": "Multilingual", "backends": ["sentence-transformers"]},
+            {"id": "Qwen/Qwen3-Embedding-0.6B", "label": "Qwen3 Embedding 0.6B — best quality, heavy", "dimensions": 1024, "size_mb": 1300, "language": "Multilingual", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "paraphrase-MiniLM-L3-v2", "label": "MiniLM L3 — fastest, lower quality", "dimensions": 384, "size_mb": 60, "language": "English", "backends": ["sentence-transformers"]},
         ],
     },
     {
@@ -325,6 +335,15 @@ def default_model_for(provider_id: str) -> str:
     return p["default_model"] if p else ""
 
 
+def local_model_entry(model_name: str) -> Optional[Dict[str, Any]]:
+    """Catalog entry for a local model name, or None when it is not curated."""
+    local = get_provider("local") or {"models": []}
+    for m in local["models"]:
+        if m["id"] == model_name:
+            return m
+    return None
+
+
 def local_model_catalog() -> List[Dict[str, Any]]:
     """The curated sentence-transformers list, in the shape older callers of
     config_manager.get_embedding_models() expect (`name` + `description`)."""
@@ -337,5 +356,6 @@ def local_model_catalog() -> List[Dict[str, Any]]:
             "dimensions": m.get("dimensions"),
             "size_mb": m.get("size_mb"),
             "language": m.get("language"),
+            "backends": list(m.get("backends", [])),
         })
     return out
