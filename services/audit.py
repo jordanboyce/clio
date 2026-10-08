@@ -35,6 +35,8 @@ ACTIONS: List[str] = [
     "document.blocked",         # hash blocklist refused a re-upload
     "document.approved",        # admin cleared a flagged/quarantined document
     "document.reported",        # a user reported a document
+    "document.injection_dismissed",  # admin reviewed prompt-injection warnings and kept the document
+    "report.dismissed",         # admin closed the open user reports on a document
     "document.sensitivity",     # per-document sensitivity override changed
     "collection.sensitivity",   # collection label changed
     "collection.published",

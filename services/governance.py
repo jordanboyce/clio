@@ -26,8 +26,10 @@ Everything here is domain-neutral — it applies to any corpus.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -172,6 +174,7 @@ def remove_document(
 
     num_deleted = indexer.delete_document(document_id)
     collection_service.remove_document(collection_id, document_id)
+    invalidate_review_summary()
 
     file_deleted = False
     is_local_reference = doc_info.get("source_type") == "local_reference"
@@ -220,6 +223,7 @@ def set_policy_status(
         actor = get_request_user()
     store.set_document_governance(document_id, policy_status=status)
     _invalidate_answers(collection_id)
+    invalidate_review_summary()
     audit.record(
         "document.approved" if status == "approved" else f"document.{status}",
         actor=actor, collection_id=collection_id, document_id=document_id,
@@ -261,34 +265,271 @@ def _invalidate_answers(collection_id: str) -> None:
         logger.debug(f"Answer cache clear skipped for {collection_id}: {e}")
 
 
+# ── Review queue ──────────────────────────────────────────────────────────
+#
+# One document can be in the queue for several reasons at once — the content
+# scan held it, its text carries prompt-injection warnings, two people
+# reported it. The reviewer decides about the *document*, so the queue is one
+# row per document with every reason attached, sorted by how much it matters.
+
+_INJECTION_LEVEL_RANK = {"high": 55, "medium": 40}
+_CLOSED_REPORT_ACTIONS = ("report.dismissed", "document.approved")
+
+
+def _policy_reason(doc: Dict[str, Any]) -> str:
+    from services.content_policy import CRITICAL_CATEGORIES
+
+    flags = doc.get("policy_flags") or {}
+    cats = flags.get("categories") or {}
+    parts = [
+        f"{str(c).replace('_', ' ')}" + (f" ×{n}" if n and n > 1 else "")
+        for c, n in sorted(cats.items(), key=lambda kv: -kv[1])
+        if c not in ("secrets",)
+    ]
+    llm = (flags.get("llm") or {}).get("categories") or []
+    for c in llm:
+        label = str(c).replace("_", " ")
+        if not any(p.startswith(label) for p in parts):
+            parts.append(f"{label} (model opinion)")
+    held = "Held" if doc.get("policy_status") == "quarantined" else "Flagged"
+    what = ", ".join(parts[:3]) if parts else "content-policy signals"
+    critical = " Critical category." if (flags.get("critical") or any(c in CRITICAL_CATEGORIES for c in cats)) else ""
+    return f"{held} by the content scan: {what}.{critical}"
+
+
+def _open_report_groups() -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """User reports nobody has answered yet, grouped per document.
+
+    A report is open until an admin approves/dismisses the document after it
+    was filed (deleting the document closes it implicitly: the group has
+    nothing left to point at and is dropped when the document is not found).
+    """
+    reports = audit.list_events(limit=1000, action="document.reported")
+    if not reports:
+        return {}
+    closed_at: Dict[Tuple[str, str], str] = {}
+    for action in _CLOSED_REPORT_ACTIONS:
+        for ev in audit.list_events(limit=2000, action=action):
+            key = (ev.get("collection_id") or "", ev.get("document_id") or "")
+            if (ev.get("timestamp") or "") > closed_at.get(key, ""):
+                closed_at[key] = ev.get("timestamp") or ""
+
+    groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for ev in reversed(reports):  # oldest first, so first_at/last_at fall out naturally
+        key = (ev.get("collection_id") or "", ev.get("document_id") or "")
+        if not key[0] or not key[1]:
+            continue
+        ts = ev.get("timestamp") or ""
+        if ts <= closed_at.get(key, ""):
+            continue
+        g = groups.setdefault(key, {
+            "count": 0, "reporters": [], "reasons": [], "first_at": ts, "last_at": ts,
+        })
+        g["count"] += 1
+        g["last_at"] = ts
+        who = ev.get("actor") or "anonymous"
+        if who not in g["reporters"]:
+            g["reporters"].append(who)
+        reason = ((ev.get("detail") or {}).get("reason") if isinstance(ev.get("detail"), dict) else "") or ""
+        if reason and reason not in g["reasons"] and len(g["reasons"]) < 5:
+            g["reasons"].append(reason)
+    return groups
+
+
+def _rank(item: Dict[str, Any]) -> int:
+    """Higher = look at it sooner. Roughly: critical > held > reported > flagged > injection."""
+    flags = item.get("policy_flags") or {}
+    rank = 0
+    if "policy" in item["kinds"]:
+        if flags.get("critical"):
+            rank = max(rank, 100)
+        elif item.get("policy_status") == "quarantined":
+            rank = max(rank, 90)
+        else:
+            rank = max(rank, 60 + int(min(float(flags.get("max_score") or 0), 1.0) * 9))
+    if "report" in item["kinds"]:
+        rank = max(rank, 70 + min(item["reports"]["count"], 5))
+    if "injection" in item["kinds"]:
+        rank = max(rank, _INJECTION_LEVEL_RANK.get(item["injection"]["level"], 0))
+    return rank
+
+
+def _priority_label(item: Dict[str, Any]) -> str:
+    flags = item.get("policy_flags") or {}
+    if "policy" in item["kinds"] and flags.get("critical"):
+        return "critical"
+    if item["rank"] >= 70 or (
+        "injection" in item["kinds"] and item["injection"]["level"] == "high"
+    ):
+        return "high"
+    if item["rank"] >= 50:
+        return "medium"
+    return "low"
+
+
 def review_queue() -> List[Dict[str, Any]]:
-    """Every flagged or quarantined document across all collections."""
+    """Everything awaiting a reviewer, one entry per document, most urgent first.
+
+    Each entry is the document row plus: ``kinds`` (any of "policy",
+    "injection", "report"), ``priority`` (critical|high|medium|low), a numeric
+    ``rank``, plain-language ``reasons`` (one per kind), and the raw
+    ``injection`` / ``reports`` detail for the kinds that apply. Low-level
+    injection warnings (discussion, quoted examples) are intentionally not
+    queued — they stay visible on the document but are not an admin's job.
+    """
     from services.app_database import app_db
     from services.indexer_manager import indexer_manager
+    from services.prompt_injection_detector import summarize_document
 
-    rows: List[Dict[str, Any]] = []
+    report_groups = _open_report_groups()
+    items: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
     for collection in app_db.get_all_collections():
         cid = collection.get("id")
         if not cid:
             continue
         try:
             store = indexer_manager.get_indexer(cid).vector_store.metadata_store
-            docs = store.list_documents_by_policy_status(("flagged", "quarantined"))
+            policy_docs = store.list_documents_by_policy_status(("flagged", "quarantined"))
+            injected_docs = store.list_documents_with_injection_warnings()
+            reported_ids = [did for (c, did) in report_groups if c == cid]
+            reported_docs = [d for d in (store.get_document_info(i) for i in reported_ids) if d]
         except Exception as e:
             logger.warning(f"Review queue: could not read collection {cid}: {e}")
             continue
-        for d in docs:
-            d["collection_id"] = cid
-            d["collection_name"] = collection.get("name", cid)
-            d["sensitivity_effective"] = effective_sensitivity(collection, d.get("sensitivity"))
-            rows.append(d)
-    rows.sort(key=lambda d: (d.get("policy_status") != "quarantined", d.get("upload_timestamp") or ""),
-              )
-    return rows
+
+        for d in (*policy_docs, *injected_docs, *reported_docs):
+            key = (cid, d["document_id"])
+            item = items.get(key)
+            if item is None:
+                item = dict(d)
+                item["collection_id"] = cid
+                item["collection_name"] = collection.get("name", cid)
+                item["sensitivity_effective"] = effective_sensitivity(collection, d.get("sensitivity"))
+                item["kinds"] = []
+                item["reasons"] = []
+                item["injection"] = None
+                item["reports"] = None
+                items[key] = item
+            if "policy" not in item["kinds"] and d.get("policy_status") in ("flagged", "quarantined"):
+                item["kinds"].append("policy")
+                item["reasons"].append({"kind": "policy", "text": _policy_reason(d)})
+            if "injection" not in item["kinds"] and d.get("injection_warnings") and not d.get("injection_review"):
+                summary = summarize_document(d["injection_warnings"])
+                if summary and summary["needs_review"]:
+                    item["kinds"].append("injection")
+                    item["injection"] = summary
+                    item["reasons"].append({"kind": "injection", "text": summary["reason"]})
+            group = report_groups.get(key)
+            if group and "report" not in item["kinds"]:
+                item["kinds"].append("report")
+                item["reports"] = group
+                n = group["count"]
+                why = "; ".join(group["reasons"][:2])
+                item["reasons"].append({
+                    "kind": "report",
+                    "text": f"Reported by {len(group['reporters'])} "
+                            f"{'person' if len(group['reporters']) == 1 else 'people'}"
+                            + (f" ({n} reports)" if n > len(group["reporters"]) else "")
+                            + (f": {why}" if why else "."),
+                })
+
+    queue = [i for i in items.values() if i["kinds"]]
+    for i in queue:
+        i["rank"] = _rank(i)
+        i["priority"] = _priority_label(i)
+    queue.sort(key=lambda i: (-i["rank"], i.get("upload_timestamp") or ""))
+    return queue
 
 
 def recent_reports(limit: int = 50) -> List[Dict[str, Any]]:
     return audit.list_events(limit=limit, action="document.reported")
+
+
+def resolve_document(
+    collection_id: str, document_id: str, *, actor: Any = _UNSET, note: str = ""
+) -> Dict[str, Any]:
+    """The reviewer looked and the document is fine: close everything open on it.
+
+    Releases a flagged/quarantined document, dismisses its injection warnings
+    (kept on the row, just no longer queued) and closes its open user reports.
+    Returns what was resolved so the UI can say so. Raises KeyError when the
+    document is unknown.
+    """
+    from services.indexer_manager import indexer_manager
+
+    store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store
+    doc_info = store.get_document_info(document_id)
+    if not doc_info:
+        raise KeyError(document_id)
+    if actor is _UNSET:
+        from middleware.user_context import get_request_user
+
+        actor = get_request_user()
+
+    # Looked up first: approving writes a "document.approved" event, which
+    # itself closes reports, so checking afterwards would miss them.
+    had_reports = (collection_id, document_id) in _open_report_groups()
+
+    resolved: List[str] = []
+    status = doc_info.get("policy_status") or "clear"
+    if status in ("flagged", "quarantined"):
+        set_policy_status(collection_id, document_id, "approved", actor=actor, note=note)
+        status = "approved"
+        resolved.append("policy")
+
+    if doc_info.get("injection_warnings") and not doc_info.get("injection_review"):
+        store.set_document_governance(document_id, injection_review="dismissed")
+        audit.record("document.injection_dismissed", actor=actor, collection_id=collection_id,
+                     document_id=document_id,
+                     detail={"filename": doc_info.get("filename"), "note": note or None})
+        resolved.append("injection")
+
+    if had_reports:
+        audit.record("report.dismissed", actor=actor, collection_id=collection_id,
+                     document_id=document_id,
+                     detail={"filename": doc_info.get("filename"), "note": note or None})
+        resolved.append("report")
+
+    invalidate_review_summary()
+    return {"document_id": document_id, "policy_status": status, "resolved": resolved}
+
+
+# The footer/toolbar badge polls this; walking every collection's store on
+# each poll would be wasteful, and a few seconds of lag on a badge is fine.
+_SUMMARY_TTL = 30.0
+_summary_lock = threading.Lock()
+_summary_cache: Dict[str, Any] = {"at": 0.0, "value": None}
+
+
+def invalidate_review_summary() -> None:
+    with _summary_lock:
+        _summary_cache["at"] = 0.0
+        _summary_cache["value"] = None
+
+
+def summarize_queue(queue: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "pending": len(queue),
+        "critical": sum(1 for i in queue if i["priority"] == "critical"),
+        "held": sum(1 for i in queue if i.get("policy_status") == "quarantined"),
+        "flagged": sum(1 for i in queue if "policy" in i["kinds"] and i.get("policy_status") == "flagged"),
+        "injection": sum(1 for i in queue if "injection" in i["kinds"]),
+        "reports": sum(1 for i in queue if "report" in i["kinds"]),
+    }
+
+
+def review_summary(*, max_age: float = _SUMMARY_TTL) -> Dict[str, Any]:
+    """Counts for the notification badge (cached for ``max_age`` seconds)."""
+    with _summary_lock:
+        cached = _summary_cache["value"]
+        if cached is not None and time.monotonic() - _summary_cache["at"] < max_age:
+            return cached
+    value = summarize_queue(review_queue())
+    with _summary_lock:
+        _summary_cache["value"] = value
+        _summary_cache["at"] = time.monotonic()
+    return value
 
 
 def suspend_user(email: str, *, actor: Any = _UNSET, reason: str = "") -> Dict[str, Any]:
@@ -336,6 +577,7 @@ def report_document(
 
         actor = get_request_user()
     reason = (reason or "").strip()[:1000]
+    invalidate_review_summary()
     audit.record("document.reported", actor=actor, collection_id=collection_id,
                  document_id=document_id,
                  detail={"filename": doc_info.get("filename"), "reason": reason,

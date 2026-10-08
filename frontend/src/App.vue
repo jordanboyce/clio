@@ -23,6 +23,7 @@
         :active-tab="activeTab"
         :chat-enabled="chatTabEnabled"
         :admin-console="userStore.adminConsole"
+        :admin-badge="reviewStore.total"
         @navigate="switchTab"
         @notes="openNotes"
       />
@@ -112,6 +113,10 @@
       >
         <component :is="notesPanelShown ? PanelRightClose : PanelRight" :size="16" />
       </button>
+
+      <!-- Review notifications (admins only): held/flagged content, injection
+           warnings, user reports and access requests waiting for a decision -->
+      <ReviewBell variant="header" @open="openReview" />
 
       <!-- Help menu (desktop; phones get it in the overflow menu) -->
       <div class="dropdown dropdown-end hidden md:block">
@@ -203,6 +208,14 @@
               <Bell v-else :size="14" aria-hidden="true" />
               Background jobs
               <span v-if="backgroundJobsStore.activeJobCount > 0" class="badge badge-warning badge-xs ml-auto">{{ backgroundJobsStore.activeJobCount }}</span>
+            </button>
+          </li>
+          <li v-if="userStore.adminConsole">
+            <button @click="openReview('review'); closeMenus()">
+              <ShieldAlert v-if="reviewStore.total > 0" :size="14" class="text-warning" aria-hidden="true" />
+              <ShieldCheck v-else :size="14" aria-hidden="true" />
+              Review queue
+              <span v-if="reviewStore.total > 0" class="badge badge-warning badge-xs ml-auto">{{ reviewStore.total }}</span>
             </button>
           </li>
           <template v-if="providerPill.configured.length > 0">
@@ -762,6 +775,12 @@
         <span v-else>Idle</span>
       </button>
 
+      <!-- Pending review (admins only) -->
+      <template v-if="userStore.adminConsole">
+        <span class="w-px h-3 bg-base-300" aria-hidden="true"></span>
+        <ReviewBell variant="footer" @open="openReview" />
+      </template>
+
       <!-- Inline progress for the most recent active job, if any -->
       <template v-if="footerActiveJob">
         <span class="w-px h-3 bg-base-300" aria-hidden="true"></span>
@@ -807,6 +826,7 @@
       :active-tab="activeTab"
       :chat-enabled="chatTabEnabled"
       :admin-console="userStore.adminConsole"
+      :admin-badge="reviewStore.total"
       @navigate="navigateMobile"
       @notes="openNotes"
     />
@@ -1392,7 +1412,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
-import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus } from 'lucide-vue-next'
+import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert } from 'lucide-vue-next'
 import CommandPalette from './components/CommandPalette.vue'
 import ShortcutsDialog from './components/ShortcutsDialog.vue'
 import AboutDialog from './components/AboutDialog.vue'
@@ -1409,6 +1429,7 @@ const chatTabEnabled = ref(true)
 import SourcesSidebar from './components/SourcesSidebar.vue'
 import StudioSidebar from './components/StudioSidebar.vue'
 import WorkspaceNav from './components/WorkspaceNav.vue'
+import ReviewBell from './components/ReviewBell.vue'
 import ChatTab from './components/ChatTab.vue'
 
 // Every tab but Ask lives in its own chunk; lazyView keeps a chunk that has
@@ -1435,6 +1456,7 @@ import {
 } from './utils/aiProviders.js'
 import { useCollectionStore } from './stores/collectionStore'
 import { useUserStore } from './stores/userStore'
+import { useReviewStore } from './stores/reviewStore'
 import { useSearchStore } from './stores/searchStore'
 import { useBackgroundJobsStore } from './stores/backgroundJobsStore'
 import { useProviderStore } from './stores/providerStore'
@@ -1449,6 +1471,7 @@ const collectionStore = useCollectionStore()
 const searchStore = useSearchStore()
 const backgroundJobsStore = useBackgroundJobsStore()
 const userStore = useUserStore()
+const reviewStore = useReviewStore()
 const providerStore = useProviderStore()
 const statsStore = useStatsStore()
 const ui = useUiStore()
@@ -2008,6 +2031,21 @@ const switchTab = (tabName) => {
   activeTab.value = tabName
 }
 
+// Notification bell / footer indicator: land on the part of Admin that holds
+// the thing being counted, not just the top of the page.
+const openReview = (target = 'review') => {
+  switchTab('admin')
+  // The Admin tab is a lazy chunk, so its sections may not exist yet.
+  const id = target === 'access' ? 'admin-access' : 'admin-review'
+  let tries = 0
+  const scrollWhenReady = () => {
+    const el = document.getElementById(id)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    else if (tries++ < 30) setTimeout(scrollWhenReady, 100)
+  }
+  nextTick(scrollWhenReady)
+}
+
 // ── Command palette and global shortcuts ──
 // The palette is the one place every destination and action is listed, so
 // anything reachable from the header is reachable from the keyboard too.
@@ -2382,6 +2420,7 @@ onMounted(async () => {
 
   // Load user info
   await userStore.loadCurrentUser()
+  if (userStore.adminConsole) reviewStore.start()
 
   // Load collections first
   await collectionStore.loadCollections()
@@ -2419,6 +2458,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  reviewStore.stop()
   backgroundJobsStore.cleanup()
   window.removeEventListener('visibilitychange', refreshJobsOnReturn)
   window.removeEventListener('focus', refreshJobsOnReturn)

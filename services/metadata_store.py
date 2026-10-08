@@ -11,7 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Current schema version - increment when making breaking changes
-SCHEMA_VERSION = "3.6"
+SCHEMA_VERSION = "3.7"
 
 # v3.3 governance columns on the documents table, in migration order.
 _GOVERNANCE_DOC_COLUMNS = [
@@ -124,7 +124,9 @@ class MetadataStore:
                     policy_status TEXT DEFAULT 'clear',
                     policy_flags TEXT DEFAULT NULL,
                     -- v3.4: bytes of the source file (per-collection storage cap)
-                    file_size INTEGER DEFAULT NULL
+                    file_size INTEGER DEFAULT NULL,
+                    -- v3.7: injection-warning review outcome ('dismissed' or NULL)
+                    injection_review TEXT DEFAULT NULL
                 )
             """)
 
@@ -202,6 +204,11 @@ class MetadataStore:
             if current_version == "3.5":
                 self._migrate_to_v3_6(conn)
                 current_version = "3.6"
+
+            # Migration from 3.6 to 3.7 (injection-warning review outcome)
+            if current_version == "3.6":
+                self._migrate_to_v3_7(conn)
+                current_version = "3.7"
 
             # Update schema version
             conn.execute("""
@@ -402,6 +409,17 @@ class MetadataStore:
                 conn.execute(f"ALTER TABLE chunks ADD COLUMN {column} {ddl}")
         logger.info("Added code symbol columns to chunks")
 
+    def _migrate_to_v3_7(self, conn: sqlite3.Connection):
+        """Migrate to v3.7: remember an admin's verdict on injection warnings.
+
+        Injection warnings used to be advisory-only and permanent. The admin
+        review queue now surfaces the serious ones, and a reviewer needs a
+        way to say "looked at it, fine" that survives a restart.
+        """
+        if "injection_review" not in self._get_table_columns(conn, "documents"):
+            conn.execute("ALTER TABLE documents ADD COLUMN injection_review TEXT DEFAULT NULL")
+            logger.info("Added column injection_review to documents table")
+
     def _backfill_entities(self, max_per_chunk: int = 20) -> int:
         """Extract entities for every chunk that has none yet.
 
@@ -561,6 +579,10 @@ class MetadataStore:
         if "symbol_name" not in self._get_table_columns(conn, "chunks"):
             logger.warning("Running defensive v3.6 migration - chunk symbol columns missing")
             self._migrate_to_v3_6(conn)
+            migrated = True
+        if "injection_review" not in self._get_table_columns(conn, "documents"):
+            logger.warning("Running defensive v3.7 migration - injection_review column missing")
+            self._migrate_to_v3_7(conn)
             migrated = True
         if migrated:
             conn.execute("""
@@ -1017,7 +1039,8 @@ class MetadataStore:
                     d.content_hash,
                     d.sensitivity,
                     d.policy_status,
-                    d.policy_flags"""
+                    d.policy_flags,
+                    d.injection_review"""
 
     def list_documents_page(self, limit: int, offset: int = 0, q: str = "",
                             keys: Optional[List[str]] = None) -> List[dict]:
@@ -1084,6 +1107,19 @@ class MetadataStore:
             """, wanted)
             return [self._document_row_to_dict(row) for row in cursor.fetchall()]
 
+    def list_documents_with_injection_warnings(self) -> List[dict]:
+        """Documents carrying injection warnings no reviewer has dismissed."""
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(f"""
+                SELECT {self._DOC_LIST_COLUMNS}
+                FROM documents d
+                WHERE d.injection_warnings IS NOT NULL AND d.injection_review IS NULL
+                ORDER BY COALESCE(d.upload_timestamp, '1970-01-01') DESC
+            """)
+            return [self._document_row_to_dict(row) for row in cursor.fetchall()]
+
     def get_hidden_document_ids(self) -> set:
         """Ids of documents retrieval must not return (quarantined)."""
         with sqlite_connect(self.db_path) as conn:
@@ -1094,7 +1130,7 @@ class MetadataStore:
             return {r[0] for r in rows}
 
     def set_document_governance(self, document_id: str, *, sensitivity=..., policy_status=None,
-                                policy_flags=...):
+                                policy_flags=..., injection_review=...):
         """Update the governance columns of one document.
 
         ``sensitivity`` and ``policy_flags`` use Ellipsis as "leave alone" so
@@ -1110,6 +1146,9 @@ class MetadataStore:
         if policy_flags is not ...:
             updates.append("policy_flags = ?")
             params.append(json.dumps(policy_flags) if policy_flags else None)
+        if injection_review is not ...:
+            updates.append("injection_review = ?")
+            params.append(injection_review)
         if not updates:
             return
         params.append(document_id)
@@ -1313,7 +1352,8 @@ class MetadataStore:
                 SELECT document_id, filename, num_pages, num_chunks, upload_timestamp,
                        source_format, extraction_method, embedding_model, chunk_size,
                        chunk_overlap, schema_version, source_path, source_type,
-                       uploaded_by, content_hash, sensitivity, policy_status, policy_flags
+                       uploaded_by, content_hash, sensitivity, policy_status, policy_flags,
+                       injection_warnings, injection_review
                 FROM documents
                 WHERE document_id = ?
             """, (document_id,))
