@@ -21,25 +21,14 @@
             <input v-model="rerank" type="checkbox" class="toggle toggle-primary shrink-0" :disabled="!configuredProviders.length" />
           </label>
 
-          <div v-if="configuredProviders.length" class="space-y-3">
-            <p class="text-sm font-medium">Providers <span class="font-normal text-base-content/75">· Select one or compare several</span></p>
-            <div v-for="pid in configuredProviders" :key="pid" class="border border-base-300 rounded-lg p-3 space-y-3">
-              <label class="flex items-center gap-3 cursor-pointer min-h-8">
-                <input type="checkbox" class="checkbox checkbox-sm checkbox-primary" :checked="selectedProviders.includes(pid)" @change="toggleProvider(pid)" />
-                <span class="text-sm font-medium flex-1">{{ getProviderDisplayName(pid) }}</span>
-                <span class="text-xs text-base-content/75">{{ isLocalProvider(pid) ? 'Local' : 'Cloud' }}</span>
-              </label>
-              <label v-if="selectedProviders.includes(pid) && getProviderModels(pid).length" class="block text-sm">
-                <span class="block mb-1 text-base-content/75">Model</span>
-                <select class="select w-full" :value="modelOverrides[pid] || ''" :aria-label="`Model for ${getProviderDisplayName(pid)}`" @change="modelOverrides = { ...modelOverrides, [pid]: $event.target.value }">
-                  <option value="">Provider default</option>
-                  <option v-if="modelOverrides[pid] && !getProviderModels(pid).some(m => m.id === modelOverrides[pid])" :value="modelOverrides[pid]">{{ modelOverrides[pid] }}</option>
-                  <option v-for="model in getProviderModels(pid)" :key="model.id" :value="model.id">{{ model.label }}</option>
-                </select>
-              </label>
+          <div v-if="configuredProviders.length" class="rounded-lg border border-base-300 bg-base-200/50 p-3 text-sm">
+            <div class="flex items-center gap-2">
+              <Sparkles :size="14" class="text-primary shrink-0" aria-hidden="true" />
+              <span class="flex-1 min-w-0 truncate font-medium">{{ getProviderDisplayName(providerId) }}<span v-if="modelName" class="font-normal text-base-content/60"> · {{ modelName }}</span></span>
+              <span class="text-xs text-base-content/75">{{ isLocalProvider(providerId) ? 'Local' : 'Cloud' }}</span>
             </div>
-            <p v-if="!selectedProviders.length" class="text-sm text-base-content/75">No provider selected. Your next search will return passages without AI assistance.</p>
-            <p v-else-if="(synthesize || rerank) && selectedProviders.some(pid => !isLocalProvider(pid))" class="text-sm text-base-content/75">Selected cloud providers receive your query and matching passages.</p>
+            <p class="text-base-content/75 mt-1.5">Find uses the AI model chosen in the top bar. Change it there and Ask and Reports follow.</p>
+            <p v-if="(synthesize || rerank) && !isLocalProvider(providerId)" class="text-base-content/75 mt-1.5">This cloud provider receives your query and the matching passages.</p>
           </div>
         </fieldset>
 
@@ -63,29 +52,29 @@
 </template>
 
 <script setup>
-import { watch } from 'vue'
-import { X } from 'lucide-vue-next'
+import { computed, watch } from 'vue'
+import { Sparkles, X } from 'lucide-vue-next'
 import { useModal } from '../composables/useModal'
-import { getProviderDisplayName, getProviderModels, isLocalProvider } from '../utils/aiProviders'
+import { useProviderStore } from '../stores/providerStore'
+import { getProviderDisplayName, isLocalProvider } from '../utils/aiProviders'
 
 // Mode and result count are set in the Find toolbar; this drawer holds the
-// settings that need explanation: providers, models, and the hybrid balance.
+// settings that need explanation: AI assistance and the hybrid balance. Which
+// model answers is not one of them: it is chosen once, in the top bar.
 defineProps({
   configuredProviders: { type: Array, default: () => [] },
+  providerId: { type: String, default: '' },
   searchMode: { type: String, default: 'hybrid' },
 })
 const emit = defineEmits(['switch-tab'])
 const open = defineModel('open', { type: Boolean, default: false })
-const selectedProviders = defineModel('selectedProviders', { type: Array, default: () => [] })
 const semanticWeight = defineModel('semanticWeight', { type: Number, default: 0.7 })
 const rerank = defineModel('rerank', { type: Boolean, default: true })
 const synthesize = defineModel('synthesize', { type: Boolean, default: true })
-const modelOverrides = defineModel('modelOverrides', { type: Object, default: () => ({}) })
+const providerStore = useProviderStore()
+const modelName = computed(() => providerStore.activeModel || providerStore.deploymentDefault.model || '')
 const modal = useModal({ onClose: () => { open.value = false } })
 watch(open, value => value ? modal.open() : modal.close(), { flush: 'post' })
-function toggleProvider(pid) {
-  selectedProviders.value = selectedProviders.value.includes(pid) ? selectedProviders.value.filter(p => p !== pid) : [...selectedProviders.value, pid]
-}
 function openProviderSettings() {
   modal.close()
   emit('switch-tab', 'settings')

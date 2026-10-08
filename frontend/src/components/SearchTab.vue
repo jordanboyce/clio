@@ -15,13 +15,11 @@
     <SearchSettings
       v-model:open="searchSettingsOpen"
       :configured-providers="configuredProviderIds"
-      :selected-providers="selectedProviders"
-      @update:selected-providers="onSelectedProvidersUpdate"
+      :provider-id="selectedProviders[0] || ''"
       :search-mode="searchMode"
       v-model:semantic-weight="semanticWeight"
       v-model:rerank="localRerank"
       v-model:synthesize="localSynthesize"
-      v-model:model-overrides="providerModelOverrides"
       @switch-tab="$emit('switch-tab', $event)"
     />
 
@@ -86,7 +84,7 @@
         <span class="badge badge-sm badge-outline">{{ searchModeLabel }}</span>
         <span class="badge badge-sm badge-outline">Top {{ searchStore.topK }}</span>
         <span v-if="aiActive" class="badge badge-sm badge-outline badge-primary">
-          {{ selectedProviders.length }} AI provider{{ selectedProviders.length > 1 ? 's' : '' }}
+          AI answer
         </span>
       </div>
       <progress class="progress progress-primary w-full mt-2"></progress>
@@ -272,7 +270,6 @@ import {
   getProviderDisplayName,
   getAISettings,
   migrateLegacySettings,
-  resolveProvider,
   getProviderConfig,
 } from '../utils/aiProviders.js'
 
@@ -424,68 +421,21 @@ const searchSettingsOpen = ref(false)
 // Check which providers are configured
 const configuredProviderIds = ref([])
 
-// Selected providers for this search session
-const PROVIDER_SELECTION_KEY = 'clio_selected_providers'
-const PROVIDER_MODEL_OVERRIDES_KEY = 'clio_search_model_overrides'
-const selectedProviders = ref([])
+// Find has no provider or model of its own: it follows the one choice made in
+// the top bar (see aiProviders.js). Kept as a list because the request and the
+// cache identity are per provider.
+const selectedProviders = computed(() => {
+  const id = providerStore.activeProviderId
+  return id && configuredProviderIds.value.includes(id) ? [id] : []
+})
 
-// Per-search model overrides: { providerId: 'model-id' | '' }
-const providerModelOverrides = ref({})
-
-// Persist model override changes
-watch(providerModelOverrides, (val) => {
-  try { localStorage.setItem(PROVIDER_MODEL_OVERRIDES_KEY, JSON.stringify(val)) } catch { /* ignore */ }
-}, { deep: true })
-
-// Initialize selected providers from localStorage
 const initializeProviders = () => {
   migrateLegacySettings()
   configuredProviderIds.value = getConfiguredProviderIds()
-
-  const saved = localStorage.getItem(PROVIDER_SELECTION_KEY)
-  let savedSelection = []
-  if (saved) {
-    try { savedSelection = JSON.parse(saved) } catch { savedSelection = [] }
-  }
-  if (!Array.isArray(savedSelection)) savedSelection = []
-
-  // Filter to only configured providers
-  const validProviders = savedSelection.filter(p => configuredProviderIds.value.includes(p))
-
-  if (validProviders.length > 0 || saved === '[]') {
-    // The saved multi-selection is Search's explicit per-surface override.
-    selectedProviders.value = validProviders
-  } else {
-    // No override yet: follow the shared resolution chain (global default,
-    // else first configured). Not persisted — a later change of the global
-    // default should flow through until the user picks providers here.
-    const resolved = resolveProvider()
-    selectedProviders.value = resolved ? [resolved] : []
-  }
-
-  // Restore model overrides
-  try {
-    const savedOverrides = JSON.parse(localStorage.getItem(PROVIDER_MODEL_OVERRIDES_KEY) || '{}')
-    // Only keep overrides for still-configured providers
-    const cleaned = {}
-    for (const pid of configuredProviderIds.value) {
-      if (savedOverrides[pid]) cleaned[pid] = savedOverrides[pid]
-    }
-    providerModelOverrides.value = cleaned
-  } catch {
-    providerModelOverrides.value = {}
-  }
 }
 
-// Provider selection updates from the settings drawer (persisted)
-const onSelectedProvidersUpdate = (list) => {
-  selectedProviders.value = list
-  localStorage.setItem(PROVIDER_SELECTION_KEY, JSON.stringify(list))
-}
-
-// Re-init when the global default (or provider config) changes elsewhere —
-// a saved selection here is respected, only the un-overridden default moves.
-// providerStore.version bumps on every config write.
+// Re-read when the provider config changes. providerStore.version bumps on
+// every config write.
 watch(() => providerStore.version, initializeProviders)
 
 onMounted(async () => {
@@ -526,9 +476,9 @@ const aiActive = computed(() => {
 const providerSummary = computed(() => {
   if (!configuredProviderIds.value.length) return 'No AI connected'
   const count = selectedProviders.value.length
-  if (!count) return 'No AI selected'
-  if (count === 1) return getProviderDisplayName(selectedProviders.value[0])
-  return `${count} AI providers`
+  if (!count) return 'No AI available'
+  const model = providerStore.activeModel || providerStore.deploymentDefault.model || ''
+  return getProviderDisplayName(selectedProviders.value[0]) + (model ? ` · ${model}` : '')
 })
 
 const loadingHeadline = computed(() => aiActive.value ? 'Searching and preparing AI results' : 'Searching your sources')
@@ -593,8 +543,6 @@ const loadHistoryEntry = (entry) => {
     semanticWeight.value = entry.options.semanticWeight
     localRerank.value = entry.options.rerank
     localSynthesize.value = entry.options.synthesize
-    onSelectedProvidersUpdate(entry.options.providers.map(p => p.id).filter(id => configuredProviderIds.value.includes(id)))
-    providerModelOverrides.value = Object.fromEntries(entry.options.providers.map(p => [p.id, p.model]))
   }
 
   historyModal.close()
@@ -659,7 +607,7 @@ const currentOptions = () => ({
   rerank: localRerank.value,
   synthesize: localSynthesize.value,
   providers: selectedProviders.value.map(id => ({
-    id, model: providerModelOverrides.value[id] || getProviderConfig(id)?.model || '',
+    id, model: getProviderConfig(id)?.model || '',
     baseUrl: getProviderConfig(id)?.baseUrl || '',
   })),
 })

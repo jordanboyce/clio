@@ -10,10 +10,13 @@ import {
   fetchDeploymentDefault,
   fetchServerProviderIds,
   getConfiguredProviderIds,
+  getProviderConfig,
   getProviderDisplayName,
   isDeploymentProvider,
   resolveProvider,
+  retireSurfaceOverrides,
   setActiveProviderLS,
+  setProviderModel,
   upsertProviderConfig,
 } from '../aiProviders'
 
@@ -57,7 +60,7 @@ describe('deployment-configured provider', () => {
 
     expect(getConfiguredProviderIds()).toEqual(['openai_compatible'])
     expect(resolveProvider()).toBe('openai_compatible')
-    expect(resolveProvider('chat')).toBe('openai_compatible')
+    expect(resolveProvider()).toBe('openai_compatible')
     expect(getProviderDisplayName('openai_compatible')).toBe('Acme Internal LLM')
   })
 
@@ -96,5 +99,51 @@ describe('deployment-configured provider', () => {
     await fetchDeploymentDefault()
 
     expect(getConfiguredProviderIds()).toEqual([])
+  })
+})
+
+describe('one provider choice for every surface', () => {
+  beforeEach(async () => {
+    localStorage.clear()
+    get.mockReset()
+    server()
+    await fetchDeploymentDefault()
+    await fetchServerProviderIds()
+  })
+
+  it('stores the model on the provider and sends it in the headers', () => {
+    upsertProviderConfig('anthropic', { apiKey: 'sk-ant-test' })
+    setProviderModel('anthropic', 'claude-x')
+    expect(getProviderConfig('anthropic').model).toBe('claude-x')
+    expect(buildProviderHeaders('anthropic')['X-AI-Model']).toBe('claude-x')
+    setProviderModel('anthropic', '')
+    expect(getProviderConfig('anthropic').model).toBe('')
+  })
+
+  it('retires per-surface overrides, promoting the chat one to the global default', () => {
+    upsertProviderConfig('anthropic', { apiKey: 'sk-ant-test' })
+    upsertProviderConfig('openai', { apiKey: 'sk-test' })
+    setActiveProviderLS('anthropic')
+    localStorage.setItem('clio_provider_override_chat', 'openai')
+    localStorage.setItem('clio_provider_override_search', 'anthropic')
+    localStorage.setItem('clio_chat_model_overrides', '{"openai":"gpt-x"}')
+    localStorage.setItem('clio_search_model_overrides', '{}')
+    localStorage.setItem('clio_selected_providers', '["openai","anthropic"]')
+
+    retireSurfaceOverrides()
+
+    expect(resolveProvider()).toBe('openai')
+    for (const key of [
+      'clio_provider_override_chat', 'clio_provider_override_search',
+      'clio_chat_model_overrides', 'clio_search_model_overrides', 'clio_selected_providers',
+    ]) expect(localStorage.getItem(key)).toBeNull()
+  })
+
+  it('ignores a chat override that is no longer configured', () => {
+    upsertProviderConfig('anthropic', { apiKey: 'sk-ant-test' })
+    setActiveProviderLS('anthropic')
+    localStorage.setItem('clio_provider_override_chat', 'grok')
+    retireSurfaceOverrides()
+    expect(resolveProvider()).toBe('anthropic')
   })
 })

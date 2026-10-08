@@ -154,18 +154,12 @@
       <!-- Chat Settings Drawer -->
       <AISettingsDrawer
         v-model:open="settingsDrawerOpen"
-        mode="single"
         title="Chat Settings"
-        :configured-providers="configuredProviders"
-        :provider="providerOverride"
-        @update:provider="selectProvider"
-        allow-global
-        :global-provider-id="globalProvider"
+        :provider-id="selectedProvider"
         v-model:top-k="topK"
         v-model:search-mode="searchMode"
         v-model:rerank="rerank"
         v-model:cache-threshold="cacheThreshold"
-        v-model:model-overrides="chatModelOverrides"
         top-k-label="Context chunks"
         :top-k-max="20"
         @switch-tab="$emit('switch-tab', $event)"
@@ -643,16 +637,6 @@
               >
                 <SlidersHorizontal :size="14" />
               </button>
-              <!-- Visible cue that this chat overrides the global provider -->
-              <button
-                v-if="providerOverride && hasAnyProvider"
-                class="badge badge-warning badge-xs gap-1 cursor-pointer border-0"
-                :title="`This chat overrides the global default and uses ${providerDisplayName(selectedProvider)}. Click to change.`"
-                :aria-label="`Provider override active: ${providerDisplayName(selectedProvider)}. Open chat settings to change.`"
-                @click="settingsDrawerOpen = true"
-              >
-                {{ providerDisplayName(selectedProvider) }}
-              </button>
               <button
                 class="btn btn-ghost btn-xs btn-circle font-mono"
                 @mousedown.prevent="toggleSlashPicker"
@@ -749,8 +733,6 @@ import {
   getAPIProviderName,
   getProviderDisplayName,
   resolveProvider,
-  getProviderOverride,
-  setProviderOverride,
 } from '../utils/aiProviders.js'
 
 const emit = defineEmits(['switch-tab', 'show-sources', 'add-sources'])
@@ -823,38 +805,20 @@ const depth = ref(DEPTHS.includes(localStorage.getItem('chat_depth')) ? localSto
 // Set by "Go deeper" / "Regenerate" for the one turn they trigger.
 const depthOverride = ref('')
 
-// Provider state. Refs (not computeds over localStorage) because the list can
-// grow after mount: server-stored team keys are fetched async and count as
-// configured. Chat resolves through the shared chain in aiProviders.js —
-// an explicit chat override when set, otherwise the global default.
+// Provider state. Chat has no provider or model of its own: it follows the
+// one choice made in the top bar (see aiProviders.js). The configured list is
+// a ref because it can grow after mount, when server-stored team keys arrive.
 const configuredProviders = ref(getConfiguredProviderIds())
-const providerOverride = ref(getProviderOverride('chat'))
 const globalProvider = ref(resolveProvider())
-const selectedProvider = computed(() =>
-  providerOverride.value && configuredProviders.value.includes(providerOverride.value)
-    ? providerOverride.value
-    : globalProvider.value
-)
+const selectedProvider = computed(() => globalProvider.value)
 const hasAnyProvider = computed(() => configuredProviders.value.length > 0)
 
-// Re-read everything provider-related from localStorage. Called on mount,
-// after team keys arrive, and whenever any surface fires provider-changed
-// (e.g. the top-bar pill switching the global default).
+// Re-read the provider state. Called on mount, after team keys arrive, and
+// whenever the top-bar picker changes the global provider.
 const refreshProviders = () => {
   configuredProviders.value = getConfiguredProviderIds()
-  providerOverride.value = getProviderOverride('chat')
   globalProvider.value = resolveProvider()
 }
-
-// Per-provider model overrides for chat: { providerId: modelId | '' }.
-// '' / absent means the provider's configured default model.
-const CHAT_MODEL_OVERRIDES_KEY = 'clio_chat_model_overrides'
-const chatModelOverrides = ref((() => {
-  try { return JSON.parse(localStorage.getItem(CHAT_MODEL_OVERRIDES_KEY) || '{}') } catch { return {} }
-})())
-watch(chatModelOverrides, (v) => {
-  try { localStorage.setItem(CHAT_MODEL_OVERRIDES_KEY, JSON.stringify(v)) } catch { /* ignore */ }
-}, { deep: true })
 
 const sendDisabled = computed(() => {
   if (!inputMessage.value.trim() || loading.value) return true
@@ -995,7 +959,7 @@ const loadStarters = async () => {
         provider: getAPIProviderName(selectedProvider.value),
         document_ids: selectionStore.active ? selectionStore.currentIds : null,
       },
-      { headers: buildProviderHeaders(selectedProvider.value, chatModelOverrides.value[selectedProvider.value] || null) },
+      { headers: buildProviderHeaders(selectedProvider.value) },
     )
     if (startersKeyNow() === key) starters.value = Array.isArray(data?.questions) ? data.questions : []
   } catch {
@@ -1087,13 +1051,6 @@ const providerBadgeClass = (provider) => ({
   'badge-accent': provider === 'google',
   'badge-neutral': !['anthropic','openai','ollama','ollama_cloud','grok','google'].includes(provider),
 })
-
-// '' = follow the global default; anything else is an explicit chat override
-// persisted through the standardized override key in aiProviders.js.
-const selectProvider = (provider) => {
-  providerOverride.value = provider || ''
-  setProviderOverride('chat', provider || null)
-}
 
 const scrollToBottom = async () => {
   await nextTick()
@@ -1284,10 +1241,7 @@ const sendMessage = async () => {
   await scrollToBottom()
 
   try {
-    const providerHeaders = buildProviderHeaders(
-      selectedProvider.value,
-      chatModelOverrides.value[selectedProvider.value] || null,
-    )
+    const providerHeaders = buildProviderHeaders(selectedProvider.value)
     // Pass only role+content to the API (strip UI-only fields like timestamps).
     const apiMessages = messages.value
       .filter(m => !m.streaming)

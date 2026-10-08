@@ -17,6 +17,17 @@
         <component :is="sourcesPanelShown ? PanelLeftClose : PanelLeft" :size="16" />
       </button>
 
+      <!-- Scope on the left, next to the sources panel it controls; the AI
+           model sits on the right. They used to share a corner and blur together. -->
+      <CollectionPicker
+        :collections="collectionStore.sortedCollections"
+        :current="collectionStore.currentCollection"
+        :overview="isCollectionsView"
+        @select="pickCollection"
+        @overview="activeTab = 'collections'"
+        @create="openCreateCollectionModal"
+      />
+
       <WorkspaceNav
         v-if="!isCollectionsView"
         class="hidden md:flex"
@@ -48,56 +59,9 @@
         <Loader2 :size="16" class="animate-spin text-warning" aria-hidden="true" />
       </button>
 
-      <!-- Current collection: a selector, so it sits with the other things
-           you set rather than with the things you navigate. -->
-      <button
-        class="btn btn-xs btn-ghost gap-1.5 normal-case font-normal h-7 min-h-0 border border-base-300 rounded-full px-2.5"
-        :class="{ 'bg-base-200': isCollectionsView }"
-        @click="activeTab = 'collections'"
-        title="View all collections"
-        :aria-label="`Current collection: ${collectionStore.currentCollection?.name || 'Default'}. Click to view all collections.`"
-      >
-        <span
-          class="w-2 h-2 rounded-full flex-shrink-0"
-          :style="{ backgroundColor: collectionStore.currentCollection?.color || '#3b82f6' }"
-          aria-hidden="true"
-        ></span>
-        <span class="max-w-32 truncate text-xs">{{ collectionStore.currentCollection?.name || 'Default' }}</span>
-        <ChevronDown :size="10" class="text-base-content/40 flex-shrink-0" aria-hidden="true" />
-      </button>
-
-      <!-- Global AI provider pill: app-wide default + click-to-switch menu -->
-      <div v-if="providerPill.configured.length > 0" class="dropdown dropdown-end hidden md:block">
-        <label
-          tabindex="0"
-          class="btn btn-xs btn-ghost gap-1 normal-case font-normal h-7 min-h-0 border border-base-300 rounded-full px-2.5"
-          :title="`Default AI provider: ${providerPill.name}`"
-          :aria-label="`Default AI provider: ${providerPill.name}${providerPill.model ? ', model ' + providerPill.model : ''}. Click to switch.`"
-          aria-haspopup="menu"
-        >
-          <Sparkles :size="11" class="text-primary flex-shrink-0" aria-hidden="true" />
-          <span class="text-xs max-w-44 truncate">
-            {{ providerPill.name }}<span v-if="providerPill.model" class="text-base-content/50"> · {{ providerPill.model }}</span>
-          </span>
-          <ChevronDown :size="10" class="text-base-content/40 flex-shrink-0" aria-hidden="true" />
-        </label>
-        <ul tabindex="0" class="dropdown-content z-[60] menu p-2 shadow-lg bg-base-100 border border-base-300 rounded-box w-64">
-          <li class="menu-title"><span class="text-xs">Default AI provider</span></li>
-          <li v-for="pid in providerPill.configured" :key="pid">
-            <button
-              class="flex items-center gap-2"
-              :class="{ 'active': pid === providerPill.id }"
-              @click="setGlobalProvider(pid)"
-            >
-              <Check v-if="pid === providerPill.id" :size="12" class="flex-shrink-0" aria-hidden="true" />
-              <span v-else class="w-3 flex-shrink-0" aria-hidden="true"></span>
-              <span class="flex-1 text-left text-sm truncate">{{ providerDisplayName(pid) }}</span>
-              <span v-if="providerPill.teamIds.includes(pid)" class="badge badge-success badge-xs">Team key</span>
-            </button>
-          </li>
-          <li class="menu-title pt-1"><span class="text-xs font-normal text-base-content/50">Chat can override this per conversation.</span></li>
-        </ul>
-      </div>
+      <!-- The one AI choice: provider and model for Ask, Find and Reports.
+           Phones get the provider list in the overflow menu instead. -->
+      <ModelPicker class="hidden md:block" @connect="activeTab = 'settings'" />
 
       <!-- Notes panel toggle: the right-hand twin of the sources one -->
       <!-- v-if, not `hidden md:inline-flex`: .side-icon-btn sets display in
@@ -1430,6 +1394,8 @@ import SourcesSidebar from './components/SourcesSidebar.vue'
 import StudioSidebar from './components/StudioSidebar.vue'
 import WorkspaceNav from './components/WorkspaceNav.vue'
 import ReviewBell from './components/ReviewBell.vue'
+import ModelPicker from './components/ModelPicker.vue'
+import CollectionPicker from './components/CollectionPicker.vue'
 import ChatTab from './components/ChatTab.vue'
 
 // Every tab but Ask lives in its own chunk; lazyView keeps a chunk that has
@@ -1448,6 +1414,7 @@ import { formatBytes, describeStorage } from './utils/format'
 import Toaster from './components/Toaster.vue'
 import {
   getConfiguredProviderIds,
+  retireSurfaceOverrides,
   getServerProviderIds,
   setActiveProviderLS,
   getProviderDisplayName,
@@ -1484,7 +1451,7 @@ const ui = useUiStore()
 const providerPill = computed(() => {
   providerStore.version // reactivity hook
   const configured = getConfiguredProviderIds()
-  const id = providerStore.resolveFor()
+  const id = providerStore.activeProviderId
   return {
     id,
     configured,
@@ -2174,6 +2141,15 @@ const selectCollectionAndNavigate = (collectionId) => {
   activeTab.value = chatTabEnabled.value ? 'chat' : 'search'
 }
 
+// Picker: switch in place. Only the overview (which has no conversation to
+// stay in) and tabs unrelated to a collection hand you back to Ask/Find.
+const pickCollection = (collectionId) => {
+  collectionStore.setCurrentCollection(collectionId)
+  if (!['chat', 'search', 'generate', 'expertise'].includes(activeTab.value)) {
+    activeTab.value = chatTabEnabled.value ? 'chat' : 'search'
+  }
+}
+
 const openCreateCollectionModal = () => {
   newCollectionName.value = ''
   newCollectionDescription.value = ''
@@ -2405,6 +2381,8 @@ onMounted(async () => {
   // appear (or change) once they're known. providerStore reactivity takes
   // care of the refresh; no listeners needed.
   providerStore.loadServerProviders().then(() => {
+    retireSurfaceOverrides()
+    providerStore.touch()
     if (providerStore.configuredIds.length > 0) showOnboarding.value = false
   })
 

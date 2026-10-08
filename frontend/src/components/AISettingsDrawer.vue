@@ -27,111 +27,18 @@
       <!-- Content -->
       <div class="flex-1 overflow-y-auto p-4 space-y-5">
 
-        <!-- Section 1: Provider(s) -->
-        <div v-if="hasAnyProvider" class="space-y-2">
-          <span class="text-xs font-semibold text-base-content/60 uppercase tracking-wider">
-            {{ mode === 'multi' ? 'Providers' : 'AI Provider' }}
-          </span>
-
-          <!-- Single mode: radio list -->
-          <div v-if="mode === 'single'" class="space-y-1.5">
-            <!-- "Follow the app-wide default" option (provider = '') -->
-            <label
-              v-if="allowGlobal"
-              class="flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer border transition-colors text-sm"
-              :class="provider === '' ? 'bg-primary/20 border-primary font-medium' : 'bg-base-200/60 border-base-300 hover:bg-base-100'"
-            >
-              <input
-                type="radio"
-                class="radio radio-xs radio-primary"
-                :checked="provider === ''"
-                @change="provider = ''"
-              />
-              <span class="flex-1">Global<span v-if="globalProviderId" class="text-base-content/50"> ({{ displayName(globalProviderId) }})</span></span>
-              <span class="badge badge-xs badge-primary badge-outline">default</span>
-            </label>
-
-            <label
-              v-for="pid in configuredProviders"
-              :key="pid"
-              class="flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer border transition-colors text-sm"
-              :class="provider === pid ? 'bg-primary/20 border-primary font-medium' : 'bg-base-200/60 border-base-300 hover:bg-base-100'"
-            >
-              <input
-                type="radio"
-                class="radio radio-xs radio-primary"
-                :checked="provider === pid"
-                @change="provider = pid"
-              />
-              <span class="flex-1">{{ displayName(pid) }}</span>
-              <span v-if="allowGlobal && provider === pid" class="badge badge-xs badge-warning">override</span>
-              <span class="badge badge-xs badge-outline">{{ isLocalProvider(pid) ? 'local' : 'cloud' }}</span>
-            </label>
-
-            <p v-if="allowGlobal && provider" class="text-xs text-warning/80 px-1">
-              Overriding the global default<template v-if="globalProviderId"> ({{ displayName(globalProviderId) }})</template> for this surface.
-            </p>
+        <!-- Section 1: which model answers. Read-only: it is chosen once, in
+             the top bar, and every surface follows it. -->
+        <div v-if="hasAnyProvider" class="space-y-1.5">
+          <span class="text-xs font-semibold text-base-content/60 uppercase tracking-wider">AI model</span>
+          <div class="flex items-center gap-2 px-3 py-2 rounded-lg border border-base-300 bg-base-200/60 text-sm">
+            <Sparkles :size="13" class="text-primary flex-shrink-0" aria-hidden="true" />
+            <span class="flex-1 truncate">
+              {{ displayName(providerId) }}<span v-if="modelName" class="text-base-content/55"> · {{ modelName }}</span>
+            </span>
+            <span class="badge badge-xs badge-outline">{{ isLocalProvider(providerId) ? 'local' : 'cloud' }}</span>
           </div>
-
-          <!-- Multi mode: checkbox list -->
-          <div v-else class="space-y-1.5">
-            <label
-              v-for="pid in configuredProviders"
-              :key="pid"
-              class="flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer border transition-colors text-sm"
-              :class="selectedProviders.includes(pid) ? 'bg-primary/20 border-primary font-medium' : 'bg-base-200/60 border-base-300 hover:bg-base-100'"
-            >
-              <input
-                type="checkbox"
-                class="checkbox checkbox-xs checkbox-primary"
-                :checked="selectedProviders.includes(pid)"
-                @change="toggleProvider(pid)"
-              />
-              <span class="flex-1">{{ displayName(pid) }}</span>
-              <span class="badge badge-xs badge-outline" :class="isLocalProvider(pid) ? 'badge-info' : 'badge-warning'">{{ isLocalProvider(pid) ? 'local' : 'cloud' }}</span>
-            </label>
-          </div>
-
-          <!-- Single mode: compact model select for the effective provider -->
-          <div v-if="mode === 'single' && effectiveProvider && hasModelOverrides" class="flex items-center justify-between gap-2 px-1">
-            <span class="text-xs text-base-content/50">Model</span>
-            <select
-              class="select select-xs select-bordered max-w-[180px]"
-              :value="overrideFor(effectiveProvider)"
-              :aria-label="`Model for ${displayName(effectiveProvider)}`"
-              @change="setOverride(effectiveProvider, $event.target.value)"
-            >
-              <option value="">Provider default</option>
-              <option v-if="missingOverride" :value="missingOverride">{{ missingOverride }}</option>
-              <optgroup v-if="recommendedModels.length > 0" label="Recommended">
-                <option v-for="m in recommendedModels" :key="m.id" :value="m.id">{{ m.label }}</option>
-              </optgroup>
-              <optgroup v-if="otherModels.length > 0" label="All models">
-                <option v-for="m in otherModels" :key="m.id" :value="m.id">{{ m.label }}</option>
-              </optgroup>
-            </select>
-          </div>
-          <p v-if="mode === 'single' && modelsLoading" class="text-xs text-base-content/40 px-1">Loading models…</p>
-
-          <!-- Multi mode: per-provider model overrides (curated list, as before) -->
-          <template v-if="mode === 'multi' && hasModelOverrides">
-            <div v-for="pid in selectedProviders" :key="'model-' + pid">
-              <div v-if="curatedModels(pid).length > 1" class="flex items-center justify-between mt-1 px-1">
-                <span class="text-xs text-base-content/50">{{ displayName(pid) }} model</span>
-                <select
-                  class="select select-xs select-bordered max-w-[160px]"
-                  :value="overrideFor(pid)"
-                  :aria-label="`Model for ${displayName(pid)}`"
-                  @change="setOverride(pid, $event.target.value)"
-                >
-                  <option value="">Default ({{ defaultModelLabel(pid) }})</option>
-                  <option v-for="m in curatedModels(pid)" :key="m.id" :value="m.id">{{ m.label }}</option>
-                </select>
-              </div>
-            </div>
-          </template>
-
-          <p v-if="mode === 'multi' && selectedExternalCount > 0" class="text-xs text-warning/80">Cloud providers will receive your query.</p>
+          <p class="text-xs text-base-content/50 px-1">Change it from the model picker in the top bar. It applies to Ask, Find and Reports.</p>
         </div>
 
         <!-- No-provider nudge -->
@@ -249,42 +156,25 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
-import { X } from 'lucide-vue-next'
-import {
-  getProviderDisplayName,
-  getProviderModels,
-  getProviderConfig,
-  isLocalProvider,
-  fetchProviderModels,
-} from '../utils/aiProviders.js'
+import { computed } from 'vue'
+import { Sparkles, X } from 'lucide-vue-next'
+import { useProviderStore } from '../stores/providerStore'
+import { getProviderDisplayName, isLocalProvider } from '../utils/aiProviders.js'
 
 const props = defineProps({
-  /** 'single' (radio, one provider — Chat) or 'multi' (checkboxes — Search). */
-  mode: { type: String, default: 'single' },
   title: { type: String, default: 'AI Settings' },
-  /** Configured provider ids to offer. */
-  configuredProviders: { type: Array, default: () => [] },
+  /** The provider currently answering ('' when none is configured). */
+  providerId: { type: String, default: '' },
   topKLabel: { type: String, default: 'Top K results' },
   topKMin: { type: Number, default: 1 },
   topKMax: { type: Number, default: 20 },
-  /**
-   * Single mode only: offer a "Global (provider)" option that clears the
-   * surface's override (provider v-model = ''). globalProviderId is what the
-   * shared resolution chain currently yields for this surface without an
-   * override, shown so users know what "Global" means right now.
-   */
-  allowGlobal: { type: Boolean, default: false },
-  globalProviderId: { type: String, default: '' },
 })
 
-const emit = defineEmits(['switch-tab'])
+defineEmits(['switch-tab'])
 
-// v-model bindings. semanticWeight / synthesize / modelOverrides are optional:
-// when the parent doesn't bind them the corresponding control is hidden.
+// v-model bindings. semanticWeight / synthesize are optional: when the parent
+// doesn't bind them the corresponding control is hidden.
 const open = defineModel('open', { type: Boolean, default: false })
-const provider = defineModel('provider', { type: String, default: '' })
-const selectedProviders = defineModel('selectedProviders', { type: Array, default: () => [] })
 const topK = defineModel('topK', { type: Number, default: 10 })
 const searchMode = defineModel('searchMode', { type: String, default: 'hybrid' })
 const semanticWeight = defineModel('semanticWeight', { type: Number, default: undefined })
@@ -293,92 +183,21 @@ const synthesize = defineModel('synthesize', { type: Boolean, default: undefined
 // Answer-cache similarity floor (Chat only). Hidden when the parent doesn't
 // bind it, or binds null because the deployment has the cache off.
 const cacheThreshold = defineModel('cacheThreshold', { type: Number, default: undefined })
-const modelOverrides = defineModel('modelOverrides', { type: Object, default: undefined })
 
-const titleId = computed(() => `ai-settings-title-${props.mode}`)
-const hasAnyProvider = computed(() => props.configuredProviders.length > 0)
+const providerStore = useProviderStore()
+const titleId = 'ai-settings-title'
+const hasAnyProvider = computed(() => !!props.providerId)
+const modelName = computed(() => providerStore.activeModel || providerStore.deploymentDefault.model || '')
 const hasWeight = computed(() => typeof semanticWeight.value === 'number')
 const hasSynthesize = computed(() => typeof synthesize.value === 'boolean')
 const hasCacheThreshold = computed(() => typeof cacheThreshold.value === 'number')
 const cacheThresholdLabel = computed(() =>
   cacheThreshold.value >= 1 ? 'Identical only' : `${Math.round(cacheThreshold.value * 100)}% similar`
 )
-const hasModelOverrides = computed(() => modelOverrides.value != null)
 
 const close = () => { open.value = false }
 
 const displayName = getProviderDisplayName
-
-// Single mode: the provider actually in effect — the explicit selection, or
-// the globally resolved one while following "Global".
-const effectiveProvider = computed(() =>
-  provider.value || (props.allowGlobal ? props.globalProviderId : '')
-)
-
-// ── Provider selection ─────────────────────────────────────────────────────
-
-const toggleProvider = (pid) => {
-  const next = [...selectedProviders.value]
-  const idx = next.indexOf(pid)
-  if (idx > -1) next.splice(idx, 1)
-  else next.push(pid)
-  selectedProviders.value = next
-}
-
-const selectedExternalCount = computed(() =>
-  selectedProviders.value.filter(p => !isLocalProvider(p)).length
-)
-
-// ── Model overrides ────────────────────────────────────────────────────────
-// Stored as { providerId: modelId | '' }; '' / absent means provider default.
-
-const overrideFor = (pid) => (modelOverrides.value && modelOverrides.value[pid]) || ''
-
-const setOverride = (pid, val) => {
-  modelOverrides.value = { ...(modelOverrides.value || {}), [pid]: val }
-}
-
-// Multi mode keeps the curated recommendation list (as Search did before).
-const curatedModels = (pid) => getProviderModels(pid)
-
-const defaultModelLabel = (pid) => {
-  const cfg = getProviderConfig(pid)
-  if (!cfg?.model) return ''
-  const found = getProviderModels(pid).find(m => m.id === cfg.model)
-  return found ? found.label : cfg.model
-}
-
-// Single mode fetches the live model list (recommended first) lazily on open.
-const liveModels = ref([])
-const modelsLoading = ref(false)
-let modelFetchSeq = 0
-
-const loadModels = async () => {
-  if (props.mode !== 'single' || !effectiveProvider.value || !hasModelOverrides.value) return
-  const seq = ++modelFetchSeq
-  modelsLoading.value = true
-  try {
-    const { models } = await fetchProviderModels(effectiveProvider.value)
-    if (seq === modelFetchSeq) liveModels.value = models || []
-  } finally {
-    if (seq === modelFetchSeq) modelsLoading.value = false
-  }
-}
-
-watch([open, effectiveProvider], ([isOpen]) => {
-  if (isOpen) loadModels()
-})
-
-const recommendedModels = computed(() => liveModels.value.filter(m => m.recommended))
-const otherModels = computed(() => liveModels.value.filter(m => !m.recommended))
-
-// A previously saved override that the live list doesn't contain — keep it
-// selectable so the stored value still displays.
-const missingOverride = computed(() => {
-  const cur = overrideFor(effectiveProvider.value)
-  if (!cur) return null
-  return liveModels.value.some(m => m.id === cur) ? null : cur
-})
 
 // ── Answer depth presets ───────────────────────────────────────────────────
 // Selecting a preset writes the underlying values through the same v-models

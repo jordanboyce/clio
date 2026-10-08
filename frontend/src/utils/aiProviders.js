@@ -237,56 +237,66 @@ export function setActiveProviderLS(id) {
   notifyProviderChange()
 }
 
-// ── Provider resolution chain ──────────────────────────────────────────────
+// ── Provider resolution ────────────────────────────────────────────────────
 //
-// THE single source of truth for "which provider does this surface use".
-// Every AI surface (Chat, Search, Generate, …) resolves its provider through
-// this chain — no surface keeps its own independent provider state:
+// THE single source of truth for "which provider answers". There is one
+// choice, made in the top bar, and every AI surface (Chat, Search, Reports,
+// …) follows it — no surface keeps its own provider or model, because two
+// places to choose is how a chat ends up on one model and a search on another.
 //
-//   1. Explicit per-surface override, stored under
-//      `clio_provider_override_<surface>` (only honored while that
-//      provider is still configured). Set from the surface's own picker
-//      (e.g. Chat's settings drawer); empty/absent means "follow global".
-//   2. Global active provider — `ai_settings.provider`, set via the
-//      "Use as default" control in Settings or the top-bar provider pill.
-//   3. First configured provider, where "configured" includes the
+//   1. Global active provider — `ai_settings.provider`, set from the top-bar
+//      model picker or "Use as default" in Settings (only honored while that
+//      provider is still configured).
+//   2. First configured provider, where "configured" includes the
 //      deployment's own provider (AI_PROVIDER on the server — listed first,
 //      so an on-prem browser that configured nothing lands on the
 //      organisation's model) and server-stored team keys. Call
 //      loadServerProviders() — or fetchDeploymentDefault() and
 //      fetchServerProviderIds() — first so both count.
 //
-// resolveProvider() below is the function that implements it; the chain is
-// pinned down in utils/__tests__/aiProviders.test.js.
+// The model is the provider's configured model (`providerConfig.model`),
+// changed from the same picker.
 
-const OVERRIDE_KEY_PREFIX = 'clio_provider_override_'
-
-/** The stored per-surface override, or '' when the surface follows global. */
-export function getProviderOverride(surface) {
-  return localStorage.getItem(OVERRIDE_KEY_PREFIX + surface) || ''
+/**
+ * Resolve the provider every surface should use (see above).
+ * Returns '' when nothing is configured.
+ */
+export function resolveProvider() {
+  const configured = getConfiguredProviderIds()
+  const active = getActiveProvider()
+  if (active && configured.includes(active)) return active
+  return configured[0] || ''
 }
 
-/** Set (or clear, with ''/null) a surface's provider override. */
-export function setProviderOverride(surface, providerId) {
-  if (providerId) localStorage.setItem(OVERRIDE_KEY_PREFIX + surface, providerId)
-  else localStorage.removeItem(OVERRIDE_KEY_PREFIX + surface)
+/** Set the model a provider uses everywhere ('' = the provider's own default). */
+export function setProviderModel(id, model) {
+  upsertProviderConfig(id, { model: model || '' })
   notifyProviderChange()
 }
 
 /**
- * Resolve the provider a surface should use (see chain above).
- * Pass no surface to resolve the app-wide default (steps 2–3 only).
- * Returns '' when nothing is configured.
+ * Older builds let Chat and Search each pick their own provider and model.
+ * Those overrides are retired: one choice, in the top bar. Run once at
+ * startup. A chat override that was in force becomes the global default (Chat
+ * is the main surface, so that is the model the person was actually using);
+ * the rest are dropped so a stale value cannot silently steer one surface.
  */
-export function resolveProvider(surface = null) {
-  const configured = getConfiguredProviderIds()
-  if (surface) {
-    const override = getProviderOverride(surface)
-    if (override && configured.includes(override)) return override
-  }
-  const active = getActiveProvider()
-  if (active && configured.includes(active)) return active
-  return configured[0] || ''
+export function retireSurfaceOverrides() {
+  try {
+    const chat = localStorage.getItem('clio_provider_override_chat')
+    if (chat && getConfiguredProviderIds().includes(chat)) {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...getAISettings(), provider: chat }))
+    }
+    const stale = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key && (key.startsWith('clio_provider_override_')
+        || key === 'clio_chat_model_overrides'
+        || key === 'clio_search_model_overrides'
+        || key === 'clio_selected_providers')) stale.push(key)
+    }
+    stale.forEach(k => localStorage.removeItem(k))
+  } catch { /* storage unavailable: nothing to retire */ }
 }
 
 /**
