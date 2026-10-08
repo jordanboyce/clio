@@ -196,3 +196,130 @@ def test_http_round_trip(env, monkeypatch):
     r = client.post("/api/collections/import",
                     files={"file": ("x.zip", b"not a zip", "application/zip")})
     assert r.status_code == 400 and "not a Clio collection export" in r.json()["detail"]
+
+
+# ── Saying which model indexed it, and previewing before importing ───────────
+
+
+def test_manifest_says_which_model_in_words(env):
+    cid, _ = _source_collection(env)
+    path, _ = cb.export_collection(cid)
+    with zipfile.ZipFile(path) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+    emb = manifest["embedding"]
+    assert emb["signature"] == SIG and emb["recorded"] is True
+    assert emb["label"] == f"fake-embed · on this machine · {FakeEmbedder.embedding_dim} dimensions"
+    assert manifest["clio_version"]
+
+
+def test_describe_model_falls_back_to_document_records_and_admits_it():
+    info = cb.describe_model({}, [{"embedding_model": "old-model"}, {"embedding_model": "old-model"}])
+    assert info["model"] == "old-model" and info["recorded"] is False
+    assert cb.describe_model({}, [])["label"] == "unknown model"
+    remote = cb.describe_model({"signature": "openrouter::https://x::text-embed", "dimension": 1536})
+    assert remote["model"] == "text-embed" and remote["label"] == "text-embed · via openrouter · 1536 dimensions"
+
+
+def test_export_preview_matches_what_export_builds(env):
+    cid, _ = _source_collection(env, quarantine=True)
+    preview = cb.export_preview(cid)
+    assert preview["documents"] == 1 and preview["quarantined_excluded"] == 1
+    assert preview["embedding"]["model"] == "fake-embed" and preview["vectors_included"] is True
+    path, _ = cb.export_collection(cid)
+    with zipfile.ZipFile(path) as zf:
+        contents = json.loads(zf.read("manifest.json"))["contents"]
+    assert (preview["documents"], preview["chunks"]) == (contents["documents"], contents["chunks"])
+
+
+def test_inspect_says_reuse_for_the_same_model_and_re_embed_otherwise(env, monkeypatch):
+    cid, _ = _source_collection(env)
+    path, _ = cb.export_collection(cid)
+    before = len(app_db.get_all_collections())
+
+    same = cb.inspect_bundle(path)
+    assert same["action"] == "reuse" and "reused" in same["reason"]
+    assert same["name"] == "Handbooks"
+    assert same["embedding"]["model"] == "fake-embed" and same["documents"] == 2
+
+    import services.embedder as embedder
+    monkeypatch.setattr(embedder, "service_signature", lambda **kw: "openrouter::x::other")
+    other = cb.inspect_bundle(path)
+    assert other["action"] == "re-embed" and "different model" in other["reason"]
+    assert len(app_db.get_all_collections()) == before  # inspecting creates nothing
+
+
+def test_inspect_reports_documents_this_server_has_blocklisted(env):
+    cid, ids = _source_collection(env)
+    path, _ = cb.export_collection(cid)
+    with zipfile.ZipFile(path) as zf:
+        content_hash = json.loads(zf.read("manifest.json"))["documents"][0]["content_hash"]
+    app_db.add_blocked_hash(content_hash, "admin", "test", "x.txt")
+    assert cb.inspect_bundle(path)["blocked_here"] == 1
+
+
+def test_http_preview_then_confirm_without_uploading_twice(env, monkeypatch):
+    from fastapi.testclient import TestClient
+    from api import deps
+    import main
+
+    monkeypatch.setattr(deps, "_initialized", True)
+    client = TestClient(main.app)
+    cid, _ = _source_collection(env)
+
+    pre = client.get(f"/api/collections/{cid}/export/preview").json()
+    assert pre["embedding"]["label"].startswith("fake-embed") and pre["documents"] == 2
+
+    bundle = client.get(f"/api/collections/{cid}/export").content
+    r = client.post("/api/collections/import/preview", files={"file": ("h.clio.zip", bundle, "application/zip")})
+    assert r.status_code == 200, r.text
+    summary = r.json()
+    assert summary["action"] == "reuse" and len(summary["upload_id"]) == 32
+    staged = env / "tmp" / "staged" / f"{summary['upload_id']}.zip"
+    assert staged.exists()
+
+    r = client.post("/api/collections/import", data={"upload_id": summary["upload_id"], "name": "From preview"})
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] == "From preview"
+    assert _wait(r.json()["job_id"])["status"] == "completed"
+    assert not staged.exists()  # consumed
+
+    # An expired or invented id is refused plainly; so is "nothing at all".
+    r = client.post("/api/collections/import", data={"upload_id": summary["upload_id"]})
+    assert r.status_code == 400 and "expired" in r.json()["detail"]
+    r = client.post("/api/collections/import", data={"upload_id": "../../etc/passwd"})
+    assert r.status_code == 400
+    assert client.post("/api/collections/import").status_code == 400
+
+
+def test_preview_refuses_a_bad_bundle_and_keeps_nothing(env, monkeypatch):
+    from fastapi.testclient import TestClient
+    from api import deps
+    import main
+
+    monkeypatch.setattr(deps, "_initialized", True)
+    r = TestClient(main.app).post("/api/collections/import/preview",
+                                  files={"file": ("x.zip", b"nope", "application/zip")})
+    assert r.status_code == 400
+    assert not list((env / "tmp").glob("**/*.zip"))
+
+
+def test_discard_removes_the_staged_bundle_and_sweep_removes_stale_ones(env, monkeypatch):
+    from fastapi.testclient import TestClient
+    from api import deps
+    import main
+    import os
+
+    monkeypatch.setattr(deps, "_initialized", True)
+    client = TestClient(main.app)
+    cid, _ = _source_collection(env)
+    bundle = client.get(f"/api/collections/{cid}/export").content
+    uid = client.post("/api/collections/import/preview",
+                      files={"file": ("h.zip", bundle, "application/zip")}).json()["upload_id"]
+    assert client.delete(f"/api/collections/import/preview/{uid}").status_code == 200
+    assert not (env / "tmp" / "staged" / f"{uid}.zip").exists()
+
+    stale = cb._staged_dir() / ("a" * 32 + ".zip")
+    stale.write_bytes(b"x")
+    os.utime(stale, (0, 0))
+    cb.sweep_staged()
+    assert not stale.exists()
