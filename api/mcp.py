@@ -43,6 +43,21 @@ async def get_mcp_config():
     return get_mcp_settings_payload()
 
 
+@router.get(
+    "/api/mcp/catalog",
+    summary="Tools, resources and prompts the MCP server exposes",
+    tags=["mcp"],
+)
+async def get_mcp_catalog(user_id: Optional[str] = Depends(get_current_user_id)):
+    """What an MCP client will see: every tool with its title, opening
+    description, read-only/destructive hints and parameter names; every
+    resource URI template; every prompt with its arguments. Built from the
+    live server registry so it cannot drift from what /mcp/ advertises."""
+    from services.mcp_server import mcp_catalog
+
+    return await mcp_catalog()
+
+
 @router.post(
     "/api/mcp/config",
     summary="Update MCP configuration",
