@@ -422,6 +422,24 @@ present, else the client IP (`CF-Connecting-IP` behind the tunnel). A
 stats, and the rate-limit counters; the same data is at
 `/api/admin/usage` and `/api/admin/stats`.
 
+## Embedding model on first start
+
+The built-in embedding model runs in-process through **fastembed** (ONNX on
+onnxruntime, part of the core install) and, when `requirements-torch.txt`
+is installed, through **sentence-transformers** for models fastembed has no
+export of; `LOCAL_EMBEDDING_BACKEND` (`auto` | `fastembed` |
+`sentence-transformers`) picks, and both produce the same vectors, so
+switching never forces a re-index. The Docker image bakes the default model
+for both backends. A bare-metal install downloads it on first start: the
+warm-up runs in the background and `GET /api/embedding/status` (and the
+first-run screen) shows `downloading` with a byte count, then `ready`. To
+pre-seed a host that cannot reach huggingface.co, run on a connected
+machine `python -c "from fastembed import TextEmbedding;
+TextEmbedding('sentence-transformers/all-MiniLM-L6-v2',
+cache_dir='data/models/fastembed')"` and copy `data/models/fastembed/`
+across; the fastembed cache lives under the data directory so it survives
+container recreation with the volume.
+
 ## Backups
 
 Everything lives in the data directory (`./data` by default, `/app/data` in

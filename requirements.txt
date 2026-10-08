@@ -2,6 +2,8 @@
 #
 # Optional feature sets live in separate files so a base install stays small
 # (the extras below pull in multi-GB ML runtimes):
+#   pip install -r requirements-torch.txt     # PyTorch embedding backend (sentence-transformers):
+#                                             #   the wider local model catalog + the cross-encoder reranker
 #   pip install -r requirements-ocr.txt       # scanned-PDF OCR (tesseract-based, light)
 #   pip install -r requirements-docling.txt   # highest-quality local OCR (heavy: torch vision stack)
 #   pip install -r requirements-audio.txt     # audio transcription (faster-whisper)
@@ -22,9 +24,9 @@ pandas>=2.2.2,<3
 openpyxl>=3.1.0
 
 # Embeddings and vector search
-sentence-transformers>=3.0.0
-# transformers 5.x breaks sentence-transformers' PreTrainedModel import
-transformers>=4.41,<5
+# fastembed runs the embedding models as ONNX (onnxruntime, ~100 MB of deps,
+# no PyTorch). Models it has no export of need requirements-torch.txt.
+fastembed>=0.7
 # faiss-cpu >=1.9 and numpy >=2.1 move together: both ship prebuilt wheels
 # for modern Pythons (numpy<2 had no py3.13 wheel — every fresh Docker build
 # compiled numpy from source for ~10 minutes). pandas stays on the 2.x line

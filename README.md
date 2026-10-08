@@ -796,9 +796,12 @@ pip install faiss-cpu
 **Solutions:**
 - Wait 1-2 minutes (one-time download)
 - Check your internet connection
-- If behind corporate firewall, download manually:
-  1. Get model from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
-  2. Place in `~/.cache/torch/sentence_transformers/`
+- If behind corporate firewall, pre-seed the model from a connected machine and copy the
+  cache folder over: `<DATA_DIR>/models/fastembed/` for the default ONNX backend, or the
+  Hugging Face cache (`~/.cache/huggingface/hub/`) for the PyTorch backend. See
+  [docs/AIRGAP.md](docs/AIRGAP.md). The app also shows a **Download now** button once the
+  network is fixed, and Settings → Indexing → Embedding can switch to Ollama or a hosted
+  provider instead.
 
 #### 4. "SSL certificate error" downloading the model
 
@@ -974,13 +977,14 @@ laptop. First-run setup asks where the index should run and shows the
 download as it happens; **Settings → Indexing → Embedding** changes it later
 (changing the model re-embeds the collection). Good local choices:
 
-| Model | Size | Notes |
-|---|---|---|
-| `all-MiniLM-L6-v2` (default) | 90 MB | Fast on any CPU, English |
-| `BAAI/bge-small-en-v1.5` | 130 MB | Same size class, noticeably better retrieval |
-| `nomic-ai/nomic-embed-text-v1.5` | 270 MB | 8k context, strong on code and long passages |
-| `jinaai/jina-embeddings-v2-base-code` | 320 MB | Built for source code |
-| `intfloat/multilingual-e5-small` | 470 MB | 100 languages |
+| Model | Size | Backend | Notes |
+|---|---|---|---|
+| `all-MiniLM-L6-v2` (default) | 90 MB | ONNX or PyTorch | Fast on any CPU, English |
+| `BAAI/bge-small-en-v1.5` | 130 MB | ONNX or PyTorch | Same size class, noticeably better retrieval |
+| `nomic-ai/nomic-embed-text-v1.5` | 270 MB | ONNX or PyTorch | 8k context, strong on code and long passages |
+| `jinaai/jina-embeddings-v2-base-code` | 320 MB | ONNX or PyTorch | Built for source code |
+| `paraphrase-multilingual-MiniLM-L12-v2` | 470 MB | ONNX or PyTorch | 50+ languages |
+| `intfloat/multilingual-e5-small` | 470 MB | PyTorch only | 100 languages (`pip install -r requirements-torch.txt`) |
 
 Or move the work to an Ollama you already run, or to a hosted API:
 
@@ -1245,7 +1249,7 @@ A: Yes. Search and embeddings are local after the first run (the model downloads
 A: Very good for finding concepts, not exact strings. ~80-90% accuracy for most queries.
 
 **Q: Can I delete the embedding model cache?**
-A: It's in `~/.cache/torch/sentence_transformers/`. You can delete it but it'll re-download.
+A: The default ONNX backend keeps it in `<DATA_DIR>/models/fastembed/` (or `/opt/clio/models/fastembed/` inside the Docker image); the PyTorch backend uses the Hugging Face cache under `~/.cache/huggingface/hub/`. You can delete either; it re-downloads on the next start, with progress shown in the app.
 
 **Q: What's the largest PDF it can handle?**
 A: Tested up to 1000+ pages. Limited by RAM.
