@@ -8,7 +8,7 @@ from typing import List, Optional
 from pathlib import Path
 import shutil
 
-from fastapi import HTTPException, UploadFile, File, status
+from fastapi import HTTPException, Response, UploadFile, File, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -25,6 +25,10 @@ from models.schemas import (
     DocumentChunkView,
     RepoUploadRequest,
     RepoUploadResponse,
+    SyncFolderRequest,
+    SyncFolderResponse,
+    SyncFolderRecord,
+    SyncFoldersResponse,
 )
 from services.upload_service import upload_service
 from services.form_field_extractor import (
@@ -687,12 +691,18 @@ async def cancel_upload_job(job_id: int):
 )
 def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool, not on the event loop
     request: RepoUploadRequest,
+    response: Response,
 ) -> RepoUploadResponse:
     """
     Scan a local repository or folder and start indexing in the background.
 
     This endpoint returns immediately with a job_id. Use GET /upload-jobs/{job_id}
     to track progress.
+
+    Indexing is incremental: files whose exact bytes are already in the
+    collection are skipped (``skipped_unchanged``). When every file is
+    unchanged no job is created and the response is 200 with
+    ``status: "up_to_date"`` and ``job_id: null``.
 
     **Supported file types:**
     - Documents: PDF, TXT, DOCX, CSV, MD, JSON
@@ -751,7 +761,7 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
 
     try:
         # Start background job
-        job_id, files_found = upload_service.start_repo_index(
+        job_id, files_found, skipped_unchanged = upload_service.start_repo_index(
             repo_path=request.path,
             collection_id=request.collection_id,
             recursive=request.recursive,
@@ -760,22 +770,40 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
             uploaded_by=get_request_user(),
         )
 
+        if job_id is None:
+            # Every file is already in the collection: nothing to wait for,
+            # so no 202 and no job to poll.
+            response.status_code = status.HTTP_200_OK
+            return RepoUploadResponse(
+                message=(
+                    f"Already up to date: all {skipped_unchanged} file(s) are in the collection."
+                ),
+                status="up_to_date",
+                job_id=None,
+                files_found=files_found,
+                skipped_unchanged=skipped_unchanged,
+            )
+
         # The count matters to the caller: the UI used to read files_indexed
         # off this response, get the 0 that was always there, and tell the
         # person their folder had added nothing while the job ran fine.
+        to_index = files_found - skipped_unchanged
+        unchanged_note = f" ({skipped_unchanged} unchanged, skipped)" if skipped_unchanged else ""
         queued_behind = upload_service.queue_position(job_id)
         if queued_behind:
             message = (
-                f"{files_found} file(s) found. Queued behind "
+                f"{to_index} file(s) to index{unchanged_note}. Queued behind "
                 f"{queued_behind} other job(s); indexing starts automatically."
             )
         else:
-            message = f"Indexing {files_found} file(s) in the background."
+            message = f"Indexing {to_index} file(s) in the background{unchanged_note}."
 
         return RepoUploadResponse(
             message=message,
+            status="queued",
             job_id=job_id,
             files_found=files_found,
+            skipped_unchanged=skipped_unchanged,
         )
 
     except ValueError as e:
@@ -790,6 +818,115 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
         )
+
+@router.post(
+    "/documents/sync-folder",
+    response_model=SyncFolderResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Sync a folder into a collection (incremental, optional prune)",
+    tags=["documents"],
+)
+def sync_folder(  # sync: hashing and pruning run in FastAPI's threadpool, not on the event loop
+    request: SyncFolderRequest,
+    response: Response,
+) -> SyncFolderResponse:
+    """
+    Bring a collection up to date with a folder on disk.
+
+    Files whose bytes are already indexed are skipped; a file that changed
+    since the last sync has its old document replaced; with
+    ``prune_missing`` documents whose file has disappeared from the folder
+    are removed. Only new and changed files go through a background job.
+
+    Returns 202 with ``status: "queued"`` and a ``job_id`` when something
+    was queued, or 200 with ``status: "up_to_date"`` (``job_id: null``)
+    when nothing needed indexing — pruning may still have happened, see
+    ``pruned``.
+    """
+    folder = Path(request.path)
+    if not folder.exists():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Path does not exist: {request.path}",
+        )
+    if not folder.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Path is not a directory: {request.path}",
+        )
+
+    # Same gate as /documents/upload-repo: write access plus the AUP, and
+    # the collection must exist. Pruning deletes documents, which the
+    # write gate already covers.
+    _require_ingest(request.collection_id)
+    try:
+        get_indexer(request.collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    file_extensions = None
+    if request.file_extensions:
+        file_extensions = [
+            e.lower() if e.startswith(".") else "." + e.lower()
+            for e in request.file_extensions
+        ]
+
+    try:
+        outcome = upload_service.sync_folder(
+            path=request.path,
+            collection_id=request.collection_id,
+            recursive=request.recursive,
+            file_extensions=file_extensions,
+            exclude_patterns=request.exclude_patterns,
+            prune_missing=request.prune_missing,
+            uploaded_by=get_request_user(),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except RuntimeError as e:
+        # The waiting list is full
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    parts = []
+    if outcome["queued"]:
+        parts.append(f"indexing {outcome['queued']} new or changed file(s)")
+    if outcome["skipped_unchanged"]:
+        parts.append(f"{outcome['skipped_unchanged']} unchanged")
+    if outcome["replaced_count"]:
+        parts.append(f"{outcome['replaced_count']} replaced")
+    if outcome["pruned_count"]:
+        parts.append(f"{outcome['pruned_count']} removed")
+    if outcome["job_id"] is None:
+        response.status_code = status.HTTP_200_OK
+        message = "Up to date" + (f": {', '.join(parts)}." if parts else ".")
+    else:
+        message = ", ".join(parts).capitalize() + "."
+
+    return SyncFolderResponse(message=message, **outcome)
+
+
+@router.get(
+    "/documents/sync-folders",
+    response_model=SyncFoldersResponse,
+    summary="Folders previously synced or indexed into a collection",
+    tags=["documents"],
+)
+def list_sync_folders(collection_id: str = "default") -> SyncFoldersResponse:
+    """The folders a collection was synced from, newest first, with the
+    options and counts of each one's last run — what a "Sync again"
+    button needs. ``exists`` is false for a folder that has since gone."""
+    try:
+        get_indexer(collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    folders = []
+    for entry in upload_service.list_sync_folders(collection_id):
+        known = {k: v for k, v in entry.items() if k in SyncFolderRecord.model_fields}
+        known["exists"] = Path(entry["path"]).is_dir()
+        folders.append(SyncFolderRecord(**known))
+    return SyncFoldersResponse(collection_id=collection_id, folders=folders)
+
 
 class IndexLocalAsyncRequest(BaseModel):
     """Request body for async local file indexing."""

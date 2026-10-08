@@ -1283,6 +1283,76 @@ class MetadataStore:
             conn.commit()
             logger.info(f"Updated source for document {document_id}: {source_type} -> {source_path}")
 
+    def get_document_ids_by_content_hashes(self, hashes) -> Dict[str, str]:
+        """``{content_hash: document_id}`` for every hash that already has a
+        document row here.
+
+        This is the incremental-sync lookup: a folder re-indexed against the
+        same collection hashes its files up front and drops the ones whose
+        bytes are already in the index, instead of re-extracting and
+        re-embedding the whole tree. Hashes with no row are simply absent.
+        """
+        wanted = list({h for h in hashes if h})
+        if not wanted:
+            return {}
+        found: Dict[str, str] = {}
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            for start in range(0, len(wanted), self._IN_CLAUSE_BATCH):
+                batch = wanted[start:start + self._IN_CLAUSE_BATCH]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(
+                    f"SELECT content_hash, document_id FROM documents "
+                    f"WHERE content_hash IN ({placeholders})",
+                    batch,
+                ).fetchall()
+                for content_hash, document_id in rows:
+                    found[content_hash] = document_id
+        return found
+
+    def list_documents_under_source_root(self, source_root: str,
+                                         source_type: Optional[str] = None) -> List[dict]:
+        """Documents whose recorded ``source_path`` lies inside ``source_root``.
+
+        Used by folder sync to find what an earlier sync of that folder put
+        in the index, so files that have changed or disappeared on disk can
+        be replaced or pruned. ``source_type`` narrows the match (folder
+        sync passes its own type so it never touches in-place local
+        references that merely live under the same directory).
+        """
+        root = Path(source_root)
+        prefix = str(root)
+        if not prefix.endswith(("/", "\\")):
+            prefix += "/"
+        like = self._escape_like(prefix) + "%"
+        # Windows-style paths are recorded with backslashes; match both.
+        like_win = self._escape_like(prefix[:-1] + "\\") + "%"
+        params: list = [like, like_win]
+        type_clause = ""
+        if source_type:
+            type_clause = " AND source_type = ?"
+            params.append(source_type)
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(f"""
+                SELECT document_id, filename, source_path, source_type, content_hash, file_size
+                FROM documents
+                WHERE source_path IS NOT NULL
+                  AND (source_path LIKE ? ESCAPE '\\' OR source_path LIKE ? ESCAPE '\\')
+                  {type_clause}
+            """, params).fetchall()
+        result = []
+        for row in rows:
+            r = dict(row)
+            try:
+                if not Path(r["source_path"]).is_relative_to(root):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            result.append(r)
+        return result
+
     def get_filtered_chunk_ids(
         self,
         document_ids: Optional[List[str]] = None,
