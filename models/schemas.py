@@ -452,6 +452,7 @@ class RepoUploadResponse(BaseModel):
     skipped_unchanged: int = Field(
         0, description="Files left out because their exact bytes are already in the collection"
     )
+    skipped_unsupported: int = Field(0, description="Files skipped because their type cannot be indexed")
     files_indexed: int = Field(0, description="Files successfully indexed")
     files_failed: int = Field(0, description="Files that failed to index")
     total_chunks: int = Field(0, description="Total chunks created")
@@ -528,6 +529,7 @@ class SyncFolderResponse(BaseModel):
     files_found: int = Field(0, description="Files matched in the folder")
     queued: int = Field(0, description="New or changed files handed to the indexing job")
     skipped_unchanged: int = Field(0, description="Files whose bytes were already indexed")
+    skipped_unsupported: int = Field(0, description="Files the scan left out because Clio cannot index their type")
     replaced: List[str] = Field(default_factory=list, description="Documents removed because their file changed")
     replaced_count: int = Field(0)
     pruned: List[str] = Field(default_factory=list, description="Documents removed because their file is gone")

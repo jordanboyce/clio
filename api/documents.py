@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 import config
-from services.document_extractor import DocumentExtractor
+from services.document_extractor import is_supported_filename
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
 from models.schemas import (
@@ -159,18 +159,16 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
     document_dir = indexer_manager.get_documents_path(collection_id)
 
     # Validate all files have supported extensions and safe names
-    SUPPORTED_EXTENSIONS = DocumentExtractor.SUPPORTED_EXTENSIONS
     for file in files:
         if not file.filename:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Every uploaded file must have a filename",
             )
-        file_ext = Path(file.filename).suffix.lower()
-        if file_ext not in SUPPORTED_EXTENSIONS:
+        if not is_supported_filename(file.filename):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File {file.filename} has unsupported type. Supported: PDF, TXT, DOCX, CSV, XLSX, XLS, MD, JSON, JSONL, images (PNG/JPG/WEBP/TIFF), audio, and source code files",
+                detail=f"File {file.filename} has unsupported type. Supported: PDF, TXT, DOCX, CSV, XLSX, XLS, MD, JSON, JSONL, images (PNG/JPG/WEBP/TIFF), audio, and source code files (by extension or well-known name such as Makefile)",
             )
 
     indexed_docs = []
@@ -318,7 +316,6 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
     document_dir = indexer_manager.get_documents_path(collection_id)
-    SUPPORTED_EXTENSIONS = DocumentExtractor.SUPPORTED_EXTENSIONS
 
     # Staging is the transfer half of a background upload: refuse the batch
     # before writing it rather than accepting files the index job would then
@@ -334,7 +331,7 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
         if not file.filename:
             failed.append({"filename": "", "error": "missing filename"})
             continue
-        if Path(file.filename).suffix.lower() not in SUPPORTED_EXTENSIONS:
+        if not is_supported_filename(file.filename):
             failed.append({"filename": file.filename, "error": "unsupported type"})
             continue
         raw_filename = file.filename.replace('\\', '/').lstrip('/')
@@ -761,7 +758,7 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
 
     try:
         # Start background job
-        job_id, files_found, skipped_unchanged = upload_service.start_repo_index(
+        scan = upload_service.start_repo_index(
             repo_path=request.path,
             collection_id=request.collection_id,
             recursive=request.recursive,
@@ -769,6 +766,9 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
             exclude_patterns=request.exclude_patterns,
             uploaded_by=get_request_user(),
         )
+        job_id, files_found, skipped_unchanged = scan
+        skipped_unsupported = getattr(scan, "skipped_unsupported", 0)
+        unsupported_note = f"; {skipped_unsupported} unsupported file(s) skipped" if skipped_unsupported else ""
 
         if job_id is None:
             # Every file is already in the collection: nothing to wait for,
@@ -776,19 +776,20 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
             response.status_code = status.HTTP_200_OK
             return RepoUploadResponse(
                 message=(
-                    f"Already up to date: all {skipped_unchanged} file(s) are in the collection."
+                    f"Already up to date: all {skipped_unchanged} file(s) are in the collection{unsupported_note}."
                 ),
                 status="up_to_date",
                 job_id=None,
                 files_found=files_found,
                 skipped_unchanged=skipped_unchanged,
+                skipped_unsupported=skipped_unsupported,
             )
 
         # The count matters to the caller: the UI used to read files_indexed
         # off this response, get the 0 that was always there, and tell the
         # person their folder had added nothing while the job ran fine.
         to_index = files_found - skipped_unchanged
-        unchanged_note = f" ({skipped_unchanged} unchanged, skipped)" if skipped_unchanged else ""
+        unchanged_note = f" ({skipped_unchanged} unchanged, skipped{unsupported_note})" if skipped_unchanged else (f" ({skipped_unsupported} unsupported file(s) skipped)" if skipped_unsupported else "")
         queued_behind = upload_service.queue_position(job_id)
         if queued_behind:
             message = (
@@ -804,6 +805,7 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
             job_id=job_id,
             files_found=files_found,
             skipped_unchanged=skipped_unchanged,
+            skipped_unsupported=skipped_unsupported,
         )
 
     except ValueError as e:
@@ -956,7 +958,6 @@ async def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobR
         UploadJobResponse with job_id for tracking progress
     """
 
-    SUPPORTED_EXTENSIONS = DocumentExtractor.SUPPORTED_EXTENSIONS
 
     # Sort the batch rather than refusing it. One unreadable path used to
     # abort the whole submission, which on a folder drop of thousands of
@@ -972,7 +973,7 @@ async def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobR
         if not path.is_file():
             skipped.append({"filename": path.name or file_path, "error": "not a file"})
             continue
-        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        if not is_supported_filename(path.name):
             skipped.append({
                 "filename": path.name,
                 "error": f"unsupported file type ({path.suffix.lower() or 'no extension'})",

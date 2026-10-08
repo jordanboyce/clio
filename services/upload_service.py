@@ -114,6 +114,47 @@ def _size_of(path: Path) -> int:
         return 0
 
 
+@dataclass
+class FolderScan:
+    """What a folder scan picked up: the files to index, and how many were
+    left out because nothing can index them (unsupported name, over the
+    size limit)."""
+    files: List[str]
+    skipped_unsupported: int = 0
+
+    def __iter__(self):
+        return iter(self.files)
+
+    def __len__(self) -> int:
+        return len(self.files)
+
+
+class RepoIndexResult(tuple):
+    """``(job_id, files_found, skipped_unchanged)`` as before, so callers
+    that unpack three values keep working; ``skipped_unsupported`` rides
+    along as an attribute."""
+
+    skipped_unsupported: int
+
+    def __new__(cls, job_id: Optional[int], files_found: int, skipped_unchanged: int,
+                skipped_unsupported: int = 0):
+        self = super().__new__(cls, (job_id, files_found, skipped_unchanged))
+        self.skipped_unsupported = skipped_unsupported
+        return self
+
+    @property
+    def job_id(self) -> Optional[int]:
+        return self[0]
+
+    @property
+    def files_found(self) -> int:
+        return self[1]
+
+    @property
+    def skipped_unchanged(self) -> int:
+        return self[2]
+
+
 class UploadService:
     """Manages background document upload and indexing.
 
@@ -691,12 +732,34 @@ class UploadService:
     # in-place local references that happen to live under the same path.
     FOLDER_SYNC_SOURCE_TYPE = "folder_sync"
 
-    # Default exclude patterns for common non-code directories
+    # Default exclude patterns for common non-code directories, build
+    # output, caches, lockfiles, binaries, archives and fonts. SVG is out
+    # too: generated SVGs run to megabytes; a picture uploaded on its own
+    # still goes through the image path.
     DEFAULT_REPO_EXCLUDES = [
         '**/node_modules/**', '**/.git/**', '**/__pycache__/**',
         '**/venv/**', '**/.venv/**', '**/dist/**', '**/build/**',
-        '**/*.pyc', '**/.DS_Store', '**/Thumbs.db'
+        '**/*.pyc', '**/.DS_Store', '**/Thumbs.db',
+        # IDE and framework output
+        '**/.idea/**', '**/.vscode/**', '**/.next/**', '**/.nuxt/**',
+        '**/.svelte-kit/**', '**/coverage/**', '**/target/**', '**/bin/**',
+        '**/obj/**', '**/.terraform/**', '**/.tox/**', '**/.mypy_cache/**',
+        '**/.pytest_cache/**', '**/.ruff_cache/**',
+        # Generated / lock files
+        '**/*.min.js', '**/*.min.css', '**/*.map', '**/*.lock',
+        '**/package-lock.json', '**/yarn.lock', '**/pnpm-lock.yaml',
+        '**/Cargo.lock', '**/poetry.lock',
+        # Binaries and archives
+        '**/*.pyo', '**/*.so', '**/*.dll', '**/*.dylib', '**/*.exe', '**/*.o',
+        '**/*.a', '**/*.class', '**/*.jar', '**/*.war', '**/*.zip', '**/*.tar',
+        '**/*.gz', '**/*.7z', '**/*.rar',
+        # Fonts and icons
+        '**/*.woff', '**/*.woff2', '**/*.ttf', '**/*.eot', '**/*.ico', '**/*.svg',
     ]
+
+    # Files larger than this are left out of a folder scan: they are not
+    # source code, and extracting them would stall the job.
+    SCAN_MAX_FILE_BYTES = 25 * 1024 * 1024
 
     @staticmethod
     def _scan_folder(
@@ -704,39 +767,88 @@ class UploadService:
         recursive: bool = True,
         file_extensions: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None,
-    ) -> List[str]:
-        """Walk a folder and return the files a repo index would pick up."""
+    ) -> "FolderScan":
+        """Walk a folder and return the files a repo index would pick up.
+
+        Without an explicit ``file_extensions`` filter, files the extractor
+        cannot index (judged by name: suffix or well-known basename) and
+        files over 25 MiB are skipped and counted in
+        ``FolderScan.skipped_unsupported`` rather than queued to fail.
+        Symlinks pointing outside the folder are never followed.
+        """
         import os
         import fnmatch
+        from services.document_extractor import is_supported_filename
 
         excludes = (exclude_patterns or []) + UploadService.DEFAULT_REPO_EXCLUDES
         extensions = {e.lower() for e in (file_extensions or [])}
+        root_resolved = repo.resolve()
+        max_bytes = UploadService.SCAN_MAX_FILE_BYTES
 
-        def should_exclude(path: Path) -> bool:
-            rel = str(path.relative_to(repo))
-            for pattern in excludes:
-                if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(rel.replace('\\', '/'), pattern):
-                    return True
-            return False
+        def should_exclude(path: Path, is_dir: bool = False) -> bool:
+            # `**/x/**` patterns need a slash before and after `x`, which a
+            # top-level entry's relative path lacks: test it with those too.
+            rel = path.relative_to(repo).as_posix()
+            candidates = [rel, '/' + rel]
+            if is_dir:
+                candidates += [rel + '/', '/' + rel + '/']
+            return any(
+                fnmatch.fnmatch(candidate, pattern)
+                for pattern in excludes for candidate in candidates
+            )
 
         def should_include(path: Path) -> bool:
             if extensions:
                 return path.suffix.lower() in extensions
             return True  # Include all if no filter
 
+        def inside_root(path: Path) -> bool:
+            """A symlink that resolves outside the folder is not part of it."""
+            if not path.is_symlink():
+                return True
+            try:
+                return path.resolve().is_relative_to(root_resolved)
+            except OSError:
+                return False
+
+        skipped_unsupported = 0
+
+        def admit(fp: Path) -> Optional[bool]:
+            """True to index, False to count as skipped, None to ignore."""
+            nonlocal skipped_unsupported
+            if should_exclude(fp) or not should_include(fp):
+                return None
+            if not inside_root(fp):
+                return None
+            if extensions:
+                return True  # the caller asked for these by name
+            if not is_supported_filename(fp.name):
+                skipped_unsupported += 1
+                return False
+            try:
+                if fp.stat().st_size > max_bytes:
+                    skipped_unsupported += 1
+                    return False
+            except OSError:
+                return None
+            return True
+
         files: List[str] = []
         if recursive:
             for root, dirs, names in os.walk(repo):
-                dirs[:] = [d for d in dirs if not should_exclude(Path(root) / d)]
+                dirs[:] = [
+                    d for d in dirs
+                    if not should_exclude(Path(root) / d, is_dir=True) and inside_root(Path(root) / d)
+                ]
                 for f in names:
                     fp = Path(root) / f
-                    if not should_exclude(fp) and should_include(fp):
+                    if admit(fp):
                         files.append(str(fp))
         else:
             for fp in repo.iterdir():
-                if fp.is_file() and not should_exclude(fp) and should_include(fp):
+                if fp.is_file() and admit(fp):
                     files.append(str(fp))
-        return files
+        return FolderScan(files=files, skipped_unsupported=skipped_unsupported)
 
     @staticmethod
     def _hash_files(file_paths: List[str]) -> Dict[str, str]:
@@ -852,7 +964,7 @@ class UploadService:
         exclude_patterns: Optional[List[str]] = None,
         uploaded_by: Optional[str] = None,
         incremental: bool = True,
-    ) -> Tuple[Optional[int], int, int]:
+    ) -> "RepoIndexResult":
         """Start a background job to index a repository/folder.
 
         Args:
@@ -870,14 +982,22 @@ class UploadService:
             counts to tell the person what was picked up; the job row carries
             the indexed count too, but not before the response goes out.
             ``job_id`` is None when every file was unchanged: nothing was
-            queued and the collection is already up to date.
+            queued and the collection is already up to date. The result
+            unpacks as that 3-tuple; its ``skipped_unsupported`` attribute
+            is the number of files the scan left out as unindexable.
         """
         repo = Path(repo_path)
         if not repo.exists() or not repo.is_dir():
             raise ValueError(f"Invalid repository path: {repo_path}")
 
-        files_found = self._scan_folder(repo, recursive, file_extensions, exclude_patterns)
+        scan = self._scan_folder(repo, recursive, file_extensions, exclude_patterns)
+        files_found = scan.files
         if not files_found:
+            if scan.skipped_unsupported:
+                raise ValueError(
+                    f"No indexable files found in {repo_path} "
+                    f"({scan.skipped_unsupported} unsupported or oversized files skipped)"
+                )
             raise ValueError(f"No matching files found in {repo_path}")
 
         if incremental:
@@ -889,7 +1009,8 @@ class UploadService:
         if files_to_index:
             job_id = self._queue_repo_job(
                 files_to_index, repo_path, collection_id, uploaded_by,
-                {"files": len(files_to_index), "skipped_unchanged": len(unchanged)},
+                {"files": len(files_to_index), "skipped_unchanged": len(unchanged),
+                 "skipped_unsupported": scan.skipped_unsupported},
             )
         else:
             logger.info(
@@ -902,13 +1023,15 @@ class UploadService:
                 collection_id, repo.resolve(), job_id=job_id,
                 files_found=len(files_found), queued=len(files_to_index),
                 skipped_unchanged=len(unchanged), replaced_count=0, pruned_count=0,
+                skipped_unsupported=scan.skipped_unsupported,
                 recursive=recursive, file_extensions=file_extensions,
                 exclude_patterns=exclude_patterns, prune_missing=False,
             )
         except Exception as e:  # memory is a convenience; never fail the index over it
             logger.warning(f"Could not remember sync folder {repo_path}: {e}")
 
-        return job_id, len(files_found), len(unchanged)
+        return RepoIndexResult(job_id, len(files_found), len(unchanged),
+                               skipped_unsupported=scan.skipped_unsupported)
 
     def sync_folder(
         self,
@@ -942,7 +1065,8 @@ class UploadService:
             raise ValueError(f"Invalid folder path: {path}")
         root = repo.resolve()
 
-        files_found = self._scan_folder(root, recursive, file_extensions, exclude_patterns)
+        scan = self._scan_folder(root, recursive, file_extensions, exclude_patterns)
+        files_found = scan.files
         files_to_index, unchanged, hashes = self._split_unchanged(files_found, collection_id)
         # Hashing resolved nothing, so compare on the resolved path too.
         current_hashes = {str(Path(fp).resolve()): h for fp, h in hashes.items()}
@@ -983,13 +1107,16 @@ class UploadService:
             job_id = self._queue_repo_job(
                 files_to_index, str(root), collection_id, uploaded_by,
                 {"files": len(files_to_index), "skipped_unchanged": len(unchanged),
+                 "skipped_unsupported": scan.skipped_unsupported,
                  "replaced": len(replaced), "pruned": len(pruned), "sync": True},
             )
 
         audit.record("document.sync_folder", actor=uploaded_by, collection_id=collection_id,
                      target=str(root),
                      detail={"files_found": len(files_found), "queued": len(files_to_index),
-                             "skipped_unchanged": len(unchanged), "replaced": len(replaced),
+                             "skipped_unchanged": len(unchanged),
+                             "skipped_unsupported": scan.skipped_unsupported,
+                             "replaced": len(replaced),
                              "pruned": len(pruned), "prune_missing": prune_missing,
                              "job_id": job_id})
 
@@ -999,7 +1126,8 @@ class UploadService:
                 collection_id, root, job_id=job_id,
                 files_found=len(files_found), queued=len(files_to_index),
                 skipped_unchanged=len(unchanged), replaced_count=len(replaced),
-                pruned_count=len(pruned), recursive=recursive,
+                pruned_count=len(pruned), skipped_unsupported=scan.skipped_unsupported,
+                recursive=recursive,
                 file_extensions=file_extensions, exclude_patterns=exclude_patterns,
                 prune_missing=prune_missing,
             )
@@ -1017,6 +1145,7 @@ class UploadService:
             "files_found": len(files_found),
             "queued": len(files_to_index),
             "skipped_unchanged": len(unchanged),
+            "skipped_unsupported": scan.skipped_unsupported,
             "replaced": replaced,
             "replaced_count": len(replaced),
             "pruned": pruned,

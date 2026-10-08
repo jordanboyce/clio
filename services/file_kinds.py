@@ -10,7 +10,7 @@ counts and filtering so a paged list stays honest.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, List, Optional
 
 KINDS = ("code", "docs", "data", "media")
 

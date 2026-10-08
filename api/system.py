@@ -8,7 +8,6 @@ from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
 
 from config import settings
-from services.document_extractor import DocumentExtractor
 from services.ai_service import detect_ollama
 from services.config_manager import config_manager
 from services.indexer_manager import indexer_manager
@@ -231,8 +230,13 @@ def scan_folder(request: ScanFolderRequest):  # sync: filesystem walk runs in th
     ]
 
     # Determine which extensions to look for
-    all_supported = DocumentExtractor.SUPPORTED_EXTENSIONS
-    extensions_filter = set(request.file_extensions) if request.file_extensions else all_supported
+    from services.document_extractor import is_supported_filename
+    extensions_filter = set(e.lower() for e in request.file_extensions) if request.file_extensions else None
+
+    def wanted(path: Path) -> bool:
+        if extensions_filter is not None:
+            return path.suffix.lower() in extensions_filter
+        return is_supported_filename(path.name)
 
     files_found = []
 
@@ -246,7 +250,7 @@ def scan_folder(request: ScanFolderRequest):  # sync: filesystem walk runs in th
 
             for filename in files:
                 file_path = Path(root) / filename
-                if file_path.suffix.lower() in extensions_filter:
+                if wanted(file_path):
                     files_found.append({
                         "path": str(file_path),
                         "name": filename,
@@ -255,7 +259,7 @@ def scan_folder(request: ScanFolderRequest):  # sync: filesystem walk runs in th
                     })
     else:
         for file_path in folder_path.iterdir():
-            if file_path.is_file() and file_path.suffix.lower() in extensions_filter:
+            if file_path.is_file() and wanted(file_path):
                 files_found.append({
                     "path": str(file_path),
                     "name": file_path.name,

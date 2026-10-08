@@ -8,7 +8,7 @@ Clio owns the trustworthy data layer; the intelligence layer lives upstream in w
 
 ## Library — ingestion & context
 
-- **Git repository indexing** — crawl local or remote repos and preserve directory structure as metadata.
+- **Git repository indexing** — local trees shipped 2026-10-08: sixty-plus languages chunked by symbol with lenient parsing (syntax errors, unbalanced braces, odd encodings and minified files still index), name-based detection for Makefile/Dockerfile-style files, binary/lockfile/build-output skipping, and symbol name + line range kept on every chunk. Remaining: remote clone, and the relative path as first-class metadata (today it survives only in the flattened filename).
 - **Watch-folder sync** — incremental folder sync shipped 2026-10-08: re-syncing a folder hashes every file, skips the unchanged ones, replaces changed ones, and optionally prunes documents whose file is gone (`POST /documents/sync-folder`, remembered per collection with *Sync*/*Prune* in the Sources panel). Remaining: a server-side watcher that runs the sync automatically when files land.
 - **Richer spreadsheet handling** — multi-sheet workbooks and more complex table structures beyond flat CSVs.
 
