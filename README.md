@@ -54,6 +54,8 @@ research tools in chat and MCP clients.
 | **Teach it your house style or domain** | Expertise (under More) | Expertise packs add instructions and terminology per collection, versioned alongside the corpus. |
 | **Give your AI assistant a private knowledge source** | Connect | Claude Desktop, claude.ai, ChatGPT and Claude Code sign in through your identity provider; Codex, VS Code, AnythingLLM and Claude Code can also use a personal token. Agents can write notes and summaries back when a token allows it. |
 | **Index scanned paper, photos, audio, code** | Add sources | OCR (local Tesseract/Docling or a vision model), Whisper transcription, code-aware chunking, image description. |
+| **Keep a folder in sync** | Add sources | Point Clio at a folder once; every later sync hashes the tree, skips unchanged files, re-indexes changed ones, and can prune documents whose file was deleted. Remembered folders show *Sync* and *Prune* in the Sources panel (`POST /documents/sync-folder`). |
+| **Move fast with the keyboard** | Everywhere | `⌘K` / `Ctrl+K` opens a command palette for every destination, collection, recent chat, theme and action; `?` shows the shortcuts; `g` then a letter jumps between Ask, Find, Connect, Collections and Settings. |
 | **Keep a shared corpus accountable** | More → Admin | Attribution on every document, an append-only audit trail (including agent reads if enabled), content-policy scanning with flag/quarantine/reject, sensitivity labels, blocklists, an acceptable-use gate. |
 
 ### Where people run it
@@ -380,9 +382,23 @@ Use **Connect** in the UI to:
   a `write_document` tool: it can save markdown notes, summaries, JSON, or CSV into a collection
   (`create`, `replace`, or `append`), indexed like any upload and subject to the same content policy,
   attribution, and audit trail. Tokens are read-only unless you opt in.
-- Copy or download AnythingLLM `anythingllm_mcp_servers.json`, Claude Code `.mcp.json`,
-  Codex `config.toml`, and GitHub Copilot `.vscode/mcp.json` snippets. Newly created tokens
-  are filled in; existing tokens require pasting the credential you saved.
+- **ChatGPT connectors and deep research** — the server also exposes the two tools OpenAI's
+  connector spec requires, `search` and `fetch`, over the same auth and collection scoping as every
+  other tool, so a ChatGPT custom connector (or any client that only speaks that shape) works
+  without a bridge.
+- **Let agents manage the index** — `list_index_jobs` and `get_index_job` show what is being
+  indexed; write-enabled tokens also get `reindex_document` (re-run extraction and embedding for
+  one source as a tracked, cancellable job) and `update_document_metadata` (set the sensitivity
+  label). Every tool schema carries its numeric limits and a human title, and every resource is
+  named and typed, so clients render them properly.
+- **See exactly what agents can do** — *What agents can do here* on the Connect tab lists the
+  tools, resources and prompts read live from the server (`GET /api/mcp/catalog`), grouped by
+  task and marked where a tool writes.
+- Copy or download ready-made snippets for Claude Code `.mcp.json`, Claude Desktop
+  `claude_desktop_config.json` (via `mcp-remote`), Cursor `.cursor/mcp.json`, Codex `config.toml`,
+  VS Code `.vscode/mcp.json`, Windsurf `mcp_config.json`, and AnythingLLM
+  `anythingllm_mcp_servers.json`. Newly created tokens are filled in; existing tokens require
+  pasting the credential you saved.
 
 For AnythingLLM, merge the entry into its storage `plugins/anythingllm_mcp_servers.json`
 and reload MCP servers in AnythingLLM. The export uses its `streamable` transport.

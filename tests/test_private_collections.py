@@ -22,7 +22,7 @@ from config import settings as _import_time_settings
 from services.app_database import SQLiteBackend, app_db
 from services.collection_service import collection_service
 from services.sharing_service import sharing_service
-from middleware.user_context import set_request_user, reset_request_user
+from middleware.user_context import set_request_user, reset_request_user, set_request_identity, reset_request_identity
 
 ALICE = "alice@example.com"
 BOB = "bob@example.com"
@@ -734,9 +734,13 @@ def test_require_admin_accepts_admin(private_mode):
 
     saved = _set_admins(f" {ALICE.upper()} , someone@else.test ")
     token = set_request_user(ALICE)
+    # With ADMIN_EMAILS set the gate reads the verified identity, not the
+    # collection-mode user id, so a signed-in admin carries both.
+    identity_token = set_request_identity(ALICE)
     try:
         assert require_admin() == ALICE
     finally:
+        reset_request_identity(identity_token)
         reset_request_user(token)
         _restore_admins(saved)
 

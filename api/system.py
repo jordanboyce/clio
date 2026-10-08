@@ -156,6 +156,36 @@ async def get_capabilities():
     }
 
 
+@router.get(
+    "/api/about",
+    summary="Version and deployment facts for the About dialog",
+    tags=["system"],
+)
+async def get_about():
+    """What the About dialog shows: the running version (the image's
+    CLIO_VERSION, or the git describe of a source checkout, or "dev"), the
+    embedding model in use, and whether MCP and offline mode are on. No
+    secrets, no paths — it is readable by anyone who can open the app."""
+    import os
+    import subprocess
+    version = os.environ.get("CLIO_VERSION", "").strip()
+    if not version:
+        try:
+            version = subprocess.run(
+                ["git", "describe", "--tags", "--always", "--dirty"],
+                capture_output=True, text=True, timeout=2,
+                cwd=str(Path(__file__).resolve().parent.parent),
+            ).stdout.strip() or "dev"
+        except Exception:
+            version = "dev"
+    return {
+        "version": version,
+        "embedding_model": settings.embedding_model,
+        "mcp_enabled": settings.enable_mcp,
+        "offline_mode": settings.offline_mode,
+    }
+
+
 class ScanFolderRequest(BaseModel):
     """Request body for scanning a folder."""
     path: str
