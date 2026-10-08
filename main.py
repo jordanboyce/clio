@@ -231,6 +231,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# The search model may be unreachable behind a firewall or not installed;
+# that is a 503 with the reason, not a 500, and it never hides the rest of
+# the app (see services.embedder.DeferredEmbeddingService).
+from services.embedder import EmbeddingUnavailable  # noqa: E402
+
+
+@app.exception_handler(EmbeddingUnavailable)
+async def _embedding_unavailable(request, exc: EmbeddingUnavailable):
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": f"The search model is not available yet: {exc}",
+            "code": "embedding_unavailable",
+        },
+        headers={"Retry-After": "20"},
+    )
+
 # CORS: origins come from CORS_ALLOW_ORIGINS (comma-separated). Empty — the
 # default — installs no CORS middleware at all, so the same-origin policy keeps
 # other sites from reading responses. The bundled frontend is same-origin and

@@ -159,9 +159,14 @@ RUN python -c "import torch, faiss, fastembed, sentence_transformers, fastapi, u
 ARG BAKE_EMBEDDING=1
 ARG EMBEDDING_MODEL=all-MiniLM-L6-v2
 ENV HF_HOME=/opt/hf-cache
+# Best effort: a build behind a firewall that blocks huggingface.co must
+# still produce a working image. If the bake cannot download, the build
+# prints a warning and continues; the app then offers the download (with
+# progress) at first start, or Ollama / a hosted provider instead.
 RUN if [ "$BAKE_EMBEDDING" = "1" ]; then \
-      python -c "from fastembed import TextEmbedding; m='${EMBEDDING_MODEL}'; TextEmbedding(m if '/' in m else 'sentence-transformers/' + m, cache_dir='/opt/clio/models/fastembed')" \
-      && python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL}')"; \
+      ( python -c "from fastembed import TextEmbedding; m='${EMBEDDING_MODEL}'; TextEmbedding(m if '/' in m else 'sentence-transformers/' + m, cache_dir='/opt/clio/models/fastembed')" \
+        && python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL}')" ) \
+      || echo "WARNING: could not bake the embedding model '${EMBEDDING_MODEL}' (huggingface.co unreachable from this build?). The image still works: the app downloads it at first start, or pick Ollama / a hosted provider. See docs/AIRGAP.md to pre-seed."; \
     fi
 
 # Optional full offline bundle for air-gapped deployments: additionally bake
