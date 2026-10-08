@@ -1077,13 +1077,14 @@ class DocumentIndexer:
             "ai_usage": ai_usage,
         }
 
-    def list_documents_page(self, limit: int, offset: int = 0, q: str = "") -> List[dict]:
+    def list_documents_page(self, limit: int, offset: int = 0, q: str = "",
+                            keys: Optional[List[str]] = None) -> List[dict]:
         """One page of documents (newest first, optional filename filter)."""
-        return self.vector_store.metadata_store.list_documents_page(limit, offset=offset, q=q)
+        return self.vector_store.metadata_store.list_documents_page(limit, offset=offset, q=q, keys=keys)
 
-    def count_documents(self, q: str = "") -> int:
+    def count_documents(self, q: str = "", keys: Optional[List[str]] = None) -> int:
         """Total documents, honoring the same filename filter as the paged list."""
-        return self.vector_store.metadata_store.count_documents(q=q)
+        return self.vector_store.metadata_store.count_documents(q=q, keys=keys)
 
     def get_document_stats(self) -> dict:
         """SQL-aggregated totals: {total_documents, total_pages}."""

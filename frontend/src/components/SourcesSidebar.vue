@@ -491,6 +491,37 @@
         >Chat and reports use only the selected sources.</p>
       </div>
 
+      <!-- Type chips: what kinds of sources are here, and a one-tap filter.
+           Counts come from the server so they describe the whole collection,
+           not just the loaded page. Shown once there is more than one kind. -->
+      <div
+        v-if="kindChips.length > 1 || docKind"
+        class="flex items-center gap-1 px-2.5 pb-1.5 flex-wrap"
+        role="group"
+        aria-label="Filter sources by type"
+        data-testid="kind-chips"
+      >
+        <button
+          type="button"
+          class="btn btn-xs h-5 min-h-0 px-1.5 rounded-full font-normal gap-1"
+          :class="!docKind ? 'btn-neutral' : 'btn-ghost text-base-content/60'"
+          :aria-pressed="!docKind"
+          @click="setDocKind('')"
+        >All <span class="tabular-nums opacity-70">{{ kindTotal.toLocaleString() }}</span></button>
+        <button
+          v-for="chip in kindChips"
+          :key="chip.kind"
+          type="button"
+          class="btn btn-xs h-5 min-h-0 px-1.5 rounded-full font-normal gap-1"
+          :class="docKind === chip.kind ? 'btn-neutral' : 'btn-ghost text-base-content/60'"
+          :aria-pressed="docKind === chip.kind"
+          @click="setDocKind(chip.kind)"
+        >
+          <component :is="FAMILIES[chip.kind].icon" :size="10" aria-hidden="true" />
+          {{ FAMILIES[chip.kind].label }} <span class="tabular-nums opacity-70">{{ chip.count.toLocaleString() }}</span>
+        </button>
+      </div>
+
       <!-- Loading spinner -->
       <div v-if="loading" class="flex justify-center py-8">
         <span class="loading loading-spinner loading-sm"></span>
@@ -503,6 +534,7 @@
           <p class="text-xs text-base-content/50 mt-2">Syncing sources…</p>
         </template>
         <p v-else-if="docSearch" class="text-xs text-base-content/50">No sources match “{{ docSearch }}”.</p>
+        <p v-else-if="docKind" class="text-xs text-base-content/50">No {{ FAMILIES[docKind]?.label.toLowerCase() || docKind }} sources here.</p>
         <p v-else class="text-xs text-base-content/50">No sources yet. Use Add Sources above to get started.</p>
       </div>
 
@@ -525,15 +557,25 @@
           />
 
           <!-- File icon -->
-          <div class="flex items-center justify-center w-7 h-7 rounded flex-shrink-0 mt-0.5" :class="isLinkDoc(doc) ? 'bg-info/20' : getFileIconClass(doc.filename)">
-            <component :is="isLinkDoc(doc) ? Globe : getFileIcon(doc.filename)" :size="14" :class="isLinkDoc(doc) ? 'text-info' : getFileIconTextClass(doc.filename)" />
+          <div
+            class="relative flex items-center justify-center w-7 h-7 rounded-md flex-shrink-0 mt-0.5"
+            :class="fileInfo(doc).tile"
+            :title="`${FAMILIES[fileInfo(doc).family].label}${fileInfo(doc).label ? ' · ' + fileInfo(doc).label : ''}`"
+          >
+            <component :is="fileInfo(doc).icon" :size="14" aria-hidden="true" />
           </div>
 
           <!-- Info -->
           <div class="flex-1 min-w-0">
             <div class="text-xs font-semibold truncate leading-tight" :title="isLinkDoc(doc) ? doc.source_path : doc.filename">{{ doc.filename }}</div>
             <div class="flex items-center gap-1 mt-0.5 flex-wrap">
-              <span class="text-xs text-base-content/50">{{ doc.total_pages }}p · {{ doc.total_chunks }}ch</span>
+              <span
+                v-if="fileInfo(doc).label"
+                class="font-mono text-[10px] leading-none px-1 py-0.5 rounded bg-base-content/[0.07] text-base-content/70"
+                :aria-label="`File type ${fileInfo(doc).label}`"
+              >{{ fileInfo(doc).label }}</span>
+              <span v-if="isCodeDoc(doc)" class="text-xs text-base-content/50 tabular-nums">{{ doc.total_chunks }} {{ doc.total_chunks === 1 ? 'symbol' : 'symbols' }}</span>
+              <span v-else class="text-xs text-base-content/50 tabular-nums">{{ doc.total_pages }}p · {{ doc.total_chunks }}ch</span>
               <span
                 class="badge badge-xs"
                 :class="isLinkDoc(doc) ? 'badge-info' : (doc.source_type === 'local_reference' ? 'badge-ghost' : 'badge-primary')"
@@ -690,7 +732,15 @@
                 <div class="flex items-center justify-between flex-wrap gap-2">
                   <div class="font-mono text-xs text-base-content/60">{{ chunk.chunk_id }}</div>
                   <div class="flex gap-2">
-                    <span class="badge badge-sm">p{{ chunk.page_number }} c{{ chunk.chunk_index }}</span>
+                    <template v-if="chunk.symbol_name || chunk.line_start">
+                      <span v-if="chunk.symbol_name" class="badge badge-sm badge-primary badge-outline font-mono gap-1" :title="chunk.symbol_type || 'symbol'">
+                        <span class="opacity-60 font-sans">{{ chunk.symbol_type || 'symbol' }}</span>{{ chunk.symbol_name }}
+                      </span>
+                      <span v-else-if="chunk.symbol_type" class="badge badge-sm badge-ghost">{{ chunk.symbol_type.replace(/_/g, ' ') }}</span>
+                      <span v-if="chunk.line_start" class="badge badge-sm badge-ghost tabular-nums">L{{ chunk.line_start }}<template v-if="chunk.line_end && chunk.line_end !== chunk.line_start">–{{ chunk.line_end }}</template></span>
+                      <span v-if="chunk.language" class="badge badge-sm badge-ghost">{{ chunk.language }}</span>
+                    </template>
+                    <span v-else class="badge badge-sm">p{{ chunk.page_number }} c{{ chunk.chunk_index }}</span>
                     <span v-if="chunk.extraction_method === 'ocr'" class="badge badge-warning badge-sm">OCR</span>
                     <span v-else-if="chunk.extraction_method === 'hybrid'" class="badge badge-info badge-sm">Hybrid</span>
                     <span v-if="chunkFieldCount(chunk) > 0" class="badge badge-success badge-sm">{{ chunkFieldCount(chunk) }} fields</span>
@@ -869,6 +919,7 @@ import { useExpertiseStore } from '../stores/expertiseStore'
 import { useSelectionStore } from '../stores/selectionStore'
 import { useStatsStore } from '../stores/statsStore'
 import { formatBytes, describeStorage } from '../utils/format'
+import { describeFile, FAMILIES, isTabularFile } from '../utils/fileTypes'
 
 const emit = defineEmits(['document-deleted', 'open', 'background-job-started', 'clone-collection'])
 
@@ -1293,10 +1344,11 @@ const openFolderPicker = async () => {
       const folderPath = response.data.path
 
       // Scan folder for supported document types, add individual files
+      // No extension filter: the server scans for everything it can index,
+      // source code included, and skips what it cannot.
       const scanResponse = await http.post('/api/scan-folder', {
         path: folderPath,
         recursive: true,
-        file_extensions: ['.pdf', '.txt', '.docx', '.csv', '.xlsx', '.xls', '.md', '.json', '.jsonl']
       })
 
       if (scanResponse.data.files && scanResponse.data.files.length > 0) {
@@ -1310,7 +1362,7 @@ const openFolderPicker = async () => {
           }
         }
       } else {
-        indexError.value = 'No supported files found (.pdf, .txt, .docx, .csv, .xlsx, .xls, .md, .json)'
+        indexError.value = 'No supported files found in that folder.'
       }
     }
   } catch (err) {
@@ -1561,12 +1613,27 @@ const DOC_PAGE = 200
 const docTotal = ref(0)
 const docSearch = ref('')
 const loadingMore = ref(false)
+// Type filter (code / docs / data / media / other) and the server's per-kind
+// counts for the current collection and filename filter.
+const docKind = ref('')
+const kindCounts = ref({})
+const KIND_ORDER = ['code', 'docs', 'data', 'media', 'web', 'other']
+const kindChips = computed(() =>
+  KIND_ORDER.filter(k => (kindCounts.value[k] || 0) > 0 && FAMILIES[k]).map(k => ({ kind: k, count: kindCounts.value[k] }))
+)
+const kindTotal = computed(() => Object.values(kindCounts.value).reduce((a, b) => a + (b || 0), 0))
+const setDocKind = (kind) => {
+  if (docKind.value === kind) return
+  docKind.value = kind
+  loadDocuments()
+}
 
 const _docParams = (offset) => ({
   collection_id: collectionStore.currentCollectionId,
   limit: DOC_PAGE,
   offset,
   ...(docSearch.value ? { q: docSearch.value } : {}),
+  ...(docKind.value ? { kind: docKind.value } : {}),
 })
 
 const loadDocuments = async () => {
@@ -1577,6 +1644,7 @@ const loadDocuments = async () => {
     const response = await http.get('/documents', { params: _docParams(0) })
     documents.value = response.data.documents || []
     docTotal.value = response.data.total_documents ?? documents.value.length
+    if (response.data.kind_counts) kindCounts.value = response.data.kind_counts
     if (docTotal.value > 0) justIndexed.value = false
   } catch (err) {
     error.value = err?.message || 'Failed to load sources'
@@ -1680,29 +1748,10 @@ const closeChunksModal = () => {
   chunksModal.value?.close()
 }
 
-// Code file extensions for icon display
-const CODE_EXTENSIONS = ['.pas', '.dpr', '.dpk', '.pp', '.inc', '.dfm', '.mod', '.def', '.mi', '.asm', '.s']
-const TABULAR_EXTENSIONS = ['.csv', '.xlsx', '.xls']
-
-const getExt = (filename) => '.' + (filename || '').split('.').pop().toLowerCase()
-
-const isCodeFile = (filename) => CODE_EXTENSIONS.includes(getExt(filename))
-const isTabularFile = (filename) => TABULAR_EXTENSIONS.includes(getExt(filename))
-
-const getFileIcon = (filename) => {
-  if (isTabularFile(filename)) return Table2
-  return isCodeFile(filename) ? FileCode : FileText
-}
-
-const getFileIconClass = (filename) => {
-  if (isTabularFile(filename)) return 'bg-success/20'
-  return isCodeFile(filename) ? 'bg-primary/20' : 'bg-error/20'
-}
-
-const getFileIconTextClass = (filename) => {
-  if (isTabularFile(filename)) return 'text-success'
-  return isCodeFile(filename) ? 'text-primary' : 'text-error'
-}
+// What each source is, for the tile and the type chips. The family
+// boundaries are the server's (services/file_kinds.py); this only draws.
+const fileInfo = (doc) => describeFile(doc?.filename, { isWeb: isLinkDoc(doc) })
+const isCodeDoc = (doc) => fileInfo(doc).family === 'code'
 
 const confirmDelete = (doc) => {
   documentToDelete.value = doc
@@ -1836,6 +1885,8 @@ const runFolderSync = async (folder, prune) => {
 }
 
 watch(() => collectionStore.currentCollectionId, (newId) => {
+  docKind.value = ''
+  kindCounts.value = {}
   loadDocuments()
   loadSyncFolders()
   // The selection is kept per collection (selectionStore), so switching
@@ -1899,6 +1950,7 @@ watch(() => backgroundJobsStore.dataRefreshTick, async () => {
     const response = await http.get('/documents', { params: _docParams(0) })
     documents.value = response.data.documents || []
     docTotal.value = response.data.total_documents ?? documents.value.length
+    if (response.data.kind_counts) kindCounts.value = response.data.kind_counts
     if (docTotal.value > 0) justIndexed.value = false
   } catch {
     // transient mid-job failure — the next throttled tick retries

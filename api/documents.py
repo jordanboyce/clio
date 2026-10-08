@@ -1149,6 +1149,7 @@ async def list_documents(
     limit: int = 0,
     offset: int = 0,
     q: str = "",
+    kind: str = "",
 ) -> DocumentListResponse:
     """
     List indexed documents with their metadata.
@@ -1181,12 +1182,39 @@ async def list_documents(
         document_dir = indexer_manager.get_documents_path(collection_id)
         collection = collection_service.get_collection(collection_id)
 
+        # `kind` narrows a paged list to one family (code / docs / data /
+        # media / other); the per-kind totals always describe the whole
+        # (substring-filtered) set so the chips keep their numbers.
+        from services import file_kinds
+        kind = (kind or "").strip().lower()
+        keys = None
+        kind_counts = None
+        if kind and kind != "all":
+            if kind == "other":
+                known = set()
+                for k in file_kinds.KINDS:
+                    known |= file_kinds.extensions_for_kind(k)
+                key_counts = indexer.vector_store.metadata_store.count_documents_by_key(q=q)
+                keys = [k for k in key_counts if k not in known]
+            elif kind in file_kinds.KINDS:
+                keys = file_kinds.keys_for_kind(kind)
+            else:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                    detail=f"Unknown kind {kind!r}; use one of {', '.join(file_kinds.KINDS)}, other")
+
         paged = limit > 0
         if paged:
-            documents = indexer.list_documents_page(limit, offset=offset, q=q)
-            total_documents = indexer.count_documents(q=q)
+            documents = indexer.list_documents_page(limit, offset=offset, q=q, keys=keys)
+            total_documents = indexer.count_documents(q=q, keys=keys)
+            kind_counts = file_kinds.kind_counts(
+                indexer.vector_store.metadata_store.count_documents_by_key(q=q)
+            )
         else:
             documents = indexer.list_documents()
+            if keys is not None:
+                wanted = set(keys)
+                documents = [d for d in documents
+                             if file_kinds.kind_key_for_filename(d.get("filename", "")) in wanted]
             total_documents = len(documents)
 
         # Convert to DocumentMetadata objects
@@ -1241,8 +1269,11 @@ async def list_documents(
         return DocumentListResponse(
             documents=doc_metadata_list,
             total_documents=total_documents,
+            kind_counts=kind_counts,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list documents: {e}")
         raise HTTPException(
@@ -1443,6 +1474,11 @@ async def get_document_chunks(
                     text=chunk["text"],
                     source_format=chunk.get("source_format"),
                     extraction_method=chunk_method,
+                    language=chunk.get("language"),
+                    symbol_name=chunk.get("symbol_name"),
+                    symbol_type=chunk.get("symbol_type"),
+                    line_start=chunk.get("line_start"),
+                    line_end=chunk.get("line_end"),
                     extracted_fields=extracted_fields,
                     form_score=round(form_score, 3) if form_score is not None else None,
                     form_like=form_like,

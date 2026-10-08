@@ -248,6 +248,9 @@ class DocumentListResponse(BaseModel):
 
     documents: List[DocumentMetadata] = Field(..., description="List of indexed documents")
     total_documents: int = Field(..., description="Total number of documents")
+    kind_counts: Optional[Dict[str, int]] = Field(
+        None, description="Documents per kind (code, docs, data, media, other) for the unfiltered-by-kind set"
+    )
 
 
 class DocumentChunkView(BaseModel):
@@ -259,6 +262,12 @@ class DocumentChunkView(BaseModel):
     text: str = Field(..., description="Chunk text")
     source_format: Optional[str] = Field(None, description="Source format")
     extraction_method: Optional[str] = Field(None, description="Extraction method")
+    # Code chunks: which symbol the passage is, and where it sits in the file
+    language: Optional[str] = Field(None, description="Programming language for code chunks")
+    symbol_name: Optional[str] = Field(None, description="Function/class/procedure name for code chunks")
+    symbol_type: Optional[str] = Field(None, description="Symbol kind: function, class, method, code_block, ...")
+    line_start: Optional[int] = Field(None, description="First source line of the chunk (1-based)")
+    line_end: Optional[int] = Field(None, description="Last source line of the chunk (1-based)")
     extracted_fields: Optional[Dict[str, str]] = Field(
         None,
         description="Heuristically extracted field/value pairs from chunk text"
