@@ -37,7 +37,7 @@
       <div class="flex items-center gap-2 px-6 py-3 border-t border-base-300/60 bg-base-200/40 text-xs">
         <a href="https://github.com/jordanboyce/clio#readme" target="_blank" rel="noopener" class="link link-hover text-base-content/70">Documentation</a>
         <span class="text-base-content/25">·</span>
-        <a href="https://github.com/jordanboyce/clio/blob/master/LICENSE" target="_blank" rel="noopener" class="link link-hover text-base-content/70">Apache-2.0</a>
+        <a href="https://github.com/jordanboyce/clio/blob/master/LICENSE" target="_blank" rel="noopener" class="link link-hover text-base-content/70">MIT License</a>
         <span class="ml-auto text-base-content/40">Part of the Prometheus ecosystem</span>
       </div>
     </div>

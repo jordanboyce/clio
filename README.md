@@ -1241,11 +1241,9 @@ A: No. Search works with no model at all. For answers, use any provider you trus
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE). You're free to use, modify,
-and deploy this on internal systems — including commercial use — provided the
-license and notices are retained. The license includes an express patent grant
-from contributors, which is why it's the usual choice for software adopted
-inside enterprises and laboratories.
+Licensed under the [MIT License](LICENSE). You're free to use, modify, and
+deploy this anywhere — including commercially and inside internal systems —
+provided the copyright notice and the license text travel with the software.
 
 ---
 
