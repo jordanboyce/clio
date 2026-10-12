@@ -156,6 +156,17 @@ class Settings(BaseSettings):
     entity_boost_weight: float = 0.2       # max bonus added to a chunk's score
     entity_boost_max_candidates: int = 25  # graph-only chunks fused into the pool
 
+    # Manual per-chunk ranking intervention (services/metadata_store.py).
+    # A reviewer can pin a chunk higher for queries it matches by setting a
+    # positive boost (or lower with a negative one) from the chunk inspector.
+    # The boost is an additive bonus applied to the chunk's similarity score
+    # after retrieval, so it reorders candidates that were already retrieved
+    # but does not inject chunks that failed to retrieve (that is the entity
+    # graph's job). RAGFlow's "add keywords/weight to a chunk" affordance,
+    # scoped to what a single-machine index can honestly promise.
+    enable_chunk_boosts: bool = True
+    chunk_boost_weight: float = 0.5        # scales the stored boost (-1..1)
+
 
     # Server configuration. The default binds loopback only: the app has no
     # auth unless AUTH_PASSWORD is set, so reaching the network has to be a

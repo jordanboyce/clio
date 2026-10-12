@@ -56,7 +56,7 @@ CONTENT_TYPE_EXTENSIONS = {
 # Extensions a URL path may carry that are trusted when the server sends
 # no usable media type (octet-stream, or nothing at all).
 _PATH_EXTENSIONS = {".pdf", ".txt", ".md", ".csv", ".json", ".jsonl", ".docx",
-                    ".xlsx", ".xls", ".html", ".htm", ".png", ".jpg", ".jpeg",
+                    ".pptx", ".xlsx", ".xls", ".html", ".htm", ".png", ".jpg", ".jpeg",
                     ".webp", ".tiff", ".tif"}
 
 _HTML_TYPES = {"text/html", "application/xhtml+xml"}

@@ -342,7 +342,7 @@ class ReindexService:
             # Fallback to scanning documents_dir
             supported_extensions = {
                 # Documents
-                ".pdf", ".txt", ".docx", ".csv", ".md", ".json", ".jsonl",
+                ".pdf", ".txt", ".docx", ".pptx", ".csv", ".md", ".json", ".jsonl",
                 # Pascal/Delphi
                 ".pas", ".dpr", ".dpk", ".pp", ".inc", ".dfm",
                 # Modula-2

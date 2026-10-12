@@ -4,13 +4,13 @@ import logging
 import json
 import asyncio
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pathlib import Path
 import shutil
 
 from fastapi import HTTPException, UploadFile, File, status
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import config
 from services.document_extractor import DocumentExtractor
@@ -1278,6 +1278,35 @@ async def get_document_chunks(
         if max_chunks > 0:
             all_chunks = all_chunks[:max_chunks]
 
+        # Entity-graph annotations for the explainability view. Best effort:
+        # the table may not be backfilled yet (or a fresh corpus pre-migration),
+        # in which case every chunk simply has no annotations.
+        entities_by_chunk: Dict[str, List[str]] = {}
+        if all_chunks:
+            try:
+                entities_by_chunk = metadata_store.get_entities_for_chunks(
+                    [c["chunk_id"] for c in all_chunks]
+                )
+            except Exception as e:  # noqa: BLE001 - never fail the listing
+                logger.warning(
+                    f"Failed to load entity annotations for {document_id}: {e}"
+                )
+                entities_by_chunk = {}
+
+        # Manual ranking interventions shown inline, so a reviewer can see
+        # (and clear) what they pinned. Best effort, like the entities.
+        boosts_by_chunk: Dict[str, float] = {}
+        if all_chunks:
+            try:
+                boosts_by_chunk = metadata_store.get_chunk_boosts(
+                    [c["chunk_id"] for c in all_chunks]
+                )
+            except Exception as e:  # noqa: BLE001 - never fail the listing
+                logger.warning(
+                    f"Failed to load chunk boosts for {document_id}: {e}"
+                )
+                boosts_by_chunk = {}
+
         chunk_views: List[DocumentChunkView] = []
         for chunk in all_chunks:
             chunk_method = chunk.get("extraction_method") or doc_info.get("extraction_method")
@@ -1310,6 +1339,8 @@ async def get_document_chunks(
                     form_score=round(form_score, 3) if form_score is not None else None,
                     form_like=form_like,
                     field_extraction_applied=field_extraction_applied,
+                    entities=entities_by_chunk.get(chunk["chunk_id"]),
+                    boost=boosts_by_chunk.get(chunk["chunk_id"]),
                 )
             )
 
@@ -1332,6 +1363,79 @@ async def get_document_chunks(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list document chunks: {str(e)}",
+        )
+
+
+class ChunkBoostRequest(BaseModel):
+    """Body for the manual per-chunk ranking intervention."""
+
+    boost: float = Field(..., ge=-1.0, le=1.0, description="Ranking bias in [-1, 1]")
+    note: str = Field("", description="Optional reason shown in the inspector")
+
+
+@router.post(
+    "/documents/{document_id}/chunks/{chunk_id}/boost",
+    status_code=status.HTTP_200_OK,
+    summary="Set a manual ranking bias for a chunk",
+    tags=["documents"],
+)
+def set_chunk_boost(
+    document_id: str,
+    chunk_id: str,
+    body: ChunkBoostRequest,
+    collection_id: str = "default",
+):
+    """Pin a chunk higher (or lower) in retrieval for queries it matches.
+
+    This is the reviewer-facing counterpart to the chunk inspector: when
+    retrieval ranks a passage below where a human expects it, set a positive
+    boost; a negative one demotes it. The stored value is clamped to [-1, 1]
+    and scaled by ``chunk_boost_weight`` at query time; 0 clears the pin.
+
+    Write-gated the same as any source mutation, and audited like one.
+    """
+    try:
+        _require_write(collection_id)
+        try:
+            indexer = get_indexer(collection_id)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+        metadata_store = indexer.vector_store.metadata_store
+        doc_info = metadata_store.get_document_info(document_id)
+        if not doc_info:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document {document_id} not found",
+            )
+        governance.assert_document_servable(doc_info)
+
+        # The chunk must actually belong to this document — otherwise a
+        # stray id would silently create an orphan row that never applies.
+        chunks = metadata_store.get_chunks_by_document(document_id)
+        if not any(c["chunk_id"] == chunk_id for c in chunks):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Chunk {chunk_id} not found in document {document_id}",
+            )
+
+        metadata_store.set_chunk_boost(chunk_id, body.boost, body.note)
+        audit.record(
+            "chunk.boost",
+            collection_id=collection_id,
+            document_id=document_id,
+            target=chunk_id,
+            detail={"boost": body.boost, "note": body.note or None},
+        )
+        return {"chunk_id": chunk_id, "boost": body.boost}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set boost for chunk {chunk_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to set chunk boost: {str(e)}",
         )
 
 

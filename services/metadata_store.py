@@ -96,6 +96,22 @@ class MetadataStore:
                 ON chunk_entities(entity)
             """)
 
+            # Manual per-chunk ranking intervention (RAGFlow-style chunk
+            # weighting). One row per chunk a reviewer decided to pin up or
+            # down; the boost value is clamped to [-1, 1] at write time and
+            # scaled by settings.chunk_boost_weight at query time. Additive
+            # and self-healing: deleting a chunk removes its row in
+            # delete_document, and CREATE IF NOT EXISTS covers both fresh
+            # and already-open databases without a schema-version bump.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chunk_boosts (
+                    chunk_id TEXT PRIMARY KEY,
+                    boost REAL NOT NULL DEFAULT 0.0,
+                    note TEXT DEFAULT NULL,
+                    updated_at TEXT DEFAULT NULL
+                )
+            """)
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS documents (
                     document_id TEXT PRIMARY KEY,
@@ -498,6 +514,90 @@ class MetadataStore:
             ).fetchone()
         return row[0] if row else 0
 
+    def get_entities_for_chunks(self, chunk_ids: List[str]) -> Dict[str, List[str]]:
+        """Batch-fetch normalized entities for chunks, in insertion order.
+
+        Returns chunk_id -> ordered list of entity strings. Missing chunks
+        are simply absent from the result. Mirrors the batching pattern of
+        ``get_chunks_by_chunk_ids`` so large documents don't trip SQLite's
+        host-parameter limit.
+        """
+        wanted = list(dict.fromkeys(chunk_ids))
+        if not wanted:
+            return {}
+        result: Dict[str, List[str]] = {}
+        with sqlite_connect(self.db_path) as conn:
+            for start in range(0, len(wanted), self._IN_CLAUSE_BATCH):
+                batch = wanted[start:start + self._IN_CLAUSE_BATCH]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(f"""
+                    SELECT chunk_id, entity FROM chunk_entities
+                    WHERE chunk_id IN ({placeholders})
+                    ORDER BY rowid
+                """, batch).fetchall()
+                for chunk_id, entity in rows:
+                    result.setdefault(chunk_id, []).append(entity)
+        return result
+
+    def set_chunk_boost(self, chunk_id: str, boost: float, note: str = "") -> None:
+        """Set (or clear) a manual ranking intervention for one chunk.
+
+        ``boost`` is clamped to [-1, 1] so a typo cannot push a score off
+        its intended scale; a zero value deletes the row so an untouched
+        chunk and a deliberately-neutralized one are indistinguishable.
+        """
+        from datetime import datetime, timezone
+
+        boost = max(-1.0, min(1.0, float(boost)))
+        with sqlite_connect(self.db_path) as conn:
+            if boost == 0.0:
+                conn.execute(
+                    "DELETE FROM chunk_boosts WHERE chunk_id = ?", (chunk_id,)
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO chunk_boosts (chunk_id, boost, note, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (chunk_id, boost, (note or "").strip() or None,
+                     datetime.now(timezone.utc).isoformat()),
+                )
+            conn.commit()
+
+    def get_chunk_boosts(self, chunk_ids: List[str]) -> Dict[str, float]:
+        """Batch-fetch manual boosts for chunks (chunk_id -> boost value)."""
+        wanted = list(dict.fromkeys(chunk_ids))
+        if not wanted:
+            return {}
+        result: Dict[str, float] = {}
+        with sqlite_connect(self.db_path) as conn:
+            for start in range(0, len(wanted), self._IN_CLAUSE_BATCH):
+                batch = wanted[start:start + self._IN_CLAUSE_BATCH]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(f"""
+                    SELECT chunk_id, boost FROM chunk_boosts
+                    WHERE chunk_id IN ({placeholders})
+                """, batch).fetchall()
+                for chunk_id, boost in rows:
+                    result[chunk_id] = float(boost)
+        return result
+
+    def get_all_chunk_boosts(self) -> Dict[str, Dict[str, Any]]:
+        """Every manual boost row (chunk_id -> {boost, note, updated_at}).
+
+        Backs the inspector so a reviewer can see and clear prior
+        interventions. Small by nature — people pin a handful of chunks.
+        """
+        with sqlite_connect(self.db_path) as conn:
+            rows = conn.execute("""
+                SELECT chunk_id, boost, note, updated_at FROM chunk_boosts
+            """).fetchall()
+        return {
+            chunk_id: {"boost": float(boost), "note": note, "updated_at": updated_at}
+            for chunk_id, boost, note, updated_at in rows
+        }
+
     def _ensure_v3_1_columns(self, conn: sqlite3.Connection):
         """Ensure v3.1+ columns exist (defensive migration for runtime checks)."""
         doc_columns = self._get_table_columns(conn, "documents")
@@ -836,6 +936,10 @@ class MetadataStore:
                     placeholders = ",".join("?" for _ in batch)
                     conn.execute(
                         f"DELETE FROM chunk_entities WHERE chunk_id IN ({placeholders})",
+                        batch,
+                    )
+                    conn.execute(
+                        f"DELETE FROM chunk_boosts WHERE chunk_id IN ({placeholders})",
                         batch,
                     )
 

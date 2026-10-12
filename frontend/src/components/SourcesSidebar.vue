@@ -639,6 +639,7 @@
               <span class="badge badge-outline">{{ chunkResponse.total_chunks }} total</span>
               <span class="badge badge-info">{{ chunkResponse.extraction_method || 'text' }}</span>
               <span class="badge badge-success">{{ chunksWithFieldsCount }} with fields</span>
+              <span v-if="boostedChunkCount" class="badge badge-primary">{{ boostedChunkCount }} boosted</span>
             </div>
             <label class="label cursor-pointer gap-2 py-0">
               <span class="label-text text-sm">Only chunks with fields</span>
@@ -657,6 +658,26 @@
                     <span v-else-if="chunk.extraction_method === 'hybrid'" class="badge badge-info badge-sm">Hybrid</span>
                     <span v-if="chunkFieldCount(chunk) > 0" class="badge badge-success badge-sm">{{ chunkFieldCount(chunk) }} fields</span>
                   </div>
+                </div>
+                <div v-if="chunk.entities && chunk.entities.length > 0" class="mt-2">
+                  <span class="text-[10px] uppercase tracking-wide text-base-content/40">Entities</span>
+                  <div class="flex flex-wrap gap-1.5 mt-1">
+                    <span
+                      v-for="entity in chunk.entities"
+                      :key="entity"
+                      class="badge badge-xs badge-outline text-base-content/70"
+                    >{{ entity }}</span>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2 mt-2 pt-2 border-t border-base-300/50">
+                  <span class="text-xs text-base-content/45 shrink-0">Rank</span>
+                  <div class="flex items-center gap-0.5" role="group" aria-label="Chunk ranking bias">
+                    <button class="btn btn-xs btn-ghost h-6 w-6 min-h-0 p-0" :disabled="boostingChunkId === chunk.chunk_id || (chunk.boost ?? 0) <= -1" title="Lower this chunk in retrieval" aria-label="Lower ranking bias" @click="nudgeChunkBoost(chunk, -0.25)"><ArrowDown :size="13" /></button>
+                    <span class="inline-flex min-w-[3.25rem] justify-center font-mono text-xs tabular-nums" :class="boostTone(chunk.boost)">{{ formatBoost(chunk.boost) }}</span>
+                    <button class="btn btn-xs btn-ghost h-6 w-6 min-h-0 p-0" :disabled="boostingChunkId === chunk.chunk_id || (chunk.boost ?? 0) >= 1" title="Raise this chunk in retrieval" aria-label="Raise ranking bias" @click="nudgeChunkBoost(chunk, 0.25)"><ArrowUp :size="13" /></button>
+                  </div>
+                  <button v-if="chunk.boost" class="btn btn-xs btn-ghost text-base-content/50" :disabled="boostingChunkId === chunk.chunk_id" title="Reset ranking bias" @click="nudgeChunkBoost(chunk, -(chunk.boost ?? 0))">Reset</button>
+                  <span v-if="boostingChunkId === chunk.chunk_id" class="loading loading-spinner loading-xs"></span>
                 </div>
                 <div v-if="chunk.extracted_fields && Object.keys(chunk.extracted_fields).length > 0" class="overflow-x-auto">
                   <table class="table table-xs table-zebra">
@@ -821,7 +842,7 @@
 <script setup>
 import { ref, computed, markRaw, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import http from '../utils/http'
-import { FileText, Eye, Trash2, RefreshCw, X, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe } from 'lucide-vue-next'
+import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useUiStore } from '../stores/uiStore'
 import { useUserStore } from '../stores/userStore'
@@ -1258,7 +1279,7 @@ const openFolderPicker = async () => {
       const scanResponse = await http.post('/api/scan-folder', {
         path: folderPath,
         recursive: true,
-        file_extensions: ['.pdf', '.txt', '.docx', '.csv', '.xlsx', '.xls', '.md', '.json', '.jsonl']
+        file_extensions: ['.pdf', '.txt', '.docx', '.pptx', '.csv', '.xlsx', '.xls', '.md', '.json', '.jsonl']
       })
 
       if (scanResponse.data.files && scanResponse.data.files.length > 0) {
@@ -1272,7 +1293,7 @@ const openFolderPicker = async () => {
           }
         }
       } else {
-        indexError.value = 'No supported files found (.pdf, .txt, .docx, .csv, .xlsx, .xls, .md, .json)'
+        indexError.value = 'No supported files found (.pdf, .txt, .docx, .pptx, .csv, .xlsx, .xls, .md, .json)'
       }
     }
   } catch (err) {
@@ -1631,6 +1652,49 @@ const openChunks = async (doc) => {
 
 const closeChunksModal = () => {
   chunksModal.value?.close()
+}
+
+const boostingChunkId = ref(null)
+
+const formatBoost = (b) => {
+  if (b == null) return '0.0'
+  return (b > 0 ? '+' : '') + b.toFixed(2)
+}
+const boostTone = (b) => {
+  if (b == null) return 'text-base-content/40'
+  return b > 0 ? 'text-primary' : 'text-error'
+}
+const boostedChunkCount = computed(() =>
+  chunkResponse.value.chunks.filter((c) => c.boost).length
+)
+
+// Manual ranking intervention: a small stepper that raises/lowers a chunk's
+// bias by 0.25 steps (clamped to [-1, 1]); reset posts 0, which clears it.
+// Reflects optimistically in the already-loaded chunk; the server clamps
+// and audits the value.
+async function applyChunkBoost(chunk, boost) {
+  if (!chunk || boostingChunkId.value) return
+  boostingChunkId.value = chunk.chunk_id
+  try {
+    const collectionId = collectionStore.currentCollectionId
+    const response = await http.post(
+      `/documents/${chunkDocument.value.document_id}/chunks/${chunk.chunk_id}/boost`,
+      { boost, note: '' },
+      { params: { collection_id: collectionId } }
+    )
+    chunk.boost = response.data.boost
+    if (chunk.boost === 0) chunk.boost = null
+  } catch (err) {
+    ui.toastError(err, 'Could not set chunk boost')
+  } finally {
+    boostingChunkId.value = null
+  }
+}
+
+function nudgeChunkBoost(chunk, delta) {
+  const current = chunk.boost ?? 0
+  const next = Math.max(-1, Math.min(1, Math.round((current + delta) * 100) / 100))
+  applyChunkBoost(chunk, next)
 }
 
 // Code file extensions for icon display

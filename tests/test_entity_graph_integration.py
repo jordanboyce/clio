@@ -183,3 +183,62 @@ def test_entity_boost_config_disabled(indexer, monkeypatch):
     )
     # No crash, no boost applied.
     assert len(out["results"]) == 3
+
+
+def test_get_entities_for_chunks_batch(indexer):
+    """The chunk-inspector getter returns per-chunk entities for the requested
+    ids only, omitting unknown ids."""
+    store = indexer.vector_store.metadata_store
+    got = store.get_entities_for_chunks(["doc_alice-c0", "doc_bridge-c0", "nope"])
+    assert "alice johnson" in got["doc_alice-c0"]
+    assert "alice johnson" in got["doc_bridge-c0"]
+    assert "nope" not in got
+
+
+def test_get_entities_for_chunks_empty(indexer):
+    store = indexer.vector_store.metadata_store
+    assert store.get_entities_for_chunks([]) == {}
+
+
+def test_chunk_boost_reorders_retrieval(indexer, monkeypatch):
+    """A positive manual boost must move a chunk above its neighbours that
+    otherwise score identically (constant embeddings = equal vectors)."""
+    import config
+    monkeypatch.setattr(config.settings, "enable_entity_boost", False)
+    monkeypatch.setattr(config.settings, "enable_chunk_boosts", True)
+    monkeypatch.setattr(config.settings, "chunk_boost_weight", 0.5)
+    from models.schemas import SearchMode
+
+    store = indexer.vector_store.metadata_store
+    # Baseline: doc_bob is not top-1 for this query (all scores equal, so
+    # ordering is insertion order — bob is second).
+    baseline = indexer.search(
+        "Who worked with Alice on Project Titan?",
+        top_k=3,
+        mode=SearchMode.SEMANTIC,
+    )["results"]
+    # Pin doc_bob; it must now rank first.
+    store.set_chunk_boost("doc_bob-c0", 1.0)
+    out = indexer.search(
+        "Who worked with Alice on Project Titan?",
+        top_k=3,
+        mode=SearchMode.SEMANTIC,
+    )["results"]
+    assert out[0].chunk_id == "doc_bob-c0"
+
+
+def test_chunk_boost_negative_demotes(indexer, monkeypatch):
+    import config
+    monkeypatch.setattr(config.settings, "enable_entity_boost", False)
+    monkeypatch.setattr(config.settings, "enable_chunk_boosts", True)
+    monkeypatch.setattr(config.settings, "chunk_boost_weight", 0.5)
+    from models.schemas import SearchMode
+
+    store = indexer.vector_store.metadata_store
+    store.set_chunk_boost("doc_alice-c0", -1.0)
+    out = indexer.search(
+        "Who worked with Alice on Project Titan?",
+        top_k=3,
+        mode=SearchMode.SEMANTIC,
+    )["results"]
+    assert out[-1].chunk_id == "doc_alice-c0"

@@ -275,6 +275,14 @@ class DocumentChunkView(BaseModel):
         None,
         description="Whether field extraction was applied to this chunk"
     )
+    entities: Optional[List[str]] = Field(
+        None,
+        description="Normalized entity mentions extracted at index time (entity-graph)",
+    )
+    boost: Optional[float] = Field(
+        None,
+        description="Manual ranking intervention in force for this chunk (-1..1)",
+    )
 
 
 class DocumentChunksResponse(BaseModel):

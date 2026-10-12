@@ -260,7 +260,7 @@ class DocumentExtractor:
     """Extracts text from various document formats (PDF, TXT, DOCX, CSV, MD, JSON, JSONL) and code files."""
 
     IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff', '.gif'}
-    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.xlsx', '.xls', '.md', '.html', '.htm', '.json', '.jsonl'} | SUPPORTED_CODE_EXTENSIONS | AUDIO_EXTENSIONS | IMAGE_EXTENSIONS
+    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.xlsx', '.xls', '.md', '.html', '.htm', '.json', '.jsonl', '.pptx'} | SUPPORTED_CODE_EXTENSIONS | AUDIO_EXTENSIONS | IMAGE_EXTENSIONS
     TABULAR_EXTENSIONS = {'.csv', '.xlsx', '.xls'}
     AUDIO_EXTENSIONS = AUDIO_EXTENSIONS
 
@@ -559,6 +559,8 @@ class DocumentExtractor:
             result = ExtractionResult(self._extract_txt(file_path), method="text")
         elif file_ext == '.docx':
             result = ExtractionResult(self._extract_docx(file_path), method="text")
+        elif file_ext == '.pptx':
+            result = ExtractionResult(self._extract_pptx(file_path), method="text")
         elif file_ext == '.csv':
             result = ExtractionResult(self._extract_csv(file_path), method="text")
         elif file_ext in ('.xlsx', '.xls'):
@@ -930,6 +932,70 @@ class DocumentExtractor:
             page_content = '\n\n'.join(paragraphs[i:i + paragraphs_per_page])
             page_texts[page_num] = page_content.strip()
 
+        return page_texts
+
+    def _extract_pptx(self, pptx_path: Path) -> Dict[int, str]:
+        """Extract text from a PowerPoint deck — one page per slide.
+
+        Walks each slide's shapes in z-order: text frames (title/body
+        placeholders and drawn text boxes) first, then tables flattened to
+        pipe-separated rows, then the speaker notes (which often carry the
+        substance a slide's bullet points leave out). Slides with nothing
+        readable are skipped, so page numbers stay dense and citations point
+        at the slide the text actually came from.
+
+        Only the modern .pptx (Office Open XML) format is supported. The
+        legacy binary .ppt has no maintained pure-Python reader and is
+        deliberately left out of SUPPORTED_EXTENSIONS.
+        """
+        try:
+            from pptx import Presentation
+        except ImportError:
+            raise ImportError(
+                "python-pptx is required for PPTX support. "
+                "Install it with: pip install python-pptx"
+            )
+
+        prs = Presentation(str(pptx_path))
+        page_texts: Dict[int, str] = {}
+
+        for slide_num, slide in enumerate(prs.slides, start=1):
+            parts: List[str] = []
+
+            # Text frames (placeholders and drawn text boxes), z-order.
+            for shape in slide.shapes:
+                if not getattr(shape, "has_text_frame", False):
+                    continue
+                text = "\n".join(
+                    p.text for p in shape.text_frame.paragraphs if p.text.strip()
+                )
+                if text.strip():
+                    parts.append(text.strip())
+
+            # Tables: one pipe-separated line per row, header row included.
+            for shape in slide.shapes:
+                if not getattr(shape, "has_table", False):
+                    continue
+                rows = []
+                for row in shape.table.rows:
+                    cells = [c.text.strip() for c in row.cells]
+                    if any(cells):
+                        rows.append(" | ".join(cells))
+                if rows:
+                    parts.append("\n".join(rows))
+
+            # Speaker notes.
+            if slide.has_notes_slide:
+                notes = slide.notes_slide.notes_text_frame.text
+                if notes and notes.strip():
+                    parts.append(f"[Notes]\n{notes.strip()}")
+
+            text = "\n\n".join(parts).strip()
+            if text:
+                page_texts[slide_num] = text
+
+        if not page_texts:
+            return {1: ""}
         return page_texts
 
     def _extract_csv(self, csv_path: Path) -> Dict[int, str]:

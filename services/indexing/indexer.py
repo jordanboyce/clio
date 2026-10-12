@@ -981,6 +981,27 @@ class DocumentIndexer:
                 allowed_chunk_ids=allowed_chunk_ids,
             )
 
+        # Manual per-chunk ranking intervention (chunk_boosts table). An
+        # additive bonus reorders chunks that already retrieved — it never
+        # injects ones that failed to. Applied before quarantine filtering
+        # and reranking so a reviewer's pin competes fairly with the
+        # cross-encoder and is still dropped if the document is quarantined.
+        from config import settings as _cb_settings
+        if _cb_settings.enable_chunk_boosts and results:
+            try:
+                boost_map = self.vector_store.metadata_store.get_chunk_boosts(
+                    [r.chunk_id for r in results if getattr(r, "chunk_id", None)]
+                )
+                if boost_map:
+                    weight = float(_cb_settings.chunk_boost_weight)
+                    for r in results:
+                        b = boost_map.get(r.chunk_id)
+                        if b:
+                            r.similarity_score = float(r.similarity_score) + weight * b
+                    results.sort(key=lambda r: r.similarity_score, reverse=True)
+            except Exception as e:  # noqa: BLE001 - never fail a search
+                logger.warning(f"Chunk-boost application skipped: {e}")
+
         # Quarantined documents stay indexed (so an admin can approve them
         # without a re-index) but must never surface: this is the retrieval
         # choke point every surface — search, chat, MCP — comes through.
