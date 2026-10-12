@@ -2,8 +2,10 @@
 
 Clio has two separate questions, and they are often confused:
 
-- **Can this caller in at all?** `AUTH_PASSWORD`, or nothing on a closed
-  network. See [DEPLOYMENT.md](DEPLOYMENT.md).
+- **Can this caller in at all?** Usually the network edge; `AUTH_PASSWORD`
+  can add an app-side shared-secret gate, while `AUTH_REQUIRE_IDENTITY=true`
+  makes the app require a verified identity-provider assertion. See
+  [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Who is this caller?** `IDENTITY_PROVIDER`. This page.
 
 The second one only matters when something acts on it. Two things do:

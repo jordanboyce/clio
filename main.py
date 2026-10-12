@@ -47,7 +47,8 @@ logger = logging.getLogger(__name__)
 
 
 # ── Security posture ────────────────────────────────────────────────────────
-# The app has no authentication unless AUTH_PASSWORD is set, and every route —
+# The app has no authentication unless AUTH_PASSWORD or AUTH_REQUIRE_IDENTITY
+# is set, and every route —
 # search, upload, delete, chat on your provider keys, the whole /mcp tool
 # surface — is reachable by anyone who can open a socket to it. So the two
 # settings that decide who can open that socket are checked before we serve.
@@ -84,6 +85,13 @@ def _check_security_posture() -> None:
 
     identity_service.validate_config()
 
+    if settings.auth_require_identity and not identity_service.active_provider():
+        raise RuntimeError(
+            "AUTH_REQUIRE_IDENTITY requires a verified identity source. Set "
+            "CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD for Cloudflare Access, "
+            "or configure another identity provider. See docs/IDENTITY.md."
+        )
+
     if settings.private_collections and not identity_service.active_provider():
         raise RuntimeError(
             "PRIVATE_COLLECTIONS requires a verified identity source. Set "
@@ -118,19 +126,23 @@ def _check_security_posture() -> None:
             f" (model {settings.ai_model})" if settings.ai_model else "",
         )
 
-    if settings.host not in _LOOPBACK_HOSTS and not settings.auth_password:
+    if settings.host not in _LOOPBACK_HOSTS and not (
+        settings.auth_password or settings.auth_require_identity
+    ):
         logger.warning(
             "SECURITY: bound to %s (reachable from the network) with no "
-            "AUTH_PASSWORD set. Anyone who can reach this port can read, "
+            "authentication requirement set. Anyone who can reach this port can read, "
             "modify and delete every document, and spend your AI provider "
-            "credits. Set AUTH_PASSWORD, or set HOST=127.0.0.1 to bind "
-            "loopback only. See docs/DEPLOYMENT.md.",
+            "credits. Set AUTH_PASSWORD or AUTH_REQUIRE_IDENTITY, or set "
+            "HOST=127.0.0.1 to bind loopback only. See docs/DEPLOYMENT.md.",
             settings.host,
         )
 
-    if settings.cors_allow_origins.strip() == "*" and not settings.auth_password:
+    if settings.cors_allow_origins.strip() == "*" and not (
+        settings.auth_password or settings.auth_require_identity
+    ):
         logger.warning(
-            "SECURITY: CORS_ALLOW_ORIGINS=* with no AUTH_PASSWORD set. Any web "
+            "SECURITY: CORS_ALLOW_ORIGINS=* with no authentication requirement set. Any web "
             "page the user visits can read this API from their browser and "
             "exfiltrate indexed documents. List the origins that need access "
             "instead."
@@ -150,14 +162,20 @@ async def lifespan(app: FastAPI):
         from services.upload_service import upload_service
         upload_service.recover_orphaned_jobs()
 
-        # Initialize default collection's indexer to pre-load embedding model
-        logger.info("Loading default collection indexer...")
-        try:
-            default_indexer = indexer_manager.get_indexer("default")
-            total_chunks = default_indexer.vector_store.get_total_chunks()
-            logger.info(f"Default collection indexed chunks: {total_chunks}")
-        except Exception as e:
-            logger.warning(f"Could not load default indexer: {e}")
+        # Get the embedding model ready in the background with visible
+        # progress (GET /api/embedding/status) instead of blocking startup on
+        # a download; the job opens the default collection once the model is
+        # loaded. Skipped under pytest or CLIO_SKIP_EMBEDDING_WARMUP=1, in
+        # which case the default indexer is pre-loaded inline as before.
+        from services.embedding_status import embedding_status
+        if not embedding_status.warm_on_startup():
+            logger.info("Loading default collection indexer...")
+            try:
+                default_indexer = indexer_manager.get_indexer("default")
+                total_chunks = default_indexer.vector_store.get_total_chunks()
+                logger.info(f"Default collection indexed chunks: {total_chunks}")
+            except Exception as e:
+                logger.warning(f"Could not load default indexer: {e}")
 
         # Set up reload callback for re-indexing service (collection-aware)
         def reload_indexer(collection_id: str = "default"):
@@ -213,6 +231,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# The search model may be unreachable behind a firewall or not installed;
+# that is a 503 with the reason, not a 500, and it never hides the rest of
+# the app (see services.embedder.DeferredEmbeddingService).
+from services.embedder import EmbeddingUnavailable  # noqa: E402
+
+
+@app.exception_handler(EmbeddingUnavailable)
+async def _embedding_unavailable(request, exc: EmbeddingUnavailable):
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": f"The search model is not available yet: {exc}",
+            "code": "embedding_unavailable",
+        },
+        headers={"Retry-After": "20"},
+    )
+
 # CORS: origins come from CORS_ALLOW_ORIGINS (comma-separated). Empty — the
 # default — installs no CORS middleware at all, so the same-origin policy keeps
 # other sites from reading responses. The bundled frontend is same-origin and
@@ -243,8 +279,9 @@ from middleware.rate_limit import enforce_rate_limit as _enforce_rate_limit
 app.middleware("http")(_enforce_rate_limit)
 
 
-# ── Shared-secret auth (AUTH_PASSWORD) ──────────────────────────────────────
-# Required for any deployment reachable beyond loopback. HTTP Basic keeps the
+# ── Request authentication ─────────────────────────────────────────────────
+# AUTH_PASSWORD accepts a shared secret; AUTH_REQUIRE_IDENTITY instead
+# requires an assertion from a configured identity provider.
 # browser flow zero-UI; Bearer covers API and MCP clients. /health stays open
 # so platform probes work unauthenticated.
 
@@ -267,9 +304,15 @@ def _password_from_auth_header(header: str) -> str:
 # Paths a person can reach before they have any identity: the health probe
 # and the online-registration page with its two endpoints. Everything the
 # registration endpoints do is validated and rate-limited on their own
-# (api/register.py); the Cloudflare Access application is told to bypass
-# the same paths (scripts/provision_cloudflare.py) so the form is reachable.
-_PUBLIC_PATHS = {"/health", "/register", "/api/register", "/api/register/config"}
+# (api/register.py); a deployment that enables registration must also allow
+# these paths through its identity proxy.
+_PUBLIC_PATHS = {
+    "/health",
+    "/register",
+    "/api/register",
+    "/api/register/config",
+    "/request-access",
+}
 # The built frontend bundle is public too: the registration page is the same
 # SPA, so its hashed assets and brand files must load before sign-in. The
 # bundle holds no secrets — every fact about the deployment comes from the
@@ -345,7 +388,7 @@ async def require_auth(request, call_next):
 
     presented = _password_from_auth_header(request.headers.get("authorization", ""))
 
-    if settings.auth_password:
+    if settings.auth_password and not settings.auth_require_identity:
         if presented and secrets.compare_digest(presented, settings.auth_password):
             request.state.auth_identity = None
             request.state.auth_via = "password"
@@ -380,8 +423,13 @@ async def require_auth(request, call_next):
     # An explicit MCP credential must retain its permissions even on a
     # local/open appliance. Never silently turn a revoked token into an
     # anonymous (fully trusted) request.
-    if not settings.auth_password and not settings.private_collections and not (
-        presented and presented.startswith("asy_mcp_")
+    if (
+        not settings.auth_password
+        and not settings.auth_require_identity
+        and not settings.private_collections
+        and not (
+            presented and presented.startswith("asy_mcp_")
+        )
     ):
         return await call_next(request)
 
@@ -402,20 +450,27 @@ async def require_auth(request, call_next):
     )
 
 async def _call_with_user_context(request, call_next):
-    """Bind the verified identity to a contextvar for the request's scope.
+    """Bind the verified identity and collection scope to this request.
 
     Routers read identity from request.state; service-layer code that has
     no Request in reach (deps.get_indexer, the chat tool loop) reads the
-    contextvar. Set before call_next so the downstream task inherits it.
+    contextvars. Set before call_next so the downstream task inherits them.
     """
-    if not settings.private_collections:
-        return await call_next(request)
-    from middleware.user_context import set_request_user, reset_request_user
-    token = set_request_user(getattr(request.state, "auth_identity", None))
+    from middleware.user_context import (
+        set_request_identity,
+        reset_request_identity,
+        set_request_user,
+        reset_request_user,
+    )
+    identity = getattr(request.state, "auth_identity", None)
+    identity_token = set_request_identity(identity)
+    user_token = set_request_user(identity) if settings.private_collections else None
     try:
         return await call_next(request)
     finally:
-        reset_request_user(token)
+        if user_token is not None:
+            reset_request_user(user_token)
+        reset_request_identity(identity_token)
 
 for module in (system, documents, search, chat, artifacts, collections, mcp, sharing, expertise, admin, governance, register):
     app.include_router(module.router)
@@ -479,6 +534,50 @@ async def register_page():
     """The public registration page: the same SPA bundle, which renders the
     registration view when loaded at this path (frontend/src/main.js)."""
     return _spa_response()
+
+
+@app.get(
+    "/request-access",
+    response_class=HTMLResponse,
+    tags=["ui"],
+    include_in_schema=False,
+)
+async def request_access_page():
+    """Give people who are not on the Access allowlist a contact path."""
+    return HTMLResponse(
+        content="""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Request access · Clio</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.6 system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+      background: Canvas; color: CanvasText; }
+    main { box-sizing: border-box; width: min(100% - 2rem, 34rem); padding: 2rem 0; }
+    h1 { margin: 0; font-size: 1.65rem; line-height: 1.2; letter-spacing: -.025em; }
+    p { margin: 1rem 0; color: color-mix(in srgb, CanvasText 75%, Canvas); }
+    a { color: LinkText; }
+    .contact { display: inline-block; margin-top: .5rem; padding: .6rem .9rem;
+      border: 1px solid currentColor; border-radius: .4rem; text-decoration: none;
+      font-weight: 600; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Request access to Clio</h1>
+    <p>Access is limited to invited people. Email Jordan with your name and the
+       email address you want to use, and he can add you to the sign-in list.</p>
+    <a class="contact" href="mailto:jordan.boyce@cyberlion.dev?subject=Clio%20access%20request">
+      Email Jordan
+    </a>
+  </main>
+</body>
+</html>""",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # Mounts must come after all routes so they don't override API routes.

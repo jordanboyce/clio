@@ -17,12 +17,24 @@
         <component :is="sourcesPanelShown ? PanelLeftClose : PanelLeft" :size="16" />
       </button>
 
+      <!-- Scope on the left, next to the sources panel it controls; the AI
+           model sits on the right. They used to share a corner and blur together. -->
+      <CollectionPicker
+        :collections="collectionStore.sortedCollections"
+        :current="collectionStore.currentCollection"
+        :overview="isCollectionsView"
+        @select="pickCollection"
+        @overview="activeTab = 'collections'"
+        @create="openCreateCollectionModal"
+      />
+
       <WorkspaceNav
         v-if="!isCollectionsView"
         class="hidden md:flex"
         :active-tab="activeTab"
         :chat-enabled="chatTabEnabled"
         :admin-console="userStore.adminConsole"
+        :admin-badge="reviewStore.total"
         @navigate="switchTab"
         @notes="openNotes"
       />
@@ -47,56 +59,9 @@
         <Loader2 :size="16" class="animate-spin text-warning" aria-hidden="true" />
       </button>
 
-      <!-- Current collection: a selector, so it sits with the other things
-           you set rather than with the things you navigate. -->
-      <button
-        class="btn btn-xs btn-ghost gap-1.5 normal-case font-normal h-7 min-h-0 border border-base-300 rounded-full px-2.5"
-        :class="{ 'bg-base-200': isCollectionsView }"
-        @click="activeTab = 'collections'"
-        title="View all collections"
-        :aria-label="`Current collection: ${collectionStore.currentCollection?.name || 'Default'}. Click to view all collections.`"
-      >
-        <span
-          class="w-2 h-2 rounded-full flex-shrink-0"
-          :style="{ backgroundColor: collectionStore.currentCollection?.color || '#3b82f6' }"
-          aria-hidden="true"
-        ></span>
-        <span class="max-w-32 truncate text-xs">{{ collectionStore.currentCollection?.name || 'Default' }}</span>
-        <ChevronDown :size="10" class="text-base-content/40 flex-shrink-0" aria-hidden="true" />
-      </button>
-
-      <!-- Global AI provider pill: app-wide default + click-to-switch menu -->
-      <div v-if="providerPill.configured.length > 0" class="dropdown dropdown-end hidden md:block">
-        <label
-          tabindex="0"
-          class="btn btn-xs btn-ghost gap-1 normal-case font-normal h-7 min-h-0 border border-base-300 rounded-full px-2.5"
-          :title="`Default AI provider: ${providerPill.name}`"
-          :aria-label="`Default AI provider: ${providerPill.name}${providerPill.model ? ', model ' + providerPill.model : ''}. Click to switch.`"
-          aria-haspopup="menu"
-        >
-          <Sparkles :size="11" class="text-primary flex-shrink-0" aria-hidden="true" />
-          <span class="text-xs max-w-44 truncate">
-            {{ providerPill.name }}<span v-if="providerPill.model" class="text-base-content/50"> · {{ providerPill.model }}</span>
-          </span>
-          <ChevronDown :size="10" class="text-base-content/40 flex-shrink-0" aria-hidden="true" />
-        </label>
-        <ul tabindex="0" class="dropdown-content z-[60] menu p-2 shadow-lg bg-base-100 border border-base-300 rounded-box w-64">
-          <li class="menu-title"><span class="text-xs">Default AI provider</span></li>
-          <li v-for="pid in providerPill.configured" :key="pid">
-            <button
-              class="flex items-center gap-2"
-              :class="{ 'active': pid === providerPill.id }"
-              @click="setGlobalProvider(pid)"
-            >
-              <Check v-if="pid === providerPill.id" :size="12" class="flex-shrink-0" aria-hidden="true" />
-              <span v-else class="w-3 flex-shrink-0" aria-hidden="true"></span>
-              <span class="flex-1 text-left text-sm truncate">{{ providerDisplayName(pid) }}</span>
-              <span v-if="providerPill.teamIds.includes(pid)" class="badge badge-success badge-xs">Team key</span>
-            </button>
-          </li>
-          <li class="menu-title pt-1"><span class="text-xs font-normal text-base-content/50">Chat can override this per conversation.</span></li>
-        </ul>
-      </div>
+      <!-- The one AI choice: provider and model for Ask, Find and Reports.
+           Phones get the provider list in the overflow menu instead. -->
+      <ModelPicker class="hidden md:block" @connect="activeTab = 'settings'" />
 
       <!-- Notes panel toggle: the right-hand twin of the sources one -->
       <!-- v-if, not `hidden md:inline-flex`: .side-icon-btn sets display in
@@ -113,6 +78,10 @@
         <component :is="notesPanelShown ? PanelRightClose : PanelRight" :size="16" />
       </button>
 
+      <!-- Review notifications (admins only): held/flagged content, injection
+           warnings, user reports and access requests waiting for a decision -->
+      <ReviewBell variant="header" @open="openReview" />
+
       <!-- Help menu (desktop; phones get it in the overflow menu) -->
       <div class="dropdown dropdown-end hidden md:block">
         <button tabindex="0" class="btn btn-ghost btn-circle btn-sm" title="Help" aria-label="Help menu" aria-haspopup="menu">
@@ -126,9 +95,29 @@
             </a>
           </li>
           <li>
+            <button @click="showPalette = true">
+              <Command :size="14" />
+              Command palette
+              <span class="ml-auto flex items-center gap-0.5" aria-hidden="true"><span class="kbd-hint">{{ MOD }}</span><span class="kbd-hint">K</span></span>
+            </button>
+          </li>
+          <li>
+            <button @click="showShortcuts = true">
+              <Keyboard :size="14" />
+              Keyboard shortcuts
+              <span class="ml-auto kbd-hint" aria-hidden="true">?</span>
+            </button>
+          </li>
+          <li>
             <button @click="showOnboarding = true">
               <Sparkles :size="14" />
               Run setup again
+            </button>
+          </li>
+          <li>
+            <button @click="showAbout = true">
+              <Info :size="14" />
+              About Clio
             </button>
           </li>
         </ul>
@@ -185,6 +174,14 @@
               <span v-if="backgroundJobsStore.activeJobCount > 0" class="badge badge-warning badge-xs ml-auto">{{ backgroundJobsStore.activeJobCount }}</span>
             </button>
           </li>
+          <li v-if="userStore.adminConsole">
+            <button @click="openReview('review'); closeMenus()">
+              <ShieldAlert v-if="reviewStore.total > 0" :size="14" class="text-warning" aria-hidden="true" />
+              <ShieldCheck v-else :size="14" aria-hidden="true" />
+              Review queue
+              <span v-if="reviewStore.total > 0" class="badge badge-warning badge-xs ml-auto">{{ reviewStore.total }}</span>
+            </button>
+          </li>
           <template v-if="providerPill.configured.length > 0">
             <li class="menu-title pt-2"><span class="text-xs">Default AI provider</span></li>
             <li v-for="pid in providerPill.configured" :key="'m-' + pid">
@@ -206,6 +203,12 @@
             <button @click="showOnboarding = true; closeMenus()">
               <Sparkles :size="14" />
               Run setup again
+            </button>
+          </li>
+          <li>
+            <button @click="showAbout = true; closeMenus()">
+              <Info :size="14" />
+              About Clio
             </button>
           </li>
           <li v-if="me.authenticated_via === 'cloudflare-access'">
@@ -279,7 +282,7 @@
         >
           <!-- Chat gets full height, no padding wrapper -->
           <div v-if="activeTab === 'chat'" class="h-full p-3 md:p-4">
-            <ChatTab @switch-tab="switchTab" @show-sources="sourcesSidebarOpen = true" />
+            <ChatTab @switch-tab="switchTab" @show-sources="sourcesSidebarOpen = true" @add-sources="openAddSources" />
           </div>
 
           <!-- All other tabs: padded scroll container -->
@@ -380,21 +383,12 @@
                   </button>
                   <button
                     class="btn btn-sm btn-ghost gap-1.5 normal-case font-medium border border-base-300 hover:border-base-content/30"
-                    @click="importInput?.click()"
-                    :disabled="importing"
+                    @click="importModal?.choose()"
                     title="Create a collection from a .clio.zip someone exported"
                   >
-                    <span v-if="importing" class="loading loading-spinner loading-xs"></span>
-                    <Upload v-else :size="14" />
+                    <Upload :size="14" />
                     Import
                   </button>
-                  <input
-                    ref="importInput"
-                    type="file"
-                    accept=".zip,application/zip"
-                    class="hidden"
-                    @change="importCollection"
-                  />
                   <button
                     v-if="userStore.privateCollections"
                     class="btn btn-sm btn-ghost gap-1.5 normal-case font-medium border border-base-300 hover:border-base-content/30"
@@ -736,6 +730,12 @@
         <span v-else>Idle</span>
       </button>
 
+      <!-- Pending review (admins only) -->
+      <template v-if="userStore.adminConsole">
+        <span class="w-px h-3 bg-base-300" aria-hidden="true"></span>
+        <ReviewBell variant="footer" @open="openReview" />
+      </template>
+
       <!-- Inline progress for the most recent active job, if any -->
       <template v-if="footerActiveJob">
         <span class="w-px h-3 bg-base-300" aria-hidden="true"></span>
@@ -781,6 +781,7 @@
       :active-tab="activeTab"
       :chat-enabled="chatTabEnabled"
       :admin-console="userStore.adminConsole"
+      :admin-badge="reviewStore.total"
       @navigate="navigateMobile"
       @notes="openNotes"
     />
@@ -788,30 +789,62 @@
     <!-- Global toast stack + backend-unreachable banner -->
     <Toaster />
 
-    <!-- Embedding model missing: the built-in model is not in the local cache
-         and would have to be downloaded (blocked on this network). Shown until
-         the user fixes the provider or dismisses it. -->
-    <div
-      v-if="statsStore.embeddingModelMissing && !embeddingBannerDismissed"
-      class="fixed top-0 inset-x-0 z-[102] flex justify-center pointer-events-none"
-      role="alert"
-    >
-      <div class="alert alert-warning shadow-lg rounded-t-none rounded-b-lg max-w-xl py-2 pointer-events-auto">
-        <AlertTriangle :size="16" class="shrink-0" aria-hidden="true" />
-        <span class="text-sm">
-          The built-in embedding model isn't available on this server — it would have to be
-          downloaded from the internet, which this network blocks. Add sources and search won't
-          work until you set an embedding provider in Settings → Indexing → Embedding.
-        </span>
-        <button
-          class="btn btn-ghost btn-xs btn-circle shrink-0"
-          aria-label="Dismiss this notice"
-          @click="embeddingBannerDismissed = true"
+    <!-- Command palette, shortcuts sheet and About: the three things the
+         Help menu and the keyboard open from anywhere. -->
+    <CommandPalette :open="showPalette" :commands="paletteCommands" @close="showPalette = false" />
+    <ShortcutsDialog :open="showShortcuts" @close="showShortcuts = false" />
+    <AboutDialog :open="showAbout" @close="showAbout = false" />
+
+    <!-- Search-index readiness. One quiet bar at the top: progress while the
+         model downloads, a way forward when it is missing or failed, nothing
+         at all once it is ready. -->
+    <Transition name="rise">
+      <div
+        v-if="embeddingBanner && !embeddingBannerDismissed"
+        class="fixed top-0 inset-x-0 z-[102] flex justify-center pointer-events-none"
+        :role="embeddingBanner.kind === 'progress' ? 'status' : 'alert'"
+        aria-live="polite"
+      >
+        <div
+          class="notice shadow-lg rounded-t-none rounded-b-xl bg-base-100 ring-1 ring-base-content/10 w-full max-w-xl pointer-events-auto items-start"
+          :class="{ 'notice-warning': embeddingBanner.kind === 'missing', 'notice-error': embeddingBanner.kind === 'error' }"
         >
-          <X class="w-3.5 h-3.5" aria-hidden="true" />
-        </button>
+          <span v-if="embeddingBanner.kind === 'progress'" class="loading loading-spinner loading-xs mt-0.5" aria-hidden="true"></span>
+          <AlertTriangle v-else :size="15" class="mt-0.5" :class="embeddingBanner.kind === 'error' ? 'text-error' : 'text-warning'" aria-hidden="true" />
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-between gap-3">
+              <span class="truncate">{{ embeddingBanner.text }}</span>
+              <span v-if="embeddingBanner.kind === 'progress' && embeddingBanner.percent != null" class="tabular-nums text-base-content/60 flex-shrink-0">{{ embeddingBanner.percent }}%</span>
+            </div>
+            <progress
+              v-if="embeddingBanner.kind === 'progress'"
+              class="progress progress-primary w-full h-1 mt-1.5"
+              :value="embeddingBanner.percent ?? undefined"
+              max="100"
+            ></progress>
+            <div v-else class="flex items-center gap-1.5 mt-1.5">
+              <button
+                v-if="embeddingBanner.canDownload"
+                class="btn btn-xs btn-primary"
+                :disabled="embeddingWarming"
+                @click="downloadEmbeddingModel"
+              >
+                <span v-if="embeddingWarming" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+                {{ embeddingBanner.kind === 'error' ? 'Try again' : 'Download now' }}
+              </button>
+              <button class="btn btn-xs btn-ghost" @click="switchTab('settings')">Choose another provider</button>
+            </div>
+          </div>
+          <button
+            class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content -mr-1"
+            aria-label="Dismiss this notice"
+            @click="embeddingBannerDismissed = true"
+          >
+            <X :size="13" aria-hidden="true" />
+          </button>
+        </div>
       </div>
-    </div>
+    </Transition>
 
     <!-- Create Collection Modal (native showModal: focus trap, Escape, inert background) -->
     <dialog :ref="createModal.dialogRef" class="modal" @close="createModal.onClosed" aria-labelledby="create-collection-title">
@@ -1070,37 +1103,10 @@
       </form>
     </dialog>
 
-    <!-- Export Collection Modal -->
-    <dialog :ref="exportModal.dialogRef" class="modal" @close="exportModal.onClosed" aria-labelledby="export-collection-title">
-      <div class="modal-box max-w-md">
-        <h3 id="export-collection-title" class="font-bold text-lg mb-1">Export {{ exportTarget?.name }}</h3>
-        <p class="text-sm text-base-content/70 mb-4">
-          A <code>.clio.zip</code> another Clio can import with <strong>Import</strong>. It carries the
-          extracted text, pages and tables, and the vectors with the exact embedding model that made them,
-          so nothing has to be OCR'd again. If the other Clio uses a different model, it re-embeds from the text.
-        </p>
-        <label class="flex items-start gap-3 cursor-pointer mb-3">
-          <input v-model="exportIncludeSources" type="checkbox" class="checkbox checkbox-sm mt-0.5" />
-          <span class="text-sm">
-            Include the original files
-            <span class="block text-xs text-base-content/60">
-              Larger download. Needed to open originals or re-chunk later. Only share files you have the right to redistribute.
-            </span>
-          </span>
-        </label>
-        <p class="text-xs text-base-content/60">
-          Quarantined sources are left out. The text inside the bundle is readable by anyone you give it to.
-        </p>
-        <div class="modal-action">
-          <button class="btn btn-ghost" @click="exportModal.close()">Cancel</button>
-          <a class="btn btn-primary" :href="exportHref" download @click="exportModal.close()">
-            <Download :size="16" />
-            Download
-          </a>
-        </div>
-      </div>
-      <form method="dialog" class="modal-backdrop"><button aria-label="Close">close</button></form>
-    </dialog>
+    <!-- Export / import (portable .clio.zip bundles): both state which
+         embedding model indexed the collection and what that means -->
+    <ExportCollectionModal ref="exportModal" />
+    <ImportCollectionModal ref="importModal" @imported="onCollectionImported" />
 
     <!-- Delete Collection Confirmation Modal -->
     <dialog
@@ -1333,8 +1339,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue'
-import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose } from 'lucide-vue-next'
+import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
+import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert } from 'lucide-vue-next'
+import CommandPalette from './components/CommandPalette.vue'
+import ShortcutsDialog from './components/ShortcutsDialog.vue'
+import AboutDialog from './components/AboutDialog.vue'
+import { isTypingTarget, isMod, MOD } from './utils/shortcuts'
+import { useChatStore } from './stores/chatStore'
 import http from './utils/http'
 import { useModal } from './composables/useModal'
 import { lazyView } from './utils/lazyView'
@@ -1346,6 +1357,11 @@ const chatTabEnabled = ref(true)
 import SourcesSidebar from './components/SourcesSidebar.vue'
 import StudioSidebar from './components/StudioSidebar.vue'
 import WorkspaceNav from './components/WorkspaceNav.vue'
+import ReviewBell from './components/ReviewBell.vue'
+import ModelPicker from './components/ModelPicker.vue'
+import CollectionPicker from './components/CollectionPicker.vue'
+import ExportCollectionModal from './components/ExportCollectionModal.vue'
+import ImportCollectionModal from './components/ImportCollectionModal.vue'
 import ChatTab from './components/ChatTab.vue'
 
 // Every tab but Ask lives in its own chunk; lazyView keeps a chunk that has
@@ -1364,6 +1380,7 @@ import { formatBytes, describeStorage } from './utils/format'
 import Toaster from './components/Toaster.vue'
 import {
   getConfiguredProviderIds,
+  retireSurfaceOverrides,
   getServerProviderIds,
   setActiveProviderLS,
   getProviderDisplayName,
@@ -1372,6 +1389,7 @@ import {
 } from './utils/aiProviders.js'
 import { useCollectionStore } from './stores/collectionStore'
 import { useUserStore } from './stores/userStore'
+import { useReviewStore } from './stores/reviewStore'
 import { useSearchStore } from './stores/searchStore'
 import { useBackgroundJobsStore } from './stores/backgroundJobsStore'
 import { useProviderStore } from './stores/providerStore'
@@ -1386,6 +1404,7 @@ const collectionStore = useCollectionStore()
 const searchStore = useSearchStore()
 const backgroundJobsStore = useBackgroundJobsStore()
 const userStore = useUserStore()
+const reviewStore = useReviewStore()
 const providerStore = useProviderStore()
 const statsStore = useStatsStore()
 const ui = useUiStore()
@@ -1398,7 +1417,7 @@ const ui = useUiStore()
 const providerPill = computed(() => {
   providerStore.version // reactivity hook
   const configured = getConfiguredProviderIds()
-  const id = providerStore.resolveFor()
+  const id = providerStore.activeProviderId
   return {
     id,
     configured,
@@ -1690,50 +1709,24 @@ const newCollectionColor = ref('#3b82f6')
 const newCollectionVisibility = ref('private')
 const creatingCollection = ref(false)
 
-// Export / import (portable .clio.zip bundles)
-const exportModal = useModal()
-const exportTarget = ref(null)
-const exportIncludeSources = ref(false)
-const exportHref = computed(() => exportTarget.value
-  ? `/api/collections/${encodeURIComponent(exportTarget.value.id)}/export?include_sources=${exportIncludeSources.value}`
-  : '#')
+// Export / import (portable .clio.zip bundles) live in their own dialogs.
+const exportModal = ref(null)
+const importModal = ref(null)
+const openExportModal = (collection) => exportModal.value?.open(collection)
 
-const openExportModal = (collection) => {
-  exportTarget.value = collection
-  exportIncludeSources.value = false
-  exportModal.open()
-}
-
-const importInput = ref(null)
-const importing = ref(false)
-
-const importCollection = async (event) => {
-  const file = event.target.files?.[0]
-  event.target.value = '' // let the same file be picked again after an error
-  if (!file || importing.value) return
-  importing.value = true
-  try {
-    const form = new FormData()
-    form.append('file', file)
-    // Bundles with originals can be large: no client timeout.
-    const { data } = await http.post('/api/collections/import', form, { timeout: 0 })
-    await collectionStore.loadCollections()
-    collectionStore.setCurrentCollection(data.id)
-    backgroundJobsStore.addUploadJob({
-      job_id: data.job_id, collection_id: data.id, status: 'pending',
-      total_files: 1, processed_files: 0, job_type: 'import',
-    })
-    showJobsDrawer.value = true
-    const how = data.vectors === 'reused'
-      ? 'its vectors match this server, so it is ready as soon as keyword search is rebuilt'
-      : "re-embedding its text with this server's model in the background"
-    const blocked = data.documents_blocked ? ` ${data.documents_blocked} blocklisted source(s) were left out.` : ''
-    ui.notify(`Imported ${data.name}: ${data.documents_imported} source(s), ${how}.${blocked}`, 'success', { duration: 8000 })
-  } catch (err) {
-    ui.toastError(err, 'Could not import that file')
-  } finally {
-    importing.value = false
-  }
+const onCollectionImported = async (data) => {
+  await collectionStore.loadCollections()
+  collectionStore.setCurrentCollection(data.id)
+  backgroundJobsStore.addUploadJob({
+    job_id: data.job_id, collection_id: data.id, status: 'pending',
+    total_files: 1, processed_files: 0, job_type: 'import',
+  })
+  showJobsDrawer.value = true
+  const how = data.vectors === 'reused'
+    ? 'its vectors match this server, so it is ready as soon as keyword search is rebuilt'
+    : "re-embedding its text with this server's model in the background"
+  const blocked = data.documents_blocked ? ` ${data.documents_blocked} blocklisted source(s) were left out.` : ''
+  ui.notify(`Imported ${data.name}: ${data.documents_imported} source(s), ${how}.${blocked}`, 'success', { duration: 8000 })
 }
 
 // Edit collection modal
@@ -1771,6 +1764,45 @@ const showJobsDrawer = ref(false)
 // Embedding-model-missing banner: the flag comes from /health (via
 // statsStore), but dismissal is a per-session UI concern, not persisted.
 const embeddingBannerDismissed = ref(false)
+const embeddingWarming = ref(false)
+// What the readiness bar says, derived from the stats store's live status.
+const embeddingBanner = computed(() => {
+  const e = statsStore.embedding
+  if (!e) return statsStore.embeddingModelMissing
+    ? { kind: 'missing', text: 'The search model is not on this server yet.', canDownload: false }
+    : null
+  const model = e.model ? ` (${e.model})` : ''
+  if (e.status === 'downloading') {
+    const p = e.progress || {}
+    const mb = (n) => `${Math.round((n || 0) / 1048576)} MB`
+    const detail = p.total_bytes ? ` · ${mb(p.downloaded_bytes)} of ${mb(p.total_bytes)}` : ''
+    return { kind: 'progress', text: `Preparing the search model${model}${detail}`, percent: p.percent ?? null }
+  }
+  if (e.status === 'loading') return { kind: 'progress', text: `Loading the search model${model}`, percent: null }
+  if (e.status === 'missing') {
+    return {
+      kind: 'missing',
+      text: e.can_download
+        ? `The search model${model} is not on this server yet. Download it once and it stays with your data.`
+        : `The search model${model} is not on this server, and this network cannot download it. Choose another provider or pre-seed the model.`,
+      canDownload: !!e.can_download,
+    }
+  }
+  if (e.status === 'error') return { kind: 'error', text: `The search model could not be prepared: ${e.error || 'unknown error'}`, canDownload: true }
+  return null
+})
+// A new problem after a dismissal should show again.
+watch(() => statsStore.embedding?.status, () => { embeddingBannerDismissed.value = false })
+const downloadEmbeddingModel = async () => {
+  embeddingWarming.value = true
+  try {
+    await statsStore.warmEmbedding()
+  } catch (err) {
+    ui.toastError(err, 'Could not start the download')
+  } finally {
+    embeddingWarming.value = false
+  }
+}
 
 // First-run onboarding: a full-screen takeover shown when the user has
 // never configured an AI provider. Resolves the "you installed the app but
@@ -1906,9 +1938,156 @@ const switchTab = (tabName) => {
   activeTab.value = tabName
 }
 
+// Notification bell / footer indicator: land on the part of Admin that holds
+// the thing being counted, not just the top of the page.
+const openReview = (target = 'review') => {
+  switchTab('admin')
+  // The Admin tab is a lazy chunk, so its sections may not exist yet.
+  const id = target === 'access' ? 'admin-access' : 'admin-review'
+  let tries = 0
+  const scrollWhenReady = () => {
+    const el = document.getElementById(id)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    else if (tries++ < 30) setTimeout(scrollWhenReady, 100)
+  }
+  nextTick(scrollWhenReady)
+}
+
+// ── Command palette and global shortcuts ──
+// The palette is the one place every destination and action is listed, so
+// anything reachable from the header is reachable from the keyboard too.
+const chatStore = useChatStore()
+const showPalette = ref(false)
+const showShortcuts = ref(false)
+const showAbout = ref(false)
+
+const THEME_CHOICES = [
+  { id: 'light', label: 'Light', icon: SunMedium },
+  { id: 'dark', label: 'Dark', icon: Moon },
+  { id: 'cupcake', label: 'Cupcake', icon: Palette },
+  { id: 'nord', label: 'Nord', icon: Palette },
+  { id: 'dracula', label: 'Dracula', icon: Palette },
+]
+const setTheme = (id) => {
+  if (id) localStorage.setItem('theme', id)
+  else localStorage.removeItem('theme')
+  window.dispatchEvent(new CustomEvent('theme-changed'))
+}
+
+const focusChatInput = () => {
+  switchTab('chat')
+  nextTick(() => document.getElementById('chat-input')?.focus())
+}
+const focusSearchInput = () => {
+  switchTab('search')
+  nextTick(() => document.getElementById('search-query')?.focus())
+}
+const newChat = () => {
+  chatStore.newSession(collectionStore.currentCollectionId)
+  focusChatInput()
+}
+// The Sources panel owns its Add-sources flow; it listens for this event.
+const openAddSources = () => {
+  if (!isWorkspaceView.value) switchTab(chatTabEnabled.value ? 'chat' : 'search')
+  sourcesSidebarOpen.value = true
+  nextTick(() => window.dispatchEvent(new CustomEvent('clio:add-sources')))
+}
+
+const paletteCommands = computed(() => {
+  const current = collectionStore.currentCollectionId
+  const currentTheme = localStorage.getItem('theme')
+  const cmds = []
+  const add = (group, label, icon, run, extra = {}) => cmds.push({ id: `${group}:${label}`, group, label, icon, run, ...extra })
+
+  if (chatTabEnabled.value) add('Go to', 'Ask', MessageSquare, () => switchTab('chat'), { keys: ['G', 'A'], keywords: 'chat question' })
+  add('Go to', 'Find', Search, () => switchTab('search'), { keys: ['G', 'F'], keywords: 'search passages' })
+  add('Go to', 'Connect', Plug, () => switchTab('mcp'), { keys: ['G', 'C'], keywords: 'mcp token claude chatgpt client' })
+  add('Go to', 'Reports', FileText, () => switchTab('generate'), { keywords: 'generate briefing summary' })
+  add('Go to', 'Saved instructions', BookOpen, () => switchTab('expertise'), { keywords: 'expertise packs' })
+  if (userStore.adminConsole) add('Go to', 'Administration', Gauge, () => switchTab('admin'), { keywords: 'admin audit access' })
+  add('Go to', 'Collections', Layers, () => switchTab('collections'), { keys: ['G', 'O'], keywords: 'overview all' })
+  add('Go to', 'Settings', Settings, () => switchTab('settings'), { keys: ['G', 'S'], keywords: 'preferences provider model theme' })
+
+  if (chatTabEnabled.value) {
+    add('Ask', 'New chat', MessageSquarePlus, newChat, { keys: [MOD, 'J'] })
+    add('Ask', 'Focus the question box', MessageSquare, focusChatInput)
+    for (const session of chatStore.getSessions(current).slice(0, 8)) {
+      if (!session.messages?.length) continue
+      add('Recent chats', session.title || 'New chat', History, () => {
+        chatStore.selectSession(current, session.id)
+        switchTab('chat')
+      }, { detail: `${session.messages.length} message${session.messages.length === 1 ? '' : 's'}`, keywords: 'chat session history' })
+    }
+  }
+  add('Find', 'Search passages', Search, focusSearchInput, { keywords: 'find exact' })
+
+  add('Sources', 'Add sources', FolderPlus, openAddSources, { keys: [MOD, 'U'], keywords: 'upload index file folder link' })
+  add('Sources', sourcesPanelShown.value ? 'Hide sources panel' : 'Show sources panel', PanelLeft, toggleSources, { keys: [MOD, '\\'] })
+  if (!isCompact.value) add('Sources', notesPanelShown.value ? 'Hide notes and tools' : 'Show notes and tools', StickyNote, toggleNotes, { keys: [MOD, '.'] })
+  add('Sources', 'Background jobs', Bell, () => { showJobsDrawer.value = true }, { keywords: 'indexing progress' })
+
+  for (const c of collectionStore.sortedCollections) {
+    if (c.id === current) continue
+    add('Switch collection', c.name, Layers, () => selectCollectionAndNavigate(c.id), {
+      swatch: c.color,
+      detail: `${c.document_count || 0} ${(c.document_count || 0) === 1 ? 'doc' : 'docs'}`,
+      keywords: 'collection switch open',
+    })
+  }
+  add('Switch collection', 'New collection', Plus, () => { switchTab('collections'); nextTick(openCreateCollectionModal) }, { keywords: 'create' })
+
+  for (const t of THEME_CHOICES) {
+    add('Theme', t.label, t.icon, () => setTheme(t.id), { hint: currentTheme === t.id ? 'current' : undefined, keywords: 'theme appearance colour color' })
+  }
+  add('Theme', 'Follow system', MonitorCog, () => setTheme(null), { hint: !currentTheme ? 'current' : undefined, keywords: 'theme auto os' })
+
+  add('Help', 'Keyboard shortcuts', Keyboard, () => { showShortcuts.value = true }, { keys: ['?'] })
+  add('Help', 'Documentation', BookOpen, () => window.open('https://github.com/jordanboyce/clio#readme', '_blank', 'noopener'))
+  add('Help', 'Run setup again', Sparkles, () => { showOnboarding.value = true })
+  add('Help', 'About Clio', Info, () => { showAbout.value = true }, { keywords: 'version whats new' })
+  return cmds
+})
+
+// Two-key "go to" sequences (g then a letter) live here; the pending prefix
+// expires quickly so a stray g never arms a later keystroke.
+let goPrefixUntil = 0
+const onGlobalKeydown = (e) => {
+  if (e.defaultPrevented) return
+  const key = e.key
+  if (isMod(e) && !e.shiftKey && key.toLowerCase() === 'k') {
+    e.preventDefault()
+    showPalette.value = !showPalette.value
+    return
+  }
+  if (showPalette.value) return
+  if (isMod(e) && !e.shiftKey && key.toLowerCase() === 'j' && chatTabEnabled.value) { e.preventDefault(); newChat(); return }
+  if (isMod(e) && !e.shiftKey && key === '\\') { e.preventDefault(); toggleSources(); return }
+  if (isMod(e) && !e.shiftKey && key === '.' && !isCompact.value) { e.preventDefault(); toggleNotes(); return }
+  if (isMod(e) && !e.shiftKey && key.toLowerCase() === 'u') { e.preventDefault(); openAddSources(); return }
+
+  if (isTypingTarget(e.target) || e.ctrlKey || e.metaKey || e.altKey) return
+  if (key === '?') { e.preventDefault(); showShortcuts.value = !showShortcuts.value; return }
+  const now = Date.now()
+  if (key === 'g' || key === 'G') { goPrefixUntil = now + 1200; return }
+  if (goPrefixUntil > now) {
+    goPrefixUntil = 0
+    const target = { a: chatTabEnabled.value ? 'chat' : null, f: 'search', c: 'mcp', o: 'collections', s: 'settings' }[key.toLowerCase()]
+    if (target) { e.preventDefault(); switchTab(target) }
+  }
+}
+
 const selectCollectionAndNavigate = (collectionId) => {
   collectionStore.setCurrentCollection(collectionId)
   activeTab.value = chatTabEnabled.value ? 'chat' : 'search'
+}
+
+// Picker: switch in place. Only the overview (which has no conversation to
+// stay in) and tabs unrelated to a collection hand you back to Ask/Find.
+const pickCollection = (collectionId) => {
+  collectionStore.setCurrentCollection(collectionId)
+  if (!['chat', 'search', 'generate', 'expertise'].includes(activeTab.value)) {
+    activeTab.value = chatTabEnabled.value ? 'chat' : 'search'
+  }
 }
 
 const openCreateCollectionModal = () => {
@@ -2142,6 +2321,8 @@ onMounted(async () => {
   // appear (or change) once they're known. providerStore reactivity takes
   // care of the refresh; no listeners needed.
   providerStore.loadServerProviders().then(() => {
+    retireSurfaceOverrides()
+    providerStore.touch()
     if (providerStore.configuredIds.length > 0) showOnboarding.value = false
   })
 
@@ -2157,6 +2338,7 @@ onMounted(async () => {
 
   // Load user info
   await userStore.loadCurrentUser()
+  if (userStore.adminConsole) reviewStore.start()
 
   // Load collections first
   await collectionStore.loadCollections()
@@ -2168,6 +2350,7 @@ onMounted(async () => {
   backgroundJobsStore.checkActiveJobs()
   window.addEventListener('visibilitychange', refreshJobsOnReturn)
   window.addEventListener('focus', refreshJobsOnReturn)
+  window.addEventListener('keydown', onGlobalKeydown)
 
   // Initialize theme
   updateThemeFromStorage()
@@ -2193,8 +2376,10 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  reviewStore.stop()
   backgroundJobsStore.cleanup()
   window.removeEventListener('visibilitychange', refreshJobsOnReturn)
   window.removeEventListener('focus', refreshJobsOnReturn)
+  window.removeEventListener('keydown', onGlobalKeydown)
 })
 </script>

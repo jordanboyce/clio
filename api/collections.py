@@ -510,6 +510,68 @@ def export_collection(  # sync: builds a zip in the threadpool
     )
 
 
+@router.get(
+    "/api/collections/{collection_id}/export/preview",
+    summary="What an export would contain, and which model indexed it",
+    tags=["collections"],
+)
+def export_preview(collection_id: str, user_id: str = Depends(get_current_user_id)):
+    """Counts and the embedding model, without building the bundle."""
+    from api.deps import require_collection_access
+    from services.collection_bundle import BundleError, export_preview as preview
+
+    require_collection_access(collection_id, user_id, owner=True)
+    try:
+        return preview(collection_id)
+    except BundleError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/api/collections/import/preview",
+    summary="Look inside a bundle before importing it",
+    tags=["collections"],
+)
+def import_preview(file: UploadFile = File(...), user_id: str = Depends(get_current_user_id)):
+    """
+    Upload a `.clio.zip` and get back what it holds, which embedding model
+    made it, and whether this server can reuse its vectors or must embed the
+    text again. Nothing is created. The bundle is kept for an hour under
+    `upload_id` so `POST /api/collections/import` can confirm without
+    uploading it a second time.
+    """
+    import shutil
+    import uuid
+
+    from services.collection_bundle import BundleError, _work_dir, stage_bundle
+
+    tmp = _work_dir() / f"import-{uuid.uuid4().hex}.zip"
+    try:
+        with open(tmp, "wb") as out:
+            shutil.copyfileobj(file.file, out)
+        upload_id, summary = stage_bundle(tmp)
+        return {"upload_id": upload_id, **summary}
+    except BundleError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+@router.delete(
+    "/api/collections/import/preview/{upload_id}",
+    summary="Discard a previewed bundle",
+    tags=["collections"],
+)
+def discard_import_preview(upload_id: str, user_id: str = Depends(get_current_user_id)):
+    from services.collection_bundle import BundleError, staged_path
+
+    try:
+        staged_path(upload_id).unlink(missing_ok=True)
+    except BundleError:
+        pass
+    return {"discarded": True}
+
+
 @router.post(
     "/api/collections/import",
     summary="Create a collection from an exported bundle",
@@ -517,7 +579,8 @@ def export_collection(  # sync: builds a zip in the threadpool
     status_code=status.HTTP_201_CREATED,
 )
 def import_collection(  # sync: unpacks the bundle in the threadpool
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    upload_id: Optional[str] = Form(None),
     name: Optional[str] = Form(None),
     visibility: Optional[str] = Form(None),
     user_id: str = Depends(get_current_user_id),
@@ -534,7 +597,7 @@ def import_collection(  # sync: unpacks the bundle in the threadpool
     import uuid
 
     from services import governance, storage_quota
-    from services.collection_bundle import BundleError, _work_dir, import_collection as load
+    from services.collection_bundle import BundleError, _work_dir, import_collection as load, staged_path
 
     if not user_id and settings.private_collections:
         raise HTTPException(
@@ -543,10 +606,19 @@ def import_collection(  # sync: unpacks the bundle in the threadpool
         )
     governance.require_aup(user_id)
 
-    tmp = _work_dir() / f"import-{uuid.uuid4().hex}.zip"
+    if file is None and not upload_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Choose a .clio.zip to import.")
     try:
-        with open(tmp, "wb") as out:
-            shutil.copyfileobj(file.file, out)
+        if upload_id:
+            tmp = staged_path(upload_id)  # previewed already: no second upload
+        else:
+            tmp = _work_dir() / f"import-{uuid.uuid4().hex}.zip"
+            with open(tmp, "wb") as out:
+                shutil.copyfileobj(file.file, out)
+    except BundleError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    try:
         return load(
             tmp,
             owner_id=(

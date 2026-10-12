@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 _request_user_id: ContextVar[Optional[str]] = ContextVar(
     "clio_request_user_id", default=None
 )
+_request_identity: ContextVar[Optional[str]] = ContextVar(
+    "clio_request_identity", default=None
+)
 
 # Users already upserted by this process — avoids a DB write per request.
 _provisioned_users: set[str] = set()
@@ -46,6 +49,15 @@ def reset_request_user(token: Token) -> None:
     _request_user_id.reset(token)
 
 
+def set_request_identity(identity: Optional[str]) -> Token:
+    """Bind the verified caller identity for admin checks in every mode."""
+    return _request_identity.set(identity)
+
+
+def reset_request_identity(token: Token) -> None:
+    _request_identity.reset(token)
+
+
 def get_request_user() -> Optional[str]:
     """The verified identity for the current request, or None if anonymous.
 
@@ -55,6 +67,11 @@ def get_request_user() -> Optional[str]:
     if not settings.private_collections:
         return settings.default_user_id
     return _request_user_id.get()
+
+
+def get_request_identity() -> Optional[str]:
+    """The verified identity for this request, independent of collection mode."""
+    return _request_identity.get()
 
 
 def _provision(user_id: str) -> None:

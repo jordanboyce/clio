@@ -11,7 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Current schema version - increment when making breaking changes
-SCHEMA_VERSION = "3.5"
+SCHEMA_VERSION = "3.7"
 
 # v3.3 governance columns on the documents table, in migration order.
 _GOVERNANCE_DOC_COLUMNS = [
@@ -66,7 +66,13 @@ class MetadataStore:
                     -- v3.0: CSV-specific metadata (JSON-encoded)
                     csv_row_number INTEGER DEFAULT NULL,
                     csv_columns TEXT DEFAULT NULL,
-                    csv_values TEXT DEFAULT NULL
+                    csv_values TEXT DEFAULT NULL,
+                    -- v3.6: code symbol metadata (which function/class a chunk is)
+                    language TEXT DEFAULT NULL,
+                    symbol_name TEXT DEFAULT NULL,
+                    symbol_type TEXT DEFAULT NULL,
+                    line_start INTEGER DEFAULT NULL,
+                    line_end INTEGER DEFAULT NULL
                 )
             """)
 
@@ -134,7 +140,9 @@ class MetadataStore:
                     policy_status TEXT DEFAULT 'clear',
                     policy_flags TEXT DEFAULT NULL,
                     -- v3.4: bytes of the source file (per-collection storage cap)
-                    file_size INTEGER DEFAULT NULL
+                    file_size INTEGER DEFAULT NULL,
+                    -- v3.7: injection-warning review outcome ('dismissed' or NULL)
+                    injection_review TEXT DEFAULT NULL
                 )
             """)
 
@@ -206,6 +214,17 @@ class MetadataStore:
             # Migration from 3.4 to 3.5
             if current_version == "3.4":
                 self._migrate_to_v3_5(conn)
+                current_version = "3.5"
+
+            # Migration from 3.5 to 3.6 (code symbol columns on chunks)
+            if current_version == "3.5":
+                self._migrate_to_v3_6(conn)
+                current_version = "3.6"
+
+            # Migration from 3.6 to 3.7 (injection-warning review outcome)
+            if current_version == "3.6":
+                self._migrate_to_v3_7(conn)
+                current_version = "3.7"
 
             # Update schema version
             conn.execute("""
@@ -383,6 +402,39 @@ class MetadataStore:
             ON chunk_entities(entity)
         """)
         logger.info("Created chunk_entities table")
+
+    _CHUNK_SYMBOL_COLUMNS = ("language", "symbol_name", "symbol_type", "line_start", "line_end")
+
+    def _migrate_to_v3_6(self, conn: sqlite3.Connection):
+        """Migrate to v3.6: persist code symbol metadata on chunks.
+
+        The code extractor has always produced symbol names, types and line
+        ranges, but the chunks table dropped them on insert, so nothing
+        downstream (the chunk viewer, MCP context, search results) could
+        say which function a passage came from. Additive, nullable columns.
+        """
+        existing = self._get_table_columns(conn, "chunks")
+        for column, ddl in (
+            ("language", "TEXT DEFAULT NULL"),
+            ("symbol_name", "TEXT DEFAULT NULL"),
+            ("symbol_type", "TEXT DEFAULT NULL"),
+            ("line_start", "INTEGER DEFAULT NULL"),
+            ("line_end", "INTEGER DEFAULT NULL"),
+        ):
+            if column not in existing:
+                conn.execute(f"ALTER TABLE chunks ADD COLUMN {column} {ddl}")
+        logger.info("Added code symbol columns to chunks")
+
+    def _migrate_to_v3_7(self, conn: sqlite3.Connection):
+        """Migrate to v3.7: remember an admin's verdict on injection warnings.
+
+        Injection warnings used to be advisory-only and permanent. The admin
+        review queue now surfaces the serious ones, and a reviewer needs a
+        way to say "looked at it, fine" that survives a restart.
+        """
+        if "injection_review" not in self._get_table_columns(conn, "documents"):
+            conn.execute("ALTER TABLE documents ADD COLUMN injection_review TEXT DEFAULT NULL")
+            logger.info("Added column injection_review to documents table")
 
     def _backfill_entities(self, max_per_chunk: int = 20) -> int:
         """Extract entities for every chunk that has none yet.
@@ -624,6 +676,14 @@ class MetadataStore:
             logger.warning("Running defensive v3.5 migration - chunk_entities table missing")
             self._migrate_to_v3_5(conn)
             migrated = True
+        if "symbol_name" not in self._get_table_columns(conn, "chunks"):
+            logger.warning("Running defensive v3.6 migration - chunk symbol columns missing")
+            self._migrate_to_v3_6(conn)
+            migrated = True
+        if "injection_review" not in self._get_table_columns(conn, "documents"):
+            logger.warning("Running defensive v3.7 migration - injection_review column missing")
+            self._migrate_to_v3_7(conn)
+            migrated = True
         if migrated:
             conn.execute("""
                 INSERT OR REPLACE INTO schema_info (key, value)
@@ -647,8 +707,9 @@ class MetadataStore:
             conn.executemany("""
                 INSERT OR REPLACE INTO chunks
                 (chunk_id, document_id, filename, page_number, chunk_index, text,
-                 source_format, extraction_method, csv_row_number, csv_columns, csv_values)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 source_format, extraction_method, csv_row_number, csv_columns, csv_values,
+                 language, symbol_name, symbol_type, line_start, line_end)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
                 (
                     chunk["chunk_id"],
@@ -662,6 +723,16 @@ class MetadataStore:
                     chunk.get("csv_row_number"),
                     json.dumps(chunk["csv_columns"]) if chunk.get("csv_columns") else None,
                     json.dumps(chunk["csv_values"]) if chunk.get("csv_values") else None,
+
+                    chunk.get("language"),
+
+                    chunk.get("symbol_name"),
+
+                    chunk.get("symbol_type"),
+
+                    chunk.get("line_start"),
+
+                    chunk.get("line_end"),
                 )
                 for chunk in chunks
             ])
@@ -705,7 +776,8 @@ class MetadataStore:
                 placeholders = ",".join("?" for _ in batch)
                 cursor = conn.execute(f"""
                     SELECT chunk_id, document_id, filename, page_number, chunk_index, text,
-                           source_format, extraction_method, csv_row_number, csv_columns, csv_values
+                           source_format, extraction_method, csv_row_number, csv_columns, csv_values,
+                           language, symbol_name, symbol_type, line_start, line_end
                     FROM chunks
                     WHERE chunk_id IN ({placeholders})
                 """, batch)
@@ -886,7 +958,8 @@ class MetadataStore:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT chunk_id, document_id, filename, page_number, chunk_index, text,
-                       source_format, extraction_method, csv_row_number, csv_columns, csv_values
+                       source_format, extraction_method, csv_row_number, csv_columns, csv_values,
+                       language, symbol_name, symbol_type, line_start, line_end
                 FROM chunks
                 WHERE document_id = ?
                 ORDER BY page_number, chunk_index
@@ -998,17 +1071,46 @@ class MetadataStore:
             row = conn.execute("SELECT COALESCE(SUM(file_size), 0) FROM documents").fetchone()
             return int(row[0] or 0)
 
-    def count_documents(self, q: str = "") -> int:
-        """Count documents, optionally filtered by a filename substring."""
-        with sqlite_connect(self.db_path) as conn:
-            if q:
-                row = conn.execute(
-                    "SELECT COUNT(*) FROM documents WHERE filename LIKE ? ESCAPE '\\'",
-                    (f"%{self._escape_like(q)}%",),
-                ).fetchone()
+    # The grouping key of a filename: its last suffix, or the whole name when
+    # it has none (Makefile). Must agree with services.file_kinds.kind_key_for_filename.
+    _DOC_KEY_SQL = "lower(substr({col}, length(rtrim({col}, replace({col}, '.', '')))))"
+
+    def _doc_filter(self, q: str = "", keys: Optional[List[str]] = None, alias: str = "") -> tuple:
+        """WHERE clause + params for the filename substring and kind-key filters."""
+        col = f"{alias}filename"
+        clauses, params = [], []
+        if q:
+            clauses.append(f"{col} LIKE ? ESCAPE '\\'")
+            params.append(f"%{self._escape_like(q)}%")
+        if keys is not None:
+            keys = [k.lower() for k in keys][: self._IN_CLAUSE_BATCH]
+            if not keys:
+                clauses.append("0")
             else:
-                row = conn.execute("SELECT COUNT(*) FROM documents").fetchone()
+                placeholders = ", ".join("?" for _ in keys)
+                clauses.append(f"{self._DOC_KEY_SQL.format(col=col)} IN ({placeholders})")
+                params.extend(keys)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        return where, params
+
+    def count_documents(self, q: str = "", keys: Optional[List[str]] = None) -> int:
+        """Count documents, optionally filtered by a filename substring and
+        by kind keys (suffixes / bare names, see services.file_kinds)."""
+        with sqlite_connect(self.db_path) as conn:
+            where, params = self._doc_filter(q, keys)
+            row = conn.execute(f"SELECT COUNT(*) FROM documents {where}", params).fetchone()
             return row[0]
+
+    def count_documents_by_key(self, q: str = "") -> Dict[str, int]:
+        """``{key: count}`` over every document, keyed like count_documents'
+        `keys` filter, so the UI can show per-kind totals for a paged list."""
+        with sqlite_connect(self.db_path) as conn:
+            where, params = self._doc_filter(q)
+            key = self._DOC_KEY_SQL.format(col="filename")
+            rows = conn.execute(
+                f"SELECT {key} AS k, COUNT(*) FROM documents {where} GROUP BY k", params
+            ).fetchall()
+            return {str(k or ""): int(n) for k, n in rows}
 
     @staticmethod
     def _escape_like(q: str) -> str:
@@ -1041,9 +1143,11 @@ class MetadataStore:
                     d.content_hash,
                     d.sensitivity,
                     d.policy_status,
-                    d.policy_flags"""
+                    d.policy_flags,
+                    d.injection_review"""
 
-    def list_documents_page(self, limit: int, offset: int = 0, q: str = "") -> List[dict]:
+    def list_documents_page(self, limit: int, offset: int = 0, q: str = "",
+                            keys: Optional[List[str]] = None) -> List[dict]:
         """One page of documents, newest first, optionally filename-filtered.
 
         The unpaged list_documents() walks the whole table — fine for hundreds
@@ -1054,12 +1158,8 @@ class MetadataStore:
         with sqlite_connect(self.db_path) as conn:
             self._ensure_v3_1_columns(conn)
             conn.row_factory = sqlite3.Row
-            where = ""
-            params: list = []
-            if q:
-                where = "WHERE d.filename LIKE ? ESCAPE '\\'"
-                params.append(f"%{self._escape_like(q)}%")
-            params += [limit, offset]
+            where, params = self._doc_filter(q, keys, alias="d.")
+            params = list(params) + [limit, offset]
             cursor = conn.execute(f"""
                 SELECT {self._DOC_LIST_COLUMNS}
                 FROM documents d
@@ -1111,6 +1211,19 @@ class MetadataStore:
             """, wanted)
             return [self._document_row_to_dict(row) for row in cursor.fetchall()]
 
+    def list_documents_with_injection_warnings(self) -> List[dict]:
+        """Documents carrying injection warnings no reviewer has dismissed."""
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(f"""
+                SELECT {self._DOC_LIST_COLUMNS}
+                FROM documents d
+                WHERE d.injection_warnings IS NOT NULL AND d.injection_review IS NULL
+                ORDER BY COALESCE(d.upload_timestamp, '1970-01-01') DESC
+            """)
+            return [self._document_row_to_dict(row) for row in cursor.fetchall()]
+
     def get_hidden_document_ids(self) -> set:
         """Ids of documents retrieval must not return (quarantined)."""
         with sqlite_connect(self.db_path) as conn:
@@ -1121,7 +1234,7 @@ class MetadataStore:
             return {r[0] for r in rows}
 
     def set_document_governance(self, document_id: str, *, sensitivity=..., policy_status=None,
-                                policy_flags=...):
+                                policy_flags=..., injection_review=...):
         """Update the governance columns of one document.
 
         ``sensitivity`` and ``policy_flags`` use Ellipsis as "leave alone" so
@@ -1137,6 +1250,9 @@ class MetadataStore:
         if policy_flags is not ...:
             updates.append("policy_flags = ?")
             params.append(json.dumps(policy_flags) if policy_flags else None)
+        if injection_review is not ...:
+            updates.append("injection_review = ?")
+            params.append(injection_review)
         if not updates:
             return
         params.append(document_id)
@@ -1257,7 +1373,8 @@ class MetadataStore:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT chunk_id, document_id, filename, page_number, chunk_index, text,
-                       source_format, extraction_method, csv_row_number, csv_columns, csv_values
+                       source_format, extraction_method, csv_row_number, csv_columns, csv_values,
+                       language, symbol_name, symbol_type, line_start, line_end
                 FROM chunks
                 ORDER BY id
             """)
@@ -1339,7 +1456,8 @@ class MetadataStore:
                 SELECT document_id, filename, num_pages, num_chunks, upload_timestamp,
                        source_format, extraction_method, embedding_model, chunk_size,
                        chunk_overlap, schema_version, source_path, source_type,
-                       uploaded_by, content_hash, sensitivity, policy_status, policy_flags
+                       uploaded_by, content_hash, sensitivity, policy_status, policy_flags,
+                       injection_warnings, injection_review
                 FROM documents
                 WHERE document_id = ?
             """, (document_id,))
@@ -1386,6 +1504,76 @@ class MetadataStore:
             """, (source_path, source_type, document_id))
             conn.commit()
             logger.info(f"Updated source for document {document_id}: {source_type} -> {source_path}")
+
+    def get_document_ids_by_content_hashes(self, hashes) -> Dict[str, str]:
+        """``{content_hash: document_id}`` for every hash that already has a
+        document row here.
+
+        This is the incremental-sync lookup: a folder re-indexed against the
+        same collection hashes its files up front and drops the ones whose
+        bytes are already in the index, instead of re-extracting and
+        re-embedding the whole tree. Hashes with no row are simply absent.
+        """
+        wanted = list({h for h in hashes if h})
+        if not wanted:
+            return {}
+        found: Dict[str, str] = {}
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            for start in range(0, len(wanted), self._IN_CLAUSE_BATCH):
+                batch = wanted[start:start + self._IN_CLAUSE_BATCH]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(
+                    f"SELECT content_hash, document_id FROM documents "
+                    f"WHERE content_hash IN ({placeholders})",
+                    batch,
+                ).fetchall()
+                for content_hash, document_id in rows:
+                    found[content_hash] = document_id
+        return found
+
+    def list_documents_under_source_root(self, source_root: str,
+                                         source_type: Optional[str] = None) -> List[dict]:
+        """Documents whose recorded ``source_path`` lies inside ``source_root``.
+
+        Used by folder sync to find what an earlier sync of that folder put
+        in the index, so files that have changed or disappeared on disk can
+        be replaced or pruned. ``source_type`` narrows the match (folder
+        sync passes its own type so it never touches in-place local
+        references that merely live under the same directory).
+        """
+        root = Path(source_root)
+        prefix = str(root)
+        if not prefix.endswith(("/", "\\")):
+            prefix += "/"
+        like = self._escape_like(prefix) + "%"
+        # Windows-style paths are recorded with backslashes; match both.
+        like_win = self._escape_like(prefix[:-1] + "\\") + "%"
+        params: list = [like, like_win]
+        type_clause = ""
+        if source_type:
+            type_clause = " AND source_type = ?"
+            params.append(source_type)
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(f"""
+                SELECT document_id, filename, source_path, source_type, content_hash, file_size
+                FROM documents
+                WHERE source_path IS NOT NULL
+                  AND (source_path LIKE ? ESCAPE '\\' OR source_path LIKE ? ESCAPE '\\')
+                  {type_clause}
+            """, params).fetchall()
+        result = []
+        for row in rows:
+            r = dict(row)
+            try:
+                if not Path(r["source_path"]).is_relative_to(root):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            result.append(r)
+        return result
 
     def get_filtered_chunk_ids(
         self,

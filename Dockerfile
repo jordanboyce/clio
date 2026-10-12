@@ -69,11 +69,15 @@ ENV PATH="/opt/venv/bin:$PATH"
 # opt-in:  docker compose build --build-arg WITH_DOCLING=1
 # It brings torchvision along, installed from the SAME CPU index as torch so
 # the compiled ops match (a PyPI torchvision against index torch segfaults).
+#
+# The image keeps torch (docling and the reranker need it), so both embedding
+# backends are installed: fastembed from requirements.txt and
+# sentence-transformers from requirements-torch.txt.
 ARG WITH_DOCLING=0
-COPY requirements.txt requirements-ocr.txt requirements-audio.txt requirements-docling.txt ./
+COPY requirements.txt requirements-torch.txt requirements-ocr.txt requirements-audio.txt requirements-docling.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir "torch==2.11.0" --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir -r requirements.txt -r requirements-ocr.txt -r requirements-audio.txt \
+    && pip install --no-cache-dir -r requirements.txt -r requirements-torch.txt -r requirements-ocr.txt -r requirements-audio.txt \
     && if [ "$WITH_DOCLING" = "1" ]; then \
          pip install --no-cache-dir torchvision --index-url https://download.pytorch.org/whl/cpu \
          && pip install --no-cache-dir -r requirements-docling.txt; \
@@ -134,23 +138,35 @@ ENV PATH="/opt/venv/bin:$PATH"
 # dlopen the system libs above, and importing them is fast and side-effect-free
 # (importing docling itself would try to resolve model caches).
 ARG WITH_DOCLING=0
-RUN python -c "import torch, faiss, sentence_transformers, fastapi, uvicorn, ctranslate2, pytesseract; print('runtime deps ok')" \
+RUN python -c "import torch, faiss, fastembed, sentence_transformers, fastapi, uvicorn, ctranslate2, pytesseract; print('runtime deps ok')" \
     && if [ "$WITH_DOCLING" = "1" ]; then python -c "import cv2; print('docling deps ok')"; fi
 
 # Bake the embedding model into the image. Cold starts stay fast on platforms
 # with ephemeral filesystems (Railway, Render, Fly), and the container never
 # needs HuggingFace reachable at runtime.
 #
-# OFF by default: the download needs huggingface.co reachable at build time,
-# which corporate/air-gapped networks (e.g. Z-scaler blocking the hub) refuse.
-# Enable it on a connected network with `docker compose build --build-arg
-# BAKE_EMBEDDING=1`; when it is off, EMBEDDING_PROVIDER must point at a
-# non-local backend (ollama / openai_compatible / a hosted API) or the model
-# is fetched at runtime instead.
-ARG BAKE_EMBEDDING=0
+# Both backends are baked so either starts warm: fastembed's ONNX copy into
+# /opt/clio/models/fastembed (a fixed image path — the data directory is a
+# volume, so a bake there would be hidden by the mount; FastEmbedService
+# looks in the image path first, then under DATA_DIR/models/fastembed) and
+# the sentence-transformers copy into HF_HOME as before.
+#
+# ON by default. The download needs huggingface.co reachable at build time;
+# on a network that blocks the hub build with `--build-arg BAKE_EMBEDDING=0`
+# and either pre-seed the caches (docs/AIRGAP.md) or point
+# EMBEDDING_PROVIDER at a non-local backend (ollama / openai_compatible / a
+# hosted API) — otherwise the model is fetched at first start instead.
+ARG BAKE_EMBEDDING=1
+ARG EMBEDDING_MODEL=all-MiniLM-L6-v2
 ENV HF_HOME=/opt/hf-cache
+# Best effort: a build behind a firewall that blocks huggingface.co must
+# still produce a working image. If the bake cannot download, the build
+# prints a warning and continues; the app then offers the download (with
+# progress) at first start, or Ollama / a hosted provider instead.
 RUN if [ "$BAKE_EMBEDDING" = "1" ]; then \
-      python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"; \
+      ( python -c "from fastembed import TextEmbedding; m='${EMBEDDING_MODEL}'; TextEmbedding(m if '/' in m else 'sentence-transformers/' + m, cache_dir='/opt/clio/models/fastembed')" \
+        && python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL}')" ) \
+      || echo "WARNING: could not bake the embedding model '${EMBEDDING_MODEL}' (huggingface.co unreachable from this build?). The image still works: the app downloads it at first start, or pick Ollama / a hosted provider. See docs/AIRGAP.md to pre-seed."; \
     fi
 
 # Optional full offline bundle for air-gapped deployments: additionally bake
@@ -180,7 +196,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # version and commit go in as labels rather than living in a build log.
 ARG APP_VERSION=dev
 ARG VCS_REF=unknown
-LABEL org.opencontainers.image.title="Clio"       org.opencontainers.image.description="Private document indexing, grounded chat and MCP access"       org.opencontainers.image.source="https://github.com/jordanboyce/clio"       org.opencontainers.image.licenses="Apache-2.0"       org.opencontainers.image.version="${APP_VERSION}"       org.opencontainers.image.revision="${VCS_REF}"
+LABEL org.opencontainers.image.title="Clio"       org.opencontainers.image.description="Private document indexing, grounded chat and MCP access"       org.opencontainers.image.source="https://github.com/jordanboyce/clio"       org.opencontainers.image.licenses="MIT"       org.opencontainers.image.version="${APP_VERSION}"       org.opencontainers.image.revision="${VCS_REF}"
 ENV CLIO_VERSION=${APP_VERSION}
 
 EXPOSE 8473

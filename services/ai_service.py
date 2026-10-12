@@ -12,7 +12,7 @@ import json
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict
+from typing import Any, List, Optional, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -369,12 +369,14 @@ class OpenAIProvider(AIProvider):
         payload_messages = list(messages)
         if system and (not payload_messages or payload_messages[0].get("role") != "system"):
             payload_messages = [{"role": "system", "content": system}] + payload_messages
-        response = self.client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            messages=payload_messages,
-            tools=tools,
-        )
+        request_kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": payload_messages,
+        }
+        if tools:
+            request_kwargs["tools"] = tools
+        response = self.client.chat.completions.create(**request_kwargs)
         choice = response.choices[0]
         message = choice.message
         text = (message.content or "").strip()

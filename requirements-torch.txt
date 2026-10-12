@@ -1,0 +1,15 @@
+# Optional PyTorch embedding backend.
+#
+# The core install (requirements.txt) embeds with fastembed — ONNX models on
+# onnxruntime, no torch. This set adds sentence-transformers, which:
+#   - serves the wider local model catalog (MiniLM-L12, MPNet, multilingual
+#     E5, MiniLM-L3, and any sentence-transformers name you type in), and
+#   - provides the cross-encoder reranker (services/reranker.py).
+# Pulls in torch (~2 GB with CUDA; use the CPU wheel index to keep it small):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements-torch.txt
+# Which backend serves the "local" provider is LOCAL_EMBEDDING_BACKEND
+# (auto | fastembed | sentence-transformers); both produce the same vectors.
+sentence-transformers>=3.0.0
+# transformers 5.x breaks sentence-transformers' PreTrainedModel import
+transformers>=4.41,<5

@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="prose prose-sm max-w-none text-sm chat-markdown" @click="reviewCitation" v-html="html"></div>
+    <div class="chat-markdown" :class="{ 'is-answer': answer }" @click="reviewCitation" v-html="html"></div>
     <!-- Source strip: every passage behind the answer, one glance, one click
          to the evidence. Numbers match the [Source N] citations in the prose. -->
     <div v-if="sources.length && !streaming" class="mt-3 flex flex-wrap gap-1.5" role="list" aria-label="Sources" @click="reviewCitation">
@@ -60,6 +60,9 @@ const props = defineProps({
   content: { type: String, default: '' },
   sources: { type: Array, default: () => [] },
   streaming: Boolean,
+  // Long-form answer on the page: gets the reading measure. Off for
+  // compact places (search synthesis) that set their own width.
+  answer: Boolean,
 })
 const id = useId()
 const selected = ref(null)
@@ -105,7 +108,7 @@ async function reviewCitation(event) {
 .chat-markdown :deep(h1) { font-size: 1.5rem; }
 .chat-markdown :deep(h2) { font-size: 1.25rem; }
 .chat-markdown :deep(h3) { font-size: 1rem; }
-.chat-markdown :deep(pre) { overflow-x: auto; padding: 0.75rem; background: var(--color-base-100); border-radius: var(--radius-field); }
+.chat-markdown :deep(pre) { overflow-x: auto; padding: 0.75rem; border-radius: var(--radius-field); }
 .chat-markdown :deep(table) { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin-block: 0.75rem; }
 .chat-markdown :deep(th),
 .chat-markdown :deep(td) { padding: 0.5rem; border: 1px solid var(--color-base-300); text-align: start; }

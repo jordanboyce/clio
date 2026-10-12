@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     embedding_provider: str = "local"
     # Model for the "local" provider (a sentence-transformers name).
     embedding_model: str = "all-MiniLM-L6-v2"
+    # Which in-process runtime serves the "local" provider:
+    #   auto                  fastembed (ONNX, no PyTorch) when it is installed
+    #                         and knows the model, else sentence-transformers
+    #   fastembed             only fastembed (`pip install fastembed`)
+    #   sentence-transformers only the PyTorch backend
+    #                         (`pip install -r requirements-torch.txt`)
+    # Both backends run the same weights, so switching never forces a
+    # re-index (see services/embedder.py: embedding_signature).
+    local_embedding_backend: Literal["auto", "fastembed", "sentence-transformers"] = "auto"
     # Model for every non-local provider; empty = the provider's default.
     # OLLAMA_EMBEDDING_MODEL is the pre-2026-09 name and still works.
     remote_embedding_model: str = Field(
@@ -256,12 +265,15 @@ class Settings(BaseSettings):
     # Shared-secret auth. When set, every request (except /health) must present
     # this password via HTTP Basic auth (any username) or
     # `Authorization: Bearer <password>`. Browsers prompt natively, so no login
-    # UI is needed. Required whenever the server is reachable beyond loopback.
+    # UI is needed. Use AUTH_REQUIRE_IDENTITY instead when a verified proxy
+    # identity is the intended gate.
     auth_password: str = ""
+    # Require a verified identity even when AUTH_PASSWORD is unset.
+    auth_require_identity: bool = False
 
     # ── Verified identity (services/identity.py) ─────────────────────────
-    # Which source establishes *who* a request is. Only this decides identity;
-    # AUTH_PASSWORD above decides whether an anonymous caller gets in at all.
+    # Which source establishes *who* a request is. AUTH_REQUIRE_IDENTITY can
+    # also make this source the app's admission gate.
     #
     #   ""                 auto — cloudflare_access when CF_ACCESS_* are set,
     #                      otherwise no verified identity (team appliance).
@@ -586,4 +598,3 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
-

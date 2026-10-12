@@ -27,6 +27,30 @@ def fetch_embedding(model_name: str) -> str:
     return f"embedding model '{model_name}'"
 
 
+def fetch_fastembed(model_name: str) -> str:
+    """Seed the ONNX copy of the embedding model into the image cache.
+
+    The core runtime embeds with fastembed; this puts its export of the model
+    where services/embedder.py looks first (FASTEMBED_IMAGE_CACHE), so an
+    offline container starts warm on either backend.
+    """
+    from fastembed import TextEmbedding
+
+    # The Docker build runs this from /tmp with the app at the working
+    # directory; make the app package importable either way.
+    repo = os.environ.get("CLIO_ROOT") or os.getcwd()
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    from services.embedder import FASTEMBED_IMAGE_CACHE, fastembed_model_id
+
+    model_id = fastembed_model_id(model_name)
+    if not model_id:
+        return f"fastembed has no export of '{model_name}' (skipped; PyTorch backend serves it)"
+    FASTEMBED_IMAGE_CACHE.mkdir(parents=True, exist_ok=True)
+    TextEmbedding(model_id, cache_dir=str(FASTEMBED_IMAGE_CACHE))
+    return f"fastembed model '{model_id}' -> {FASTEMBED_IMAGE_CACHE}"
+
+
 def fetch_reranker(model_name: str) -> str:
     from sentence_transformers import CrossEncoder
 
@@ -93,6 +117,7 @@ def main() -> int:
     args = parser.parse_args()
 
     steps = [
+        ("fastembed", lambda: fetch_fastembed(args.embedding_model), True),
         ("embedding", lambda: fetch_embedding(args.embedding_model), True),
         ("reranker", lambda: fetch_reranker(args.reranker_model), True),
     ]

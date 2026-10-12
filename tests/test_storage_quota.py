@@ -9,6 +9,7 @@ import config
 from services import storage_quota
 from services.metadata_store import MetadataStore
 from services.storage_quota import StorageLimitExceeded, format_bytes
+from services.metadata_store import SCHEMA_VERSION
 
 
 @pytest.fixture(autouse=True)
@@ -73,7 +74,7 @@ def test_legacy_rows_backfill_from_disk(tmp_path):
     store = MetadataStore(db)
     assert store.get_storage_bytes() == 123
     with sqlite3.connect(db) as conn:
-        assert conn.execute("SELECT value FROM schema_info WHERE key='version'").fetchone()[0] == "3.5"
+        assert conn.execute("SELECT value FROM schema_info WHERE key='version'").fetchone()[0] == SCHEMA_VERSION
 
 
 # ── The cap itself ──────────────────────────────────────────────────────

@@ -63,6 +63,13 @@ def test_health_stays_open(auth_client):
     assert response.status_code == 200
 
 
+def test_request_access_page_is_public_and_has_contact_link(auth_client):
+    response = auth_client.get("/request-access")
+    assert response.status_code == 200
+    assert "jordan.boyce@cyberlion.dev" in response.text
+    assert "mailto:" in response.text
+
+
 def test_unauthenticated_request_rejected(auth_client):
     response = auth_client.get("/documents/upload/active")
     assert response.status_code == 401
@@ -83,6 +90,34 @@ def test_bearer_password_accepted(auth_client):
     assert response.status_code != 401
 
 
+def test_required_identity_rejects_anonymous_request(reloaded_main):
+    main = reloaded_main(
+        AUTH_REQUIRE_IDENTITY="true",
+        IDENTITY_PROVIDER="cloudflare_access",
+        CF_ACCESS_TEAM_DOMAIN="test.cloudflareaccess.com",
+        CF_ACCESS_AUD="test-aud",
+        PRIVATE_COLLECTIONS="false",
+    )
+    response = TestClient(main.app).get("/documents/upload/active")
+    assert response.status_code == 401
+
+
+def test_required_identity_does_not_accept_shared_password(reloaded_main):
+    main = reloaded_main(
+        AUTH_REQUIRE_IDENTITY="true",
+        AUTH_PASSWORD=SECRET,
+        IDENTITY_PROVIDER="cloudflare_access",
+        CF_ACCESS_TEAM_DOMAIN="test.cloudflareaccess.com",
+        CF_ACCESS_AUD="test-aud",
+        PRIVATE_COLLECTIONS="false",
+    )
+    token = base64.b64encode(f"anyone:{SECRET}".encode()).decode()
+    response = TestClient(main.app).get(
+        "/documents/upload/active", headers={"Authorization": f"Basic {token}"}
+    )
+    assert response.status_code == 401
+
+
 def test_basic_password_accepted_any_username(auth_client):
     token = base64.b64encode(f"anyone:{SECRET}".encode()).decode()
     response = auth_client.get(
@@ -92,6 +127,34 @@ def test_basic_password_accepted_any_username(auth_client):
 
 
 # ── Startup security posture ────────────────────────────────────────────────
+
+
+def test_admin_allowlist_is_enforced_in_shared_collection_mode(monkeypatch):
+    from fastapi import HTTPException
+
+    import config
+    import services.access_provisioning as access_provisioning
+    from api.deps import require_admin
+    from middleware.user_context import reset_request_identity, set_request_identity
+
+    monkeypatch.setattr(config.settings, "private_collections", False)
+    monkeypatch.setattr(config.settings, "admin_emails", "jordan.boyce@cyberlion.dev")
+    monkeypatch.setattr(access_provisioning.settings, "admin_emails", "jordan.boyce@cyberlion.dev")
+    token = set_request_identity("student@example.edu")
+    try:
+        with pytest.raises(HTTPException) as exc:
+            require_admin("manage access")
+        assert exc.value.status_code == 403
+        reset_request_identity(token)
+        token = set_request_identity("jordan.boyce@cyberlion.dev")
+        assert require_admin("manage access") == "jordan.boyce@cyberlion.dev"
+    finally:
+        reset_request_identity(token)
+
+
+def test_required_identity_refuses_start_without_provider(reloaded_main):
+    with pytest.raises(RuntimeError, match="AUTH_REQUIRE_IDENTITY"):
+        reloaded_main(AUTH_REQUIRE_IDENTITY="true", PRIVATE_COLLECTIONS="false")
 
 
 def test_multi_user_refuses_to_start(reloaded_main):

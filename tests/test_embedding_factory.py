@@ -44,7 +44,10 @@ def stub_services(monkeypatch):
                 "api_key": api_key, "label": label,
             }
 
+    # Both local backends resolve to the same recorder: the routing under
+    # test is provider selection, not which ONNX/PyTorch runtime loads it.
     monkeypatch.setattr(embedder, "EmbeddingService", FakeLocal)
+    monkeypatch.setattr(embedder, "FastEmbedService", FakeLocal)
     monkeypatch.setattr(embedder, "OllamaEmbeddingService", FakeOllama)
     monkeypatch.setattr(embedder, "OpenAICompatibleEmbeddingService", FakeCompat)
     return calls

@@ -8,8 +8,8 @@ Clio owns the trustworthy data layer; the intelligence layer lives upstream in w
 
 ## Library — ingestion & context
 
-- **Git repository indexing** — crawl local or remote repos and preserve directory structure as metadata.
-- **Watch-folder sync** — auto-index new files dropped into a designated local directory.
+- **Git repository indexing** — local trees shipped 2026-10-08: sixty-plus languages chunked by symbol with lenient parsing (syntax errors, unbalanced braces, odd encodings and minified files still index), name-based detection for Makefile/Dockerfile-style files, binary/lockfile/build-output skipping, and symbol name + line range kept on every chunk. Remaining: remote clone, and the relative path as first-class metadata (today it survives only in the flattened filename).
+- **Watch-folder sync** — incremental folder sync shipped 2026-10-08: re-syncing a folder hashes every file, skips the unchanged ones, replaces changed ones, and optionally prunes documents whose file is gone (`POST /documents/sync-folder`, remembered per collection with *Sync*/*Prune* in the Sources panel). Remaining: a server-side watcher that runs the sync automatically when files land.
 - **Richer spreadsheet handling** — multi-sheet workbooks and more complex table structures beyond flat CSVs.
 
 ## Notebook — synthesis
@@ -20,12 +20,12 @@ Clio owns the trustworthy data layer; the intelligence layer lives upstream in w
 
 ## Toolbox — extensibility
 
-- **MCP expansion** — let external agents trigger re-indexing and metadata updates, not just read documents (`write_document` shipped 2026-09-11; cross-collection `research_documents`, `corpus_version` freshness tokens and MCP prompts shipped 2026-09-17; re-index and metadata edits remain). Progress notifications during long research calls need the streamable transport switched from JSON responses to SSE, which is a deployment-affecting change to make deliberately.
+- **MCP expansion** — let external agents trigger re-indexing and metadata updates, not just read documents (`write_document` shipped 2026-09-11; cross-collection `research_documents`, `corpus_version` freshness tokens and MCP prompts shipped 2026-09-17; `reindex_document`, `update_document_metadata`, `list_index_jobs`/`get_index_job`, ChatGPT-shape `search`/`fetch`, schema limits and titles on every tool, and a live `GET /api/mcp/catalog` shipped 2026-10-08). Progress notifications during long research calls need the streamable transport switched from JSON responses to SSE, which is a deployment-affecting change to make deliberately.
 - **PWA** — a web manifest and theme-color meta shipped 2026-09-12 (installable from the browser menu); an offline service worker is the remaining step.
 
 ## Access & limits
 
-- **Online registration** — shipped 2026-09-12: `/register` (approval or open mode, domain allowlist, seat cap). Expiring, collection-limited personal MCP tokens shipped 2026-09-17. Pluggable identity shipped 2026-09-17: `IDENTITY_PROVIDER=oidc` (your own IdP) or `trusted_header` (an authenticating proxy) alongside Cloudflare Access, plus `MCP_AUDIT_TOOL_CALLS` for auditing agent reads. OAuth 2.1 on `/mcp` shipped 2026-09-17: RFC 9728 metadata and the Bearer challenge delegate to the site's IdP, so Claude Desktop, claude.ai, ChatGPT and `claude mcp login` attach with the endpoint URL alone (`MCP_PUBLIC_URL`, optional `MCP_OAUTH_SCOPE`, or `MCP_OAUTH_ISSUER` for a Cloudflare deployment). Next: per-tool token scopes, group-derived collection access, an admin token fleet view, and ChatGPT `search`/`fetch` aliases.
+- **Online registration** — shipped 2026-09-12: `/register` (approval or open mode, domain allowlist, seat cap). Expiring, collection-limited personal MCP tokens shipped 2026-09-17. Pluggable identity shipped 2026-09-17: `IDENTITY_PROVIDER=oidc` (your own IdP) or `trusted_header` (an authenticating proxy) alongside Cloudflare Access, plus `MCP_AUDIT_TOOL_CALLS` for auditing agent reads. OAuth 2.1 on `/mcp` shipped 2026-09-17: RFC 9728 metadata and the Bearer challenge delegate to the site's IdP, so Claude Desktop, claude.ai, ChatGPT and `claude mcp login` attach with the endpoint URL alone (`MCP_PUBLIC_URL`, optional `MCP_OAUTH_SCOPE`, or `MCP_OAUTH_ISSUER` for a Cloudflare deployment). ChatGPT `search`/`fetch` aliases shipped 2026-10-08. Next: per-tool token scopes, group-derived collection access, and an admin token fleet view.
 - **Per-collection storage cap** — shipped 2026-09-12 (5 GiB default, `COLLECTION_STORAGE_LIMIT_BYTES`). Next: per-user totals across collections, and an admin view of storage by collection.
 
 ## From the September 2026 product assessment (docs/PRODUCT_ASSESSMENT.md)

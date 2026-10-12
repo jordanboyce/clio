@@ -458,6 +458,13 @@ class VectorStore:
             csv_row_number=chunk.get("csv_row_number"),
             csv_columns=chunk.get("csv_columns"),
             csv_values=chunk.get("csv_values"),
+            # Code chunks: the symbol a passage is, so results can say
+            # "handler() in router.py, lines 40-72" rather than "page 3".
+            language=chunk.get("language"),
+            symbol_name=chunk.get("symbol_name"),
+            symbol_type=chunk.get("symbol_type"),
+            line_start=chunk.get("line_start"),
+            line_end=chunk.get("line_end"),
             source_type=doc_info.get("source_type") if doc_info else None,
             source_path=doc_info.get("source_path") if doc_info else None,
             # Document-level override only; the API layer resolves the

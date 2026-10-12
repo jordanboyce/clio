@@ -64,9 +64,9 @@ def resolve_ai_key(provider: str, header_key: str | None) -> str:
 def require_admin(action: str = "change deployment settings") -> str | None:
     """Gate an operator-only endpoint. Returns the admin's identity.
 
-    No-op when private collections are off. That is the shared-appliance
-    model: everyone who reaches the app is a trusted teammate and access is
-    controlled at the edge, so an operator gate would only get in the way.
+    No-op when private collections are off and no ADMIN_EMAILS are configured.
+    When an operator list exists, enforce it even in shared-collection mode so
+    a deployment can make admin powers distinct from ordinary user access.
 
     With private collections on, the deployment deliberately admits people
     who are not operators — anyone an invitation let through the Access
@@ -76,13 +76,14 @@ def require_admin(action: str = "change deployment settings") -> str | None:
     """
     from config import settings
 
-    if not settings.private_collections:
-        return None
-
-    from middleware.user_context import get_request_user
     from services.access_provisioning import admin_emails, is_admin
 
-    user_id = get_request_user()
+    if not settings.private_collections and not admin_emails():
+        return None
+
+    from middleware.user_context import get_request_identity, get_request_user
+
+    user_id = get_request_identity() if settings.admin_emails.strip() else get_request_user()
     if not is_admin(user_id):
         if not admin_emails():
             raise HTTPException(

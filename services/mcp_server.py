@@ -7,8 +7,11 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from typing import Any, Literal
+from pathlib import Path
+from typing import Annotated, Any, Literal
 from urllib.parse import parse_qs, urlencode
+
+from pydantic import Field
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -263,6 +266,21 @@ def _truncate(text: str, limit: int) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."
 
 
+def _read_only(title: str) -> ToolAnnotations:
+    """Annotations for a tool that only reads: safe to call freely and to retry."""
+    return ToolAnnotations(
+        title=title, readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+    )
+
+
+def _mutating(title: str, *, destructive: bool, idempotent: bool) -> ToolAnnotations:
+    """Annotations for a tool that changes a collection; the host may ask before calling."""
+    return ToolAnnotations(
+        title=title, readOnlyHint=False, destructiveHint=destructive,
+        idempotentHint=idempotent, openWorldHint=False,
+    )
+
+
 def get_mcp_settings_payload() -> dict[str, Any]:
     return {field: getattr(settings, field) for field in MCP_CONFIG_FIELDS}
 
@@ -502,7 +520,7 @@ def _serialize_result(
     return payload
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Health check", annotations=_read_only("Health check"))
 def health_check() -> dict[str, Any]:
     """Check that the Clio MCP server is reachable and report its status.
 
@@ -564,7 +582,7 @@ def health_check() -> dict[str, Any]:
     }, "health_check")
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="List collections", annotations=_read_only("List collections"))
 def list_collections() -> dict[str, Any]:
     """List every document collection available on this MCP server.
 
@@ -611,7 +629,7 @@ def list_collections() -> dict[str, Any]:
     }, "list_collections")
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Collection info", annotations=_read_only("Collection info"))
 def get_collection_info(
     collection_id: str | None = None,
     detail: Literal["counts", "with_documents"] = "with_documents",
@@ -728,7 +746,7 @@ def _normalize_search_filters(filters: dict[str, Any] | None) -> dict[str, Any] 
     return out or None
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Collection facets", annotations=_read_only("Collection facets"))
 def get_collection_facets(collection_id: str | None = None) -> dict[str, Any]:
     """List the filterable metadata for a collection.
 
@@ -833,11 +851,11 @@ def search_all_collections_sync(
     }, "search_all_collections")
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Search all collections", annotations=_read_only("Search all collections"))
 async def search_all_collections(
     query: str,
     mode: Literal["semantic", "keyword", "hybrid"] | None = None,
-    top_k_per_collection: int = 3,
+    top_k_per_collection: Annotated[int, Field(ge=1, le=10)] = 3,
     collection_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Search across ALL collections (or a named subset) in one call.
@@ -870,9 +888,9 @@ async def search_all_collections(
     )
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Recent documents", annotations=_read_only("Recent documents"))
 def list_recent_documents(
-    limit: int = 10,
+    limit: Annotated[int, Field(ge=1, le=50)] = 10,
     collection_id: str | None = None,
 ) -> dict[str, Any]:
     """List the most recently indexed documents, newest first.
@@ -1120,14 +1138,14 @@ def _research_documents_impl(
     return payload
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Research documents", annotations=_read_only("Research documents"))
 async def research_documents(
     query: str,
     collection_id: str | None = None,
-    subqueries: list[str] | None = None,
-    top_k: int = 8,
-    max_per_document: int = 2,
-    max_context_chars: int = 12000,
+    subqueries: Annotated[list[str], Field(max_length=3)] | None = None,
+    top_k: Annotated[int, Field(ge=1, le=20)] = 8,
+    max_per_document: Annotated[int, Field(ge=1, le=10)] = 2,
+    max_context_chars: Annotated[int, Field(ge=1000, le=40000)] = 12000,
     filters: dict[str, Any] | None = None,
     collection_ids: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -1364,12 +1382,12 @@ def search_collection_sync(
     return _tool_response(response, "search_collection")
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Search collection", annotations=_read_only("Search collection"))
 async def search_collection(
     query: str,
     collection_id: str | None = None,
     mode: Literal["semantic", "keyword", "hybrid"] | None = None,
-    top_k: int | None = None,
+    top_k: Annotated[int, Field(ge=1, le=20)] | None = None,
     filters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Search indexed documents using semantic, keyword, or hybrid retrieval.
@@ -1444,7 +1462,7 @@ _DOC_CONTEXT_MAX_CHARS_DEFAULT = 12000
 _DOC_CONTEXT_MAX_CHARS_CAP = 40000
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Read document text", annotations=_read_only("Read document text"))
 def get_document_context(
     document_id: str,
     page_number: int | None = None,
@@ -1495,6 +1513,30 @@ def get_document_context(
         which is truncated for tabular sources.
     """
 
+    return _tool_response(
+        _document_context_payload(
+            document_id, page_number=page_number, chunk_id=chunk_id, window=window,
+            max_chars=max_chars, collection_id=collection_id,
+        ),
+        "get_document_context",
+    )
+
+
+def _document_context_payload(
+    document_id: str,
+    *,
+    page_number: int | None = None,
+    chunk_id: str | None = None,
+    window: int = 1,
+    max_chars: int = _DOC_CONTEXT_MAX_CHARS_DEFAULT,
+    collection_id: str | None = None,
+    cap: int = _DOC_CONTEXT_MAX_CHARS_CAP,
+) -> dict[str, Any]:
+    """The get_document_context result, before auditing.
+
+    Shared with the connector `fetch` tool, which reads whole documents and
+    so allows a larger `cap` than the context tool's default.
+    """
     resolved_collection = _resolve_collection_id(collection_id)
     indexer = indexer_manager.get_indexer(resolved_collection)
     metadata_store = indexer.vector_store.metadata_store
@@ -1537,7 +1579,7 @@ def get_document_context(
     else:
         selected = all_chunks
 
-    cap = max(500, min(int(max_chars), _DOC_CONTEXT_MAX_CHARS_CAP))
+    cap = max(500, min(int(max_chars), int(cap)))
     emitted: list[dict[str, Any]] = []
     running = 0
     truncated = False
@@ -1556,7 +1598,7 @@ def get_document_context(
 
     from services.governance import effective_sensitivity
 
-    return _tool_response({
+    return {
         "collection_id": resolved_collection,
         "document_id": document_id,
         "filename": doc_info.get("filename"),
@@ -1572,7 +1614,7 @@ def get_document_context(
         "sensitivity": effective_sensitivity(
             collection_service.get_collection(resolved_collection), doc_info.get("sensitivity")
         ),
-    }, "get_document_context")
+    }
 
 
 _FIND_EXCERPT_PAD_CHARS = 80
@@ -1735,13 +1777,13 @@ def find_in_documents_sync(
     }, "find_in_documents")
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Find exact text", annotations=_read_only("Find exact text"))
 async def find_in_documents(
     pattern: str,
     literal: bool = True,
     case_sensitive: bool = False,
     collection_id: str | None = None,
-    max_results: int = 20,
+    max_results: Annotated[int, Field(ge=1, le=_FIND_MAX_RESULTS)] = 20,
     filters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Exact-substring OR regex search across a collection's indexed text chunks.
@@ -1879,7 +1921,7 @@ def _format_schema_summary(schema: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="List tables", annotations=_read_only("List tables"))
 def list_tables(collection_id: str | None = None) -> dict[str, Any]:
     """List every CSV / Excel sheet ingested as a typed SQL table.
 
@@ -1920,7 +1962,7 @@ def list_tables(collection_id: str | None = None) -> dict[str, Any]:
     }, "list_tables")
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Table schema", annotations=_read_only("Table schema"))
 def get_table_schema(
     identifier: str,
     collection_id: str | None = None,
@@ -1956,10 +1998,10 @@ def get_table_schema(
     return _tool_response(_format_schema_summary(schema), "get_table_schema")
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Table rows", annotations=_read_only("Table rows"))
 def get_table_rows(
     identifier: str,
-    limit: int = 200,
+    limit: Annotated[int, Field(ge=1, le=2000)] = 200,
     collection_id: str | None = None,
     identifier_type: Literal["table_name", "filename", "document_id"] | None = None,
 ) -> dict[str, Any]:
@@ -2029,7 +2071,7 @@ def get_table_rows(
     }, "get_table_rows")
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Query table (SQL)", annotations=_read_only("Query table (SQL)"))
 def query_table(
     sql: str,
     max_rows: int = 500,
@@ -2080,7 +2122,7 @@ _AGG_FN_SQL = {
 }
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Aggregate table", annotations=_read_only("Aggregate table"))
 def aggregate_table(
     identifier: str,
     aggregate_col: str,
@@ -2172,7 +2214,7 @@ def aggregate_table(
     }, "aggregate_table")
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+@_clio_mcp.tool(title="Document metadata", annotations=_read_only("Document metadata"))
 def get_document_metadata(
     document_id: str,
     collection_id: str | None = None,
@@ -2201,17 +2243,30 @@ def get_document_metadata(
       - upload_timestamp: when it was indexed
     """
     resolved_collection = _resolve_collection_id(collection_id)
-    indexer = indexer_manager.get_indexer(resolved_collection)
-    metadata_store = indexer.vector_store.metadata_store
-    doc_info = metadata_store.get_document_info(document_id)
+    doc_info = _visible_document_info(resolved_collection, document_id)
+    return _tool_response(
+        _document_metadata_payload(resolved_collection, doc_info), "get_document_metadata"
+    )
+
+
+def _visible_document_info(collection_id: str, document_id: str) -> dict[str, Any]:
+    """The metadata row for one document the caller may see, or a clear error."""
+    store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store
+    doc_info = store.get_document_info(document_id)
     if not doc_info or _is_hidden_doc(doc_info):
         raise ValueError(
             f"Document '{document_id}' not found in collection "
-            f"'{resolved_collection}'. Call get_collection_info() to see "
+            f"'{collection_id}'. Call get_collection_info() to see "
             f"available document_ids."
         )
-    return _tool_response({
-        "collection_id": resolved_collection,
+    return doc_info
+
+
+def _document_metadata_payload(collection_id: str, doc_info: dict[str, Any]) -> dict[str, Any]:
+    from services.governance import effective_sensitivity
+
+    return {
+        "collection_id": collection_id,
         "document_id": doc_info.get("document_id"),
         "filename": doc_info.get("filename"),
         "source_format": doc_info.get("source_format"),
@@ -2225,7 +2280,13 @@ def get_document_metadata(
         "num_pages": doc_info.get("num_pages"),
         "num_chunks": doc_info.get("num_chunks"),
         "upload_timestamp": doc_info.get("upload_timestamp"),
-    }, "get_document_metadata")
+        # The per-document override (None = inherits the collection's label)
+        # and the label actually in force.
+        "sensitivity": doc_info.get("sensitivity"),
+        "sensitivity_effective": effective_sensitivity(
+            collection_service.get_collection(collection_id), doc_info.get("sensitivity")
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2271,12 +2332,14 @@ def _safe_source_filename(filename: str) -> str:
     return safe
 
 
-def _require_mcp_write(collection_id: str | None) -> str:
+def _require_mcp_write(collection_id: str | None, *, require_aup: bool = True) -> str:
     """Resolve the target collection and check every write gate.
 
     Mirrors api/documents._require_ingest for the agent surface: collection
     visibility, the token's write flag, the collection's write permission
     under private collections, and the acceptable-use acknowledgement.
+    `require_aup=False` is api/documents._require_write: a change that adds
+    no content (a relabel) must not be trapped behind the policy gate.
     """
     resolved = _resolve_collection_id(collection_id)
 
@@ -2297,6 +2360,8 @@ def _require_mcp_write(collection_id: str | None) -> str:
             f"Collection '{resolved}' is shared with you read-only; its owner "
             "manages the sources."
         )
+    if not require_aup:
+        return resolved
     try:
         governance.require_aup(user)
     except HTTPException as e:
@@ -2454,7 +2519,7 @@ def write_document_sync(
     return _tool_response(payload, "write_document")
 
 
-@_clio_mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
+@_clio_mcp.tool(title="Write document", annotations=_mutating("Write document", destructive=True, idempotent=False))
 async def write_document(
     filename: str,
     content: str,
@@ -2512,6 +2577,636 @@ async def write_document(
 
 
 # ---------------------------------------------------------------------------
+# ChatGPT / OpenAI connector aliases — tools named exactly `search` and `fetch`
+# ---------------------------------------------------------------------------
+# OpenAI's MCP connector and deep-research integrations require two tools
+# with these exact names and shapes: search(query) -> {results: [{id, title,
+# url}]} and fetch(id) -> {id, title, text, url, metadata}. They are thin
+# aliases over the same hybrid retrieval and document reader the Clio tools
+# use, under the same scoping, so a credential sees exactly what it would
+# through search_collection and get_document_context.
+
+_CONNECTOR_SEARCH_LIMIT = 10
+_CONNECTOR_FETCH_MAX_CHARS = 60_000
+_CONNECTOR_FETCH_WINDOW = 2
+
+
+def _document_url(
+    document_id: str,
+    collection_id: str,
+    chunk_id: str | None = None,
+    page_number: int | None = None,
+) -> str:
+    """A stable URL for a document (optionally one chunk) that a host can cite.
+
+    With MCP_PUBLIC_URL set (e.g. https://clio.example.org/mcp) the link is
+    the app's own download route next to the MCP endpoint, with the page as
+    a fragment for PDF viewers. Otherwise it is a clio://document/... URI
+    that `fetch` resolves; it carries the collection so the id round-trips
+    even when no default collection is configured.
+    """
+    base = (settings.mcp_public_url or "").strip().rstrip("/")
+    if base.endswith("/mcp"):
+        base = base[: -len("/mcp")]
+    query = urlencode({"collection_id": collection_id})
+    if base:
+        url = f"{base}/documents/{document_id}/pdf?{query}"
+        if page_number:
+            url += f"#page={int(page_number)}"
+        return url
+    url = f"clio://document/{document_id}?{query}"
+    if chunk_id:
+        url += f"#{chunk_id}"
+    return url
+
+
+def _connector_id(document_id: str, chunk_id: str | None) -> str:
+    return f"{document_id}#{chunk_id}" if chunk_id else document_id
+
+
+def _parse_connector_id(raw: str) -> tuple[str, str | None, str | None]:
+    """Split a `search` result id (or its url) into (document_id, chunk_id, collection_id).
+
+    Accepts the bare "<document_id>", "<document_id>#<chunk_id>", or either
+    URL form `_document_url` produces, so a host that hands back the url
+    instead of the id still resolves. A "#page=N" fragment is not a chunk.
+    """
+    from urllib.parse import urlsplit
+
+    value = (raw or "").strip()
+    if not value:
+        raise ValueError("id must not be empty")
+    collection_id: str | None = None
+    chunk_id: str | None = None
+    if "://" in value:
+        parts = urlsplit(value)
+        segments = [seg for seg in f"{parts.netloc}/{parts.path}".split("/") if seg]
+        document_id = ""
+        for i, seg in enumerate(segments):
+            if seg in ("document", "documents") and i + 1 < len(segments):
+                document_id = segments[i + 1]
+                break
+        if not document_id:
+            raise ValueError(f"'{raw}' is not a document id or document URL.")
+        collection_id = (parse_qs(parts.query).get("collection_id") or [None])[0]
+        if parts.fragment and not parts.fragment.startswith("page="):
+            chunk_id = parts.fragment
+    else:
+        document_id, _, fragment = value.partition("#")
+        chunk_id = fragment or None
+    document_id = document_id.strip()
+    if not document_id:
+        raise ValueError(f"'{raw}' is not a document id or document URL.")
+    return document_id, chunk_id, collection_id
+
+
+def search_sync(query: str) -> dict[str, Any]:
+    """Synchronous implementation of the connector `search` tool.
+
+    Scope: the request's resolved collection (explicit profile pin or the
+    server default) when there is one; otherwise every collection the
+    credential may see, merged by score. Going straight to the indexer
+    rather than through search_collection_sync keeps one audit row per
+    call and skips the table inlining a connector host cannot use.
+    """
+    normalized_query = (query or "").strip()
+    if not normalized_query:
+        raise ValueError("query must not be empty")
+
+    try:
+        targets = [_resolve_collection_id(None)]
+    except ValueError:
+        targets = [c["id"] for c in _visible_collections() if c.get("id")]
+    if not targets:
+        raise ValueError("No collections available to search.")
+
+    profile = get_request_mcp_profile()
+    try:
+        resolved_mode = SearchMode(profile.get("mode") or settings.mcp_mode)
+    except ValueError:
+        resolved_mode = SearchMode.HYBRID
+    resolved_weight = max(0.0, min(
+        float(profile.get("semantic_weight", settings.mcp_semantic_weight)), 1.0
+    ))
+    snippet_len = max(100, min(
+        int(profile.get("max_source_length") or settings.mcp_max_source_length), 2000
+    ))
+
+    from services.governance import effective_sensitivity
+
+    hits: list[tuple[float, str, dict[str, Any] | None, Any]] = []
+    for cid in targets:
+        collection = collection_service.get_collection(cid)
+        try:
+            found = indexer_manager.get_indexer(cid).search(
+                query=normalized_query,
+                top_k=_CONNECTOR_SEARCH_LIMIT,
+                mode=resolved_mode,
+                semantic_weight=resolved_weight,
+            )
+        except Exception as e:
+            logger.warning("search (connector): failed for collection %s: %s", cid, e)
+            continue
+        for result in found.get("results", []):
+            hits.append((float(result.similarity_score), cid, collection, result))
+    hits.sort(key=lambda h: h[0], reverse=True)
+
+    results = []
+    for score, cid, collection, result in hits[:_CONNECTOR_SEARCH_LIMIT]:
+        chunk_id = getattr(result, "chunk_id", None)
+        title = result.filename
+        if result.page_number:
+            title += f" (p. {result.page_number})"
+        results.append({
+            "id": _connector_id(result.document_id, chunk_id),
+            "title": title,
+            "url": _document_url(result.document_id, cid, chunk_id, result.page_number),
+            "text": _truncate(result.text_snippet or "", snippet_len),
+            "metadata": {
+                "document_id": result.document_id,
+                "chunk_id": chunk_id,
+                "collection_id": cid,
+                "collection_name": _mcp_safe_name(collection, cid),
+                "page_number": result.page_number,
+                "score": round(score, 4),
+                "source_format": result.source_format,
+                "sensitivity": effective_sensitivity(collection, getattr(result, "sensitivity", None)),
+            },
+        })
+
+    return _tool_response({"results": results}, "search")
+
+
+@_clio_mcp.tool(title="Search (connector)", annotations=_read_only("Search (connector)"))
+async def search(query: str) -> dict[str, Any]:
+    """Search the indexed documents (OpenAI/ChatGPT connector shape).
+
+    Alias of `search_collection` for hosts that require a tool named
+    `search`: one query in, up to 10 ranked passages out, each with an `id`
+    that `fetch` resolves, a `title` of the form "filename (p. N)", a stable
+    `url`, and a short `text` excerpt. Searches the server's default (or
+    URL-pinned) collection; when none is configured, every collection the
+    credential may see. Clio-aware hosts should prefer `search_collection`
+    and `research_documents`, which take filters, modes and collections.
+    """
+    return await asyncio.to_thread(search_sync, query)
+
+
+def fetch_sync(id: str) -> dict[str, Any]:
+    """Synchronous implementation of the connector `fetch` tool."""
+    document_id, chunk_id, hinted = _parse_connector_id(id)
+
+    # Collection resolution: the id's own hint, then the request's default,
+    # then a sweep of the visible collections. Each candidate passes through
+    # _resolve_collection_id, so a scoped token cannot read outside its grant.
+    candidates: list[str] = []
+    if hinted:
+        candidates.append(hinted)
+    try:
+        candidates.append(_resolve_collection_id(None))
+    except ValueError:
+        pass
+    located = _find_collection_for_document(document_id)
+    if located:
+        candidates.append(located[0])
+
+    resolved: str | None = None
+    for candidate in dict.fromkeys(candidates):
+        try:
+            cid = _resolve_collection_id(candidate)
+        except ValueError:
+            continue
+        store = indexer_manager.get_indexer(cid).vector_store.metadata_store
+        if store.get_document_info(document_id):
+            resolved = cid
+            break
+    if resolved is None:
+        raise ValueError(
+            f"Document '{document_id}' not found. Use an id returned by search()."
+        )
+
+    payload = _document_context_payload(
+        document_id,
+        chunk_id=chunk_id,
+        window=_CONNECTOR_FETCH_WINDOW,
+        max_chars=_CONNECTOR_FETCH_MAX_CHARS,
+        collection_id=resolved,
+        cap=_CONNECTOR_FETCH_MAX_CHARS,
+    )
+    chunks = payload["chunks"]
+    page_number = chunks[0].get("page_number") if (chunk_id and chunks) else None
+    title = payload.get("filename") or document_id
+    if page_number:
+        title += f" (p. {page_number})"
+    return _tool_response({
+        "id": _connector_id(document_id, chunk_id),
+        "title": title,
+        "text": "\n\n".join(c["text"] for c in chunks),
+        "url": _document_url(document_id, resolved, chunk_id, page_number),
+        "metadata": {
+            "document_id": document_id,
+            "chunk_id": chunk_id,
+            "collection_id": resolved,
+            "filename": payload.get("filename"),
+            "source_format": payload.get("source_format"),
+            "total_pages": payload.get("total_pages"),
+            "total_chunks_in_document": payload.get("total_chunks_in_document"),
+            "chunks_returned": len(chunks),
+            "pages": sorted({c.get("page_number") for c in chunks if c.get("page_number")}),
+            "total_chars": payload.get("total_chars"),
+            "truncated": payload.get("truncated"),
+            "sensitivity": payload.get("sensitivity"),
+        },
+    }, "fetch")
+
+
+@_clio_mcp.tool(title="Fetch (connector)", annotations=_read_only("Fetch (connector)"))
+async def fetch(id: str) -> dict[str, Any]:
+    """Read a document found by `search` (OpenAI/ChatGPT connector shape).
+
+    Alias of `get_document_context` for hosts that require a tool named
+    `fetch`. Pass an `id` from `search`: a bare document id returns the whole
+    document text (up to 60,000 characters; `metadata.truncated` says if more
+    exists), and "document_id#chunk_id" returns that passage with two
+    neighbouring chunks on each side. Returns `id`, `title`, `text`, `url` and
+    `metadata` (collection, pages, sensitivity label, truncation).
+    """
+    return await asyncio.to_thread(fetch_sync, id)
+
+
+# ---------------------------------------------------------------------------
+# Index jobs — visibility, single-document re-index, governance labels
+# ---------------------------------------------------------------------------
+
+
+def _serialize_index_job(job: dict[str, Any]) -> dict[str, Any]:
+    """One index job row (services.app_database.upload_jobs) in the tool shape."""
+    total = int(job.get("total_files") or 0)
+    processed = int(job.get("processed_files") or 0)
+    status_value = job.get("status")
+    if status_value == "completed":
+        progress = 100.0
+    elif total > 0:
+        progress = round(processed / total * 100, 1)
+    else:
+        progress = 0.0
+    summary = job.get("result_summary")
+    if isinstance(summary, str):
+        try:
+            summary = json.loads(summary)
+        except (json.JSONDecodeError, TypeError):
+            summary = None
+    failed = (summary or {}).get("failed_files") if isinstance(summary, dict) else None
+    return {
+        "job_id": job.get("job_id") or job.get("id"),
+        "collection_id": job.get("collection_id"),
+        "status": status_value,
+        "job_type": job.get("job_type") or "upload",
+        "phase": job.get("phase"),
+        "phase_detail": job.get("phase_detail"),
+        "current_file": job.get("current_file"),
+        "processed_files": processed,
+        "total_files": total,
+        "progress_percent": progress,
+        "failed_count": len(failed) if isinstance(failed, list) else 0,
+        "error": job.get("error"),
+        "started_at": job.get("started_at"),
+        "completed_at": job.get("completed_at"),
+    }
+
+
+@_clio_mcp.tool(title="List index jobs", annotations=_read_only("List index jobs"))
+def list_index_jobs(
+    collection_id: str | None = None,
+    limit: Annotated[int, Field(ge=1, le=50)] = 10,
+) -> dict[str, Any]:
+    """List recent indexing jobs (uploads, folder/repo/link indexing, re-indexes), newest first.
+
+    Parameters:
+      - collection_id: Optional. If omitted, lists jobs across every
+        collection this credential may see. Pass an id to scope to one.
+      - limit: max jobs to return (default 10, cap 50).
+
+    Each job carries job_id, status (pending | running | completed | failed |
+    cancelled), job_type, phase, processed/total files, progress_percent,
+    failed_count, error and start/completion timestamps. Call
+    `get_index_job` for a job's failed files and result summary. Use this
+    after `write_document` or `reindex_document` to confirm the work landed,
+    or to explain why a source is missing from search.
+    """
+    capped = max(1, min(int(limit), 50))
+    if collection_id:
+        resolved = _resolve_collection_id(collection_id)
+        rows = app_db.get_recent_upload_jobs(limit=capped, collection_id=resolved)
+        scope = resolved
+    else:
+        visible = {c["id"] for c in _visible_collections() if c.get("id")}
+        rows = [
+            row for row in app_db.get_recent_upload_jobs(limit=200)
+            if row.get("collection_id") in visible
+        ][:capped]
+        scope = "all_collections"
+    return _tool_response({
+        "scope": scope,
+        "total_returned": len(rows),
+        "jobs": [_serialize_index_job(row) for row in rows],
+    }, "list_index_jobs")
+
+
+@_clio_mcp.tool(title="Index job status", annotations=_read_only("Index job status"))
+def get_index_job(job_id: Annotated[int, Field(ge=1)]) -> dict[str, Any]:
+    """Return one indexing job with its progress and per-file failures.
+
+    Parameters:
+      - job_id: from `list_index_jobs`, `reindex_document`, or the app.
+
+    Returns the fields of `list_index_jobs` plus progress_percent, queue_position
+    (while waiting), cancel_requested, chunk-level phase progress, `failed_files`
+    (filename and error for each source that did not make it in) and `summary`
+    (documents_processed, total_chunks, document_ids). Poll while status is
+    pending or running.
+    """
+    from services.upload_service import upload_service
+
+    job = upload_service.get_job_status(int(job_id))
+    if job:
+        try:
+            _resolve_collection_id(job.get("collection_id"))
+        except ValueError:
+            job = None
+    if not job:
+        raise ValueError(f"Index job {job_id} not found. Call list_index_jobs() to see recent jobs.")
+
+    summary = job.get("result_summary") if isinstance(job.get("result_summary"), dict) else {}
+    payload = _serialize_index_job(job)
+    payload.update({
+        "progress_percent": job.get("progress_percent", payload["progress_percent"]),
+        "queue_position": job.get("queue_position"),
+        "cancel_requested": bool(job.get("cancel_requested", False)),
+        "phase_progress": job.get("phase_progress"),
+        "chunks_processed": job.get("chunks_processed"),
+        "chunks_total": job.get("chunks_total"),
+        "failed_files": list(summary.get("failed_files") or []),
+        "summary": {
+            k: v for k, v in summary.items() if k != "failed_files"
+        },
+    })
+    return _tool_response(payload, "get_index_job")
+
+
+def _run_reindex_document_job(
+    job_id: int,
+    collection_id: str,
+    document_id: str,
+    source_path: str,
+    filename: str,
+    source_type: str | None,
+    sensitivity: str | None,
+    uploaded_by: str | None,
+) -> None:
+    """Job-thread body for reindex_document: drop the chunks, index the file again.
+
+    The document id is the content hash, so an unchanged file comes back
+    under the same id; a changed file gets a new one and the old id retires.
+    The per-document sensitivity override and an in-place source reference
+    survive the round trip. Raising lets the dispatcher mark the job failed.
+    """
+    from services import audit, governance
+    from services.upload_service import upload_service
+
+    if upload_service.is_cancelled(job_id):
+        upload_service.finish_job(job_id, {"documents_processed": 0, "document_ids": [],
+                                           "failed_files": []}, cancelled=True)
+        return
+
+    upload_service.report_progress(job_id, "extracting", 0.0, f"Re-indexing {filename}")
+    indexer = indexer_manager.get_indexer(collection_id)
+    store = indexer.vector_store.metadata_store
+    chunks_deleted = indexer.delete_document(document_id)
+    collection_service.remove_document(collection_id, document_id)
+    try:
+        meta = indexer.index_document(
+            Path(source_path), filename, collection_id=collection_id, uploaded_by=uploaded_by,
+        )
+    except Exception:
+        indexer.save_index()
+        raise
+    collection_service.add_document(collection_id, meta.document_id)
+    if source_type == "local_reference":
+        store.update_document_source(meta.document_id, source_path=source_path,
+                                     source_type="local_reference")
+    if sensitivity:
+        store.set_document_governance(meta.document_id, sensitivity=sensitivity)
+    indexer.save_index()
+    governance._invalidate_answers(collection_id)
+    audit.record(
+        "document.reindex", actor=uploaded_by, collection_id=collection_id,
+        document_id=meta.document_id,
+        detail={"filename": filename, "previous_document_id": document_id,
+                "chunks_deleted": chunks_deleted, "total_chunks": meta.total_chunks,
+                "job_id": job_id, "via": "mcp"},
+    )
+    upload_service.finish_job(job_id, {
+        "documents_processed": 1,
+        "total_pages": meta.total_pages,
+        "total_chunks": meta.total_chunks,
+        "document_ids": [meta.document_id],
+        "failed_files": [],
+        "previous_document_id": document_id,
+        "chunks_deleted": chunks_deleted,
+    })
+
+
+def reindex_document_sync(document_id: str, collection_id: str | None = None) -> dict[str, Any]:
+    """Synchronous implementation of reindex_document; docs on the MCP wrapper."""
+    from middleware.user_context import get_request_user
+    from services.upload_service import upload_service
+
+    resolved = _require_mcp_write(collection_id)
+    doc_info = _visible_document_info(resolved, document_id)
+    filename = doc_info.get("filename") or document_id
+    source_type = doc_info.get("source_type")
+    if source_type == "local_reference" and doc_info.get("source_path"):
+        source = Path(doc_info["source_path"])
+    else:
+        source = indexer_manager.get_documents_path(resolved) / filename
+    if not source.is_file():
+        raise ValueError(
+            f"The source file for '{filename}' ({source}) is no longer on disk, so it "
+            "cannot be re-indexed. Upload it again or write it with write_document."
+        )
+
+    try:
+        job_id = upload_service.submit_job(
+            resolved, "reindex", 1, _run_reindex_document_job,
+            args=(resolved, document_id, str(source), filename, source_type,
+                  doc_info.get("sensitivity"), get_request_user()),
+        )
+    except RuntimeError as e:
+        raise ValueError(str(e))
+
+    return _tool_response({
+        "status": "queued",
+        "job_id": job_id,
+        "collection_id": resolved,
+        "document_id": document_id,
+        "filename": filename,
+        "source_path": str(source),
+        "note": (
+            "Re-indexing runs as a tracked job; poll get_index_job(job_id). If the "
+            "file's bytes changed, the document comes back under a new document_id."
+        ),
+    }, "reindex_document")
+
+
+@_clio_mcp.tool(
+    title="Re-index document",
+    annotations=_mutating("Re-index document", destructive=True, idempotent=True),
+)
+def reindex_document(document_id: str, collection_id: str | None = None) -> dict[str, Any]:
+    """Re-index one existing document from its stored source file.
+
+    Use this when a source's text looks stale or badly extracted (an OCR
+    setting changed, the embedding model changed, a file indexed in place
+    from a local folder was edited on disk). The document's chunks are
+    dropped and rebuilt from the file by a tracked background job that
+    shows in the app's jobs drawer like any upload.
+
+    Parameters:
+      - document_id: The id from a search result or `get_collection_info`.
+      - collection_id: Optional. If omitted, uses the server's default
+        collection.
+
+    Returns {status: "queued", job_id, document_id, filename}. Poll
+    `get_index_job(job_id)` until it completes. An unchanged file keeps its
+    document_id; a changed one gets a new id (the id is the content hash).
+    The per-document sensitivity label is preserved.
+
+    Rules: needs a token minted with writes enabled (Settings → MCP) or a
+    signed-in session, write access to the collection, and the stored source
+    file still on disk. The job is refused while the queue is full.
+    """
+    return reindex_document_sync(document_id, collection_id=collection_id)
+
+
+_SENSITIVITY_CHOICE = Literal["public", "internal", "confidential", "restricted", "inherit"]
+
+
+def update_document_metadata_sync(
+    document_id: str,
+    sensitivity: _SENSITIVITY_CHOICE | None = None,
+    collection_id: str | None = None,
+) -> dict[str, Any]:
+    """Synchronous implementation of update_document_metadata; docs on the MCP wrapper."""
+    from middleware.user_context import get_request_user
+    from services import governance
+
+    if sensitivity is None:
+        raise ValueError(
+            "Nothing to update: pass sensitivity (public, internal, confidential, "
+            "restricted, or 'inherit' to clear the per-document override)."
+        )
+    resolved = _require_mcp_write(collection_id, require_aup=False)
+    _visible_document_info(resolved, document_id)
+    label = None if sensitivity == "inherit" else sensitivity
+    try:
+        governance.set_document_sensitivity(resolved, document_id, label, actor=get_request_user())
+    except KeyError:
+        raise ValueError(f"Document '{document_id}' not found in collection '{resolved}'.")
+    except ValueError as e:
+        raise ValueError(str(e))
+
+    doc_info = _visible_document_info(resolved, document_id)
+    payload = _document_metadata_payload(resolved, doc_info)
+    payload["status"] = "updated"
+    return _tool_response(payload, "update_document_metadata")
+
+
+@_clio_mcp.tool(
+    title="Update document metadata",
+    annotations=_mutating("Update document metadata", destructive=False, idempotent=True),
+)
+def update_document_metadata(
+    document_id: str,
+    sensitivity: _SENSITIVITY_CHOICE | None = None,
+    collection_id: str | None = None,
+) -> dict[str, Any]:
+    """Set the governance sensitivity label on one document.
+
+    Parameters:
+      - document_id: The id from a search result or `get_collection_info`.
+      - sensitivity: "public", "internal", "confidential" or "restricted" to
+        override the collection's label for this document, or "inherit" to
+        clear the override so the collection's label applies again.
+      - collection_id: Optional. If omitted, uses the server's default
+        collection.
+
+    Returns the updated metadata record (the same fields as
+    `get_document_metadata`) with `sensitivity` (the override, null when
+    inherited) and `sensitivity_effective` (the label now in force). The
+    change is recorded in the audit trail against the caller.
+
+    Rules: needs a token minted with writes enabled (Settings → MCP) or a
+    signed-in session, and write access to the collection. Policy status
+    (quarantine / approve) is an administrator action and is not exposed.
+    """
+    return update_document_metadata_sync(document_id, sensitivity=sensitivity, collection_id=collection_id)
+
+
+# ---------------------------------------------------------------------------
+# Catalog — what this server exposes, for the app's MCP settings page
+# ---------------------------------------------------------------------------
+
+
+def _first_paragraph(text: str | None) -> str:
+    """The opening paragraph of a docstring, collapsed to one line."""
+    if not text:
+        return ""
+    head = text.strip().split("\n\n", 1)[0]
+    return " ".join(head.split())
+
+
+async def mcp_catalog() -> dict[str, Any]:
+    """Tools, resources and prompts as the MCP server advertises them."""
+    tools = await _clio_mcp.list_tools()
+    templates = await _clio_mcp.list_resource_templates()
+    resources = await _clio_mcp.list_resources()
+    prompts = await _clio_mcp.list_prompts()
+
+    return {
+        "transport": "streamable-http",
+        "endpoint": "/mcp/",
+        "tools": [
+            {
+                "name": t.name,
+                "title": t.title or (t.annotations.title if t.annotations else None) or t.name,
+                "description": _first_paragraph(t.description),
+                "read_only": bool(t.annotations and t.annotations.readOnlyHint),
+                "destructive": bool(t.annotations and t.annotations.destructiveHint),
+                "parameters": list((t.inputSchema or {}).get("properties", {}).keys()),
+            }
+            for t in tools
+        ],
+        "resources": [
+            {"uri_template": r.uriTemplate, "name": r.name, "description": r.description or ""}
+            for r in templates
+        ] + [
+            {"uri_template": str(r.uri), "name": r.name, "description": r.description or ""}
+            for r in resources
+        ],
+        "prompts": [
+            {
+                "name": p.name,
+                "title": p.title or p.name,
+                "description": p.description or "",
+                "arguments": [a.name for a in (p.arguments or [])],
+            }
+            for p in prompts
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # MCP Resources — passive context the host LLM can load without tool calls
 # ---------------------------------------------------------------------------
 
@@ -2548,7 +3243,12 @@ def _find_collection_for_table(identifier: str) -> tuple[str, dict[str, Any]] | 
     return None
 
 
-@_clio_mcp.resource("collection://{id}")
+@_clio_mcp.resource(
+    "collection://{id}",
+    name="collection",
+    description="Collection metadata and document inventory (same payload as get_collection_info).",
+    mime_type="application/json",
+)
 def resource_collection(id: str) -> dict[str, Any]:
     """Collection metadata and document inventory.
 
@@ -2592,7 +3292,12 @@ def resource_collection(id: str) -> dict[str, Any]:
     }, "resource_collection")
 
 
-@_clio_mcp.resource("collection://{id}/schema")
+@_clio_mcp.resource(
+    "collection://{id}/schema",
+    name="collection_schema",
+    description="Column schemas of every CSV/XLSX table in a collection.",
+    mime_type="application/json",
+)
 def resource_collection_schema(id: str) -> dict[str, Any]:
     """All table schemas in a collection.
 
@@ -2619,7 +3324,12 @@ def resource_collection_schema(id: str) -> dict[str, Any]:
     }, "resource_collection_schema")
 
 
-@_clio_mcp.resource("collections://all")
+@_clio_mcp.resource(
+    "collections://all",
+    name="all_collections",
+    description="Every collection this credential may see, with counts and descriptions.",
+    mime_type="application/json",
+)
 def resource_all_collections() -> dict[str, Any]:
     """Complete workspace map — every collection with stats and document inventory.
 
@@ -2684,7 +3394,12 @@ def resource_all_collections() -> dict[str, Any]:
     }, "resource_all_collections")
 
 
-@_clio_mcp.resource("collection://{id}/guide")
+@_clio_mcp.resource(
+    "collection://{id}/guide",
+    name="collection_guide",
+    description="The owner's own brief on how to use a collection.",
+    mime_type="application/json",
+)
 def resource_collection_guide(id: str) -> dict[str, Any]:
     """The full user-authored guide for a collection.
 
@@ -2706,7 +3421,12 @@ def resource_collection_guide(id: str) -> dict[str, Any]:
     }, "resource_collection_guide")
 
 
-@_clio_mcp.resource("collection://{id}/tables")
+@_clio_mcp.resource(
+    "collection://{id}/tables",
+    name="collection_tables",
+    description="The structured tables (CSV/XLSX) available in a collection.",
+    mime_type="application/json",
+)
 def resource_collection_tables(id: str) -> dict[str, Any]:
     """All structured table listings for a collection.
 
@@ -2731,7 +3451,12 @@ def resource_collection_tables(id: str) -> dict[str, Any]:
     }, "resource_collection_tables")
 
 
-@_clio_mcp.resource("document://{id}")
+@_clio_mcp.resource(
+    "document://{id}",
+    name="document",
+    description="Full metadata record for one document, located across all collections.",
+    mime_type="application/json",
+)
 def resource_document(id: str) -> dict[str, Any]:
     """Full document metadata record — searched across ALL collections.
 
@@ -2749,25 +3474,15 @@ def resource_document(id: str) -> dict[str, Any]:
             f"Call get_collection_info() to see available document_ids."
         )
     resolved, doc_info = found
-    return _tool_response({
-        "collection_id": resolved,
-        "document_id": doc_info.get("document_id"),
-        "filename": doc_info.get("filename"),
-        "source_format": doc_info.get("source_format"),
-        "source_type": doc_info.get("source_type"),
-        "source_path": doc_info.get("source_path"),
-        "extraction_method": doc_info.get("extraction_method"),
-        "embedding_model": doc_info.get("embedding_model"),
-        "chunk_size": doc_info.get("chunk_size"),
-        "chunk_overlap": doc_info.get("chunk_overlap"),
-        "schema_version": doc_info.get("schema_version"),
-        "num_pages": doc_info.get("num_pages"),
-        "num_chunks": doc_info.get("num_chunks"),
-        "upload_timestamp": doc_info.get("upload_timestamp"),
-    }, "resource_document")
+    return _tool_response(_document_metadata_payload(resolved, doc_info), "resource_document")
 
 
-@_clio_mcp.resource("table://{id}")
+@_clio_mcp.resource(
+    "table://{id}",
+    name="table",
+    description="Schema plus sample rows for one table, located across all collections.",
+    mime_type="application/json",
+)
 def resource_table(id: str) -> dict[str, Any]:
     """Table schema and sample rows in one fetch — searched across ALL collections.
 

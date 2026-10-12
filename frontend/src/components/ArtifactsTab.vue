@@ -121,7 +121,7 @@ const copied = ref(false)
 // the shared resolution chain and just displays "Using X". Reactivity comes
 // from providerStore.version (bumped on every provider config write).
 const providerStore = useProviderStore()
-const providerId = computed(() => providerStore.resolveFor())
+const providerId = computed(() => providerStore.activeProviderId)
 
 const providerDisplayName = (id) => getProviderDisplayName(id)
 

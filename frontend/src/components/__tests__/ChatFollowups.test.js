@@ -122,7 +122,7 @@ describe('Follow-ups, depth and the chat library', () => {
       { provider: 'anthropic', document_ids: null },
       expect.objectContaining({ headers: expect.any(Object) }),
     )
-    expect(wrapper.text()).toContain('Suggested from your sources')
+    expect(wrapper.text()).toContain('From your sources')
     const starter = wrapper.findAll('button').find((b) => b.text().includes('Who approves exceptions?'))
     await starter.trigger('click')
     await flushPromises()
@@ -134,7 +134,7 @@ describe('Follow-ups, depth and the chat library', () => {
     http.post.mockRejectedValue(new Error('no model'))
     const wrapper = mountChat()
     await flushPromises()
-    expect(wrapper.text()).not.toContain('Suggested from your sources')
+    expect(wrapper.text()).not.toContain('From your sources')
     expect(wrapper.text()).toContain('Summarize the key points in these documents')
     wrapper.unmount()
   })

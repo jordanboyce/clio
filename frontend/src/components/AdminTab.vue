@@ -3,9 +3,138 @@
     <header class="pb-4 border-b border-base-300/60">
       <h1 class="text-[22px] leading-none font-semibold tracking-tight">Admin</h1>
       <p class="mt-2 text-xs text-base-content/50">
-        Who is using this deployment, what it's spending, and who can reach it.
+        What needs your decision, who is using this deployment, what it's spending, and who can reach it.
       </p>
     </header>
+
+    <!-- ═══ Needs review ═══
+         First on the page: it is the one part of Admin that is a to-do list.
+         One card per document, every reason attached, most urgent first. -->
+    <section aria-labelledby="admin-review">
+      <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
+        <h2 id="admin-review" class="text-sm font-semibold uppercase tracking-wider text-base-content/60 flex items-center gap-2">
+          Needs review
+          <span v-if="reviewQueue.length" class="badge badge-sm badge-warning normal-case tracking-normal font-medium tabular-nums">{{ reviewQueue.length }}</span>
+        </h2>
+        <span class="text-xs text-base-content/45">
+          scanner: <span class="font-mono">{{ review.content_policy_action || '…' }}</span>
+          · {{ review.blocked_hashes ?? 0 }} blocked hash{{ (review.blocked_hashes ?? 0) === 1 ? '' : 'es' }}
+        </span>
+      </div>
+
+      <div v-if="reviewError" class="alert alert-error py-2">
+        <span class="text-sm">{{ reviewError }}</span>
+        <button class="btn btn-xs btn-ghost" @click="loadReview">Retry</button>
+      </div>
+
+      <template v-else>
+        <div v-if="reviewQueue.length === 0" class="text-center py-8 text-sm text-base-content/50 border border-dashed border-base-300 rounded-lg">
+          <ShieldCheck :size="20" class="mx-auto mb-2 text-success" aria-hidden="true" />
+          All clear. Nothing is held, flagged or reported.
+        </div>
+
+        <template v-else>
+          <div class="flex flex-wrap items-center gap-1.5 mb-3" role="group" aria-label="Filter the review queue">
+            <button
+              v-for="f in REVIEW_FILTERS"
+              :key="f.id"
+              v-show="f.id === 'all' || filterCount(f.id) > 0"
+              class="btn btn-xs rounded-full normal-case font-normal"
+              :class="reviewFilter === f.id ? 'btn-neutral' : 'btn-ghost border border-base-300'"
+              :aria-pressed="reviewFilter === f.id"
+              @click="reviewFilter = f.id"
+            >{{ f.label }} <span class="tabular-nums opacity-70">{{ filterCount(f.id) }}</span></button>
+          </div>
+
+          <ul class="space-y-2">
+            <li
+              v-for="d in visibleQueue"
+              :key="key(d)"
+              class="rounded-lg border bg-base-100"
+              :class="d.priority === 'critical' ? 'border-error/60' : 'border-base-300/60'"
+            >
+              <div class="p-3 flex flex-wrap items-start gap-x-4 gap-y-2">
+                <div class="min-w-0 flex-1 basis-64">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="badge badge-sm" :class="priorityBadge(d.priority).cls">{{ priorityBadge(d.priority).text }}</span>
+                    <span v-if="policyBadge(d.policy_status) && d.policy_status === 'quarantined'" class="badge badge-sm badge-error badge-outline" :title="policyBadge(d.policy_status).title">hidden from search</span>
+                    <span class="font-medium truncate max-w-[40ch]" :title="d.filename">{{ d.filename }}</span>
+                  </div>
+                  <div class="text-[11px] text-base-content/50 mt-0.5">
+                    {{ d.collection_name }} · added by {{ d.uploaded_by || 'unattributed' }} · {{ formatDay(d.upload_timestamp) }}
+                  </div>
+                  <ul class="mt-2 space-y-1">
+                    <li v-for="r in d.reasons" :key="r.kind" class="text-xs flex items-start gap-2">
+                      <span class="badge badge-xs badge-ghost flex-shrink-0 mt-0.5">{{ KIND_LABELS[r.kind] || r.kind }}</span>
+                      <span class="text-base-content/75">{{ r.text }}</span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="flex items-center gap-1 flex-wrap justify-end">
+                  <button class="btn btn-xs btn-ghost" :aria-expanded="expanded === key(d)" @click="toggleDetails(d)">{{ expanded === key(d) ? 'Hide evidence' : 'Evidence' }}</button>
+                  <button
+                    class="btn btn-xs btn-success btn-outline"
+                    :disabled="busy === key(d)"
+                    :title="approveHint(d)"
+                    @click="approve(d)"
+                  >{{ approveLabel(d) }}</button>
+                  <button class="btn btn-xs btn-error btn-outline" :disabled="busy === key(d)" @click="remove(d, true)">Remove &amp; block</button>
+                </div>
+              </div>
+
+              <div v-if="expanded === key(d)" class="border-t border-base-300/60 bg-base-200/50 p-3 space-y-3 text-xs">
+                <div v-if="d.kinds.includes('policy')">
+                  <div class="font-semibold mb-1">Content scan</div>
+                  <div v-if="!policyFlagPages(d.policy_flags).length" class="text-base-content/50">No page-level findings recorded.</div>
+                  <div v-for="entry in policyFlagPages(d.policy_flags)" :key="entry.page" class="mb-2">
+                    <div class="text-base-content/70">Page {{ entry.page }} · score {{ entry.risk_score }}</div>
+                    <div v-for="(f, i) in entry.findings" :key="i" class="ml-2 mt-0.5">
+                      <span class="capitalize">{{ categoryLabel(f.category) }}</span>
+                      <span class="badge badge-xs ml-1" :class="f.severity === 'critical' || f.severity === 'high' ? 'badge-error' : 'badge-warning'">{{ f.severity }}</span>
+                      <code v-if="f.matched_text" class="ml-1 text-[11px] text-base-content/70 break-all">{{ f.matched_text }}</code>
+                    </div>
+                  </div>
+                  <div v-if="d.policy_flags?.llm?.rationale" class="text-base-content/60">
+                    Model opinion: {{ d.policy_flags.llm.rationale }}
+                  </div>
+                </div>
+
+                <div v-if="d.kinds.includes('injection')">
+                  <div class="font-semibold mb-1">
+                    Prompt injection
+                    <span class="badge badge-xs ml-1" :class="d.injection.level === 'high' ? 'badge-error' : 'badge-warning'">{{ d.injection.level }}</span>
+                    <span class="font-normal text-base-content/55 ml-1">on {{ d.injection.flagged_pages }} page{{ d.injection.flagged_pages === 1 ? '' : 's' }} · score {{ d.injection.max_score }}</span>
+                  </div>
+                  <div v-for="(t, i) in injectionEvidence(d.injection)" :key="i" class="ml-2 mt-0.5">
+                    <span class="capitalize">{{ t.category }}</span>
+                    <span class="text-base-content/45"> · p.{{ t.page }}</span>
+                    <span class="badge badge-xs ml-1" :class="t.severity === 'high' ? 'badge-error' : 'badge-warning'">{{ t.severity }}</span>
+                    <code class="ml-1 text-[11px] text-base-content/70 break-all">{{ t.matched_text }}</code>
+                  </div>
+                  <p class="mt-1 text-base-content/50">
+                    Text like this can steer an AI that reads the document. Approving keeps the warning on the
+                    source but takes it off this list; it does not hide the document.
+                  </p>
+                </div>
+
+                <div v-if="d.kinds.includes('report')">
+                  <div class="font-semibold mb-1">
+                    Reports
+                    <span class="font-normal text-base-content/55 ml-1">{{ d.reports.count }} from {{ d.reports.reporters.join(', ') }} · latest {{ formatWhen(d.reports.last_at) }}</span>
+                  </div>
+                  <div v-if="!d.reports.reasons.length" class="text-base-content/50">No reason was given.</div>
+                  <ul v-else class="list-disc ml-5 space-y-0.5">
+                    <li v-for="(reason, i) in d.reports.reasons" :key="i" class="text-base-content/75">{{ reason }}</li>
+                  </ul>
+                </div>
+
+                <button class="btn btn-xs btn-ghost" :disabled="busy === key(d)" @click="remove(d, false)">Remove without blocking</button>
+              </div>
+            </li>
+          </ul>
+        </template>
+      </template>
+    </section>
 
     <!-- ═══ Live system card ═══ -->
     <section aria-labelledby="admin-system">
@@ -129,117 +258,6 @@
           ></div>
         </div>
       </div>
-    </section>
-
-    <!-- ═══ Content review ═══ -->
-    <section aria-labelledby="admin-review">
-      <div class="flex items-center justify-between mb-3">
-        <h2 id="admin-review" class="text-sm font-semibold uppercase tracking-wider text-base-content/60">Content review</h2>
-        <span class="text-xs text-base-content/45">
-          scanner: <span class="font-mono">{{ review.content_policy_action || '…' }}</span>
-          · {{ review.blocked_hashes ?? 0 }} blocked hash{{ (review.blocked_hashes ?? 0) === 1 ? '' : 'es' }}
-        </span>
-      </div>
-
-      <div v-if="reviewError" class="alert alert-error py-2">
-        <span class="text-sm">{{ reviewError }}</span>
-        <button class="btn btn-xs btn-ghost" @click="loadReview">Retry</button>
-      </div>
-
-      <template v-else>
-        <div v-if="reviewQueue.length === 0" class="text-center py-6 text-sm text-base-content/45 border border-dashed border-base-300 rounded-lg">
-          Nothing is held or flagged.
-        </div>
-        <div v-else class="overflow-x-auto rounded-lg border border-base-300/60">
-          <table class="table table-sm">
-            <thead>
-              <tr class="text-[10px] uppercase tracking-wider text-base-content/45">
-                <th>Status</th>
-                <th>Source</th>
-                <th>Added by</th>
-                <th>Categories</th>
-                <th class="text-right">Score</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              <template v-for="d in reviewQueue" :key="d.collection_id + d.document_id">
-                <tr>
-                  <td>
-                    <span class="badge badge-sm" :class="policyBadge(d.policy_status)?.cls">{{ policyBadge(d.policy_status)?.text }}</span>
-                    <span v-if="d.policy_flags?.critical" class="badge badge-sm badge-error badge-outline ml-1">critical</span>
-                  </td>
-                  <td>
-                    <div class="font-medium truncate max-w-[28ch]" :title="d.filename">{{ d.filename }}</div>
-                    <div class="text-[11px] text-base-content/50">{{ d.collection_name }} · {{ formatDay(d.upload_timestamp) }}</div>
-                  </td>
-                  <td class="text-xs">{{ d.uploaded_by || 'unattributed' }}</td>
-                  <td class="text-xs">
-                    <span v-for="(n, cat) in d.policy_flags?.categories || {}" :key="cat" class="badge badge-xs badge-outline mr-1">{{ categoryLabel(cat) }} {{ n }}</span>
-                    <span v-if="d.policy_flags?.llm?.categories?.length" class="badge badge-xs badge-info badge-outline">LLM: {{ d.policy_flags.llm.categories.map(categoryLabel).join(', ') }}</span>
-                  </td>
-                  <td class="text-right tabular-nums">{{ d.policy_flags?.max_score ?? '—' }}</td>
-                  <td class="text-right whitespace-nowrap">
-                    <button class="btn btn-xs btn-ghost" @click="toggleDetails(d)">{{ expanded === key(d) ? 'Hide' : 'Details' }}</button>
-                    <button class="btn btn-xs btn-success btn-outline ml-1" :disabled="busy === key(d)" @click="approve(d)">Approve</button>
-                    <button class="btn btn-xs btn-error btn-outline ml-1" :disabled="busy === key(d)" @click="remove(d, true)">Remove &amp; block</button>
-                  </td>
-                </tr>
-                <tr v-if="expanded === key(d)">
-                  <td colspan="6" class="bg-base-200/60">
-                    <div v-if="!policyFlagPages(d.policy_flags).length" class="text-xs text-base-content/50">No page-level findings recorded.</div>
-                    <div v-for="entry in policyFlagPages(d.policy_flags)" :key="entry.page" class="text-xs mb-2">
-                      <div class="font-semibold">Page {{ entry.page }} · score {{ entry.risk_score }}</div>
-                      <div v-for="(f, i) in entry.findings" :key="i" class="ml-2 mt-0.5">
-                        <span class="capitalize">{{ categoryLabel(f.category) }}</span>
-                        <span class="badge badge-xs ml-1" :class="f.severity === 'critical' || f.severity === 'high' ? 'badge-error' : 'badge-warning'">{{ f.severity }}</span>
-                        <code v-if="f.matched_text" class="ml-1 text-[11px] text-base-content/70 break-all">{{ f.matched_text }}</code>
-                      </div>
-                    </div>
-                    <div v-if="d.policy_flags?.llm?.rationale" class="text-xs text-base-content/60 mt-1">
-                      LLM rationale: {{ d.policy_flags.llm.rationale }}
-                    </div>
-                    <button class="btn btn-xs btn-ghost mt-1" :disabled="busy === key(d)" @click="remove(d, false)">Remove without blocking</button>
-                  </td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
-        </div>
-
-        <!-- Reports -->
-        <div class="mt-4">
-          <div class="text-[10px] uppercase tracking-wider text-base-content/45 mb-2">Reports from users</div>
-          <div v-if="review.reports?.length === 0" class="text-xs text-base-content/45">No reports.</div>
-          <div v-else class="overflow-x-auto rounded-lg border border-base-300/60">
-            <table class="table table-sm">
-              <thead>
-                <tr class="text-[10px] uppercase tracking-wider text-base-content/45">
-                  <th>When</th>
-                  <th>Reported by</th>
-                  <th>Source</th>
-                  <th>Reason</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="r in review.reports" :key="r.id">
-                  <td class="text-xs whitespace-nowrap">{{ formatWhen(r.timestamp) }}</td>
-                  <td class="text-xs">{{ r.actor || 'anonymous' }}</td>
-                  <td class="text-xs">
-                    <div class="font-medium">{{ r.detail?.filename || r.document_id }}</div>
-                    <div class="text-base-content/50">{{ r.collection_id }} · added by {{ r.detail?.uploaded_by || 'unattributed' }}</div>
-                  </td>
-                  <td class="text-xs max-w-[36ch]">{{ r.detail?.reason || '—' }}</td>
-                  <td class="text-right whitespace-nowrap">
-                    <button class="btn btn-xs btn-error btn-outline" :disabled="busy === (r.collection_id + r.document_id)" @click="remove({ collection_id: r.collection_id, document_id: r.document_id, filename: r.detail?.filename }, true)">Remove &amp; block</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </template>
     </section>
 
     <!-- ═══ Policy settings ═══ -->
@@ -418,30 +436,54 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { RefreshCw } from 'lucide-vue-next'
+import { RefreshCw, ShieldCheck } from 'lucide-vue-next'
 import http from '../utils/http'
 import AccessAdmin from './AccessAdmin.vue'
 import { useUserStore } from '../stores/userStore'
 import { useUiStore } from '../stores/uiStore'
-import { policyBadge, policyFlagPages, categoryLabel } from '../utils/governance'
+import { useReviewStore } from '../stores/reviewStore'
+import {
+  policyBadge, policyFlagPages, categoryLabel, priorityBadge, injectionEvidence,
+  KIND_LABELS, REVIEW_FILTERS, filterReviewItems,
+} from '../utils/governance'
 
 const userStore = useUserStore()
 const ui = useUiStore()
+const reviewStore = useReviewStore()
 
 // ── Content review ─────────────────────────────────────────────────────
-const review = ref({ quarantined: [], flagged: [], reports: [] })
+const review = ref({ items: [], quarantined: [], flagged: [], reports: [] })
 const reviewError = ref('')
 const expanded = ref('')
 const busy = ref('')
-const reviewQueue = computed(() => [...(review.value.quarantined || []), ...(review.value.flagged || [])])
+const reviewFilter = ref('all')
+const reviewQueue = computed(() => review.value.items || [])
+const visibleQueue = computed(() => filterReviewItems(reviewQueue.value, reviewFilter.value))
+const filterCount = (id) => filterReviewItems(reviewQueue.value, id).length
 const key = (d) => `${d.collection_id}:${d.document_id}`
 const toggleDetails = (d) => { expanded.value = expanded.value === key(d) ? '' : key(d) }
+
+// What the green button does depends on why the document is here.
+const approveLabel = (d) => {
+  if (d.policy_status === 'quarantined') return 'Release'
+  if (d.kinds.includes('policy')) return 'Approve'
+  return 'Looks fine'
+}
+const approveHint = (d) => {
+  const does = []
+  if (d.kinds.includes('policy')) does.push(d.policy_status === 'quarantined' ? 'lifts the hold' : 'clears the flag')
+  if (d.kinds.includes('injection')) does.push('dismisses the injection warnings')
+  if (d.kinds.includes('report')) does.push('closes the reports')
+  return `Marks it reviewed: ${does.join(', ')}. The findings stay on record.`
+}
 
 const loadReview = async () => {
   reviewError.value = ''
   try {
     const resp = await http.get('/api/admin/review')
     review.value = resp.data
+    reviewStore.setSummary(resp.data.summary)
+    if (reviewFilter.value !== 'all' && filterCount(reviewFilter.value) === 0) reviewFilter.value = 'all'
   } catch (err) {
     reviewError.value = err.message || 'Could not load the review queue'
   }
@@ -451,7 +493,7 @@ const approve = async (d) => {
   busy.value = key(d)
   try {
     await http.post(`/api/admin/documents/${d.collection_id}/${d.document_id}/approve`, { note: '' })
-    ui.notify(`Approved ${d.filename}.`, 'success')
+    ui.notify(`Marked ${d.filename || 'the document'} as reviewed.`, 'success')
     await Promise.all([loadReview(), loadAudit()])
   } catch (err) {
     ui.toastError(err, 'Could not approve the document')

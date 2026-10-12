@@ -51,6 +51,15 @@ class BundleError(ValueError):
     """The bundle is unusable; the message says why in plain words."""
 
 
+def _clio_version() -> str:
+    try:
+        from main import app
+
+        return str(app.version)
+    except Exception:  # pragma: no cover - only absent outside the server
+        return ""
+
+
 def _work_dir() -> Path:
     # On the data volume, not the container's /tmp: bundles with sources can
     # be gigabytes.
@@ -117,6 +126,38 @@ def _index_info(db_path: Path) -> Dict[str, Any]:
     finally:
         conn.close()
     return {k: json.loads(v) for k, v in rows}
+
+
+def describe_model(info: Dict[str, Any], documents: Iterable[Dict[str, Any]] = ()) -> Dict[str, Any]:
+    """Say, in words a person can check, which embedding model made the vectors.
+
+    ``info`` is the collection's recorded index_info (or the manifest's
+    ``embedding`` block). Older collections never recorded it, so fall back to
+    the per-document ``embedding_model`` and say how sure we are.
+    """
+    signature = info.get("signature") or None
+    model = info.get("model")
+    if not model and signature:
+        model = signature.split("::")[-1]
+    if not model:
+        names = sorted({d.get("embedding_model") for d in documents if d.get("embedding_model")})
+        model = names[0] if len(names) == 1 else None
+    provider = signature.split("::")[0] if signature else None
+    dimension = info.get("dimension")
+    where = None if not provider else ("on this machine" if provider == "local" else f"via {provider}")
+    bits = [model or "unknown model"]
+    if where:
+        bits.append(where)
+    if dimension:
+        bits.append(f"{dimension} dimensions")
+    return {
+        "model": model,
+        "provider": provider,
+        "dimension": dimension,
+        "signature": signature,
+        "recorded": bool(signature),
+        "label": " · ".join(bits),
+    }
 
 
 # ── Export ───────────────────────────────────────────────────────────────────
@@ -227,7 +268,9 @@ def export_collection(collection_id: str, include_sources: bool = False,
                 "chunk_size": collection.get("chunk_size"),
                 "chunk_overlap": collection.get("chunk_overlap"),
             },
-            "embedding": info,
+            "embedding": {**info, **{k: v for k, v in describe_model(info, documents).items()
+                                     if k in ("provider", "label", "recorded")}},
+            "clio_version": _clio_version(),
             "contents": {
                 "documents": len(documents),
                 "chunks": chunks,
@@ -503,3 +546,138 @@ def _run_import(job_id: int, collection_id: str, reuse: bool, source_model: Opti
     store.save()
     upload_service.finish_job(job_id, {"chunks": total, "vectors": "re-embedded",
                                        "model": service.model_name, "source_model": source_model})
+
+
+# ── Export preview ───────────────────────────────────────────────────────────
+
+
+def export_preview(collection_id: str) -> Dict[str, Any]:
+    """What an export would contain, without building the zip.
+
+    Lets the Export dialog state the embedding model and the size up front.
+    """
+    from services import governance
+    from services.collection_service import collection_service
+
+    collection = collection_service.get_collection(collection_id)
+    if not collection:
+        raise BundleError(f"Collection '{collection_id}' not found")
+    indexes_dir = collection_service.get_indexes_path(collection_id)
+    db = indexes_dir / "metadata.db"
+    if not db.exists():
+        raise BundleError("This collection has nothing indexed to export yet.")
+
+    docs = _documents(db)
+    visible = [d for d in docs if not governance.is_hidden(d)]
+    info = _index_info(db)
+    model = describe_model(info, visible)
+    chunks = sum(int(d.get("num_chunks") or 0) for d in visible)
+    return {
+        "name": collection.get("name"),
+        "documents": len(visible),
+        "chunks": chunks,
+        "quarantined_excluded": len(docs) - len(visible),
+        "embedding": model,
+        # Reusable on import only when the vectors can be vouched for.
+        "vectors_included": bool(model["recorded"]) and (indexes_dir / "faiss.index").exists(),
+        "sources_bytes": sum(int(d.get("file_size") or 0) for d in visible),
+    }
+
+
+# ── Import preview: look inside a bundle before creating anything ────────────
+
+
+def inspect_bundle(zip_path: Path) -> Dict[str, Any]:
+    """Summarise a bundle for the Import dialog and say how it will land here.
+
+    ``action`` is "reuse" when this server embeds with exactly the model the
+    bundle records (instant), otherwise "re-embed" (chunk text is embedded
+    again here; extraction and OCR are never redone).
+    """
+    from services import content_policy
+    from services.embedder import service_signature
+
+    manifest = read_manifest(zip_path)
+    meta = manifest.get("collection") or {}
+    embedding = manifest.get("embedding") or {}
+    contents = manifest.get("contents") or {}
+    signature = embedding.get("signature") or ""
+    docs = manifest.get("documents") or []
+
+    collection_model = (signature[len("local::"):] if signature.startswith("local::")
+                        else settings.embedding_model)
+    target = service_signature(collection_model=collection_model)
+    with zipfile.ZipFile(zip_path) as zf:
+        has_vectors = _VECTORS in zf.namelist()
+    reuse = bool(signature) and signature == target and has_vectors
+
+    if reuse:
+        reason = "This server embeds with the same model, so the vectors are reused as they are."
+    elif not signature:
+        reason = "The bundle does not record its embedding model, so its text is embedded again here."
+    elif not has_vectors:
+        reason = "The bundle carries no vectors, so its text is embedded again here."
+    else:
+        reason = (f"This server uses a different model ({settings.embedding_model}), so the "
+                  "bundle's text is embedded again here. Extraction and OCR are not redone.")
+
+    blocked = sum(1 for d in docs if d.get("content_hash") and content_policy.is_hash_blocked(d["content_hash"]))
+    name = meta.get("name") or "Imported collection"
+    return {
+        "name": name,
+        "description": meta.get("description") or "",
+        "documents": len(docs),
+        "chunks": int(contents.get("chunks") or 0),
+        "sources_included": int(contents.get("sources_included") or 0),
+        "quarantined_excluded": int(contents.get("quarantined_excluded") or 0),
+        "blocked_here": blocked,
+        "exported_at": manifest.get("exported_at"),
+        "exported_by": manifest.get("exported_by"),
+        "clio_version": manifest.get("clio_version") or None,
+        "embedding": describe_model(embedding),
+        "action": "reuse" if reuse else "re-embed",
+        "reason": reason,
+        "this_server": {"model": settings.embedding_model, "provider": settings.embedding_provider},
+        "bytes": zip_path.stat().st_size,
+    }
+
+
+# A previewed bundle waits here so the confirm step does not upload it twice
+# (bundles with originals run to gigabytes). Swept when stale.
+_STAGED_TTL = 3600
+
+
+def _staged_dir() -> Path:
+    path = _work_dir() / "staged"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def sweep_staged(max_age: float = _STAGED_TTL) -> None:
+    import time
+
+    cutoff = time.time() - max_age
+    for p in _staged_dir().glob("*.zip"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+        except OSError:
+            pass
+
+
+def stage_bundle(uploaded: Path) -> Tuple[str, Dict[str, Any]]:
+    """Validate an uploaded bundle, keep it for the confirm step, summarise it."""
+    sweep_staged()
+    summary = inspect_bundle(uploaded)  # raises BundleError for a bad bundle
+    upload_id = uuid.uuid4().hex
+    shutil.move(str(uploaded), str(_staged_dir() / f"{upload_id}.zip"))
+    return upload_id, summary
+
+
+def staged_path(upload_id: str) -> Path:
+    if not upload_id or len(upload_id) != 32 or any(c not in "0123456789abcdef" for c in upload_id):
+        raise BundleError("That upload is not valid. Choose the file again.")
+    path = _staged_dir() / f"{upload_id}.zip"
+    if not path.exists():
+        raise BundleError("That upload expired. Choose the file again.")
+    return path

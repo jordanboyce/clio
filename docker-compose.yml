@@ -30,7 +30,7 @@ services:
       # that block the hub and set EMBEDDING_PROVIDER to ollama / a hosted
       # API instead.
       args:
-        BAKE_EMBEDDING: "${BAKE_EMBEDDING:-0}"
+        BAKE_EMBEDDING: "${BAKE_EMBEDDING:-1}"
     container_name: clio
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:8473:8473"

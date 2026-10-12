@@ -8,7 +8,9 @@
 #
 # Required in .env (next to this file):
 #   TUNNEL_TOKEN=...     # from the Cloudflare Zero Trust tunnel you create
-#   AUTH_PASSWORD=...    # belt-and-braces shared secret (long + random)
+#
+# Initial allowlist for scripts/provision_cloudflare.py:
+#   CLIO_ALLOW_EMAILS=you@example.com,teammate@example.com
 
 services:
   clio:
@@ -24,9 +26,13 @@ services:
         aliases:
           - asymptote
     environment:
-      # Fail closed even if something reaches the container network directly:
-      # every request (except /health) must carry this as Basic or Bearer auth.
-      - AUTH_PASSWORD=${AUTH_PASSWORD:?set AUTH_PASSWORD in .env for remote deployments}
+      # Fail closed even if a request reaches the app without an Access JWT.
+      - AUTH_REQUIRE_IDENTITY=true
+      - AUTH_PASSWORD=
+      - REGISTRATION_MODE=off
+      # Only Jordan can use Clio's admin console or manage the Access list.
+      # CF_API_TOKEN remains provided through .env for the Access admin panel.
+      - ADMIN_EMAILS=jordan.boyce@cyberlion.dev
 
   cloudflared:
     image: cloudflare/cloudflared:latest

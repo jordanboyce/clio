@@ -16,17 +16,22 @@ router = APIRouter()
 
 
 @router.get("/api/user/me", summary="Get current user info", tags=["users"])
-async def get_current_user(user_id: str = Depends(get_current_user_id)):
+async def get_current_user(
+    request: Request, user_id: str = Depends(get_current_user_id)
+):
     """Get the current user's identity and private-collections status.
 
     In private-collections mode, user_id is the verified Cloudflare Access
     identity; None means an anonymous (password-authenticated) caller who can
     reach team collections only.
     """
-    from services.access_provisioning import access_provisioning_enabled, is_admin
+    from services.access_provisioning import access_provisioning_enabled, admin_emails, is_admin
     from services.app_database import app_db
     from services import governance
     user = app_db.get_user(user_id) if user_id else None
+    identity = getattr(request.state, "auth_identity", None)
+    has_admin_allowlist = bool(admin_emails())
+    admin_identity = identity if has_admin_allowlist else user_id
     return {
         "user_id": user_id,
         "display_name": (user["display_name"] if user else user_id) or "anonymous",
@@ -36,14 +41,15 @@ async def get_current_user(user_id: str = Depends(get_current_user_id)):
         # Cloudflare Access edge — the share dialog says so plainly rather
         # than letting an owner send an invitation that dead-ends at login.
         "edge_admission": access_provisioning_enabled(),
-        "is_admin": is_admin(user_id),
-        # Whether to show the Admin tab (usage, content review, audit). With
-        # private collections off there is no operator distinction —
-        # require_admin is a no-op and every teammate is trusted — so the
-        # console is open to everyone, matching what the backend allows.
-        # is_admin stays the raw ADMIN_EMAILS check: edge admission is
-        # gated on it in every mode.
-        "admin_console": is_admin(user_id) or not settings.private_collections,
+        "is_admin": is_admin(admin_identity),
+        # Whether to show the Admin tab (usage, content review, audit).
+        # Shared-collection deployments remain open when no operator list is
+        # configured; an explicit ADMIN_EMAILS list narrows the console even
+        # in shared mode, matching the backend gate. Edge admission always
+        # requires an explicit admin.
+        "admin_console": is_admin(admin_identity) or (
+            not settings.private_collections and not has_admin_allowlist
+        ),
         # Governance: whether the UI must show the acceptable-use modal
         # before this person adds sources, and what the scanner does.
         "aup": governance.aup_payload(user_id),
@@ -56,7 +62,7 @@ async def get_current_user(user_id: str = Depends(get_current_user_id)):
             settings.registration_mode if access_provisioning_enabled() else "off"
         ),
         "pending_registrations": (
-            app_db.count_registration_requests("pending") if is_admin(user_id) else 0
+            app_db.count_registration_requests("pending") if is_admin(admin_identity) else 0
         ),
         # The per-collection storage cap, so the UI can show it without a
         # second round-trip (0 = unlimited).
@@ -78,6 +84,7 @@ FREE_SEAT_LIMIT = 50
 
 def _require_admin(user_id: str):
     from services.access_provisioning import access_provisioning_enabled, is_admin
+    from middleware.user_context import get_request_identity
 
     if not access_provisioning_enabled():
         raise HTTPException(
@@ -85,7 +92,7 @@ def _require_admin(user_id: str):
             detail="Edge admission is not configured: set CF_API_TOKEN, "
                    "CF_ACCOUNT_ID and CF_ACCESS_POLICY_ID in .env.",
         )
-    if not is_admin(user_id):
+    if not is_admin(get_request_identity() or user_id):
         raise HTTPException(
             status_code=403,
             detail="Only an admin (ADMIN_EMAILS) can manage edge admissions.",
@@ -158,6 +165,7 @@ async def create_admission(body: dict, user_id: str = Depends(get_current_user_i
     """
     _require_admin(user_id)
     from services.access_provisioning import admit_email
+    from middleware.user_context import get_request_identity
 
     email = (body.get("email") or "").strip()
     if not email or "@" not in email:
@@ -166,7 +174,7 @@ async def create_admission(body: dict, user_id: str = Depends(get_current_user_i
         added = admit_email(email)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
-    logger.info(f"{user_id} admitted {email} at the edge")
+    logger.info(f"{get_request_identity() or user_id} admitted {email} at the edge")
     return {"email": email.lower(), "added": added}
 
 
@@ -183,8 +191,10 @@ async def delete_admission(email: str, user_id: str = Depends(get_current_user_i
     """
     _require_admin(user_id)
     from services.access_provisioning import revoke_email
+    from middleware.user_context import get_request_identity
 
-    if email.strip().lower() == (user_id or "").strip().lower():
+    actor = get_request_identity() or user_id
+    if email.strip().lower() == (actor or "").strip().lower():
         raise HTTPException(
             status_code=400,
             detail="You cannot withdraw your own access from inside the app.",
@@ -193,7 +203,7 @@ async def delete_admission(email: str, user_id: str = Depends(get_current_user_i
         removed = revoke_email(email)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
-    logger.info(f"{user_id} withdrew edge access for {email}")
+    logger.info(f"{actor} withdrew edge access for {email}")
     return {"email": email.strip().lower(), "removed": removed}
 
 
@@ -245,13 +255,15 @@ async def create_share(collection_id: str, body: dict, request: Request, user_id
             admit_email,
             is_admin,
         )
+        from middleware.user_context import get_request_identity
         from services.collection_service import collection_service
         from services.share_email import send_share_email
+        actor = get_request_identity() or user_id
 
         # Admit at the edge BEFORE sending, so the link works on arrival
         # rather than bouncing the recipient off the Access login.
         if access_provisioning_enabled():
-            if is_admin(user_id):
+            if is_admin(actor):
                 try:
                     share["edge_admitted"] = admit_email(notify_email)
                 except Exception as e:
@@ -314,6 +326,8 @@ async def create_shares_bulk(collection_id: str, body: dict, request: Request, u
     )
     from services.app_database import app_db
     from services.share_email import send_share_email
+    from middleware.user_context import get_request_identity
+    actor = get_request_identity() or user_id
 
     raw = body.get("emails") or []
     emails, seen = [], set()
@@ -340,7 +354,7 @@ async def create_shares_bulk(collection_id: str, body: dict, request: Request, u
 
     # One policy write for the whole batch.
     admissions = {}
-    if access_provisioning_enabled() and is_admin(user_id):
+    if access_provisioning_enabled() and is_admin(actor):
         try:
             admissions = admit_emails(emails)
         except Exception as e:
@@ -386,7 +400,7 @@ async def create_shares_bulk(collection_id: str, body: dict, request: Request, u
             entry["email_error"] = str(e)
         results.append(entry)
 
-    if access_provisioning_enabled() and not is_admin(user_id):
+    if access_provisioning_enabled() and not is_admin(actor):
         note = (
             "Admitting new people at the Cloudflare Access edge is an admin "
             "action; these invitations only work for recipients who can "

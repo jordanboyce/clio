@@ -5,6 +5,7 @@ import {
   fetchServerProviderIds,
   getConfiguredProviderIds,
   getDeploymentDefault,
+  getProviderConfig,
   getProviderDisplayName,
   onProviderChange,
   resolveProvider,
@@ -47,12 +48,12 @@ export const useProviderStore = defineStore('provider', () => {
     activeProviderId.value ? getProviderDisplayName(activeProviderId.value) : ''
   )
 
-  // Surface-scoped resolution ('chat', 'search', …). Reading version inside
-  // registers the dependency, so callers can use this in their computeds.
-  function resolveFor(surface = null) {
+  // The configured model of the active provider ('' = the provider's own default).
+  const activeModel = computed(() => {
     version.value
-    return resolveProvider(surface)
-  }
+    const id = resolveProvider()
+    return (id && getProviderConfig(id)?.model) || ''
+  })
 
   // The provider the deployment itself configured (on-prem private model).
   // Reading version keeps consumers reactive across loadServerProviders().
@@ -75,7 +76,7 @@ export const useProviderStore = defineStore('provider', () => {
     activeProviderId,
     activeProviderName,
     deploymentDefault,
-    resolveFor,
+    activeModel,
     loadServerProviders,
   }
 })

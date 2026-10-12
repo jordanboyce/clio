@@ -36,19 +36,31 @@ router = APIRouter()
 
 @router.get("/api/admin/review", summary="Content review queue", tags=["admin"])
 async def get_review_queue():
-    """Flagged and quarantined documents across every collection, plus the
-    most recent user reports."""
+    """Everything awaiting review: one entry per document with every reason
+    attached (content scan, prompt-injection warnings, user reports), most
+    urgent first. ``quarantined``, ``flagged`` and ``reports`` keep their
+    original shapes for existing clients."""
     require_admin("review flagged content")
     from services.app_database import app_db
 
     queue = governance.review_queue()
+    governance.invalidate_review_summary()
     return {
         "content_policy_action": settings.content_policy_action,
+        "items": queue,
+        "summary": governance.summarize_queue(queue),
         "quarantined": [d for d in queue if d.get("policy_status") == "quarantined"],
         "flagged": [d for d in queue if d.get("policy_status") == "flagged"],
         "reports": governance.recent_reports(limit=50),
         "blocked_hashes": len(app_db.list_blocked_hashes()),
     }
+
+
+@router.get("/api/admin/review/summary", summary="Pending-review counts", tags=["admin"])
+async def get_review_summary():
+    """Cheap counts for the notification badge (cached for a few seconds)."""
+    require_admin("review flagged content")
+    return governance.review_summary()
 
 
 class ReviewNote(BaseModel):
@@ -57,16 +69,18 @@ class ReviewNote(BaseModel):
 
 @router.post(
     "/api/admin/documents/{collection_id}/{document_id}/approve",
-    summary="Clear a flagged or quarantined document",
+    summary="Mark a document as reviewed and fine",
     tags=["admin"],
 )
 async def approve_document(collection_id: str, document_id: str, body: Optional[ReviewNote] = None):
-    """The document becomes visible again everywhere. The scan summary stays
-    on the row so the decision is reviewable later."""
+    """Closes everything open on the document: a hold or flag is lifted (it is
+    visible again everywhere), injection warnings are dismissed and user
+    reports are answered. The scan findings stay on the row so the decision
+    is reviewable later; ``resolved`` says which of the three applied."""
     require_admin("approve a document")
     try:
-        return governance.set_policy_status(
-            collection_id, document_id, "approved", note=(body.note if body else "")
+        return governance.resolve_document(
+            collection_id, document_id, note=(body.note if body else "")
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Document not found")

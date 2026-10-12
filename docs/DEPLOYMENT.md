@@ -422,6 +422,24 @@ present, else the client IP (`CF-Connecting-IP` behind the tunnel). A
 stats, and the rate-limit counters; the same data is at
 `/api/admin/usage` and `/api/admin/stats`.
 
+## Embedding model on first start
+
+The built-in embedding model runs in-process through **fastembed** (ONNX on
+onnxruntime, part of the core install) and, when `requirements-torch.txt`
+is installed, through **sentence-transformers** for models fastembed has no
+export of; `LOCAL_EMBEDDING_BACKEND` (`auto` | `fastembed` |
+`sentence-transformers`) picks, and both produce the same vectors, so
+switching never forces a re-index. The Docker image bakes the default model
+for both backends. A bare-metal install downloads it on first start: the
+warm-up runs in the background and `GET /api/embedding/status` (and the
+first-run screen) shows `downloading` with a byte count, then `ready`. To
+pre-seed a host that cannot reach huggingface.co, run on a connected
+machine `python -c "from fastembed import TextEmbedding;
+TextEmbedding('sentence-transformers/all-MiniLM-L6-v2',
+cache_dir='data/models/fastembed')"` and copy `data/models/fastembed/`
+across; the fastembed cache lives under the data directory so it survives
+container recreation with the volume.
+
 ## Backups
 
 Everything lives in the data directory (`./data` by default, `/app/data` in
@@ -445,3 +463,14 @@ Stop the container first, or snapshot the volume, so SQLite is not mid-write.
       `CONTENT_POLICY_ACTION` / `AUP_REQUIRED` match what you told people
       the rules are (see [Content governance](#content-governance))
 - [ ] The data directory is backed up
+
+### Behind a firewall that blocks huggingface.co
+
+Neither the image build nor the first start depends on the download succeeding.
+`docker compose build` prints a warning and continues when the bake cannot reach
+the hub; at runtime the app opens, lists existing sources and serves settings,
+while search and indexing return HTTP 503 with the reason until a model is
+available. From the readiness bar (or Settings → Indexing → Embedding) choose
+one of: retry the download once the proxy allows it, pre-seed the cache from a
+connected machine (docs/AIRGAP.md), point `EMBEDDING_PROVIDER` at an Ollama you
+run, or at a hosted API you trust.

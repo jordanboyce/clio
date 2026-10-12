@@ -24,6 +24,11 @@ Setting `OFFLINE_MODE=1` enforces, at runtime:
   are set before any ML library loads. Embedding, reranker, Whisper, and
   Docling models load from the local cache only; a missing model fails fast
   with instructions instead of hanging on network retries.
+  The embedding model has two in-process backends — fastembed (ONNX, the
+  default, cache under `DATA_DIR/models/fastembed`, or `/opt/clio/models/fastembed`
+  in the image) and sentence-transformers (PyTorch, HF cache). Both read the
+  same weights, so pre-seeding either is enough; `GET /api/embedding/status`
+  reports `missing` with `can_download: false` when neither has the model.
 
 Everything else in the stack is local by construction: FAISS + BM25 search,
 SQLite storage, the embedded MCP server, and a frontend with zero CDN
@@ -96,7 +101,14 @@ carry across.
 
 2. Transfer the whole project directory **including** `venv/`,
    `frontend/dist/`, and the model caches:
-   - `~/.cache/huggingface/` (or wherever `HF_HOME` points)
+   - `<DATA_DIR>/models/fastembed/` — the default embedding backend
+     (fastembed, ONNX). Seed it on the connected machine with
+     `python -c "from fastembed import TextEmbedding; TextEmbedding('sentence-transformers/all-MiniLM-L6-v2', cache_dir='data/models/fastembed')"`
+     (use the fastembed id of whichever `EMBEDDING_MODEL` you run; the
+     directory is complete once it holds a `files_metadata.json`).
+   - `~/.cache/huggingface/` (or wherever `HF_HOME` points) — the
+     sentence-transformers backend and the reranker, only when
+     `requirements-torch.txt` is installed
    - `~/.cache/docling/` (if using local OCR)
 
 3. Inside the air gap, set in `.env`:

@@ -54,6 +54,10 @@ research tools in chat and MCP clients.
 | **Teach it your house style or domain** | Expertise (under More) | Expertise packs add instructions and terminology per collection, versioned alongside the corpus. |
 | **Give your AI assistant a private knowledge source** | Connect | Claude Desktop, claude.ai, ChatGPT and Claude Code sign in through your identity provider; Codex, VS Code, AnythingLLM and Claude Code can also use a personal token. Agents can write notes and summaries back when a token allows it. |
 | **Index scanned paper, photos, audio, code** | Add sources | OCR (local Tesseract/Docling or a vision model), Whisper transcription, code-aware chunking, image description. |
+| **Index a whole source tree** | Add sources | Sixty-plus languages and config formats chunk by symbol (functions, classes, SQL objects, Terraform resources, shell functions, Vue/Svelte scripts), with `Makefile`, `Dockerfile` and friends recognised by name. Parsing is lenient by design: syntax errors, unbalanced braces, unterminated strings, mixed tabs and spaces, odd encodings and minified files still index; binaries, lockfiles, build output and vendored dependencies are skipped. Every passage keeps its symbol name and line range, so Find, Ask and MCP results say *which function* they came from. The Sources panel shows a type tile per file and chips (Code · Docs · Data · Media) that filter the list. |
+| **Share an indexed collection with another Clio** | Collections | *Export* writes one `.clio.zip`: the extracted text, pages and tables, the vectors, and a plain statement of which embedding model made them (optionally the original files). *Import* previews it first: contents, the model, and whether this server will reuse the vectors (same model, ready almost at once) or embed the text again with its own (no extraction or OCR is redone). Held sources never leave; this server's blocklist applies on the way in. |
+| **Keep a folder in sync** | Add sources | Point Clio at a folder once; every later sync hashes the tree, skips unchanged files, re-indexes changed ones, and can prune documents whose file was deleted. Remembered folders show *Sync* and *Prune* in the Sources panel (`POST /documents/sync-folder`). |
+| **Move fast with the keyboard** | Everywhere | `⌘K` / `Ctrl+K` opens a command palette for every destination, collection, recent chat, theme and action; `?` shows the shortcuts; `g` then a letter jumps between Ask, Find, Connect, Collections and Settings. |
 | **Keep a shared corpus accountable** | More → Admin | Attribution on every document, an append-only audit trail (including agent reads if enabled), content-policy scanning with flag/quarantine/reject, sensitivity labels, blocklists, an acceptable-use gate. |
 
 ### Where people run it
@@ -62,7 +66,7 @@ research tools in chat and MCP clients.
 |---|---|---|---|
 | **Just you, on your machine** | `python main.py` or `docker compose up -d` | Loopback only; no password needed | [Quick Start](#quick-start) |
 | **A team on an internal network** | Docker with `BIND_ADDRESS` and `AUTH_PASSWORD` | Everyone with the password sees the shared corpus | [DEPLOYMENT.md](docs/DEPLOYMENT.md) |
-| **A team reachable from anywhere** | Docker + Cloudflare Tunnel + Access, no inbound ports | Your SSO at the edge; per-person collections with `PRIVATE_COLLECTIONS`; self-serve `/register`; invitations admitted at the edge automatically | [REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md) |
+| **A team reachable from anywhere** | Docker + Cloudflare Tunnel + Access, no inbound ports | Email PIN for an explicit allowlist; Jordan-only Clio administration; `/request-access` contact page | [REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md) |
 | **An organisation hosting it internally** | The portable image, your own IdP (`IDENTITY_PROVIDER=oidc` or an authenticating proxy), your own models (`AI_PROVIDER`) | Identities from Keycloak, Entra ID, Okta, mTLS or Kerberos; private collections; OAuth sign-in for connector clients; a full audit trail | [ONPREM.md](docs/ONPREM.md), [IDENTITY.md](docs/IDENTITY.md), [AGENCY_PILOT.md](docs/AGENCY_PILOT.md) |
 | **Fully air-gapped** | The offline bundle with `OFFLINE_MODE=1` | As above, with cloud providers and model downloads disabled | [AIRGAP.md](docs/AIRGAP.md) |
 | **A hosted PaaS (Railway, Render, Fly.io, Coolify)** | The Dockerfile, a volume at `/app/data`, `AUTH_PASSWORD` | The password, or an SSO proxy in front | [Hosting on a PaaS](#hosting-on-a-paas-railway-render-flyio-coolify-) |
@@ -125,7 +129,7 @@ That's the whole setup — the image builds the frontend, bundles OCR (Tesseract
 
 Choose an access model deliberately. In the default shared-appliance mode, everyone admitted can access the team corpus. `PRIVATE_COLLECTIONS=true` enables collection ownership and read/readwrite sharing, enforced against a verified identity: Cloudflare Access at the edge, your own OIDC provider (`IDENTITY_PROVIDER=oidc` — Keycloak, Entra ID, Okta, PingFederate), or an authenticating reverse proxy (`trusted_header` — mTLS, Kerberos, a site SSO proxy). Configure `ADMIN_EMAILS` for operators. The app refuses to start with private collections on and no identity source it can enforce. Setup and verification: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) and [docs/IDENTITY.md](docs/IDENTITY.md).
 
-To reach a home or lab box from anywhere without opening a port, put it behind Cloudflare Tunnel + Access; `scripts/provision_cloudflare.py` creates the tunnel, the Access apps and the DNS record in one run. Recipe: [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md).
+To reach a home or lab box from anywhere without opening a port, put it behind Cloudflare Tunnel + Access; `scripts/provision_cloudflare.py` creates the tunnel, the Access apps and the DNS record in one run. Set `CLIO_ALLOW_EMAILS` to the exact addresses to admit; people sign in with Cloudflare's emailed one-time PIN, with no app password or public registration. Recipe: [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md).
 
 People can also ask for access themselves: `REGISTRATION_MODE=approval` (queue for an admin) or `open` (admit matching addresses at once) turns on a public `/register` page, with an optional email-domain allowlist and a seat cap. Each collection holds up to 5 GiB of sources by default (`COLLECTION_STORAGE_LIMIT_BYTES`); usage is shown in the Sources panel.
 
@@ -195,7 +199,10 @@ API and MCP clients then authenticate with `Authorization: Bearer <AUTH_PASSWORD
 - **API Endpoint**: http://localhost:8473/api - REST API for programmatic access
 - **MCP Endpoint**: http://localhost:8473/mcp - Streamable-HTTP MCP server for external agents
 
-**First time setup**: The embedding model (~90MB) will download automatically on first run.
+**First time setup**: the search model (about 90 MB) downloads in the background the first
+time the server starts, with progress shown in the app. Setup also asks where you want the
+search index to run: on this machine, in an Ollama you already run, or at a hosted provider
+you trust.
 
 **SSL/TLS Support**: For corporate environments with custom CA certificates, see the [Corporate SSL Configuration](#corporate-ssl-configuration) section below.
 
@@ -341,7 +348,20 @@ cp .env.example .env
 python main.py
 ```
 
-**First run:** The embedding model downloads automatically (~90MB, 1-2 minutes).
+**First run:** the search model downloads in the background (about 90 MB, one to two
+minutes) and the app shows a progress bar until it is ready. If a corporate firewall blocks
+the download, nothing else stops: the app opens, existing sources list and settings work,
+search and indexing answer with the reason (HTTP 503) until a model is available, and the
+readiness bar offers a retry or another provider (an Ollama you run, or a hosted API). The core install runs embeddings
+on a small ONNX runtime (`fastembed`); the PyTorch-based `sentence-transformers` backend, which
+unlocks the wider model catalog, is optional:
+
+```bash
+pip install -r requirements-torch.txt   # optional: PyTorch backend, wider model catalog
+```
+
+Set `LOCAL_EMBEDDING_BACKEND=fastembed|sentence-transformers` to pick one explicitly; `auto`
+(the default) uses `fastembed` when it serves the chosen model and PyTorch otherwise.
 
 **You'll see:**
 ```
@@ -380,9 +400,23 @@ Use **Connect** in the UI to:
   a `write_document` tool: it can save markdown notes, summaries, JSON, or CSV into a collection
   (`create`, `replace`, or `append`), indexed like any upload and subject to the same content policy,
   attribution, and audit trail. Tokens are read-only unless you opt in.
-- Copy or download AnythingLLM `anythingllm_mcp_servers.json`, Claude Code `.mcp.json`,
-  Codex `config.toml`, and GitHub Copilot `.vscode/mcp.json` snippets. Newly created tokens
-  are filled in; existing tokens require pasting the credential you saved.
+- **ChatGPT connectors and deep research** — the server also exposes the two tools OpenAI's
+  connector spec requires, `search` and `fetch`, over the same auth and collection scoping as every
+  other tool, so a ChatGPT custom connector (or any client that only speaks that shape) works
+  without a bridge.
+- **Let agents manage the index** — `list_index_jobs` and `get_index_job` show what is being
+  indexed; write-enabled tokens also get `reindex_document` (re-run extraction and embedding for
+  one source as a tracked, cancellable job) and `update_document_metadata` (set the sensitivity
+  label). Every tool schema carries its numeric limits and a human title, and every resource is
+  named and typed, so clients render them properly.
+- **See exactly what agents can do** — *What agents can do here* on the Connect tab lists the
+  tools, resources and prompts read live from the server (`GET /api/mcp/catalog`), grouped by
+  task and marked where a tool writes.
+- Copy or download ready-made snippets for Claude Code `.mcp.json`, Claude Desktop
+  `claude_desktop_config.json` (via `mcp-remote`), Cursor `.cursor/mcp.json`, Codex `config.toml`,
+  VS Code `.vscode/mcp.json`, Windsurf `mcp_config.json`, and AnythingLLM
+  `anythingllm_mcp_servers.json`. Newly created tokens are filled in; existing tokens require
+  pasting the credential you saved.
 
 For AnythingLLM, merge the entry into its storage `plugins/anythingllm_mcp_servers.json`
 and reload MCP servers in AnythingLLM. The export uses its `streamable` transport.
@@ -462,6 +496,7 @@ DATA_DIR=./data                          # Where documents and indexes are store
 # Embeddings — see "Choosing where embeddings run" below
 EMBEDDING_PROVIDER=local                # local | google | mistral | voyage | jina | openrouter | openai | ollama | openai_compatible
 EMBEDDING_MODEL=all-MiniLM-L6-v2        # model for the local provider
+LOCAL_EMBEDDING_BACKEND=auto            # auto | fastembed (ONNX, light) | sentence-transformers (PyTorch)
 REMOTE_EMBEDDING_MODEL=                 # model for any other provider (blank = its recommended one)
 EMBEDDING_API_KEY=                      # blank = reuse the matching AI Providers key
 
@@ -765,9 +800,12 @@ pip install faiss-cpu
 **Solutions:**
 - Wait 1-2 minutes (one-time download)
 - Check your internet connection
-- If behind corporate firewall, download manually:
-  1. Get model from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
-  2. Place in `~/.cache/torch/sentence_transformers/`
+- If behind corporate firewall, pre-seed the model from a connected machine and copy the
+  cache folder over: `<DATA_DIR>/models/fastembed/` for the default ONNX backend, or the
+  Hugging Face cache (`~/.cache/huggingface/hub/`) for the PyTorch backend. See
+  [docs/AIRGAP.md](docs/AIRGAP.md). The app also shows a **Download now** button once the
+  network is fixed, and Settings → Indexing → Embedding can switch to Ollama or a hosted
+  provider instead.
 
 #### 4. "SSL certificate error" downloading the model
 
@@ -938,9 +976,21 @@ echo "CHUNK_OVERLAP=150" >> .env
 
 Every document chunk and every search query is turned into a vector by an
 embedding model. By default that model runs inside the app on the server's
-CPU — free and private, but slow on small hosting plans, where it is also
-what makes the container heavy. **Settings → Indexing → Embedding** lets you
-move that work to a hosted API instead:
+CPU through a small ONNX runtime — free and private, and light enough for a
+laptop. First-run setup asks where the index should run and shows the
+download as it happens; **Settings → Indexing → Embedding** changes it later
+(changing the model re-embeds the collection). Good local choices:
+
+| Model | Size | Backend | Notes |
+|---|---|---|---|
+| `all-MiniLM-L6-v2` (default) | 90 MB | ONNX or PyTorch | Fast on any CPU, English |
+| `BAAI/bge-small-en-v1.5` | 130 MB | ONNX or PyTorch | Same size class, noticeably better retrieval |
+| `nomic-ai/nomic-embed-text-v1.5` | 270 MB | ONNX or PyTorch | 8k context, strong on code and long passages |
+| `jinaai/jina-embeddings-v2-base-code` | 320 MB | ONNX or PyTorch | Built for source code |
+| `paraphrase-multilingual-MiniLM-L12-v2` | 470 MB | ONNX or PyTorch | 50+ languages |
+| `intfloat/multilingual-e5-small` | 470 MB | PyTorch only | 100 languages (`pip install -r requirements-torch.txt`) |
+
+Or move the work to an Ollama you already run, or to a hosted API:
 
 | Option | Cost | Key | Notes |
 |---|---|---|---|
@@ -1203,7 +1253,7 @@ A: Yes. Search and embeddings are local after the first run (the model downloads
 A: Very good for finding concepts, not exact strings. ~80-90% accuracy for most queries.
 
 **Q: Can I delete the embedding model cache?**
-A: It's in `~/.cache/torch/sentence_transformers/`. You can delete it but it'll re-download.
+A: The default ONNX backend keeps it in `<DATA_DIR>/models/fastembed/` (or `/opt/clio/models/fastembed/` inside the Docker image); the PyTorch backend uses the Hugging Face cache under `~/.cache/huggingface/hub/`. You can delete either; it re-downloads on the next start, with progress shown in the app.
 
 **Q: What's the largest PDF it can handle?**
 A: Tested up to 1000+ pages. Limited by RAM.
@@ -1224,11 +1274,9 @@ A: No. Search works with no model at all. For answers, use any provider you trus
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE). You're free to use, modify,
-and deploy this on internal systems — including commercial use — provided the
-license and notices are retained. The license includes an express patent grant
-from contributors, which is why it's the usual choice for software adopted
-inside enterprises and laboratories.
+Licensed under the [MIT License](LICENSE). You're free to use, modify, and
+deploy this anywhere — including commercially and inside internal systems —
+provided the copyright notice and the license text travel with the software.
 
 ---
 

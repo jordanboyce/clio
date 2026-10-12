@@ -22,7 +22,13 @@ export const useStatsStore = defineStore('stats', () => {
   // would have to be downloaded on first use — impossible on a network that
   // blocks huggingface.co. Surfaced as a banner until fixed or dismissed.
   const embeddingModelMissing = ref(false)
+  // Live readiness of the search index: {status, backend, model, provider,
+  // progress, error, can_download}. `status` is ready | loading |
+  // downloading | missing | error | unconfigured. Polled by the banner while
+  // a download is in flight.
+  const embedding = ref(null)
   const loaded = ref(false)
+  let embeddingPollTimer = null
 
   let inFlight = null
   let debounceTimer = null
@@ -47,7 +53,7 @@ export const useStatsStore = defineStore('stats', () => {
         storageLimitBytes.value = statsResponse.data.storage_limit_bytes || 0
         storagePercent.value = statsResponse.data.storage_percent || 0
         offline.value = !!healthResponse.data.offline_mode
-        embeddingModelMissing.value = !!healthResponse.data.embedding?.local_model_missing
+        applyEmbedding(healthResponse.data.embedding)
         loaded.value = true
       } catch {
         // Stats are decorative; the http interceptor already surfaced any
@@ -59,6 +65,38 @@ export const useStatsStore = defineStore('stats', () => {
     return inFlight
   }
 
+  function applyEmbedding(info) {
+    if (!info) return
+    embedding.value = { ...(embedding.value || {}), ...info }
+    const status = info.status
+    embeddingModelMissing.value = status ? status === 'missing' : !!info.local_model_missing
+    if (status === 'downloading' || status === 'loading') startEmbeddingPolling()
+    else stopEmbeddingPolling()
+  }
+
+  async function refreshEmbedding() {
+    try {
+      const { data } = await http.get('/api/embedding/status')
+      applyEmbedding(data)
+    } catch { /* the next health poll will catch up */ }
+  }
+
+  function startEmbeddingPolling() {
+    if (embeddingPollTimer) return
+    embeddingPollTimer = setInterval(refreshEmbedding, 1500)
+  }
+  function stopEmbeddingPolling() {
+    if (embeddingPollTimer) clearInterval(embeddingPollTimer)
+    embeddingPollTimer = null
+  }
+
+  // Ask the server to fetch and load the configured local model now.
+  async function warmEmbedding() {
+    const { data } = await http.post('/api/embedding/warm')
+    applyEmbedding(data)
+    return data
+  }
+
   // For high-frequency triggers (job progress ticks): trailing-edge debounce.
   function fetchStatsDebounced(delay = 500) {
     clearTimeout(debounceTimer)
@@ -67,6 +105,7 @@ export const useStatsStore = defineStore('stats', () => {
 
   return {
     documents, pages, chunks, storageBytes, storageLimitBytes, storagePercent,
-    offline, embeddingModelMissing, loaded, fetchStats, fetchStatsDebounced,
+    offline, embeddingModelMissing, embedding, loaded, fetchStats, fetchStatsDebounced,
+    refreshEmbedding, warmEmbedding, applyEmbedding,
   }
 })

@@ -375,37 +375,52 @@
 
     </template>
 
-    <!-- What this server exposes -->
-    <details class="rounded-lg border border-base-300 px-4 py-3 space-y-2">
-      <summary class="cursor-pointer text-sm font-medium">Tools and resources reference</summary>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-xs text-base-content/70">
-        <div>
-          <p class="font-medium text-base-content/80 mb-0.5">Tools (call these)</p>
-          <ul class="space-y-0.5 font-mono">
-            <li>search_all_collections</li>
-            <li>search_collection</li>
-            <li>research_documents — multi-query research, diverse passages, coverage gaps; collection_ids spans several collections</li>
-            <li>list_recent_documents</li>
-            <li>get_document_context</li>
-            <li>find_in_documents</li>
-            <li>list_tables · query_table</li>
-            <li>aggregate_table · get_table_rows</li>
-            <li>list_collections · health_check</li>
-            <li>write_document <span class="font-sans text-base-content/45">— add or update a source (write-enabled tokens)</span></li>
+    <!-- What this server exposes: read live from the server so the list is
+         never stale. Each tool shows its title, first line of description,
+         and whether it reads or writes. -->
+    <details class="rounded-lg border border-base-300 px-4 py-3" data-testid="mcp-catalog">
+      <summary class="cursor-pointer text-sm font-medium">
+        What agents can do here
+        <span v-if="catalog" class="font-normal text-base-content/50">· {{ catalog.tools.length }} tools · {{ catalog.resources.length }} resources · {{ catalog.prompts.length }} prompts</span>
+      </summary>
+      <div v-if="catalogError" class="mt-3 text-xs text-base-content/60">{{ catalogError }}</div>
+      <div v-else-if="!catalog" class="mt-3 space-y-2">
+        <div v-for="n in 4" :key="n" class="skeleton h-5 w-full rounded" aria-hidden="true"></div>
+      </div>
+      <div v-else class="mt-3 space-y-5">
+        <section v-for="group in catalogGroups" :key="group.title">
+          <h3 class="side-label text-base-content/50 mb-1">{{ group.title }}</h3>
+          <ul class="divide-y divide-base-300/50">
+            <li v-for="tool in group.tools" :key="tool.name" class="py-2 grid grid-cols-[minmax(0,14rem)_1fr] gap-x-4 gap-y-0.5 text-xs">
+              <div class="min-w-0">
+                <code class="font-mono text-[12px] text-base-content/90 break-all">{{ tool.name }}</code>
+                <span v-if="!tool.read_only" class="ml-1.5 badge badge-xs badge-warning badge-outline align-middle">writes</span>
+              </div>
+              <p class="text-base-content/65 leading-relaxed">{{ tool.description }}</p>
+            </li>
           </ul>
-        </div>
-        <div>
-          <p class="font-medium text-base-content/80 mb-0.5">Resources (load as context)</p>
-          <ul class="space-y-0.5 font-mono">
-            <li>collections://all</li>
-            <li>collection://&#123;id&#125;</li>
-            <li>collection://&#123;id&#125;/guide</li>
-            <li>collection://&#123;id&#125;/schema</li>
-            <li>collection://&#123;id&#125;/tables</li>
-            <li>document://&#123;id&#125;</li>
-            <li>table://&#123;id&#125;</li>
+        </section>
+        <section v-if="catalog.resources.length">
+          <h3 class="side-label text-base-content/50 mb-1">Resources <span class="font-normal">(load as context)</span></h3>
+          <ul class="divide-y divide-base-300/50">
+            <li v-for="r in catalog.resources" :key="r.uri_template" class="py-1.5 grid grid-cols-[minmax(0,14rem)_1fr] gap-x-4 text-xs">
+              <code class="font-mono text-[12px] text-base-content/90 break-all">{{ r.uri_template }}</code>
+              <span class="text-base-content/65">{{ r.description || r.name }}</span>
+            </li>
           </ul>
-        </div>
+        </section>
+        <section v-if="catalog.prompts.length">
+          <h3 class="side-label text-base-content/50 mb-1">Prompts <span class="font-normal">(ready-made workflows)</span></h3>
+          <ul class="divide-y divide-base-300/50">
+            <li v-for="pr in catalog.prompts" :key="pr.name" class="py-1.5 grid grid-cols-[minmax(0,14rem)_1fr] gap-x-4 text-xs">
+              <code class="font-mono text-[12px] text-base-content/90 break-all">{{ pr.name }}</code>
+              <span class="text-base-content/65">{{ pr.description || pr.title }}</span>
+            </li>
+          </ul>
+        </section>
+        <p class="text-[11px] text-base-content/45">
+          ChatGPT connectors call <code>search</code> and <code>fetch</code>; every other client sees the full set. Write tools only work for tokens that allow adding sources.
+        </p>
       </div>
     </details>
 
@@ -474,10 +489,13 @@ const oauthIssuerHost = computed(() => {
 })
 
 const configTabs = [
-  { key: 'anythingllm', label: 'AnythingLLM' },
   { key: 'claude', label: 'Claude Code' },
+  { key: 'desktop', label: 'Claude Desktop' },
+  { key: 'cursor', label: 'Cursor' },
   { key: 'codex', label: 'Codex' },
-  { key: 'copilot', label: 'GitHub Copilot' },
+  { key: 'copilot', label: 'VS Code' },
+  { key: 'windsurf', label: 'Windsurf' },
+  { key: 'anythingllm', label: 'AnythingLLM' },
 ]
 
 // Client configs are generated locally — the server URL plus a collection_id
@@ -548,14 +566,68 @@ const activeTabMeta = computed(() => {
       hint: 'Merge this entry into your existing Codex config.toml. Keep the credential private.',
     },
     copilot: {
-      label: 'GitHub Copilot config',
+      label: 'VS Code (GitHub Copilot) config',
       content: JSON.stringify({ servers: { [serverId.value]: httpEntry } }, null, 2),
       filename: '.vscode/mcp.json',
       hint: 'Place this file at .vscode/mcp.json in your project, or merge into your VS Code settings.',
     },
+    cursor: {
+      label: 'Cursor config',
+      content: JSON.stringify({ mcpServers: { [serverId.value]: { url: serverUrl.value, headers } } }, null, 2),
+      filename: '.cursor/mcp.json',
+      hint: 'Save as .cursor/mcp.json in your project (or ~/.cursor/mcp.json for every project), then enable the server under Cursor Settings → MCP. Keep the credential private.',
+    },
+    windsurf: {
+      label: 'Windsurf config',
+      content: JSON.stringify({ mcpServers: { [serverId.value]: { serverUrl: serverUrl.value, headers } } }, null, 2),
+      filename: '~/.codeium/windsurf/mcp_config.json',
+      hint: 'Merge this entry into ~/.codeium/windsurf/mcp_config.json and refresh the MCP list in Windsurf. Keep the credential private.',
+    },
+    desktop: {
+      label: 'Claude Desktop config',
+      content: JSON.stringify({ mcpServers: { [serverId.value]: {
+        command: 'npx',
+        args: ['-y', 'mcp-remote', serverUrl.value, '--header', `Authorization: Bearer ${authHeaderValue.value}`],
+      } } }, null, 2),
+      filename: 'claude_desktop_config.json',
+      hint: oauth.value.enabled
+        ? 'With sign-in enabled you can skip this: add the server URL as a custom connector under Settings → Connectors and sign in from the client. This token-based form needs Node.js for the mcp-remote bridge.'
+        : 'Claude Desktop speaks stdio to local servers, so mcp-remote (needs Node.js) bridges it to this URL. Merge into claude_desktop_config.json (Settings → Developer → Edit Config) and restart Claude Desktop.',
+    },
   }
   return tabs[activeTab.value]
 })
+
+// Live tool catalog from the server. Grouped by what an agent is trying to
+// do rather than by implementation, so a reader can scan it.
+const catalog = ref(null)
+const catalogError = ref('')
+const CATALOG_GROUPS = [
+  { title: 'Search and research', match: /^(search|fetch|search_|research_|find_)/ },
+  { title: 'Read documents', match: /^(get_document|list_recent|get_collection|list_collections|health)/ },
+  { title: 'Tables', match: /table/ },
+  { title: 'Write, index and jobs', match: /^(write_|reindex|update_|list_index|get_index)/ },
+]
+const catalogGroups = computed(() => {
+  if (!catalog.value) return []
+  const seen = new Set()
+  const groups = CATALOG_GROUPS.map(g => ({ title: g.title, tools: [] }))
+  for (const tool of catalog.value.tools) {
+    const idx = CATALOG_GROUPS.findIndex(g => g.match.test(tool.name))
+    const target = idx === -1 ? groups[groups.length - 1] : groups[idx]
+    target.tools.push(tool); seen.add(tool.name)
+  }
+  return groups.filter(g => g.tools.length)
+})
+const loadCatalog = async () => {
+  try {
+    const { data } = await http.get('/api/mcp/catalog')
+    catalog.value = { tools: data.tools || [], resources: data.resources || [], prompts: data.prompts || [] }
+  } catch (err) {
+    catalogError.value = err?.message || 'Could not load the tool list.'
+  }
+}
+onMounted(loadCatalog)
 
 const loadMcpCollections = async () => {
   try {

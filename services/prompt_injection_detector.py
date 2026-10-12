@@ -32,6 +32,7 @@ class InjectionFinding:
     matched_text: str   # excerpt (capped at 120 chars)
     severity: str       # "low" | "medium" | "high"
     char_offset: int    # byte offset in the scanned string
+    downgraded: bool = False  # severity lowered because the match is quoted / an example
 
 
 @dataclass
@@ -54,6 +55,7 @@ class InjectionScanResult:
                     "matched_text": f.matched_text,
                     "severity": f.severity,
                     "char_offset": f.char_offset,
+                    **({"downgraded": True} if f.downgraded else {}),
                 }
                 for f in self.findings
             ],
@@ -197,9 +199,12 @@ _PATTERNS: List[Tuple[str, str, str, str]] = [
      "medium"),
 
     # ── Exfiltration attempts ───────────────────────────────────────────────
+    # Needs "your ..." or an explicit system/hidden prompt: "show the instructions"
+    # is what every installation guide says.
     ("exfiltration", "reveal_system_prompt",
      r"\b(reveal|print|repeat|show|output|display|tell\s+me|write\s+out)\b.{0,50}"
-     r"\b(your\s+)?(system\s+prompt|instructions?|directives?|constraints?|rules?)\b",
+     r"\b(your\s+(system\s+)?(prompt|instructions?|directives?|constraints?|rules?)"
+     r"|(the\s+)?(system|initial|hidden|original)\s+(prompt|instructions?|message))\b",
      "high"),
 
     ("exfiltration", "what_are_your_instructions",
@@ -211,10 +216,18 @@ _PATTERNS: List[Tuple[str, str, str, str]] = [
      "medium"),
 
     # ── Bypass / disable attempts ───────────────────────────────────────────
+    # Aimed at the assistant ("your safety filters") it is an attack; without
+    # that it is as likely a machinery manual or a spam-filter how-to.
+    ("bypass_attempt", "bypass_your_safety",
+     r"\b(bypass|disable|circumvent|override|ignore|remove|turn\s+off)\b.{0,30}"
+     r"\b(your|the\s+(ai|model|assistant|llm)'?s?)\b.{0,30}"
+     r"\b(safety|filter|guardrail|restriction|limitation|constraint|ethical|moral)",
+     "high"),
+
     ("bypass_attempt", "bypass_safety",
      r"\b(bypass|disable|circumvent|override|ignore|remove|turn\s+off)\b.{0,50}"
      r"\b(safety|filter|guardrail|restriction|limitation|constraint|ethical|moral)\b",
-     "high"),
+     "medium"),
 
     ("bypass_attempt", "without_restrictions",
      r"\bwithout\s+(any\s+)?(filter|restriction|guardrail|constraint|limitation|safety|ethical|moral)\b",
@@ -249,6 +262,139 @@ _ZERO_WIDTH = frozenset('\u200b\u200c\u200d\ufeff\u2060\u2061\u2062\u2063\u2064'
 _DIR_OVERRIDE = frozenset('\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069')
 
 
+# ── Quoted / example context ────────────────────────────────────────────────
+# A security guide quoting "ignore previous instructions" is not performing
+# the attack. Matches that sit inside quotes or code, or right after a cue
+# that the text is *about* injection, drop one severity level (and never
+# reach "high", which is what gets a document queued for review).
+_EXAMPLE_CUE = re.compile(
+    r"\b(example|examples|for\s+instance|e\.g\.|such\s+as|phrases?\s+like|payloads?|"
+    r"red[\s-]?team\w*|attackers?|attacks?|mitigat\w+|defen[cs]e|detect(?:ion|ing|or)?|"
+    r"vulnerab\w+|sample|test\s+(?:case|string|input)|known\s+as|quoted?|jailbreak\s+prompts?)\b",
+    re.IGNORECASE,
+)
+_OPEN_QUOTES = frozenset('"\'`\u201c\u2018\u00ab')
+# Format tokens and invisible characters are technical artefacts, not prose:
+# quoting them does not make them harmless, so they are never downgraded.
+_NEVER_DOWNGRADE = frozenset({"model_token", "encoding_trick"})
+_DOWNGRADE = {"high": "medium", "medium": "low", "low": "low"}
+_MAX_FINDINGS_PER_PATTERN = 5
+
+
+def _in_example_context(text: str, start: int) -> bool:
+    line_start = text.rfind("\n", 0, start) + 1
+    if text[line_start:start].lstrip().startswith(">"):
+        return True
+    i = start - 1
+    while i >= 0 and text[i] in " \t":
+        i -= 1
+    if i >= 0 and text[i] in _OPEN_QUOTES:
+        return True
+    return bool(_EXAMPLE_CUE.search(text[max(0, start - 100):start]))
+
+
+# Plain-language reading of each category, for the reviewer.
+CATEGORY_MEANING = {
+    "instruction_override": "tries to override the assistant's instructions",
+    "persona_injection": "tries to give the assistant a different persona",
+    "model_token": "contains chat-format control tokens",
+    "context_manipulation": "claims to be hidden or system instructions",
+    "exfiltration": "asks the assistant to reveal its prompt",
+    "bypass_attempt": "asks the assistant to drop its safety limits",
+    "encoding_trick": "hides text behind invisible or look-alike characters",
+    "meta_injection": "mentions prompt injection",
+}
+_SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3}
+
+
+def summarize_document(warnings: Optional[dict]) -> Optional[dict]:
+    """Fold the stored per-page warnings into one reviewable verdict.
+
+    ``warnings`` is the ``injection_warnings`` column: page -> scan dict.
+    Returns None when there is nothing to review. Otherwise::
+
+        {"level": "low"|"medium"|"high", "needs_review": bool, "max_score": float,
+         "flagged_pages": int, "categories": {cat: n}, "reason": str,
+         "top": [{"page", "category", "severity", "matched_text"}, ...]}
+
+    Levels are deliberately conservative so the queue stays worth opening:
+    ``high`` means several independent signals (or a very high score) and
+    ``medium`` at least one high-severity, un-quoted pattern. Everything else
+    is ``low`` — still visible on the document, but not a task for an admin.
+    """
+    if not warnings:
+        return None
+
+    categories: Dict[str, int] = {}
+    high_cats: set = set()
+    high_pages = 0
+    max_score = 0.0
+    top: List[dict] = []
+    pages = 0
+    for page, scan in warnings.items():
+        if not isinstance(scan, dict):
+            continue
+        pages += 1
+        max_score = max(max_score, float(scan.get("risk_score") or 0))
+        page_has_high = False
+        for f in scan.get("findings") or []:
+            cat = f.get("category") or "unknown"
+            categories[cat] = categories.get(cat, 0) + 1
+            sev = f.get("severity") or "low"
+            if sev == "high" and cat != "meta_injection":
+                high_cats.add(cat)
+                page_has_high = True
+            top.append({
+                "page": page, "category": cat, "severity": sev,
+                "matched_text": f.get("matched_text") or "",
+                "_rank": _SEVERITY_RANK.get(sev, 0),
+            })
+        if page_has_high:
+            high_pages += 1
+    if not pages:
+        return None
+
+    substantive = {c for c in categories if c != "meta_injection"}
+    if max_score >= 0.8 or len(high_cats) >= 2 or high_pages >= 3:
+        level = "high"
+    elif high_cats or (max_score >= 0.5 and substantive):
+        level = "medium"
+    else:
+        level = "low"
+
+    # Strongest excerpt per category: overlapping patterns often match the
+    # same sentence twice, and the reviewer needs breadth, not repeats.
+    top.sort(key=lambda t: (-t["_rank"], str(t["page"])))
+    seen_cats: set = set()
+    unique: List[dict] = []
+    for t in top:
+        if t["category"] in seen_cats:
+            continue
+        seen_cats.add(t["category"])
+        unique.append({k: v for k, v in t.items() if k != "_rank"})
+    top = unique[:3]
+
+    ranked = sorted(substantive, key=lambda c: -categories[c]) or sorted(categories)
+    meanings = [CATEGORY_MEANING.get(c, c.replace("_", " ")) for c in ranked[:2]]
+    where = f"{pages} page{'s' if pages != 1 else ''}"
+    if meanings:
+        reason = f"Text on {where} " + " and ".join(meanings) + "."
+    else:
+        reason = f"{where.capitalize()} scored {max_score:.2f} for injection signals."
+    if level == "low":
+        reason += " Low confidence: likely discussion, an example, or ordinary wording."
+
+    return {
+        "level": level,
+        "needs_review": level != "low",
+        "max_score": round(max_score, 3),
+        "flagged_pages": pages,
+        "categories": categories,
+        "reason": reason,
+        "top": top,
+    }
+
+
 class PromptInjectionDetector:
     """
     Scans plain text for prompt injection signals.
@@ -281,7 +427,12 @@ class PromptInjectionDetector:
         findings.extend(self._scan_unicode(text))
 
         risk_score = self._calculate_score(findings)
-        is_flagged = risk_score >= 0.30 or any(f.severity == "high" for f in findings)
+        # Talking *about* prompt injection (a security wiki, this very README)
+        # is not an injection attempt, however many meta terms pile up.
+        substantive = [f for f in findings if f.category != "meta_injection"]
+        is_flagged = bool(substantive) and (
+            risk_score >= 0.30 or any(f.severity == "high" for f in substantive)
+        )
         summary = self._build_summary(findings, risk_score)
 
         if is_flagged and source_label:
@@ -322,16 +473,24 @@ class PromptInjectionDetector:
     def _scan_patterns(self, text: str) -> List[InjectionFinding]:
         findings: List[InjectionFinding] = []
         for category, name, pattern, severity in _COMPILED:
+            kept = 0
             for match in pattern.finditer(text):
+                if kept >= _MAX_FINDINGS_PER_PATTERN:
+                    break
+                sev, downgraded = severity, False
+                if category not in _NEVER_DOWNGRADE and _in_example_context(text, match.start()):
+                    sev, downgraded = _DOWNGRADE[severity], severity != _DOWNGRADE[severity]
                 raw = match.group(0)
                 excerpt = raw[:120] + ("…" if len(raw) > 120 else "")
                 findings.append(InjectionFinding(
                     category=category,
                     pattern_name=name,
                     matched_text=excerpt,
-                    severity=severity,
+                    severity=sev,
                     char_offset=match.start(),
+                    downgraded=downgraded,
                 ))
+                kept += 1
         return findings
 
     def _scan_unicode(self, text: str) -> List[InjectionFinding]:

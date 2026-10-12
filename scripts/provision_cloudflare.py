@@ -12,21 +12,21 @@ One idempotent run creates everything deployment shape B needs:
   7. a reusable Access policy `clio-invited` holding the admitted
      addresses, plus the one-time PIN login method so invited guests need
      no account in your identity provider
-  8. Access app on <hostname>/register (+ /api/register, /assets and the
-     brand files) with a Bypass policy, so the online-registration page is
-     reachable before sign-in (REGISTRATION_MODE in .env switches it on)
+  8. public Access bypasses for access requests and MCP protected-resource metadata
 
-Secrets (TUNNEL_TOKEN, AUTH_PASSWORD, CF_ACCESS_CLIENT_ID/SECRET) are written
-into the repo-local .env — which is gitignored — and never printed. The JWT
-trust settings (CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD — the Access apps' AUD
-tags) and MCP_ALLOWED_HOSTS are written too, so SSO logins skip the password
-prompt and PRIVATE_COLLECTIONS=true can be enabled without further lookup.
+Secrets (TUNNEL_TOKEN, CF_ACCESS_CLIENT_ID/SECRET) are written into the
+repo-local .env — which is gitignored — and never printed. The JWT trust
+settings (CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD — the Access apps' AUD tags)
+and MCP_ALLOWED_HOSTS are written too, so Clio can enforce Access logins and
+PRIVATE_COLLECTIONS=true can be enabled without further lookup.
 CF_ACCOUNT_ID and CF_ACCESS_POLICY_ID are written as well, so the app can
-admit invited people at the edge itself (services/access_provisioning.py)
-instead of you editing the dashboard for every new person. Set CF_API_TOKEN
-and ADMIN_EMAILS by hand to switch that on — see .env.example.
+manage admissions when CF_API_TOKEN is configured. The remote compose
+deployment restricts app administration to jordan.boyce@cyberlion.dev.
+Without a separate CF_API_TOKEN in .env, manage the email policy in Cloudflare.
 
 Usage:
+    CLIO_ALLOW_EMAILS=jordan.boyce@cyberlion.dev,student@example.edu \
+      CLOUDFLARE_API_TOKEN=... python scripts/provision_cloudflare.py
     CLOUDFLARE_API_TOKEN=... python scripts/provision_cloudflare.py
     # or put CLOUDFLARE_API_TOKEN=... in .env first, then run with no env var
 
@@ -45,25 +45,19 @@ import urllib.request
 
 ACCOUNT_ID = os.environ.get("CF_ACCOUNT_ID", "")  # required: your Cloudflare account ID
 HOSTNAME = os.environ.get("CLIO_HOSTNAME", "clio.example.com")
-ALLOW_EMAIL = os.environ.get("CLIO_ALLOW_EMAIL", "you@example.com")
+ADMIN_EMAIL = "jordan.boyce@cyberlion.dev"
+ALLOW_EMAILS = list(dict.fromkeys(
+    email.strip().lower()
+    for email in os.environ.get(
+        "CLIO_ALLOW_EMAILS", os.environ.get("CLIO_ALLOW_EMAIL", ADMIN_EMAIL)
+    ).split(",")
+    if email.strip()
+))
 TUNNEL_NAME = "clio"
 SERVICE_TOKEN_NAME = "clio-mcp"
 MCP_BYPASS_POLICY_NAME = "mcp-app-token-gate"
+MCP_METADATA_BYPASS_POLICY_NAME = "mcp-resource-metadata"
 INVITE_POLICY_NAME = "clio-invited"
-PUBLIC_APP_NAME = "Clio public (registration)"
-PUBLIC_BYPASS_POLICY_NAME = "public-registration"
-# Everything the registration page needs before anyone is signed in: the
-# page, its two API paths (prefix match covers /api/register/config), the
-# hashed SPA bundle and the brand files. The app itself exempts exactly the
-# same paths from its own auth (main.py _PUBLIC_PATHS) and rate-limits the
-# form per IP; nothing under these paths reveals deployment data.
-PUBLIC_PATHS = ("/register", "/api/register", "/assets", "/favicon.ico",
-                "/manifest.webmanifest", "/apple-touch-icon.png",
-                "/clio-mark.png", "/clio-mark-dark.png", "/clio-icon-maskable.png",
-                "/clio-og.png",
-                # RFC 9728 metadata an OAuth MCP client reads before it has any
-                # credential (only served when MCP_OAUTH_ISSUER names an IdP).
-                "/.well-known/oauth-protected-resource")
 API = "https://api.cloudflare.com/client/v4"
 ENV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 
@@ -136,6 +130,12 @@ def main():
     if not ACCOUNT_ID:
         sys.exit("CF_ACCOUNT_ID is required — set it to your Cloudflare account ID "
                  "(dashboard right-sidebar, or `wrangler whoami`).")
+    if not ALLOW_EMAILS:
+        sys.exit("Set CLIO_ALLOW_EMAILS to at least one email address.")
+    if len(ALLOW_EMAILS) > 1000:
+        sys.exit("CLIO_ALLOW_EMAILS exceeds Cloudflare's 1,000-email rule limit.")
+    if any(not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) for email in ALLOW_EMAILS):
+        sys.exit("CLIO_ALLOW_EMAILS must contain valid, comma-separated email addresses.")
     who = cf("GET", "/user/tokens/verify")
     print(f"token ok (status: {who['status']})")
 
@@ -206,6 +206,26 @@ def main():
             print(f"access app on {domain}: exists, leaving as-is")
         return app
 
+    def ensure_bypass_app(domain, name, policy_name):
+        app = ensure_app(domain, name, {
+            "name": policy_name,
+            "decision": "bypass",
+            "precedence": 1,
+            "include": [{"everyone": {}}],
+        })
+        app_policies = cf(
+            "GET", f"/accounts/{ACCOUNT_ID}/access/apps/{app['id']}/policies"
+        ) or []
+        if not any(p.get("decision") == "bypass" for p in app_policies):
+            cf("POST", f"/accounts/{ACCOUNT_ID}/access/apps/{app['id']}/policies", {
+                "name": policy_name,
+                "decision": "bypass",
+                "precedence": 1,
+                "include": [{"everyone": {}}],
+            })
+            print(f"access app '{domain}': bypass policy '{policy_name}' added")
+        return app
+
     # 5a. Reusable policy holding everyone admitted to the browser app.
     # Reusable rather than inline so the running app can edit exactly this one
     # object by ID when someone is invited, without touching the application
@@ -215,18 +235,91 @@ def main():
     if invite_policy is None:
         invite_policy = cf("POST", f"/accounts/{ACCOUNT_ID}/access/policies", {
             "name": INVITE_POLICY_NAME, "decision": "allow",
-            "include": [{"email": {"email": ALLOW_EMAIL}}],
+            "include": [{"email": {"email": email}} for email in ALLOW_EMAILS],
         })
         print(f"reusable policy '{INVITE_POLICY_NAME}': created")
     else:
-        n = sum(1 for r in invite_policy.get("include", []) if "email" in r)
-        print(f"reusable policy '{INVITE_POLICY_NAME}': exists ({n} address(es))")
+        include = invite_policy.get("include") or []
+        existing_emails = {
+            str(rule["email"].get("email", "")).strip().lower()
+            for rule in include
+            if isinstance(rule.get("email"), dict) and rule["email"].get("email")
+        }
+        additions = [
+            {"email": {"email": email}}
+            for email in ALLOW_EMAILS
+            if email not in existing_emails
+        ]
+        email_rule_count = sum(
+            1 for rule in include
+            if isinstance(rule.get("email"), dict) and rule["email"].get("email")
+        )
+        if email_rule_count + len(additions) > 1000:
+            sys.exit(f"Access policy '{INVITE_POLICY_NAME}' exceeds Cloudflare's 1,000-email rule limit.")
+        if additions:
+            body = {
+                "name": invite_policy.get("name") or INVITE_POLICY_NAME,
+                "decision": invite_policy.get("decision") or "allow",
+                "include": include + additions,
+            }
+            for optional in ("exclude", "require", "session_duration"):
+                if invite_policy.get(optional):
+                    body[optional] = invite_policy[optional]
+            invite_policy = cf(
+                "PUT",
+                f"/accounts/{ACCOUNT_ID}/access/policies/{invite_policy['id']}",
+                body,
+            )
+            print(f"reusable policy '{INVITE_POLICY_NAME}': added {len(additions)} address(es)")
+        else:
+            print(f"reusable policy '{INVITE_POLICY_NAME}': already contains configured addresses")
     policy_id = invite_policy["id"]
 
     ui_app = ensure_app(HOSTNAME, "Clio", {
         "name": "owner", "decision": "allow", "precedence": 1,
-        "include": [{"email": {"email": ALLOW_EMAIL}}],
+        "include": [{"email": {"email": ADMIN_EMAIL}}],
     })
+
+    ui_policies = cf(
+        "GET", f"/accounts/{ACCOUNT_ID}/access/apps/{ui_app['id']}/policies"
+    ) or []
+    owner_policy = next((p for p in ui_policies if p.get("name") == "owner"), None)
+    if owner_policy is None:
+        owner_policy = cf(
+            "POST",
+            f"/accounts/{ACCOUNT_ID}/access/apps/{ui_app['id']}/policies",
+            {
+                "name": "owner",
+                "decision": "allow",
+                "precedence": 1,
+                "include": [{"email": {"email": ADMIN_EMAIL}}],
+            },
+        )
+        print(f"bootstrap Access policy created for {ADMIN_EMAIL}")
+    else:
+        owner_include = owner_policy.get("include") or []
+        owner_emails = {
+            str(rule["email"].get("email", "")).strip().lower()
+            for rule in owner_include
+            if isinstance(rule.get("email"), dict) and rule["email"].get("email")
+        }
+        if (
+            owner_emails != {ADMIN_EMAIL}
+            or owner_policy.get("decision") != "allow"
+            or owner_policy.get("precedence") != 1
+        ):
+            body = {
+                "name": owner_policy.get("name") or "owner",
+                "decision": "allow",
+                "precedence": 1,
+                "include": [{"email": {"email": ADMIN_EMAIL}}],
+            }
+            cf(
+                "PUT",
+                f"/accounts/{ACCOUNT_ID}/access/apps/{ui_app['id']}/policies/{owner_policy['id']}",
+                body,
+            )
+            print(f"bootstrap Access policy restricted to {ADMIN_EMAIL}")
 
     # Attach the reusable policy. It cannot go through the app's policies
     # subresource — that endpoint only accepts inline policy definitions and
@@ -262,7 +355,7 @@ def main():
     # top-down, so a client presenting the service token still gets its
     # JWT, and everything else falls through to the app's own gate, which
     # answers 401 without a valid token or AUTH_PASSWORD (see require_auth
-    # in main.py). Only /mcp is affected; the UI app stays SSO-gated.
+    # in main.py). Only /mcp is affected; the UI app stays Access-gated.
     # Applied to pre-existing apps too, since ensure_app leaves those alone.
     mcp_policies = cf("GET", f"/accounts/{ACCOUNT_ID}/access/apps/{mcp_app['id']}/policies") or []
     if not any(p.get("decision") == "bypass" for p in mcp_policies):
@@ -275,31 +368,23 @@ def main():
     else:
         print(f"access app '{HOSTNAME}/mcp': bypass policy present")
 
-    # 5d. Online registration: one Access app spanning the public paths with
-    # a Bypass policy. Access matches an app's path as a prefix, so
-    # "<host>/api/register" also covers /api/register/config. Idempotent —
-    # an existing app keeps whatever paths it has; delete it in the dashboard
-    # to have this recreate it with the current PUBLIC_PATHS.
-    public_domain = f"{HOSTNAME}/register"
-    public_app = apps.get(public_domain)
-    if public_app is None:
-        public_app = cf("POST", f"/accounts/{ACCOUNT_ID}/access/apps", {
-            "name": PUBLIC_APP_NAME, "domain": public_domain, "type": "self_hosted",
-            "self_hosted_domains": [f"{HOSTNAME}{p}" for p in PUBLIC_PATHS],
-            "session_duration": "24h",
-        })
-        cf("POST", f"/accounts/{ACCOUNT_ID}/access/apps/{public_app['id']}/policies", {
-            "name": PUBLIC_BYPASS_POLICY_NAME, "decision": "bypass", "precedence": 1,
-            "include": [{"everyone": {}}],
-        })
-        print(f"access app '{PUBLIC_APP_NAME}': created (bypass on {len(PUBLIC_PATHS)} public paths)")
-    else:
-        print(f"access app '{PUBLIC_APP_NAME}': exists, leaving as-is")
-    print("  registration itself stays off until REGISTRATION_MODE=approval|open is set in .env")
+    # MCP clients discover the OAuth resource metadata before presenting a
+    # credential. Keep this one metadata path public without bypassing the
+    # login requirement for Clio's registration page or other UI routes.
+    ensure_bypass_app(
+        f"{HOSTNAME}/.well-known/oauth-protected-resource",
+        "Clio MCP resource metadata",
+        MCP_METADATA_BYPASS_POLICY_NAME,
+    )
+    ensure_bypass_app(
+        f"{HOSTNAME}/request-access",
+        "Clio access requests",
+        "clio-access-request-contact",
+    )
 
     # 6. JWT trust: team domain + both apps' AUD tags -----------------------
     # With these set the app verifies the Cf-Access-Jwt-Assertion the edge
-    # attaches: SSO logins skip the Basic-auth prompt, MCP service tokens
+    # attaches: Access logins authenticate directly, MCP service tokens
     # carry their name as identity, and PRIVATE_COLLECTIONS=true becomes
     # possible (it refuses to start without them).
     # 5b. One-time PIN login: Cloudflare emails a code to any address the
@@ -347,16 +432,13 @@ def main():
         updates["CF_ACCESS_TEAM_DOMAIN"] = auth_domain
     if auds:
         updates["CF_ACCESS_AUD"] = auds
-    if not env.get("AUTH_PASSWORD"):
-        updates["AUTH_PASSWORD"] = secrets.token_urlsafe(33)
     set_env(updates)
     print(f"\nsecrets written to {ENV_PATH} (TUNNEL_TOKEN, CF_ACCESS_CLIENT_ID/SECRET, "
-          "CF_ACCESS_TEAM_DOMAIN/AUD, MCP_ALLOWED_HOSTS, CF_ACCOUNT_ID, CF_ACCESS_POLICY_ID"
-          + (", AUTH_PASSWORD generated)" if "AUTH_PASSWORD" in updates else ")"))
+          "CF_ACCESS_TEAM_DOMAIN/AUD, MCP_ALLOWED_HOSTS, CF_ACCOUNT_ID, CF_ACCESS_POLICY_ID)")
     print("\nnext: docker compose -f docker-compose.yml -f docker-compose.remote.yml up -d --build")
+    print("browser login: Cloudflare Access One-time PIN, restricted to the configured email allowlist")
+    print("add or remove admitted addresses in the Clio Access panel or Zero Trust -> Access -> Policies")
     print("optional: add PRIVATE_COLLECTIONS=true to .env for per-person collections")
-    print("optional: add CF_API_TOKEN + ADMIN_EMAILS to .env so emailed invitations")
-    print("          admit the recipient at the edge (no dashboard edit per person)")
 
 
 if __name__ == "__main__":

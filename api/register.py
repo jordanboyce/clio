@@ -4,10 +4,12 @@ Two halves with different trust:
 
 - The public half (``GET /api/register/config``, ``POST /api/register``) is
   reachable without any credential: ``require_auth`` in main.py exempts it
-  and the deployment's Cloudflare Access application is told to bypass the
-  same paths. It therefore validates hard, rate-limits per IP (its own
-  class in ``middleware/rate_limit.py``), and returns nothing about the
-  deployment beyond whether registration is open.
+  from the app's identity gate. If registration is intentionally enabled
+  behind Cloudflare Access, its routes also need a narrowly scoped edge
+  bypass. The hosted provisioner only bypasses the contact-only
+  ``/request-access`` page. This endpoint validates hard, rate-limits per IP
+  (its own class in ``middleware/rate_limit.py``), and returns nothing about
+  the deployment beyond whether registration is open.
 - The admin half (``/api/access/registrations``) is behind the normal
   identity gate and ``ADMIN_EMAILS``, because approving a request edits
   the Access policy for the whole deployment.
@@ -80,6 +82,7 @@ def register(body: RegisterRequest, request: Request):  # sync: Cloudflare round
 
 def _require_registration_admin(user_id: Optional[str]):
     from services.access_provisioning import access_provisioning_enabled, is_admin
+    from middleware.user_context import get_request_identity
 
     if not access_provisioning_enabled():
         raise HTTPException(
@@ -87,7 +90,7 @@ def _require_registration_admin(user_id: Optional[str]):
             detail="Edge admission is not configured: set CF_API_TOKEN, "
                    "CF_ACCOUNT_ID and CF_ACCESS_POLICY_ID in .env.",
         )
-    if not is_admin(user_id):
+    if not is_admin(get_request_identity() or user_id):
         raise HTTPException(
             status_code=403,
             detail="Only an admin (ADMIN_EMAILS) can review registration requests.",
@@ -130,8 +133,10 @@ async def approve_registration(
     user_id: str = Depends(get_current_user_id),
 ):
     _require_registration_admin(user_id)
+    from middleware.user_context import get_request_identity
+    actor = get_request_identity() or user_id
     try:
-        return registration.approve(request_id, user_id, note=(body.note if body else ""))
+        return registration.approve(request_id, actor, note=(body.note if body else ""))
     except KeyError:
         raise HTTPException(status_code=404, detail="Registration request not found")
     except RuntimeError as e:
@@ -148,7 +153,9 @@ async def deny_registration(
     user_id: str = Depends(get_current_user_id),
 ):
     _require_registration_admin(user_id)
+    from middleware.user_context import get_request_identity
+    actor = get_request_identity() or user_id
     try:
-        return registration.deny(request_id, user_id, note=(body.note if body else ""))
+        return registration.deny(request_id, actor, note=(body.note if body else ""))
     except KeyError:
         raise HTTPException(status_code=404, detail="Registration request not found")

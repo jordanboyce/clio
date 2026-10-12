@@ -9,12 +9,15 @@ Each collection has its own:
 import logging
 import threading
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 from services.collection_service import collection_service
 from services.document_extractor import DocumentExtractor
 from services.chunker import TextChunker
-from services.embedder import create_embedding_service, describe_embedding, embedding_signature
+from services.embedder import (
+    DeferredEmbeddingService, create_embedding_service, describe_embedding,
+    embedding_signature, known_embedding_dim,
+)
 from services.vector_store import VectorStore
 from services.indexing import DocumentIndexer
 from config import settings
@@ -28,7 +31,7 @@ class IndexerManager:
     def __init__(self):
         """Initialize the indexer manager."""
         self._indexers: Dict[str, DocumentIndexer] = {}
-        self._embedding_services: Dict[str, EmbeddingService] = {}
+        self._embedding_services: Dict[str, object] = {}
         # get_indexer is called from request threads and background indexing
         # threads. Without this lock, two concurrent first-touches of a
         # collection each construct a VectorStore over the same directory and
@@ -185,11 +188,33 @@ class IndexerManager:
         chunk_size = collection.get("chunk_size", settings.chunk_size)
         chunk_overlap = collection.get("chunk_overlap", settings.chunk_overlap)
 
-        # Get or create embedding service
-        embedding_service = self._get_embedding_service(embedding_model)
-
         # Get paths for this collection
         indexes_dir = collection_service.get_indexes_path(collection_id)
+
+        # Get or create embedding service. When the model cannot be built
+        # right now (hub blocked behind a firewall, backend not installed,
+        # key missing) the collection still opens: a deferred service
+        # carries the dimension from the catalog or the existing index and
+        # builds the real one on the first embed, raising
+        # EmbeddingUnavailable (-> 503) until then. Browsing, settings and
+        # the onboarding never depend on a download finishing.
+        try:
+            embedding_service = self._get_embedding_service(embedding_model)
+        except Exception as e:
+            dim = known_embedding_dim(embedding_model, indexes_dir)
+            if dim is None:
+                raise
+            logger.warning(
+                f"Embedding model for collection '{collection_id}' is not available yet "
+                f"({e}); opening the collection read-only until it is."
+            )
+            embedding_service = DeferredEmbeddingService(
+                model_name=embedding_model if settings.embedding_provider == "local"
+                else (settings.remote_embedding_model or embedding_model),
+                embedding_dim=dim,
+                factory=lambda m=embedding_model: self._get_embedding_service(m),
+                reason=str(e),
+            )
 
         # Create vector store
         vector_store = VectorStore(

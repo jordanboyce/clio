@@ -30,13 +30,25 @@
     </button>
     <details ref="menu" class="dropdown dropdown-end" :class="mobile ? 'dropdown-top flex-1' : ''" @keydown.esc="closeMenu">
       <summary :class="[buttonClass, 'list-none', mobile ? 'w-full h-full' : '', secondaryActive ? 'bg-base-200 font-semibold' : 'text-base-content/65']">
-        <Ellipsis :size="mobile ? 19 : 14" aria-hidden="true" />
+        <span class="relative inline-flex">
+          <Ellipsis :size="mobile ? 19 : 14" aria-hidden="true" />
+          <span
+            v-if="adminConsole && adminBadge > 0"
+            class="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-warning"
+            aria-hidden="true"
+          ></span>
+        </span>
         <span>{{ secondaryLabel }}</span>
       </summary>
       <ul class="dropdown-content menu z-[70] w-56 rounded-box bg-base-100 border border-base-300 p-2 shadow-lg">
         <li v-for="tab in secondaryTabs" :key="tab.id">
           <button :aria-current="activeTab === tab.id ? 'page' : undefined" @click="navigate(tab.id)">
             <component :is="tab.icon" :size="15" aria-hidden="true" />{{ tab.label }}
+            <span
+              v-if="tab.id === 'admin' && adminBadge > 0"
+              class="badge badge-warning badge-xs ml-auto tabular-nums"
+              :aria-label="`${adminBadge} waiting for review`"
+            >{{ adminBadge }}</span>
           </button>
         </li>
         <li><button @click="openNotes"><StickyNote :size="15" aria-hidden="true" />Notes and tools</button></li>
@@ -53,6 +65,8 @@ const props = defineProps({
   activeTab: { type: String, required: true },
   chatEnabled: { type: Boolean, default: true },
   adminConsole: { type: Boolean, default: false },
+  // Items waiting for an administrator; shown as a dot on "More" and a count on Administration.
+  adminBadge: { type: Number, default: 0 },
   mobile: { type: Boolean, default: false },
 })
 const emit = defineEmits(['navigate', 'notes'])
