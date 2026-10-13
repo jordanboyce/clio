@@ -1,8 +1,8 @@
 """Request-scoped user identity for private-collections mode.
 
 Identity is never taken from a client-controlled header. The auth middleware
-in main.py verifies the credential (a built-in account's session cookie, an
-OIDC bearer JWT, or a proxy-vouched header) and records the result on
+in main.py verifies the credential (an OIDC bearer JWT or a
+proxy-vouched header) and records the result on
 ``request.state.auth_identity`` - a person's email, the owner of a personal
 MCP token for agent clients, or ``None`` for AUTH_PASSWORD callers, who are
 authenticated but anonymous.

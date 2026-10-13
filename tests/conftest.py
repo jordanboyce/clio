@@ -21,14 +21,11 @@ os.environ["CLIO_ENV_FILE"] = str(
 )
 os.environ["PRIVATE_COLLECTIONS"] = "false"
 os.environ["AUTH_PASSWORD"] = ""
-# Identity source and first-run setup code: with PRIVATE_COLLECTIONS on and no
-# provider named the app selects the built-in accounts, so a leaked value from
-# the host environment would change which verifier a test exercises.
+# A leaked identity provider from the host environment would change which
+# verifier a test exercises.
 os.environ["IDENTITY_PROVIDER"] = ""
-os.environ["SETUP_CODE"] = ""
-# Built-in accounts (accounts.db) live in the data directory. Point it at a
-# throwaway directory so tests that resolve an admin or look up an account
-# never read or create state in the developer's real ./data.
+# Point the data directory at a throwaway so tests never read or create state
+# in the developer's real ./data.
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="clio-tests-")
 # A deployment default LLM (an on-prem operator's private endpoint) would
 # otherwise leak into every provider-construction test through the factory.

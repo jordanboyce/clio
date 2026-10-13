@@ -1,11 +1,11 @@
 """Private-collections mode: ownership, sharing, and enforcement.
 
 The mode is opt-in (PRIVATE_COLLECTIONS=true) and enforces ownership against
-a verified identity - the built-in accounts unless another provider is named.
+a verified identity from an external provider (oidc / trusted_header).
 These tests cover the layers separately:
 
 - service rules: check_collection_access / get_all_collections visibility
-- startup posture: which identity provider the flag selects
+- startup posture: the flag refuses to start without an identity provider
 - HTTP enforcement: two identities exercising the real routers end-to-end
   (the identity verifier is faked via tests/identity_helpers.py; the real
   verifiers have their own tests)
@@ -488,8 +488,7 @@ def test_require_admin_fails_closed_with_no_admins(private_mode):
 
     saved = _set_admins("")
     # An external identity source has no admin flag of its own, so with no
-    # ADMIN_EMAILS there is no admin policy at all. (The built-in accounts
-    # always have one: the first account is the administrator.)
+    # ADMIN_EMAILS there is no admin policy at all.
     old_providers = [(o, o.identity_provider) for o in _settings_objects()]
     for o in _settings_objects():
         o.identity_provider = "oidc"
