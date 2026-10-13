@@ -64,14 +64,8 @@ services:
       # download — the container makes no outbound connections beyond the
       # Ollama/self-hosted endpoints you configure. See docs/AIRGAP.md.
       # - OFFLINE_MODE=1
-      # Accounts: PRIVATE_COLLECTIONS=true in .env turns on sign-in with
-      # per-person collections. The first visit asks for a setup code that
-      # is printed in the log (docker logs clio); an administrator then
-      # invites everyone else from the Admin tab. See docs/IDENTITY.md.
-      #
-      # Or, simpler, a shared-secret gate: require this password (Basic or
-      # Bearer) on every request. Recommended whenever others can reach the
-      # port and you do not want accounts.
+      # Shared-secret gate: require this password (Basic or Bearer) on every
+      # request. Recommended whenever others can reach the port.
       # - AUTH_PASSWORD=change-me
     extra_hosts:
       - "host.docker.internal:host-gateway"

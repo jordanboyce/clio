@@ -64,29 +64,28 @@ def resolve_ai_key(provider: str, header_key: str | None) -> str:
 def require_admin(action: str = "change deployment settings") -> str | None:
     """Gate an operator-only endpoint. Returns the admin's identity.
 
-    No-op on an open appliance: private collections off and no admin policy
-    (no ADMIN_EMAILS, no built-in accounts). Once either exists the gate is
-    enforced even in shared-collection mode, so admin powers stay distinct
-    from ordinary use.
+    No-op on an open appliance: private collections off and no admin gate
+    (ADMIN_EMAILS together with an identity provider, which is what makes it
+    matchable). Once the gate exists it is enforced even in shared-collection
+    mode, so admin powers stay distinct from ordinary use.
 
-    With private collections on, anyone with an account may be a user who is
-    not an operator, so "is signed in" is far too wide a gate for settings
-    that apply to the whole deployment. The admin is an account holding the
-    admin flag (built-in accounts) or an address in ADMIN_EMAILS. No admin
-    configured means nobody, so this fails closed rather than open.
+    With private collections on, anyone the identity provider admits may be a
+    user who is not an operator, so "is signed in" is far too wide a gate for
+    settings that apply to the whole deployment: require ADMIN_EMAILS. Empty
+    means nobody, so this fails closed rather than open.
     """
     from config import settings
 
-    from services.admins import has_admin_policy, is_admin
+    from services.admins import admin_emails, admin_gate_active, is_admin
 
-    if not settings.private_collections and not has_admin_policy():
+    if not settings.private_collections and not admin_gate_active():
         return None
 
     from middleware.user_context import get_request_identity, get_request_user
 
     user_id = get_request_identity() or get_request_user()
     if not is_admin(user_id):
-        if not has_admin_policy():
+        if not admin_emails():
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -96,7 +95,7 @@ def require_admin(action: str = "change deployment settings") -> str | None:
             )
         raise HTTPException(
             status_code=403,
-            detail=f"Only an administrator may {action}.",
+            detail=f"Only an admin (ADMIN_EMAILS) may {action}.",
         )
     return user_id
 

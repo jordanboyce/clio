@@ -431,21 +431,17 @@ async def whoami(request: Request):
     """
     Identity and sign-out info for the header menu.
 
-    - With built-in accounts, `identity` is the signed-in email and the app
-      signs out with POST /api/auth/logout (`can_sign_out`).
+    - Behind an identity provider, `identity` is the verified person.
     - Password-authenticated or open deployments report those modes instead;
       browsers cache Basic credentials, so there is no reliable app-side
       sign-out for the password path.
     """
-    from services.identity import active_provider
 
     via = getattr(request.state, "auth_via", None) or ("open" if not settings.auth_password else "password")
     identity = getattr(request.state, "auth_identity", None)
     return {
         "authenticated_via": via,
         "identity": identity,
-        "auth_provider": active_provider() or "none",
-        "can_sign_out": via == "local_session",
     }
 
 

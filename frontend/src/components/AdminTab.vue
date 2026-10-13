@@ -396,7 +396,7 @@
         <div class="space-y-4">
           <div class="rounded-lg border border-base-300/60 bg-base-100 p-4 space-y-2">
             <div class="text-xs font-medium">Suspend an identity</div>
-            <p class="text-[11px] text-base-content/50">Revokes every MCP token they hold and, with built-in accounts, disables their account and ends their sessions. Their sources stay until you remove them.</p>
+            <p class="text-[11px] text-base-content/50">Revokes every MCP token they hold. Their sources stay until you remove them.</p>
             <div class="flex flex-wrap gap-2">
               <input v-model="suspendEmail" type="email" class="input input-bordered input-xs flex-1 min-w-[10rem]" placeholder="person@example.com" aria-label="Identity to suspend" />
               <input v-model="suspendReason" class="input input-bordered input-xs w-32" placeholder="reason" aria-label="Reason" />
@@ -419,13 +419,6 @@
       </div>
     </section>
 
-    <!-- ═══ People (built-in accounts) ═══ -->
-    <section v-if="userStore.canManageUsers" aria-labelledby="admin-people">
-      <h2 id="admin-people" class="text-sm font-semibold uppercase tracking-wider text-base-content/60 mb-3">
-        People
-      </h2>
-      <UsersAdmin />
-    </section>
   </div>
 </template>
 
@@ -433,7 +426,6 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RefreshCw, ShieldCheck } from 'lucide-vue-next'
 import http from '../utils/http'
-import UsersAdmin from './UsersAdmin.vue'
 import { useUserStore } from '../stores/userStore'
 import { useUiStore } from '../stores/uiStore'
 import { useReviewStore } from '../stores/reviewStore'
@@ -627,13 +619,13 @@ const unblockHash = async (h) => {
 
 const suspend = async () => {
   const email = suspendEmail.value.trim()
-  if (!window.confirm(`Suspend ${email}? Their MCP tokens are revoked and their account is disabled immediately.`)) return
+  if (!window.confirm(`Suspend ${email}? Their MCP tokens are revoked immediately.`)) return
   try {
     const resp = await http.post(`/api/admin/users/${encodeURIComponent(email)}/suspend`, { reason: suspendReason.value })
     const r = resp.data
     ui.notify(
       `Suspended ${email}: ${r.tokens_revoked} token${r.tokens_revoked === 1 ? '' : 's'} revoked` +
-      (r.account_disabled === true ? ', account disabled.' : r.account_error ? ` (account: ${r.account_error})` : '.'),
+      '.',
       'success',
     )
     suspendEmail.value = ''

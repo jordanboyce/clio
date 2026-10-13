@@ -28,7 +28,6 @@ from services import identity as identity_service
 from api import (
     admin,
     artifacts,
-    auth,
     chat,
     collections,
     documents,
@@ -48,9 +47,8 @@ logger = logging.getLogger(__name__)
 
 
 # ── Security posture ────────────────────────────────────────────────────────
-# The app has no authentication unless built-in accounts (IDENTITY_PROVIDER=local
-# or PRIVATE_COLLECTIONS=true), another identity provider, or AUTH_PASSWORD is
-# set, and every route —
+# The app has no authentication unless AUTH_PASSWORD or an identity provider
+# is set, and every route —
 # search, upload, delete, chat on your provider keys, the whole /mcp tool
 # surface — is reachable by anyone who can open a socket to it. So the two
 # settings that decide who can open that socket are checked before we serve.
@@ -76,10 +74,10 @@ def _check_security_posture() -> None:
             "tools accept any collection_id without an ownership check, so it "
             "never isolated anything. Remove ENABLE_MULTI_USER. For per-person "
             "collections with enforced ownership, set PRIVATE_COLLECTIONS=true "
-            "(built-in accounts) - see docs/IDENTITY.md."
+            "behind your own identity provider - see docs/IDENTITY.md."
         )
 
-    # Identity source (built-in accounts, your own OIDC provider, or an
+    # Identity source (your own OIDC provider, or an
     # authenticating reverse proxy). Validated whether or not private
     # collections are on: a deployment that configured an identity source at
     # all should learn immediately that it is wrong.
@@ -90,8 +88,19 @@ def _check_security_posture() -> None:
     if settings.auth_require_identity and not identity_service.active_provider():
         raise RuntimeError(
             "AUTH_REQUIRE_IDENTITY requires a verified identity source. Set "
-            "IDENTITY_PROVIDER to local (built-in accounts), oidc or "
-            "trusted_header. See docs/IDENTITY.md."
+            "IDENTITY_PROVIDER to oidc or trusted_header. See docs/IDENTITY.md."
+        )
+
+    if settings.private_collections and not identity_service.active_provider():
+        raise RuntimeError(
+            "PRIVATE_COLLECTIONS requires a verified identity source. Clio has "
+            "no accounts of its own, so set IDENTITY_PROVIDER to oidc "
+            "(OIDC_ISSUER + OIDC_AUDIENCE - your own IdP) or trusted_header "
+            "(an authenticating reverse proxy). Without one, ownership would be "
+            "enforced against an identity anyone can forge, which is the "
+            "half-boundary this app refuses to ship. For a personal or "
+            "small-team install, set PRIVATE_COLLECTIONS=false. See "
+            "docs/IDENTITY.md."
         )
 
     # Deployment default LLM (on-prem private endpoints). A typo here would
@@ -124,7 +133,7 @@ def _check_security_posture() -> None:
             "SECURITY: bound to %s (reachable from the network) with no "
             "authentication requirement set. Anyone who can reach this port can read, "
             "modify and delete every document, and spend your AI provider "
-            "credits. Set PRIVATE_COLLECTIONS=true (built-in accounts) or AUTH_PASSWORD, or set "
+            "credits. Set AUTH_PASSWORD, or set "
             "HOST=127.0.0.1 to bind loopback only. See docs/DEPLOYMENT.md.",
             settings.host,
         )
@@ -193,12 +202,6 @@ async def lifespan(app: FastAPI):
         reindex_service.reload_callback = reload_indexer
 
         deps.mark_initialized()
-
-        # First run with built-in accounts: print the code that claims the
-        # first administrator account.
-        if identity_service.active_provider() == "local":
-            from services.local_auth import announce_setup
-            announce_setup()
 
         # Retention sweeps for the unbounded log tables (search_history
         # stores result snippets; chat_usage grows per turn). First run is
@@ -298,33 +301,18 @@ def _password_from_auth_header(header: str) -> str:
     return ""
 
 
-# Paths a person can reach before they have any identity: the health probe,
-# and, with built-in accounts, the SPA shell plus the sign-in endpoints (the
-# shell is what renders the sign-in page; it holds no secrets).
+# Paths a person can reach before they have any identity: the health probe.
 _PUBLIC_PATHS = {
     "/health",
 }
-_LOCAL_AUTH_PUBLIC_PATHS = {
-    "/",
-    "/index.html",
-    "/api/auth/status",
-    "/api/auth/setup",
-    "/api/auth/login",
-    "/api/auth/logout",
-    "/api/auth/link",
-    "/api/auth/accept",
-}
-# The built frontend bundle is public too: the sign-in page is the same
-# SPA, so its hashed assets and brand files must load before sign-in. The
+# The built frontend bundle's hashed assets and brand files are public too,
+# so the browser can load them while it is still answering a Basic challenge. The
 # bundle holds no secrets — every fact about the deployment comes from the
 # API, which stays gated.
 _PUBLIC_STATIC = {"/favicon.ico", "/manifest.webmanifest", "/apple-touch-icon.png",
                   "/clio-mark.png", "/clio-mark-dark.png", "/clio-icon-maskable.png",
                   "/clio-og.png"}
 
-
-def _local_accounts_active() -> bool:
-    return identity_service.active_provider() == "local"
 
 
 def _client_ip(request) -> str | None:
@@ -338,7 +326,6 @@ def _client_ip(request) -> str | None:
 def _is_public_path(path: str) -> bool:
     return (
         path in _PUBLIC_PATHS
-        or (path in _LOCAL_AUTH_PUBLIC_PATHS and _local_accounts_active())
         or path in _PUBLIC_STATIC
         or path.startswith("/assets/")
         or path.startswith("/icons/")
@@ -359,9 +346,8 @@ async def require_auth(request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    # Verified identity: a built-in account's session cookie, a bearer JWT
-    # from the site's own IdP, or a header an authenticating proxy already
-    # vouched for (services/identity.py). Any of these is stronger auth than the shared
+    # Verified identity: a bearer JWT from the site's own IdP, or a header an
+    # authenticating proxy already vouched for (services/identity.py). Any of these is stronger auth than the shared
     # password — per-identity and revocable at the source — and accepting one
     # removes the browser's second login prompt after SSO. Verification runs
     # in a thread: it can hit the network for a JWKS refresh.
@@ -388,14 +374,6 @@ async def require_auth(request, call_next):
                 headers={"WWW-Authenticate": challenge(request, error="insufficient_scope")},
             )
         if who:
-            if verifier.via == "local_session":
-                # A cookie is sent by the browser on the caller's behalf, so a
-                # write must be shown to come from this site (CSRF).
-                from services.local_auth import csrf_ok
-                if not csrf_ok(request.method, request.headers):
-                    return JSONResponse(
-                        {"detail": "Cross-site request refused."}, status_code=403
-                    )
             request.state.auth_identity = who
             request.state.auth_via = verifier.via
             return await _call_with_user_context(request, call_next)
@@ -455,10 +433,6 @@ async def require_auth(request, call_next):
     if is_mcp_path(request.url.path):
         from services.mcp_oauth import challenge
         www_authenticate = challenge(request, error="invalid_token" if presented else None)
-    elif _local_accounts_active():
-        # The app renders its own sign-in page; a Basic challenge would pop
-        # the browser's native dialog over it.
-        return JSONResponse({"detail": "Not authenticated", "login_required": True}, status_code=401)
     else:
         www_authenticate = 'Basic realm="Clio"'
     return JSONResponse(
@@ -490,7 +464,7 @@ async def _call_with_user_context(request, call_next):
             reset_request_user(user_token)
         reset_request_identity(identity_token)
 
-for module in (system, documents, search, chat, artifacts, collections, mcp, sharing, expertise, admin, governance, auth):
+for module in (system, documents, search, chat, artifacts, collections, mcp, sharing, expertise, admin, governance):
     app.include_router(module.router)
 
 

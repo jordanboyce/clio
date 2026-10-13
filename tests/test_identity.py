@@ -444,16 +444,15 @@ def test_hmac_secret_without_a_signature_header_refuses_to_start(identity_settin
         identity_service.validate_config()
 
 
-def test_private_collections_select_builtin_accounts(identity_settings):
-    """Turning on private collections without naming a provider needs no
-    second system: the built-in accounts are the identity source."""
+def test_private_collections_do_not_invent_an_identity_source(identity_settings):
+    """Clio has no accounts: turning private collections on does not select a
+    provider, so the startup check (main._check_security_posture) refuses it."""
     identity_settings.private_collections = True
-    assert identity_service.active_provider() == "local"
-    assert identity_service.requires_identity() is True
-    identity_service.validate_config()  # must not raise
+    assert identity_service.active_provider() == ""
+    assert identity_service.requires_identity() is False
 
 
-def test_explicit_provider_wins_over_private_collections_default(identity_settings):
+def test_explicit_provider_is_used_with_private_collections(identity_settings):
     identity_settings.private_collections = True
     identity_settings.identity_provider = "oidc"
     identity_settings.oidc_issuer = ISSUER
@@ -467,8 +466,7 @@ def test_requires_identity_follows_provider_and_flag(identity_settings):
     identity_settings.auth_require_identity = True
     assert identity_service.requires_identity() is True
     identity_settings.auth_require_identity = False
-    identity_settings.identity_provider = "local"
-    assert identity_service.requires_identity() is True
+    assert identity_service.requires_identity() is False
 
 
 def test_no_identity_source_is_a_valid_appliance_config(identity_settings):
@@ -481,7 +479,7 @@ def test_cloudflare_access_is_no_longer_a_provider(identity_settings):
     """A deployment still naming the removed provider must fail loudly at
     startup, not silently fall back to "everyone is anonymous"."""
     identity_settings.identity_provider = "cloudflare_access"
-    with pytest.raises(RuntimeError, match="local, oidc, trusted_header"):
+    with pytest.raises(RuntimeError, match="oidc, trusted_header"):
         identity_service.validate_config()
 
 
@@ -493,11 +491,6 @@ def test_no_verifier_is_built_when_nothing_is_configured(identity_settings):
 
 
 def test_each_provider_builds_its_own_verifier(identity_settings):
-    from services.local_auth import LocalSessionIdentity
-
-    identity_settings.identity_provider = "local"
-    assert isinstance(identity_service.get_identity_verifier(), LocalSessionIdentity)
-
     identity_settings.identity_provider = "oidc"
     identity_settings.oidc_issuer = ISSUER
     identity_settings.oidc_audience = AUDIENCE

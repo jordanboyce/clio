@@ -7,8 +7,6 @@ export const useUserStore = defineStore('user', () => {
   const displayName = ref('')
   const privateCollections = ref(false)
   const dbBackend = ref('sqlite')
-  // 'local' (built-in accounts), 'oidc', 'trusted_header' or 'none'.
-  const authProvider = ref('none')
   const isAdmin = ref(false)
   // Whether the Admin tab is available: admins under private collections,
   // everyone on an open (shared-appliance) deployment.
@@ -27,8 +25,6 @@ export const useUserStore = defineStore('user', () => {
   const collectionStorageLimitBytes = ref(0)
 
   const isPrivateMode = computed(() => privateCollections.value)
-  // Only an admin on a deployment with built-in accounts can create accounts.
-  const canManageUsers = computed(() => authProvider.value === 'local' && isAdmin.value)
   // The modal takes over until accepted; it can also be opened voluntarily.
   const mustAcceptAup = computed(() => aup.value.required && !aup.value.accepted)
 
@@ -39,7 +35,6 @@ export const useUserStore = defineStore('user', () => {
       displayName.value = response.data.display_name
       privateCollections.value = response.data.private_collections
       dbBackend.value = response.data.db_backend
-      authProvider.value = response.data.auth_provider || 'none'
       isAdmin.value = response.data.is_admin || false
       adminConsole.value = response.data.admin_console ?? isAdmin.value
       if (response.data.aup) aup.value = response.data.aup
@@ -56,7 +51,6 @@ export const useUserStore = defineStore('user', () => {
       displayName.value = 'Default User'
       privateCollections.value = false
       dbBackend.value = 'sqlite'
-      authProvider.value = 'none'
       isAdmin.value = false
       adminConsole.value = false
       loaded.value = true
@@ -79,7 +73,6 @@ export const useUserStore = defineStore('user', () => {
     displayName,
     privateCollections,
     dbBackend,
-    authProvider,
     isAdmin,
     adminConsole,
     loaded,
@@ -89,7 +82,6 @@ export const useUserStore = defineStore('user', () => {
     sensitivityLevels,
     collectionStorageLimitBytes,
     isPrivateMode,
-    canManageUsers,
     mustAcceptAup,
     loadCurrentUser,
     acceptAup,

@@ -15,18 +15,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _has_account(email: str) -> bool:
-    """Whether this address can already sign in (built-in accounts only; any
-    other identity provider admits people outside Clio, so assume yes)."""
-    from services.identity import active_provider
-
-    if active_provider() != "local":
-        return True
-    from services.local_auth import get_store
-
-    return get_store().get_account(email) is not None
-
-
 @router.get("/api/user/me", summary="Get current user info", tags=["users"])
 async def get_current_user(
     request: Request, user_id: str = Depends(get_current_user_id)
@@ -38,9 +26,8 @@ async def get_current_user(
     anonymous (password-authenticated) caller who can reach team collections
     only.
     """
-    from services.admins import has_admin_policy, is_admin
+    from services.admins import admin_gate_active, is_admin
     from services.app_database import app_db
-    from services.identity import active_provider
     from services import governance
     user = app_db.get_user(user_id) if user_id else None
     identity = getattr(request.state, "auth_identity", None)
@@ -50,15 +37,12 @@ async def get_current_user(
         "display_name": (user["display_name"] if user else user_id) or "anonymous",
         "private_collections": settings.private_collections,
         "db_backend": settings.db_backend,
-        # Which identity source is in use; the UI only offers sign-out and
-        # the Users panel for built-in accounts.
-        "auth_provider": active_provider() or "none",
         "is_admin": is_admin(admin_identity),
         # Whether to show the Admin tab (usage, content review, audit).
-        # An open appliance with no admin policy shows it to everyone; once
-        # built-in accounts or ADMIN_EMAILS exist it narrows to admins.
+        # An open appliance shows it to everyone; once an operator list and
+        # an identity provider exist it narrows to admins.
         "admin_console": is_admin(admin_identity) or (
-            not settings.private_collections and not has_admin_policy()
+            not settings.private_collections and not admin_gate_active()
         ),
         # Governance: whether the UI must show the acceptable-use modal
         # before this person adds sources, and what the scanner does.
@@ -88,9 +72,6 @@ async def create_share(collection_id: str, body: dict, request: Request, user_id
             link via Resend (requires RESEND_API_KEY). The share is created
             either way; the response reports email_sent / email_error.
 
-    With built-in accounts the recipient needs an account to open the link;
-    the response reports ``has_account`` so the UI can tell the owner when an
-    admin still has to invite them.
     """
     notify_email = (body.get("notify_email") or "").strip()
     try:
@@ -116,7 +97,6 @@ async def create_share(collection_id: str, body: dict, request: Request, user_id
         from services.collection_service import collection_service
         from services.share_email import send_share_email
 
-        share["has_account"] = _has_account(notify_email)
         collection = collection_service.get_collection(collection_id) or {}
         try:
             send_share_email(
@@ -151,8 +131,6 @@ async def create_shares_bulk(collection_id: str, body: dict, request: Request, u
         permission: 'read' or 'readwrite' (default 'read')
         expires_days: Optional expiry applied to every share
 
-    Each result reports ``has_account`` so the owner can see who still needs
-    an account from an admin before the link will open for them.
     """
     from services.app_database import app_db
     from services.share_email import send_share_email
@@ -183,7 +161,7 @@ async def create_shares_bulk(collection_id: str, body: dict, request: Request, u
     results = []
     collection_name = collection.get("name", collection_id)
     for addr in emails:
-        entry = {"email": addr, "has_account": _has_account(addr)}
+        entry = {"email": addr}
         try:
             share = sharing_service.create_share(
                 collection_id=collection_id,

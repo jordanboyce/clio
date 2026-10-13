@@ -1,36 +1,45 @@
 # Self-hosting Clio
 
+**It just works. There is nothing to set up.** Start it, open the browser,
+add sources, ask questions:
+
+```bash
+docker compose up -d      # or: python main.py
+# open http://127.0.0.1:8473
+```
+
+There is no sign-in, no account to create and no configuration to write.
 Clio is built to run on hardware you control: a laptop, a home server, a
 machine under a desk, a VM at work. Nothing in the product depends on a cloud
-edge or a hosted identity service. You run one process, point a browser at
-it, and decide who else can reach it.
+service, a hosted identity service or an outbound connection. You run one
+process, point a browser at it, and decide who else can reach it.
 
-By default Clio is an **open appliance**. Everyone who can reach it sees the
-whole corpus - every collection, every document, every table, and the same
-`/mcp` knowledge surface (subject to restricted-source handling). That is the
-right default for a machine only you use, and it is why the app listens on
-loopback until you say otherwise. When more than one person will use it,
-turn on [accounts and private collections](#accounts-and-private-collections).
+Clio has **no accounts**. By default it is an **open appliance**: everyone who
+can reach it sees the whole corpus - every collection, every document, every
+table, and the same `/mcp` knowledge surface (subject to restricted-source
+handling). That is the right default for a machine only you use, and it is why
+the app listens on loopback until you say otherwise. If others can reach the
+port, [set `AUTH_PASSWORD`](#b-others-can-reach-it-set-a-password).
 
 ## The security model in one paragraph
 
 Out of the box nothing but the network protects the app, so the network
 default is closed: Python binds `127.0.0.1` and Docker Compose publishes
-`127.0.0.1:8473`. To let other people in you make two decisions, and the app
-helps you make both: how they are **let in** (built-in accounts, a shared
-password, or your own identity provider), and how the connection is
-**protected** (TLS from a reverse proxy, or a private network such as
-Tailscale). The app warns at startup if it is reachable from the network with
-no authentication, and refuses to start on an identity configuration it
-cannot enforce.
+`127.0.0.1:8473`. To let other people in you make two decisions: how they are
+**let in** (almost always a shared `AUTH_PASSWORD`; an organisation with its
+own sign-in can use [an identity provider](IDENTITY.md) instead), and how the
+connection is **protected** (TLS from a reverse proxy, or a private network
+such as Tailscale). The app warns at startup if it is reachable from the
+network with no authentication, and refuses to start on an identity
+configuration it cannot enforce.
 
 | Setting | Default | What it controls |
 |---|---|---|
 | `HOST` | `127.0.0.1` | Which interfaces accept connections. Docker sets `0.0.0.0` inside the container; there the published port is the boundary. |
 | `BIND_ADDRESS` | `127.0.0.1` | Host interface published by Docker Compose. Set `0.0.0.0` to accept connections from other machines. |
-| `PRIVATE_COLLECTIONS` | `false` | Built-in accounts and per-person collections. See [IDENTITY.md](IDENTITY.md). |
-| `AUTH_PASSWORD` | empty | A shared secret required on every request except `/health`. The lightweight alternative to accounts. |
+| `AUTH_PASSWORD` | empty | A shared secret required on every request except `/health`. Browsers prompt for it natively (HTTP Basic, any username); API and MCP clients send `Authorization: Bearer <password>`. |
 | `CORS_ALLOW_ORIGINS` | empty | Which *other* web origins may read responses in a browser. Empty is correct unless a separate web app calls the API. |
+| `PRIVATE_COLLECTIONS` | `false` | Per-person collections. Only for organisations that already run sign-in; requires `IDENTITY_PROVIDER`. See [IDENTITY.md](IDENTITY.md). |
 
 The legacy `ENABLE_MULTI_USER` flag always refuses to start; see
 [Private collections](#private-collections) for the supported replacement.
@@ -45,44 +54,39 @@ python main.py            # http://127.0.0.1:8473
 docker compose up -d      # http://127.0.0.1:8473
 ```
 
-Neither default exposes the app to your LAN. `./run.sh` / `run.bat`
-bootstrap a virtual environment and build the frontend on first run. Add
-`AUTH_PASSWORD` or accounts later if this changes; nothing about your data
-changes when you do.
+Neither default exposes the app to your LAN, and neither needs any
+configuration. `./run.sh` / `run.bat` bootstrap a virtual environment and
+build the frontend on first run. Add `AUTH_PASSWORD` later if this changes;
+nothing about your data changes when you do.
 
-### B. A few people on your LAN or at one site
+### B. Others can reach it: set a password
 
-Let the machine accept connections from the network, and turn on accounts so
-that the network is not the only thing standing between your documents and
-everyone on it.
+For a few people on your LAN or at one site, or a household. Let the machine
+accept connections from the network and put a shared password in front:
 
 ```bash
 # .env
 BIND_ADDRESS=0.0.0.0          # Docker; for python main.py use HOST=0.0.0.0
-PRIVATE_COLLECTIONS=true      # built-in accounts + per-person collections
+AUTH_PASSWORD=choose-a-long-passphrase
 ```
 
-Then `docker compose up -d` (or restart), read the one-time **setup code**
-from the log, and create the first administrator in the browser:
+Then `docker compose up -d` (or restart). Browsers prompt for the password
+natively (any username); API and MCP clients send
+`Authorization: Bearer <password>`. Everyone who knows it sees the same
+corpus, so this fits a group that is cleared to see everything. It cannot
+revoke one person without changing the password for all, and it keeps no record
+of who did what. Agents should use [personal MCP tokens](#mcp-clients) rather
+than the shared password.
 
-```bash
-docker logs clio              # look for "setup code"
-```
-
-The administrator invites everyone else from **Admin -> People**: it
-produces an invite link to hand to each person. There is no sign-up page and
-no mail server to configure. The full account model (sessions, resets,
-roles, what is protected, what is not) is in
-[IDENTITY.md](IDENTITY.md#local---built-in-accounts).
-
-Over plain `http://` on a trusted LAN this works, but passwords and session
-cookies cross the wire in the clear. Prefer shape C, or a private network
-(shape D), as soon as anyone is not sitting in the same room.
+Over plain `http://` on a trusted LAN this works, but the password crosses the
+wire in the clear. Prefer shape C, or a private network (shape D), as soon as
+anyone is not sitting in the same room.
 
 ### C. A team, over HTTPS, behind a reverse proxy
 
 Put a TLS-terminating proxy (Caddy, nginx, Traefik) in front, keep Clio off
-the public network, and let the proxy be the only thing that talks to it.
+the public network, and let the proxy be the only thing that talks to it. Keep
+`AUTH_PASSWORD` set so the proxy is not the only gate.
 
 **1. Bind Clio to loopback or the internal network only.** With Compose the
 default `127.0.0.1:8473` is already right when the proxy runs on the same
@@ -126,10 +130,8 @@ in a container. For nginx the equivalent is `proxy_pass`, with
 `proxy_buffering off;` and the usual `X-Forwarded-*` headers.
 
 **3. Tell Clio to trust the proxy's forwarding headers, from the proxy
-only.** Two things depend on it: the session cookie is marked `Secure` when
-the request came in over https (via `X-Forwarded-Proto`), and rate limiting
-and failed-login throttling need the real client address, not the proxy's.
-uvicorn handles both, but only for peers it is told to trust:
+only.** Rate limiting needs the real client address, not the proxy's, and
+uvicorn only honours `X-Forwarded-For` from peers it is told to trust:
 
 ```bash
 # .env - the proxy's address as Clio sees it
@@ -146,8 +148,8 @@ directly, not through the proxy:
 curl -sS --max-time 5 http://<host>:8473/health && echo "REACHABLE - fix this"
 ```
 
-That must fail. Then check `https://clio.example.org/` loads and the first
-visit shows the setup (or sign-in) screen.
+That must fail. Then check `https://clio.example.org/` loads (and prompts for
+the password, if you set one).
 
 Any TLS-terminating proxy works the same way. You can also let Clio serve
 HTTPS itself with `SSL_CERTFILE` and `SSL_KEYFILE` (`certs/generate-cert.sh`
@@ -159,8 +161,8 @@ leaves certificate renewal to you.
 Tailscale, WireGuard, or a corporate VPN. The network is the boundary:
 members of the network can reach Clio, nobody else can, and there is no
 public address to attack. Bind to the private interface (or publish the port
-only on it), and still turn on accounts if people should not see each
-other's collections.
+only on it); add `AUTH_PASSWORD` too if the network is wider than the people
+who should use Clio.
 
 With Tailscale the shortest path is `tailscale serve`, which gives you
 HTTPS on your tailnet name with a managed certificate and no proxy to run:
@@ -182,39 +184,21 @@ internet at all. Use `docker-compose.onprem.yml`; the walkthrough is
 [ONPREM.md](ONPREM.md), and the disconnected specialisation is
 [AIRGAP.md](AIRGAP.md).
 
-If the site already has an identity provider, use it instead of built-in
-accounts: `IDENTITY_PROVIDER=oidc` against your IdP, or `trusted_header`
-behind the proxy that already authenticates ([IDENTITY.md](IDENTITY.md)).
-Events then get a real actor, and `MCP_AUDIT_TOOL_CALLS=true` extends that to
-what agents read.
-
-### F. A shared password and nothing else
-
-`AUTH_PASSWORD` alone. Browsers prompt natively (HTTP Basic, any username);
-API and MCP clients send `Authorization: Bearer <password>`.
-
-Fine for a demo, a short-lived deployment or a household. Not great for a
-standing team tool: one password everyone shares, no way to revoke one
-person, and no record of who did what. Prefer **B** or **C** with accounts.
-
-## Accounts and private collections
-
-`PRIVATE_COLLECTIONS=true` is the switch that makes Clio multi-person. It
-turns on the built-in accounts (`IDENTITY_PROVIDER=local`), so every request
-needs a signed-in person, and it makes every new collection private to its
-creator until they share it. A site that already runs an identity provider
-sets `IDENTITY_PROVIDER` to `oidc` or `trusted_header` instead. All of it is
-described in [IDENTITY.md](IDENTITY.md); the collection model is
-[below](#private-collections).
+If the site already has an identity provider and wants per-person collections,
+use it: `IDENTITY_PROVIDER=oidc` against your IdP, or `trusted_header` behind
+the proxy that already authenticates ([IDENTITY.md](IDENTITY.md)). Events then
+get a real actor, and `MCP_AUDIT_TOOL_CALLS=true` extends that to what agents
+read. This is optional and only for organisations that already run sign-in;
+Clio does not provide accounts itself.
 
 ## MCP clients
 
 `/mcp` is part of the same app, so it sits behind the same door - with one
-wrinkle: **MCP clients authenticate as a token, not as a person.**
+wrinkle: **MCP clients authenticate with a token, not by signing in.**
 
 - **Personal access tokens (recommended for people).** Settings -> MCP ->
-  Personal access tokens lets anyone who can already use the app - a
-  signed-in browser session or `AUTH_PASSWORD` - mint their own bearer token
+  Personal access tokens lets anyone who can already use the app mint their
+  own bearer token
   for Claude Code, Codex, or GitHub Copilot without touching the server's
   `.env`. The tab hands back ready-to-paste config
   for each client with the token already filled in. A token only ever works
@@ -244,9 +228,9 @@ wrinkle: **MCP clients authenticate as a token, not as a person.**
   URL and a browser sign-in at your identity provider - no token to paste
   or revoke. It needs an authorization server for `/mcp`: an `oidc`
   deployment has one already (set `MCP_PUBLIC_URL`); otherwise name one with
-  `MCP_OAUTH_ISSUER` + `MCP_OAUTH_AUDIENCE`. Built-in accounts do not
-  provide one, so with them use personal tokens. The token resolves to the
-  same person a browser session would. Hosted clients (claude.ai, ChatGPT)
+  `MCP_OAUTH_ISSUER` + `MCP_OAUTH_AUDIENCE`. Without one, use personal
+  tokens. The token resolves to the same person a browser session would.
+  Hosted clients (claude.ai, ChatGPT)
   connect from the vendor's servers, so the endpoint must be reachable from
   the internet for them; clients that run on your machine do not need that.
   Details, per-IdP client registration and the optional required scope:
@@ -266,14 +250,11 @@ on any `collection_id` unchecked — advertised an isolation boundary without
 being one. That flag still refuses to start; this mode is the real version of
 what it pretended to be.
 
-**It requires a verified identity source.** Ownership enforced against an
-identity anyone can forge is worthless, so the app refuses to start with the
-flag on and no source it can enforce. With `IDENTITY_PROVIDER` empty the
-source is the built-in accounts. Or set it to one of:
+**It is for organisations that already run sign-in, and requires a verified
+identity source.** Clio has no accounts of its own. Ownership enforced against
+an identity anyone can forge is worthless, so the app refuses to start with the
+flag on and no source it can enforce. Set `IDENTITY_PROVIDER` to one of:
 
-- `local` — built-in accounts: email and password, invite links, a one-time
-  setup code for the first administrator. The default for self-hosting, and
-  what `PRIVATE_COLLECTIONS=true` selects on its own.
 - `oidc` — a bearer JWT from your own identity provider (Keycloak, Entra ID,
   Okta, PingFederate). The answer for shapes **C** and **E** when the site
   already has single sign-on.
@@ -282,7 +263,9 @@ source is the built-in accounts. Or set it to one of:
   is and passes it in a header.
 
 Full configuration, and the guards each one needs, in
-[IDENTITY.md](IDENTITY.md).
+[IDENTITY.md](IDENTITY.md). For a personal or small-team install leave
+`PRIVATE_COLLECTIONS=false`; everyone then shares one corpus behind
+`AUTH_PASSWORD`.
 
 What changes when it is on:
 
@@ -298,10 +281,8 @@ What changes when it is on:
   creators.
 - **Sharing is built in.** An owner creates a share link (read or readwrite,
   optional expiry) from the collection's ⋮ menu, or shares directly with an
-  email address; the recipient accepts in the same dialog. With built-in
-  accounts the recipient needs an account first (an administrator invites
-  them), and the response says whether they have one. Shares are revocable,
-  and deletion stays owner-only.
+  email address; the recipient accepts in the same dialog. Shares are
+  revocable, and deletion stays owner-only.
 - **Three tiers, not two.** `owner` decides how a collection is *built*:
   re-indexing, chunk size, embedding model, the guide, the sensitivity
   label, publishing and deletion. `readwrite` is a *contributor* — it adds
@@ -312,7 +293,7 @@ What changes when it is on:
   endpoint that reconfigures a collection must pass `owner=True`.
 - **Publishing releases a reviewed collection to everyone, read-only.** An
   owner ticks "Share with everyone, read-only" in the collection's edit
-  dialog. From then on every signed-in person can search it, ask about it
+  dialog. From then on every person the identity provider admits can search it, ask about it
   and reach it from their AI tools over MCP, while the owner alone keeps
   the ability to add sources or change how it is built. This is the shape
   for material that has been reviewed and released — a handbook, a policy
@@ -418,9 +399,8 @@ recorded per identity, so this only takes effect under
 
 Approve a held or flagged document, remove it with or without blocking its
 hash, act on user reports, and suspend an identity — which revokes every
-MCP token it holds and, with built-in accounts, disables the account and ends
-its sessions. Suspension leaves the person's documents in place; removal is a
-separate, reviewable decision.
+MCP token it holds. Suspension leaves the person's documents in place; removal
+is a separate, reviewable decision.
 
 ## Capacity & scaling
 
@@ -437,8 +417,7 @@ The comfortable envelope is a team appliance: **roughly 10–50 people** on
 an always-on host. Two shared chokepoints define it — the request
 threadpool (~40 slots; a chat turn holds one for its whole agent loop, up
 to ~11 provider round-trips) and a single embedding lock every query and
-indexing batch passes through. The built-in accounts have no seat limit; the
-host is the limit.
+indexing batch passes through. There is no seat limit; the host is the limit.
 
 What protects the deployment when many people share it:
 
@@ -456,10 +435,9 @@ What protects the deployment when many people share it:
 | `SEARCH_HISTORY_RETENTION_DAYS` | 30 | Search log (stores result snippets) |
 | `USAGE_RETENTION_DAYS` | 180 | Per-turn chat usage rows |
 
-Identity for the limits is the signed-in person when there is one, else the
+Identity for the limits is the verified identity when there is one, else the
 client IP — which behind a reverse proxy is the address uvicorn reports, so
-set `FORWARDED_ALLOW_IPS` to the proxy (see shape **C**). Sign-in attempts are
-throttled separately. A
+set `FORWARDED_ALLOW_IPS` to the proxy (see shape **C**). A
 **429 response** means "you, specifically, are over a limit — wait the
 `Retry-After` seconds," not that the server is down; the UI says so. With
 `ADMIN_EMAILS` set, the Admin tab shows per-person spend, live process
@@ -488,10 +466,9 @@ container recreation with the volume.
 
 Everything lives in one data directory (`./data` by default, `/app/data` in
 Docker, `DATA_DIR` to move it): uploaded documents, FAISS indexes, the SQLite
-metadata and config databases, and `accounts.db` with the built-in accounts.
-Back up that directory and you can restore the whole deployment. Keep
-`accounts.db` with it: it is a separate file from the app database even when
-`DB_BACKEND=postgres`, and the one thing a Postgres dump does not cover.
+metadata and config databases. Back up that directory and you can restore the
+whole deployment. (With `DB_BACKEND=postgres` the app metadata database lives in
+Postgres, so dump it too.)
 
 The shipped `docker-compose.yml` bind-mounts `./data`, so the files are
 ordinary files on the host and any file-level backup tool works. Stop the
@@ -514,7 +491,7 @@ docker cp clio:/app/data ./clio-data-backup
 
 To restore, stop Clio, put the directory back (or `docker cp` it into the
 container), and start it again. A restored directory brings back every
-account, collection and index as they were.
+collection and index as they were.
 
 ## Upgrading
 
@@ -529,24 +506,25 @@ older version is not supported once a newer one has migrated the data.
 
 ## Checklist before you hand out the URL
 
+Only needed if anyone other than you can reach the app.
+
 - [ ] If you use a reverse proxy: direct access to the app's port fails from
       another machine — only the proxy answers
-- [ ] People are let in by something: `PRIVATE_COLLECTIONS=true` (accounts),
-      `AUTH_PASSWORD`, your identity provider, or a network only they can reach
+- [ ] People are let in by something: `AUTH_PASSWORD`, your identity
+      provider, or a network only they can reach
 - [ ] TLS in front of anything beyond a trusted LAN (`https://`, not
       `http://`), with `FORWARDED_ALLOW_IPS` limited to the proxy
-- [ ] The first administrator exists (the setup code was used) and nobody
-      else can reach the setup screen before you do
 - [ ] `CORS_ALLOW_ORIGINS` empty, or an explicit origin list — never `*` on a
       deployment others can reach
-- [ ] The people who can log in are all cleared to see **every document** in
-      every collection — or `PRIVATE_COLLECTIONS=true` is on and the team
-      tier holds nothing sensitive
-- [ ] Someone is an administrator (Admin -> People, or `ADMIN_EMAILS`) to
-      review flagged content, and
-      `CONTENT_POLICY_ACTION` / `AUP_REQUIRED` match what you told people
-      the rules are (see [Content governance](#content-governance))
-- [ ] The data directory, including `accounts.db`, is backed up
+- [ ] Everyone who can reach it is cleared to see **every document** in every
+      collection (or you run with an identity provider and
+      `PRIVATE_COLLECTIONS=true`, and the team tier holds nothing sensitive)
+- [ ] If you want an administrator separate from ordinary users, `ADMIN_EMAILS`
+      names them (this needs an identity provider; on an open appliance the
+      Admin tab is open to everyone). They review flagged content, and
+      `CONTENT_POLICY_ACTION` / `AUP_REQUIRED` should match what you told
+      people the rules are (see [Content governance](#content-governance))
+- [ ] The data directory is backed up
 
 ### Behind a firewall that blocks huggingface.co
 

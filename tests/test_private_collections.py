@@ -218,20 +218,17 @@ def reloaded_main(monkeypatch):
     importlib.reload(main)
 
 
-def test_private_collections_default_to_builtin_accounts(reloaded_main):
-    """No second system to run: the flag alone selects the built-in accounts."""
-    from services import identity
-
-    main = reloaded_main(PRIVATE_COLLECTIONS="true", IDENTITY_PROVIDER="")
-    assert main.app is not None
-    assert identity.active_provider() == "local"
-    assert identity.requires_identity() is True
+def test_private_collections_refuse_without_identity_source(reloaded_main):
+    """Clio has no accounts of its own: ownership needs an identity source
+    (oidc / trusted_header) or the app will not start."""
+    with pytest.raises(RuntimeError, match="PRIVATE_COLLECTIONS requires a verified identity source"):
+        reloaded_main(PRIVATE_COLLECTIONS="true", IDENTITY_PROVIDER="")
 
 
 def test_unknown_identity_provider_refuses_to_start(reloaded_main):
     """Ownership enforced against a source the app does not know is the
     half-boundary it refuses to ship (Cloudflare Access is no longer one)."""
-    with pytest.raises(RuntimeError, match="local, oidc, trusted_header"):
+    with pytest.raises(RuntimeError, match="oidc, trusted_header"):
         reloaded_main(PRIVATE_COLLECTIONS="true", IDENTITY_PROVIDER="cloudflare_access")
 
 
@@ -439,39 +436,6 @@ def test_readwrite_share_contributes_but_cannot_reconfigure(private_client):
         ).status_code
         == 200
     )
-
-
-# ── Invitations with built-in accounts ──────────────────────────────────────
-
-
-def test_share_reports_whether_recipient_has_an_account(private_client, monkeypatch):
-    """With built-in accounts the link only opens for someone who can sign
-    in, so the owner is told when an admin still has to invite the guest."""
-    import services.local_auth as local_auth
-    import services.share_email as se
-
-    monkeypatch.setattr(se, "send_share_email", lambda to, **kw: None)
-
-    class _Store:
-        def get_account(self, email):
-            return object() if email == "member@example.com" else None
-
-    monkeypatch.setattr(local_auth, "get_store", lambda: _Store())
-
-    cid = private_client.post(
-        "/api/collections", json={"name": "Invites"}, headers=_as(ALICE)
-    ).json()["id"]
-    known = private_client.post(
-        f"/api/collections/{cid}/share",
-        json={"notify_email": "member@example.com"}, headers=_as(ALICE),
-    )
-    stranger = private_client.post(
-        f"/api/collections/{cid}/share",
-        json={"notify_email": "guest@outside.org"}, headers=_as(ALICE),
-    )
-    assert known.status_code == stranger.status_code == 201
-    assert known.json()["has_account"] is True
-    assert stranger.json()["has_account"] is False
 
 
 def test_revoking_a_share_reports_only_success(private_client):

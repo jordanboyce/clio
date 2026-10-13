@@ -202,8 +202,7 @@ class SuspendRequest(BaseModel):
 
 @router.post("/api/admin/users/{email}/suspend", summary="Suspend an identity", tags=["admin"])
 async def suspend_user(email: str, body: Optional[SuspendRequest] = None):
-    """Revoke every MCP token the identity holds and, with built-in accounts,
-    disable the account and end its sessions. Their documents
+    """Revoke every MCP token the identity holds. Their documents
     stay put — removal is a separate, reviewable action."""
     admin = require_admin("suspend a user")
     if admin and email.strip().lower() == admin.strip().lower():

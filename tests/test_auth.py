@@ -129,8 +129,12 @@ def test_admin_allowlist_is_enforced_in_shared_collection_mode(monkeypatch):
     from api.deps import require_admin
     from middleware.user_context import reset_request_identity, set_request_identity
 
+    from services import identity
+
     monkeypatch.setattr(config.settings, "private_collections", False)
     monkeypatch.setattr(config.settings, "admin_emails", "owner@example.com")
+    # The list only binds once there is an identity source to match it against.
+    monkeypatch.setattr(identity, "active_provider", lambda: "oidc")
     token = set_request_identity("student@example.edu")
     try:
         with pytest.raises(HTTPException) as exc:
@@ -199,3 +203,28 @@ def test_cors_middleware_absent_by_default(reloaded_main):
 def test_cors_middleware_added_when_origins_listed(reloaded_main):
     main = reloaded_main(CORS_ALLOW_ORIGINS="https://example.com")
     assert any("CORSMiddleware" in str(m.cls) for m in main.app.user_middleware)
+
+
+def test_admin_list_without_an_identity_source_does_not_lock_out_the_owner(monkeypatch):
+    """ADMIN_EMAILS can only be matched against a verified identity. On the
+    default open appliance there is none, so enforcing the list would lock
+    the owner out of their own settings; the gate applies once a provider
+    exists."""
+    import config
+    from api.deps import require_admin
+    from services import admins, identity
+
+    monkeypatch.setattr(config.settings, "private_collections", False)
+    monkeypatch.setattr(config.settings, "identity_provider", "")
+    monkeypatch.setattr(config.settings, "admin_emails", "owner@example.com")
+    assert admins.admin_gate_active() is False
+    assert require_admin("change settings") is None
+
+    monkeypatch.setattr(config.settings, "identity_provider", "oidc")
+    assert admins.admin_gate_active() is True
+    monkeypatch.setattr(identity, "active_provider", lambda: "oidc")
+    import pytest
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        require_admin("change settings")
+    assert exc.value.status_code == 403

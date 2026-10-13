@@ -246,13 +246,11 @@ class Settings(BaseSettings):
 
     # Private collections: per-person ownership and sharing, enforced at every
     # entry point that takes a collection_id (search, documents, chat, /mcp).
-    # Requires a verified identity source - IDENTITY_PROVIDER below. Leaving
-    # that empty with this flag on selects the built-in accounts (email and
-    # password, first administrator claimed with a setup code printed to the
-    # server log), so a self-hosted install needs nothing else. Your own OIDC
-    # provider or an authenticating reverse proxy work too. The app refuses to
-    # start with this flag on and no usable identity source, because without
-    # one the boundary would be cosmetic.
+    # Off by default, and Clio has no accounts of its own: this is for an
+    # organisation that already runs sign-in (an OIDC provider, or an
+    # authenticating reverse proxy - IDENTITY_PROVIDER below). The app
+    # refuses to start with this flag on and no identity source, because
+    # without one the boundary would be cosmetic.
     #
     # Semantics when on:
     #   - Collections owned by a person are visible only to the owner and to
@@ -278,12 +276,7 @@ class Settings(BaseSettings):
     # Which source establishes *who* a request is. AUTH_REQUIRE_IDENTITY can
     # also make this source the app's admission gate.
     #
-    #   ""                 auto - "local" when PRIVATE_COLLECTIONS is on,
-    #                      otherwise no verified identity (open appliance).
-    #   local              built-in accounts: email + password, session
-    #                      cookie, invite links, a setup code for the first
-    #                      administrator. Also usable without private
-    #                      collections, as a login in front of a shared corpus.
+    #   ""                 none: an open appliance (the default).
     #   oidc               a bearer JWT from your own IdP (Keycloak, Entra ID,
     #                      Okta, PingFederate). The on-prem / air-gapped answer.
     #   trusted_header     a header set by an authenticating reverse proxy —
@@ -292,11 +285,6 @@ class Settings(BaseSettings):
     # See docs/IDENTITY.md. Misconfiguration is a startup failure, never a
     # silent downgrade to "everyone is anonymous".
     identity_provider: str = ""
-
-    # First-run setup code for IDENTITY_PROVIDER=local. Empty (the default)
-    # generates one and prints it in the server log until the first account
-    # exists; set this to choose your own, e.g. for unattended installs.
-    setup_code: str = ""
 
     # OIDC (IDENTITY_PROVIDER=oidc). OIDC_AUDIENCE is not optional: without
     # it, any token the IdP ever issued for any application would be accepted
@@ -326,12 +314,10 @@ class Settings(BaseSettings):
     trusted_header_secret: str = ""
     trusted_header_signature_name: str = "X-Forwarded-User-Signature"
 
-    # Operator allowlist, comma-separated. With external identity providers
-    # (oidc, trusted_header) this is how administrators are named; with
-    # built-in accounts admins are granted in the Users panel and this list
-    # is an additional, always-on source (a break-glass address). Empty
-    # means nobody, so settings that apply to the whole deployment fail
-    # closed rather than open.
+    # Operator allowlist, comma-separated: how administrators are named when
+    # identity comes from an external provider. Empty means nobody, so on a
+    # deployment with private collections, settings that apply to the whole
+    # deployment fail closed rather than open.
     admin_emails: str = ""  # comma-separated
 
     # ── Load protection ──────────────────────────────────────────────────
@@ -439,8 +425,8 @@ class Settings(BaseSettings):
     # With IDENTITY_PROVIDER=oidc nothing else is required - OIDC_ISSUER /
     # OIDC_AUDIENCE are advertised and enforced on /mcp as they are
     # everywhere. The MCP_OAUTH_* values below override them for /mcp only,
-    # which is how a built-in-accounts or trusted-proxy deployment (whose
-    # browser identity is not a bearer JWT) names an IdP for its MCP clients.
+    # which is how a trusted-proxy deployment (whose browser identity is not a
+    # bearer JWT) names an IdP for its MCP clients.
     #
     # MCP_PUBLIC_URL is the canonical URL clients reach the endpoint at,
     # e.g. https://clio.agency.gov/mcp. It is the RFC 9728 `resource`,

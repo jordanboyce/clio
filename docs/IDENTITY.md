@@ -1,163 +1,53 @@
 # Identity: who a request is
 
-Clio has two separate questions, and they are often confused:
+**Clio has no accounts.** There is no sign-up, no login page, no user list
+and no roles. Out of the box it is an open appliance: whoever can reach it
+uses it, and everyone sees the same collections. That is the right model for
+a laptop, a home server, or any network you trust, and it needs no setup.
 
-- **Can this caller get in at all?** Either the network (loopback, a VPN, a
-  firewall), `AUTH_PASSWORD` (a shared-secret gate), or an identity: with
-  `IDENTITY_PROVIDER=local` every request needs a signed-in account, and
-  `AUTH_REQUIRE_IDENTITY=true` makes the other providers require a verified
-  assertion too. See [DEPLOYMENT.md](DEPLOYMENT.md).
-- **Who is this caller?** `IDENTITY_PROVIDER`. This page.
+**You probably need nothing from this page.** Read on only if one of these
+applies:
 
-The second one only matters when something acts on it. Two things do:
-`PRIVATE_COLLECTIONS` (per-person ownership and sharing) and the audit trail
-(`actor` on every recorded event). Without a verified identity the app is an
-open appliance: everyone who can reach it sees the whole corpus, which is the
-right model for a machine only you use and the wrong one for a group with
-different access needs.
+- **Others can reach the port and you want a gate.** Set `AUTH_PASSWORD` in
+  `.env`. Browsers prompt for it natively (HTTP Basic, any username); API and
+  MCP clients send `Authorization: Bearer <password>`. Everyone who knows it
+  sees the same corpus. See [DEPLOYMENT.md](DEPLOYMENT.md).
+- **Agents need to connect.** Mint a personal MCP token in Settings -> MCP
+  (prefix `asy_mcp_`). Tokens are read-only unless minted with writes allowed.
+- **Your organisation already runs sign-in** (Keycloak, Entra ID, Okta, an
+  SSO or mTLS proxy) and you want per-person collections and sharing. That is
+  the advanced case, and the only one the rest of this page covers.
 
-The app **refuses to start** on an identity configuration it cannot enforce.
-That is deliberate: a boundary that is advertised but not enforced is worse
-than no boundary, because people put things behind it.
+## Advanced: an identity from your own sign-in
 
-## Pick a provider
+Two separate questions are easy to confuse:
+
+- **Can this caller get in at all?** The network (loopback, a VPN, a
+  firewall) or `AUTH_PASSWORD`. `AUTH_REQUIRE_IDENTITY=true` additionally
+  demands a verified identity from the provider below.
+- **Who is this caller?** `IDENTITY_PROVIDER`. It matters only when something
+  acts on it: `PRIVATE_COLLECTIONS` (per-person ownership and sharing),
+  `ADMIN_EMAILS` (who is an administrator) and the audit trail (`actor` on
+  every recorded event).
 
 | `IDENTITY_PROVIDER` | Use when | Identity comes from |
 | --- | --- | --- |
-| *(empty)* | The default. | Auto: `local` when `PRIVATE_COLLECTIONS=true`; otherwise nobody (an open appliance, optionally behind `AUTH_PASSWORD`) |
-| `local` | **Most self-hosted installs.** A laptop, home server or team box with no identity provider of its own | Built-in accounts: email + password, a session cookie |
-| `oidc` | **On-prem / air-gapped.** You run Keycloak, Entra ID, Okta, PingFederate, ADFS | `Authorization: Bearer <JWT>` |
+| *(empty)* | The default. No accounts. | Nobody: an open appliance, optionally behind `AUTH_PASSWORD` |
+| `oidc` | You run Keycloak, Entra ID, Okta, PingFederate, ADFS (on-prem or air-gapped) | `Authorization: Bearer <JWT>` |
 | `trusted_header` | An authenticating proxy already fronts the app (mTLS, SPNEGO/Kerberos, a site SSO proxy) | A header that proxy sets |
 
-If you do not already run an identity provider, use `local`: set
-`PRIVATE_COLLECTIONS=true` and the rest happens in the browser.
+`PRIVATE_COLLECTIONS=true` is for these deployments only. **The app refuses
+to start with it on and no identity provider**, because ownership enforced
+against an identity anyone could forge would be a boundary in name only. For a
+personal or small-team install leave it `false`.
 
----
+`ADMIN_EMAILS` names administrators only when the identity comes from `oidc`
+or `trusted_header` (or from an MCP token's owner). On an open appliance with
+`ADMIN_EMAILS` empty, the Admin tab is open to everyone who can reach the app.
 
-## `local` - built-in accounts
-
-Clio can keep its own accounts, so a self-hosted install needs no identity
-provider, no cloud service and no outbound connection to sign people in.
-
-```bash
-PRIVATE_COLLECTIONS=true          # implies IDENTITY_PROVIDER=local
-# IDENTITY_PROVIDER=local         # explicit form; also works without
-#                                 # PRIVATE_COLLECTIONS, as a login in front
-#                                 # of one shared corpus
-# SETUP_CODE=                     # optional, see First run
-ADMIN_EMAILS=                     # optional break-glass administrators
-```
-
-### First run
-
-A fresh install has no accounts, so something has to prevent whoever reaches
-it first from claiming it. That something is a one-time **setup code**,
-printed to the server log:
-
-```bash
-docker logs clio          # or read the terminal running `python main.py`
-```
-
-The first visit to the app shows a setup screen. Enter the code, an email
-address and a password (at least 10 characters) and that account becomes the
-first administrator, signed in. Setup then closes: once any account exists
-the code is dead and the screen never comes back.
-
-For an unattended install, choose the code yourself with `SETUP_CODE=` in
-`.env` instead of reading it from the log. Treat it like a password until the
-first account exists, and remove it afterwards.
-
-### Adding people
-
-There is no public sign-up and no email requirement. An administrator opens
-**Admin -> People**, enters an address and gets an **invite link**. Send it
-to the person yourself (chat, email, in person); opening it lets them choose
-a password and signs them in. Links are single use, expire after 7 days, and
-are stored hashed, so the link shown once is the only copy.
-
-A person who forgot their password does not need a mail server either: an
-administrator creates a **reset link** for them in the same place (valid 24
-hours, single use). Invite and reset links are not emailed automatically
-yet; you hand them over yourself.
-
-### Roles
-
-- **Administrator** - the `is_admin` flag on an account, granted or removed in
-  Admin -> People. Administrators manage people, deployment-wide settings,
-  the audit trail and content review.
-- **Everyone else** - signs in, owns the collections they create, and sees
-  what others share with them or publish.
-- **`ADMIN_EMAILS`** - an always-on, environment-level administrator list.
-  Use it as a break-glass route (it works even if the database flag is lost)
-  and, for `oidc` and `trusted_header` deployments, as the only way to name
-  administrators. The last-admin guard stops anyone from demoting, disabling
-  or deleting the final administrator through the UI.
-
-### Sharing with an account holder
-
-An owner shares a collection by link or by email address, exactly as in
-[DEPLOYMENT.md](DEPLOYMENT.md#private-collections). The recipient needs an
-account first, so an administrator invites them; the share response reports
-`has_account` so the owner can tell when an invitation is still outstanding.
-
-### Sessions and agents
-
-Signing in sets an `HttpOnly`, `SameSite=Lax` cookie named `clio_session`
-(marked `Secure` automatically when the request arrived over https or with
-`X-Forwarded-Proto: https`). The session lives on the server; the browser
-holds only an opaque token. Agent clients do not use the cookie: mint a
-**personal MCP token** in Settings -> MCP (prefix `asy_mcp_`). It carries the
-identity of the person who minted it, is the simplest way to attach Claude
-Code, Codex and similar clients, and works against `/mcp` only. OAuth sign-in
-for connector-style clients still needs an OIDC provider; see
-[OAuth for MCP clients](#oauth-for-mcp-clients).
-
-### What is protected
-
-- **Passwords** are hashed with scrypt, with a per-account salt, minimum
-  length 10. Nothing reversible is stored.
-- **Sessions** are random server-side tokens, hashed at rest. They expire
-  after 14 days idle (sliding) and never outlive 60 days from sign-in.
-- **Invite and reset links** are single use, hashed at rest, and expire (7
-  days / 24 hours).
-- **Guessing** is throttled: 5 failed sign-ins per address and email per 15
-  minutes, and 40 per address. Behind a reverse proxy this needs real client
-  addresses, so trust the proxy's forwarding headers only from the proxy
-  itself (`FORWARDED_ALLOW_IPS`; see [DEPLOYMENT.md](DEPLOYMENT.md)).
-- **Cross-site requests**: writes that arrive with the session cookie must
-  carry a same-origin `Origin` / `Sec-Fetch-Site`; others are refused.
-- **Credential changes end sessions**: changing your password signs out your
-  other devices; disabling or deleting an account ends all its sessions.
-- **Last-admin guard**: the final active administrator cannot be removed.
-- **Audit**: setup, sign-ins (and failed ones), password changes,
-  invitations, resets, role changes and deletions are recorded
-  (Admin -> Audit).
-
-### Where it lives, and backing it up
-
-Accounts are stored in `accounts.db` in the data directory, a SQLite file
-separate from the app database even when `DB_BACKEND=postgres`. It is part of
-the data directory backup; restoring the directory restores every account.
-Without it the install is back at first run (a new setup code is printed),
-and the collections on disk have no sign-ins until the accounts are
-recreated with the same email addresses.
-
-### Coming from another identity provider
-
-Built-in accounts are keyed by **email address**, the same key earlier
-deployments used for collection ownership. If your existing collections are
-owned by `jordan@example.com`, creating the first administrator (or inviting
-a person) with that exact address gives them those collections back. Nothing
-is migrated or rewritten. Collections owned by `default` stay the shared
-team tier.
-
-### What it is not
-
-Built-in accounts are deliberately small. There is no single sign-on, no
-multi-factor authentication, no self-service password reset by email and no
-sign-up form. If you need those, put your identity provider in front with
-`oidc` or `trusted_header`; see the next sections. They are listed in the
-[roadmap](ROADMAP.md).
+The app also **refuses to start** on any identity configuration it cannot
+enforce. That is deliberate: a boundary that is advertised but not enforced is
+worse than no boundary, because people put things behind it.
 
 ---
 
@@ -397,8 +287,8 @@ this problem.
 
 ### A different IdP for `/mcp` only
 
-With `local` accounts (or `trusted_header`) the browser identity is not a
-bearer JWT, so the app has no authorization server to advertise. If you do
+With `trusted_header` (or no identity provider) the browser identity is not
+a bearer JWT, so the app has no authorization server to advertise. If you do
 run an OIDC provider, name it for `/mcp` only:
 
 ```bash
@@ -464,16 +354,15 @@ row per tool call — an agent turn is typically several.
 
 ## Checklist
 
-- [ ] `IDENTITY_PROVIDER` set (or `PRIVATE_COLLECTIONS=true` for built-in accounts)
-- [ ] The app starts — a refusal here names exactly what is missing
+Only for deployments using `oidc` or `trusted_header`:
+
+- [ ] `IDENTITY_PROVIDER` set, and the app starts (a refusal names exactly
+      what is missing)
 - [ ] `OIDC_AUDIENCE` is this app's client id, not a shared or wildcard value
 - [ ] `PRIVATE_COLLECTIONS=true` if people should not see each other's sources
 - [ ] For `trusted_header`: loopback bind or HMAC secret, and the proxy
       strips inbound copies of the identity header
 - [ ] `MCP_AUDIT_TOOL_CALLS=true` where reads must be accountable
 - [ ] `ADMIN_EMAILS` lists identities as this provider reports them (the
-      email claim, the certificate CN — whatever `OIDC_IDENTITY_CLAIM` or the
-      proxy header actually contains). For `local`, grant administrators in
-      Admin -> People instead and keep `ADMIN_EMAILS` as break-glass
-- [ ] For `local`: the setup code is used (or `SETUP_CODE` removed), and the
-      data directory including `accounts.db` is backed up
+      email claim, the certificate CN - whatever `OIDC_IDENTITY_CLAIM` or the
+      proxy header actually contains)

@@ -1,17 +1,14 @@
 """Verified request identity, from whichever source the site actually runs.
 
 ``PRIVATE_COLLECTIONS`` enforces per-person ownership, and it is only as
-trustworthy as the identity it enforces against. A self-hosted install may
-have nothing in front of it at all, or may sit inside an organisation that
-already runs its own identity provider; this module serves both.
+trustworthy as the identity it enforces against. Clio itself has no accounts:
+a default install is an open appliance for whoever can reach it (fine on
+your own machine; add ``AUTH_PASSWORD`` when others can). An organisation
+that already runs its own sign-in can plug it in here.
 
 This module is the seam. One verifier per deployment, chosen by
 ``IDENTITY_PROVIDER``:
 
-  local              Built-in accounts (services/local_auth.py): email and
-                     password, a session cookie, invite links. The default
-                     whenever PRIVATE_COLLECTIONS is on and nothing else is
-                     named, and the answer for a laptop or a small team's box.
   oidc               Authorization: Bearer <JWT> from the site's own IdP
                      (Keycloak, Entra ID, Okta, PingFederate). Signature,
                      issuer, audience and expiry are verified against the
@@ -71,9 +68,8 @@ logger = logging.getLogger(__name__)
 
 _JWKS_TTL_SECONDS = 3600
 
-# Providers that establish identity. "" means auto-detect: built-in accounts
-# when private collections are on, otherwise no verified identity at all.
-IDENTITY_PROVIDERS = ("local", "oidc", "trusted_header")
+# Providers that establish identity. "" means none: an open appliance.
+IDENTITY_PROVIDERS = ("oidc", "trusted_header")
 
 
 def is_mcp_path(path: str) -> bool:
@@ -449,27 +445,17 @@ def _ip_in_networks(client_ip: Optional[str], networks: list) -> bool:
 
 
 def active_provider() -> str:
-    """The provider this deployment uses: an explicit choice, or auto-detect.
-
-    Private collections need an identity to enforce against, so turning them
-    on without naming a provider selects the built-in accounts: the common
-    self-hosted install then needs one setting, not a second system to run.
-    """
+    """The identity provider this deployment uses, or "" for none."""
     from config import settings
 
-    explicit = (settings.identity_provider or "").strip().lower()
-    if explicit:
-        return explicit
-    if settings.private_collections:
-        return "local"
-    return ""
+    return (settings.identity_provider or "").strip().lower()
 
 
 def requires_identity() -> bool:
     """True when every request must carry a verified identity to be served."""
     from config import settings
 
-    return settings.auth_require_identity or active_provider() == "local"
+    return bool(settings.auth_require_identity)
 
 
 def validate_config() -> None:
@@ -491,10 +477,7 @@ def validate_config() -> None:
             f"Use one of: {', '.join(IDENTITY_PROVIDERS)}."
         )
 
-    if provider == "local":
-        pass  # accounts live in the data directory; nothing to configure
-
-    elif provider == "oidc":
+    if provider == "oidc":
         if not settings.oidc_issuer:
             raise RuntimeError(
                 "IDENTITY_PROVIDER=oidc needs OIDC_ISSUER - the issuer URL of "
@@ -618,8 +601,8 @@ def mcp_oauth_config() -> Optional[MCPOAuthConfig]:
 
     MCP_OAUTH_ISSUER names one explicitly (any deployment shape); otherwise
     an ``oidc`` identity provider is reused as-is, so an OIDC deployment
-    admits connector clients with no further settings. A local-accounts
-    or trusted-header deployment without MCP_OAUTH_ISSUER has no OAuth on
+    admits connector clients with no further settings. A trusted-header
+    deployment without MCP_OAUTH_ISSUER has no OAuth on
     /mcp - its MCP clients keep using personal tokens.
     """
     from config import settings
@@ -728,7 +711,7 @@ class _ChainedVerifier:
     """Try each verifier that sees a candidate credential, first hit wins.
 
     Used on /mcp for a deployment whose browser identity is not a bearer
-    JWT (a session cookie, a trusted proxy header) but whose MCP clients
+    JWT (a trusted proxy header) but whose MCP clients
     sign in at an IdP: the OAuth verifier looks only at a JWS-shaped bearer,
     the deployment's own verifier only at its own header, so the two never
     contend for one request. InsufficientScope propagates untouched.
@@ -813,11 +796,6 @@ def get_identity_verifier(path: str = "") -> Optional[IdentityVerifier]:
             return _ChainedVerifier([mcp_verifier, base]) if base is not None else mcp_verifier
     if not provider:
         return None
-
-    if provider == "local":
-        from services.local_auth import LocalSessionIdentity
-
-        return LocalSessionIdentity()
 
     if provider == "oidc":
         signature = (
