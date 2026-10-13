@@ -4,9 +4,8 @@ import http from '../utils/http'
 import { useUserStore } from './userStore'
 
 // What is waiting for an administrator: held and flagged documents, prompt-
-// injection warnings worth a look, user reports (counted server-side), plus
-// registration requests, which the user store already tracks. The bell in the
-// header and the footer indicator both read from here.
+// injection warnings worth a look, and user reports (all counted server-side).
+// The bell in the header and the footer indicator both read from here.
 //
 // Polling is deliberately lazy: once a minute while the tab is visible, and
 // straight away when the person comes back to it. The server caches the
@@ -21,8 +20,7 @@ export const useReviewStore = defineStore('review', () => {
 
   const userStore = useUserStore()
 
-  const registrations = computed(() => userStore.pendingRegistrations || 0)
-  const total = computed(() => (summary.value.pending || 0) + registrations.value)
+  const total = computed(() => summary.value.pending || 0)
   const urgent = computed(() => (summary.value.critical || 0) > 0 || (summary.value.held || 0) > 0)
 
   async function refresh() {
@@ -65,5 +63,5 @@ export const useReviewStore = defineStore('review', () => {
     document.removeEventListener('visibilitychange', onVisible)
   }
 
-  return { summary, loaded, failed, registrations, total, urgent, refresh, setSummary, start, stop }
+  return { summary, loaded, failed, total, urgent, refresh, setSummary, start, stop }
 })

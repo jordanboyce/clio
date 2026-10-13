@@ -1,14 +1,14 @@
 """Private-collections mode: ownership, sharing, and enforcement.
 
-The mode is opt-in (PRIVATE_COLLECTIONS=true) and requires Cloudflare Access
-so every request carries a verified identity. These tests cover the three
-layers separately:
+The mode is opt-in (PRIVATE_COLLECTIONS=true) and enforces ownership against
+a verified identity - the built-in accounts unless another provider is named.
+These tests cover the layers separately:
 
 - service rules: check_collection_access / get_all_collections visibility
-- startup posture: the flag refuses to start without an identity source
+- startup posture: which identity provider the flag selects
 - HTTP enforcement: two identities exercising the real routers end-to-end
-  (the Access verifier is faked; the JWT crypto itself is covered by
-  test_access_jwt.py)
+  (the identity verifier is faked via tests/identity_helpers.py; the real
+  verifiers have their own tests)
 """
 
 import importlib
@@ -59,18 +59,14 @@ def _settings_objects():
 def _flip_private_mode():
     saved = []
     for s in _settings_objects():
-        saved.append((s, s.private_collections, s.cf_access_team_domain, s.cf_access_aud))
+        saved.append((s, s.private_collections))
         s.private_collections = True
-        s.cf_access_team_domain = "testteam.cloudflareaccess.com"
-        s.cf_access_aud = "aud-test"
     return saved
 
 
 def _restore(saved):
-    for s, private, team, aud in saved:
+    for s, private in saved:
         s.private_collections = private
-        s.cf_access_team_domain = team
-        s.cf_access_aud = aud
 
 
 @pytest.fixture()
@@ -222,44 +218,24 @@ def reloaded_main(monkeypatch):
     importlib.reload(main)
 
 
-def test_private_collections_refuse_without_identity_source(reloaded_main):
-    """Ownership enforced against a forgeable identity is the half-boundary
-    this app refuses to ship — no Access config, no private mode."""
-    with pytest.raises(RuntimeError, match="identity"):
-        # CF_ACCESS_* blanked explicitly: a developer .env may configure them
-        reloaded_main(
-            PRIVATE_COLLECTIONS="true",
-            CF_ACCESS_TEAM_DOMAIN="",
-            CF_ACCESS_AUD="",
-        )
+def test_private_collections_default_to_builtin_accounts(reloaded_main):
+    """No second system to run: the flag alone selects the built-in accounts."""
+    from services import identity
 
-
-def test_private_collections_start_with_access_configured(reloaded_main):
-    main = reloaded_main(
-        PRIVATE_COLLECTIONS="true",
-        CF_ACCESS_TEAM_DOMAIN="testteam.cloudflareaccess.com",
-        CF_ACCESS_AUD="aud-test",
-    )
+    main = reloaded_main(PRIVATE_COLLECTIONS="true", IDENTITY_PROVIDER="")
     assert main.app is not None
+    assert identity.active_provider() == "local"
+    assert identity.requires_identity() is True
+
+
+def test_unknown_identity_provider_refuses_to_start(reloaded_main):
+    """Ownership enforced against a source the app does not know is the
+    half-boundary it refuses to ship (Cloudflare Access is no longer one)."""
+    with pytest.raises(RuntimeError, match="local, oidc, trusted_header"):
+        reloaded_main(PRIVATE_COLLECTIONS="true", IDENTITY_PROVIDER="cloudflare_access")
 
 
 # ── HTTP enforcement with two identities ────────────────────────────────────
-
-
-class _FakeVerifier:
-    """Stands in for AccessJWTVerifier: the 'assertion' is just the email.
-
-    JWT crypto (signature/issuer/audience/expiry) is covered by
-    test_access_jwt.py; here we only need the middleware to map an assertion
-    to an identity.
-    """
-
-    def verify(self, token):
-        return {"email": token} if token and "@" in token else None
-
-    @staticmethod
-    def identity_from_claims(claims):
-        return claims.get("email")
 
 
 @pytest.fixture()
@@ -267,16 +243,16 @@ def private_client(fresh_db, monkeypatch):
     """A TestClient for the app reloaded in private-collections mode.
 
     Settings are flipped on the shared singleton (visible to every module),
-    the Access verifier is faked, and main is reloaded so the module-level
+    the identity verifier is faked, and main is reloaded so the module-level
     auth-middleware registration runs for this mode. Teardown restores the
     settings first and only then reloads main, so the restored app matches
     the restored configuration.
     """
-    import services.access_jwt as access_jwt
     import main
+    from tests import identity_helpers
 
     saved = _flip_private_mode()
-    monkeypatch.setattr(access_jwt, "get_verifier", lambda: _FakeVerifier())
+    identity_helpers.install(monkeypatch)
 
     reloaded = importlib.reload(main)
     # Bare client (no context manager): lifespan skipped, middleware still runs.
@@ -287,7 +263,7 @@ def private_client(fresh_db, monkeypatch):
 
 
 def _as(email):
-    return {"cf-access-jwt-assertion": email}
+    return {"x-test-user": email}
 
 
 def test_requests_without_identity_are_rejected(private_client):
@@ -465,206 +441,50 @@ def test_readwrite_share_contributes_but_cannot_reconfigure(private_client):
     )
 
 
-# ── Edge admission (Cloudflare Access) ───────────────────────────────────
+# ── Invitations with built-in accounts ──────────────────────────────────────
 
-def _stub_edge(monkeypatch, admin):
-    """Wire the edge-admission service to an in-memory allowlist."""
-    import services.access_provisioning as ap
+
+def test_share_reports_whether_recipient_has_an_account(private_client, monkeypatch):
+    """With built-in accounts the link only opens for someone who can sign
+    in, so the owner is told when an admin still has to invite the guest."""
+    import services.local_auth as local_auth
     import services.share_email as se
 
     monkeypatch.setattr(se, "send_share_email", lambda to, **kw: None)
-    monkeypatch.setattr(ap, "access_provisioning_enabled", lambda: True)
-    monkeypatch.setattr(ap, "is_admin", lambda uid: uid == admin)
 
-    admitted = set()
+    class _Store:
+        def get_account(self, email):
+            return object() if email == "member@example.com" else None
 
-    def fake_admit(email):
-        email = email.lower()
-        new = email not in admitted
-        admitted.add(email)
-        return new
-
-    def fake_revoke(email):
-        email = email.lower()
-        was = email in admitted
-        admitted.discard(email)
-        return was
-
-    monkeypatch.setattr(ap, "admit_email", fake_admit)
-    monkeypatch.setattr(ap, "revoke_email", fake_revoke)
-    return admitted
-
-
-def test_admin_invite_admits_at_the_edge(private_client, monkeypatch):
-    admitted = _stub_edge(monkeypatch, admin=ALICE)
+    monkeypatch.setattr(local_auth, "get_store", lambda: _Store())
 
     cid = private_client.post(
-        "/api/collections", json={"name": "Admin notes"}, headers=_as(ALICE)
+        "/api/collections", json={"name": "Invites"}, headers=_as(ALICE)
     ).json()["id"]
-    r = private_client.post(
+    known = private_client.post(
+        f"/api/collections/{cid}/share",
+        json={"notify_email": "member@example.com"}, headers=_as(ALICE),
+    )
+    stranger = private_client.post(
         f"/api/collections/{cid}/share",
         json={"notify_email": "guest@outside.org"}, headers=_as(ALICE),
     )
-    assert r.status_code == 201
-    assert r.json()["edge_admitted"] is True
-    assert "guest@outside.org" in admitted
+    assert known.status_code == stranger.status_code == 201
+    assert known.json()["has_account"] is True
+    assert stranger.json()["has_account"] is False
 
 
-def test_non_admin_invite_does_not_admit(private_client, monkeypatch):
-    """A non-admin owner may still share; they just cannot open the front
-    door for a stranger."""
-    admitted = _stub_edge(monkeypatch, admin="someone-else@example.com")
-
-    cid = private_client.post(
-        "/api/collections", json={"name": "Bob notes"}, headers=_as(BOB)
-    ).json()["id"]
-    r = private_client.post(
-        f"/api/collections/{cid}/share",
-        json={"notify_email": "guest@outside.org"}, headers=_as(BOB),
-    )
-    assert r.status_code == 201
-    assert r.json()["edge_admitted"] is False
-    assert "edge_note" in r.json()
-    assert admitted == set()
-
-
-def test_revoking_last_share_withdraws_admission(private_client, monkeypatch):
-    admitted = _stub_edge(monkeypatch, admin=ALICE)
-
+def test_revoking_a_share_reports_only_success(private_client):
     cid = private_client.post(
         "/api/collections", json={"name": "Temp"}, headers=_as(ALICE)
     ).json()["id"]
     share_id = private_client.post(
-        f"/api/collections/{cid}/share",
-        json={"notify_email": "guest@outside.org"}, headers=_as(ALICE),
+        f"/api/collections/{cid}/share", json={}, headers=_as(ALICE)
     ).json()["share_id"]
-    assert "guest@outside.org" in admitted
-
     r = private_client.delete(f"/api/shares/{share_id}", headers=_as(ALICE))
     assert r.status_code == 200
-    assert r.json()["edge_revoked"] is True
-    assert admitted == set()
-
-
-def test_revoking_one_of_two_shares_keeps_admission(private_client, monkeypatch):
-    """Otherwise revoking any one share would lock the guest out of the
-    others they still legitimately hold."""
-    admitted = _stub_edge(monkeypatch, admin=ALICE)
-
-    ids = []
-    for name in ("First", "Second"):
-        cid = private_client.post(
-            "/api/collections", json={"name": name}, headers=_as(ALICE)
-        ).json()["id"]
-        ids.append(private_client.post(
-            f"/api/collections/{cid}/share",
-            json={"notify_email": "guest@outside.org"}, headers=_as(ALICE),
-        ).json()["share_id"])
-
-    r = private_client.delete(f"/api/shares/{ids[0]}", headers=_as(ALICE))
-    assert r.status_code == 200
-    assert "edge_revoked" not in r.json()
-    assert "guest@outside.org" in admitted
-
-    r = private_client.delete(f"/api/shares/{ids[1]}", headers=_as(ALICE))
-    assert r.json()["edge_revoked"] is True
-    assert admitted == set()
-
-
-# ── Admin admission management ───────────────────────────────────────────
-
-def test_admissions_require_admin(private_client, monkeypatch):
-    _stub_edge(monkeypatch, admin=ALICE)
-    import services.access_provisioning as ap
-    monkeypatch.setattr(ap, "admitted_emails", lambda: [ALICE])
-
-    assert private_client.get("/api/access/admissions", headers=_as(BOB)).status_code == 403
-    assert private_client.post(
-        "/api/access/admissions", json={"email": "x@y.z"}, headers=_as(BOB)
-    ).status_code == 403
-    assert private_client.get("/api/access/admissions", headers=_as(ALICE)).status_code == 200
-
-
-def test_admissions_503_when_unconfigured(private_client, monkeypatch):
-    import services.access_provisioning as ap
-    monkeypatch.setattr(ap, "access_provisioning_enabled", lambda: False)
-    r = private_client.get("/api/access/admissions", headers=_as(ALICE))
-    assert r.status_code == 503
-    assert "CF_API_TOKEN" in r.json()["detail"]
-
-
-def test_admissions_reconciles_both_kinds_of_drift(private_client, monkeypatch):
-    """Admitted-with-nothing-shared and shared-with-but-not-admitted are the
-    two ways the edge list stops matching reality."""
-    _stub_edge(monkeypatch, admin=ALICE)
-    import services.access_provisioning as ap
-    monkeypatch.setattr(config.settings, "admin_emails", ALICE)
-
-    cid = private_client.post(
-        "/api/collections", json={"name": "Drifty"}, headers=_as(ALICE)
-    ).json()["id"]
-    private_client.post(
-        f"/api/collections/{cid}/share",
-        json={"notify_email": "shared-and-admitted@x.com"}, headers=_as(ALICE),
-    )
-    private_client.post(
-        f"/api/collections/{cid}/share",
-        json={"notify_email": "missing@x.com"}, headers=_as(ALICE),
-    )
-
-    # orphan: admitted, nothing shared. missing: shared with, never admitted.
-    monkeypatch.setattr(ap, "admitted_emails",
-                        lambda: [ALICE, "shared-and-admitted@x.com", "orphan@x.com"])
-
-    body = private_client.get("/api/access/admissions", headers=_as(ALICE)).json()
-    assert body["orphans"] == ["orphan@x.com"]
-    assert "missing@x.com" in body["missing"]
-    assert body["counts"]["admitted"] == 3
-    assert body["counts"]["free_seat_limit"] == 50
-
-    by_email = {p["email"]: p for p in body["people"]}
-    assert by_email["shared-and-admitted@x.com"]["shares"] == 1
-    assert by_email["orphan@x.com"]["shares"] == 0
-    # The admin is on the list but is never reported as dead weight.
-    assert by_email[ALICE]["is_admin"] is True
-    assert ALICE not in body["orphans"]
-
-
-def test_admin_cannot_withdraw_own_access(private_client, monkeypatch):
-    """Locking yourself out from inside the app leaves nobody able to fix it."""
-    _stub_edge(monkeypatch, admin=ALICE)
-    import services.access_provisioning as ap
-    monkeypatch.setattr(ap, "admitted_emails", lambda: [ALICE])
-
-    r = private_client.delete(f"/api/access/admissions/{ALICE}", headers=_as(ALICE))
-    assert r.status_code == 400
-    assert "your own access" in r.json()["detail"]
-
-
-def test_admit_and_withdraw_roundtrip(private_client, monkeypatch):
-    admitted = _stub_edge(monkeypatch, admin=ALICE)
-    import services.access_provisioning as ap
-    monkeypatch.setattr(ap, "admitted_emails", lambda: sorted(admitted))
-
-    r = private_client.post(
-        "/api/access/admissions", json={"email": "Newcomer@X.com"}, headers=_as(ALICE)
-    )
-    assert r.status_code == 201
-    assert r.json()["added"] is True
-    assert "newcomer@x.com" in admitted
-
-    r = private_client.delete("/api/access/admissions/newcomer@x.com", headers=_as(ALICE))
-    assert r.status_code == 200
-    assert r.json()["removed"] is True
-    assert admitted == set()
-
-
-def test_admit_rejects_junk(private_client, monkeypatch):
-    _stub_edge(monkeypatch, admin=ALICE)
-    r = private_client.post(
-        "/api/access/admissions", json={"email": "not-an-email"}, headers=_as(ALICE)
-    )
-    assert r.status_code == 400
+    assert set(r.json()) == {"message", "success"}
+    assert r.json()["success"] is True
 
 
 # ── Operator-only settings ──────────────────────────────────────────────────
@@ -703,6 +523,12 @@ def test_require_admin_fails_closed_with_no_admins(private_mode):
     from api.deps import require_admin
 
     saved = _set_admins("")
+    # An external identity source has no admin flag of its own, so with no
+    # ADMIN_EMAILS there is no admin policy at all. (The built-in accounts
+    # always have one: the first account is the administrator.)
+    old_providers = [(o, o.identity_provider) for o in _settings_objects()]
+    for o in _settings_objects():
+        o.identity_provider = "oidc"
     token = set_request_user(ALICE)
     try:
         with pytest.raises(HTTPException) as exc:
@@ -710,6 +536,8 @@ def test_require_admin_fails_closed_with_no_admins(private_mode):
         assert exc.value.status_code == 403
         assert "No admin is configured" in exc.value.detail
     finally:
+        for o, old in old_providers:
+            o.identity_provider = old
         reset_request_user(token)
         _restore_admins(saved)
 
@@ -955,7 +783,7 @@ def test_restricted_collections_cannot_be_published(private_client):
 def test_global_reindex_is_admin_only(private_client, monkeypatch):
     """POST /api/reindex rebuilds every collection's index, including ones
     the caller does not own — it was reachable by anyone."""
-    import services.access_provisioning as ap
+    import services.admins as admins
 
-    monkeypatch.setattr(ap, "is_admin", lambda uid: uid == ALICE)
+    monkeypatch.setattr(admins, "is_admin", lambda uid: uid == ALICE)
     assert private_client.post("/api/reindex", headers=_as(BOB)).status_code == 403

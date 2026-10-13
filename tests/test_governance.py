@@ -524,43 +524,29 @@ def test_mcp_token_scope_must_be_visible_collection(open_client, fresh_db):
 # ── HTTP: private mode (identity, AUP gate, admin gating) ───────────────────
 
 
-class _FakeVerifier:
-    def verify(self, token):
-        return {"email": token} if token and "@" in token else None
-
-    @staticmethod
-    def identity_from_claims(claims):
-        return claims.get("email")
-
-
 @pytest.fixture()
 def private_client(indexer, monkeypatch):
-    import services.access_jwt as access_jwt
     import main
+    from tests import identity_helpers
 
     saved = []
     for s in _settings_objects():
-        saved.append((s, s.private_collections, s.cf_access_team_domain,
-                      s.cf_access_aud, s.admin_emails, s.aup_required))
+        saved.append((s, s.private_collections, s.admin_emails, s.aup_required))
         s.private_collections = True
-        s.cf_access_team_domain = "testteam.cloudflareaccess.com"
-        s.cf_access_aud = "aud-test"
         s.admin_emails = ADMIN
         s.aup_required = True
-    monkeypatch.setattr(access_jwt, "get_verifier", lambda: _FakeVerifier())
+    identity_helpers.install(monkeypatch)
     reloaded = importlib.reload(main)
     yield TestClient(reloaded.app)
-    for s, private, team, aud, admins, aup in saved:
+    for s, private, admins, aup in saved:
         s.private_collections = private
-        s.cf_access_team_domain = team
-        s.cf_access_aud = aud
         s.admin_emails = admins
         s.aup_required = aup
     importlib.reload(main)
 
 
 def _as(email):
-    return {"cf-access-jwt-assertion": email}
+    return {"x-test-user": email}
 
 
 def test_aup_gate_blocks_ingest_until_accepted(private_client, policy):

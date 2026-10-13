@@ -246,10 +246,13 @@ class Settings(BaseSettings):
 
     # Private collections: per-person ownership and sharing, enforced at every
     # entry point that takes a collection_id (search, documents, chat, /mcp).
-    # Requires a verified identity source — IDENTITY_PROVIDER below, which is
-    # Cloudflare Access, your own OIDC provider, or an authenticating reverse
-    # proxy. The app refuses to start with this flag on and no identity source
-    # configured, because without one the boundary would be cosmetic.
+    # Requires a verified identity source - IDENTITY_PROVIDER below. Leaving
+    # that empty with this flag on selects the built-in accounts (email and
+    # password, first administrator claimed with a setup code printed to the
+    # server log), so a self-hosted install needs nothing else. Your own OIDC
+    # provider or an authenticating reverse proxy work too. The app refuses to
+    # start with this flag on and no usable identity source, because without
+    # one the boundary would be cosmetic.
     #
     # Semantics when on:
     #   - Collections owned by a person are visible only to the owner and to
@@ -258,8 +261,8 @@ class Settings(BaseSettings):
     #     and anything created by password-authenticated callers) are team
     #     collections: visible and writable to everyone, unchanged behaviour.
     #   - AUTH_PASSWORD callers have no identity: they see team collections
-    #     only. MCP clients get an identity via Access service tokens (the
-    #     token's common_name), so collections can be shared to them by name.
+    #     only. MCP clients get the identity of the person who minted their
+    #     personal token (Settings -> MCP), so they see what that person sees.
     private_collections: bool = False
 
     # Shared-secret auth. When set, every request (except /health) must present
@@ -275,9 +278,12 @@ class Settings(BaseSettings):
     # Which source establishes *who* a request is. AUTH_REQUIRE_IDENTITY can
     # also make this source the app's admission gate.
     #
-    #   ""                 auto — cloudflare_access when CF_ACCESS_* are set,
-    #                      otherwise no verified identity (team appliance).
-    #   cloudflare_access  Cf-Access-Jwt-Assertion from the edge.
+    #   ""                 auto - "local" when PRIVATE_COLLECTIONS is on,
+    #                      otherwise no verified identity (open appliance).
+    #   local              built-in accounts: email + password, session
+    #                      cookie, invite links, a setup code for the first
+    #                      administrator. Also usable without private
+    #                      collections, as a login in front of a shared corpus.
     #   oidc               a bearer JWT from your own IdP (Keycloak, Entra ID,
     #                      Okta, PingFederate). The on-prem / air-gapped answer.
     #   trusted_header     a header set by an authenticating reverse proxy —
@@ -286,6 +292,11 @@ class Settings(BaseSettings):
     # See docs/IDENTITY.md. Misconfiguration is a startup failure, never a
     # silent downgrade to "everyone is anonymous".
     identity_provider: str = ""
+
+    # First-run setup code for IDENTITY_PROVIDER=local. Empty (the default)
+    # generates one and prints it in the server log until the first account
+    # exists; set this to choose your own, e.g. for unattended installs.
+    setup_code: str = ""
 
     # OIDC (IDENTITY_PROVIDER=oidc). OIDC_AUDIENCE is not optional: without
     # it, any token the IdP ever issued for any application would be accepted
@@ -315,44 +326,19 @@ class Settings(BaseSettings):
     trusted_header_secret: str = ""
     trusted_header_signature_name: str = "X-Forwarded-User-Signature"
 
-    # Trust Cloudflare Access authentication. When both are set, a request
-    # carrying a valid Cf-Access-Jwt-Assertion (signed by the team's keys,
-    # audience = one of the listed Access app AUD tags) is authenticated
-    # WITHOUT the shared password — no browser Basic-auth prompt after SSO,
-    # and service-token MCP clients drop the bearer header. AUTH_PASSWORD
-    # still works as a fallback for direct/non-Access access paths.
-    cf_access_team_domain: str = ""  # e.g. "yourteam.cloudflareaccess.com"
-    cf_access_aud: str = ""  # comma-separated Access application AUD tags
-
-    # Automated edge admission for share invitations. Sharing by email
-    # delivers a share token, but the recipient is still stopped at the
-    # Cloudflare Access login until their address is on the Access policy —
-    # which otherwise means an admin editing the dashboard by hand for every
-    # new person. With these set, inviting someone also admits them at the
-    # edge, so the invitation is genuinely self-serve (pair it with the
-    # one-time PIN login method and guests need no account in your IdP).
-    #
-    # CF_API_TOKEN needs exactly one permission: Account / Access: Apps and
-    # Policies / Edit. That is write access to the deployment's front door,
-    # so do not reuse a broader token. CF_ACCESS_POLICY_ID is the reusable
-    # policy attached to the app; scripts/provision_cloudflare.py creates it
-    # and writes all three values.
-    #
-    # ADMIN_EMAILS gates the privileged half: an admission grants edge access
-    # to the whole deployment, not just the collection being shared (the
-    # private-collections layer is what confines the person to that). Any
-    # owner may still share; only an admin's invite admits a stranger. Empty
-    # means nobody, so this fails closed rather than open.
-    cf_api_token: str = ""
-    cf_account_id: str = ""
-    cf_access_policy_id: str = ""
+    # Operator allowlist, comma-separated. With external identity providers
+    # (oidc, trusted_header) this is how administrators are named; with
+    # built-in accounts admins are granted in the Users panel and this list
+    # is an additional, always-on source (a break-glass address). Empty
+    # means nobody, so settings that apply to the whole deployment fail
+    # closed rather than open.
     admin_emails: str = ""  # comma-separated
 
     # ── Load protection ──────────────────────────────────────────────────
     # These exist so one person can't starve everyone else on a shared
     # deployment — the shared free-tier LLM key and the single embedding
-    # model are common resources. All limits are per identity (Cloudflare
-    # Access email when present, else client IP), 0 disables that limit.
+    # model are common resources. All limits are per identity (the signed-in
+    # person when there is one, else client IP), 0 disables that limit.
 
     # Requests per minute, by expense class. Chat turns can cost up to ~11
     # provider round-trips each; search is a local embed + FAISS scan;
@@ -361,9 +347,6 @@ class Settings(BaseSettings):
     rate_limit_chat_per_minute: int = 6
     rate_limit_search_per_minute: int = 30
     rate_limit_default_per_minute: int = 120
-    # The public /api/register form has no identity to key on, so its
-    # budget is per IP and deliberately small.
-    rate_limit_register_per_minute: int = 5
     # /mcp is unlimited by default: an agent turn fans out several tool calls
     # at once and handles 429s badly (immediate retry or abandoning the
     # question). Set a per-token budget only for abuse protection on a shared
@@ -394,27 +377,6 @@ class Settings(BaseSettings):
     # accepting a file, so one collection cannot fill the disk or the
     # embedding queue for everyone else. 0 = unlimited. Default 5 GiB.
     collection_storage_limit_bytes: int = 5 * 1024 * 1024 * 1024
-
-    # ── Online registration ──────────────────────────────────────────────
-    # Lets a person ask for access from a public page (/register) instead of
-    # waiting for an admin to type their address in. Requires edge admission
-    # (CF_API_TOKEN / CF_ACCOUNT_ID / CF_ACCESS_POLICY_ID) because approving
-    # a request *is* an admission at the Cloudflare Access edge, and the
-    # /register page plus /api/register must be exempted from Access
-    # (scripts/provision_cloudflare.py adds the bypass; see
-    # docs/DEPLOYMENT.md).
-    #   off      — the page says registration is closed.
-    #   approval — requests queue for an admin (Admin → Access → Requests).
-    #   open     — matching requests are admitted immediately.
-    registration_mode: Literal["off", "approval", "open"] = "off"
-    # Comma-separated email domains allowed to register (e.g.
-    # "example.com, partner.org"). Empty = any domain. Enforced in both
-    # modes; a domain miss is refused before it ever reaches the queue.
-    registration_allowed_domains: str = ""
-    # Refuse new registrations once this many addresses are admitted at the
-    # edge. Defaults to Cloudflare Zero Trust's free tier so a public form
-    # cannot quietly turn into a bill. 0 = no cap beyond Cloudflare's own.
-    registration_max_seats: int = 50
 
     # Retention (days). search_history stores result snippets, so it is a
     # privacy liability with no expiry; chat_usage is small but unbounded.
@@ -477,8 +439,8 @@ class Settings(BaseSettings):
     # With IDENTITY_PROVIDER=oidc nothing else is required - OIDC_ISSUER /
     # OIDC_AUDIENCE are advertised and enforced on /mcp as they are
     # everywhere. The MCP_OAUTH_* values below override them for /mcp only,
-    # which is how a Cloudflare Access deployment (whose browser identity
-    # is not a bearer JWT) names an IdP for its MCP clients.
+    # which is how a built-in-accounts or trusted-proxy deployment (whose
+    # browser identity is not a bearer JWT) names an IdP for its MCP clients.
     #
     # MCP_PUBLIC_URL is the canonical URL clients reach the endpoint at,
     # e.g. https://clio.agency.gov/mcp. It is the RFC 9728 `resource`,

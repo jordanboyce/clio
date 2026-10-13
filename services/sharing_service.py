@@ -91,8 +91,8 @@ class SharingService:
         """
         if not user_id:
             raise ValueError(
-                "Accepting a share needs an identity — sign in through "
-                "Cloudflare Access rather than the shared password."
+                "Accepting a share needs an identity — sign in with your "
+                "account rather than the shared password."
             )
         share = app_db.get_share(share_token)
         if not share:

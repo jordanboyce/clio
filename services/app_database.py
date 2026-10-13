@@ -316,8 +316,7 @@ class SQLiteBackend(DatabaseBackend):
             """)
 
             # ── Personal MCP access tokens ────────────────────
-            # Self-serve alternative to a Cloudflare Access service token:
-            # anyone who can already reach the app mints a bearer credential
+            # Anyone who can already reach the app mints a bearer credential
             # for headless MCP clients. Only the sha256 hash is stored; the
             # plaintext is returned once, at creation. user_id NULL = minted
             # by an anonymous (password-authenticated) caller — it verifies
@@ -388,30 +387,6 @@ class SQLiteBackend(DatabaseBackend):
                 )
             """)
 
-            # Online registration: people who asked for access from the
-            # public /register page. One row per address; status moves
-            # pending -> approved | denied, and a denied address that asks
-            # again is re-opened rather than duplicated.
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS registration_requests (
-                    id TEXT PRIMARY KEY,
-                    email TEXT NOT NULL UNIQUE,
-                    name TEXT,
-                    organization TEXT,
-                    note TEXT,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    requested_at TEXT NOT NULL,
-                    decided_at TEXT,
-                    decided_by TEXT,
-                    decision_note TEXT,
-                    request_ip TEXT,
-                    attempts INTEGER NOT NULL DEFAULT 1
-                )
-            """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_registration_status ON registration_requests(status, requested_at DESC)"
-            )
-
             # ── Migrations for existing databases ────────────
             # Add owner_id to collections if missing
             try:
@@ -463,10 +438,8 @@ class SQLiteBackend(DatabaseBackend):
             except sqlite3.OperationalError:
                 pass
 
-            # v4.4: the address a share was emailed to. Recorded so that
-            # revoking a share can also withdraw that person's edge
-            # admission (services/access_provisioning.py) — without it the
-            # Access allowlist only ever grows.
+            # v4.4: the address a share was emailed to, so the owner's share
+            # list shows who each link was sent to.
             try:
                 conn.execute("ALTER TABLE collection_shares ADD COLUMN invited_email TEXT")
             except sqlite3.OperationalError:
@@ -766,8 +739,7 @@ class SQLiteBackend(DatabaseBackend):
         """Every address with a live tie to the app, and how many shares.
 
         Counts a share once whether the address was invited to it, accepted
-        it, or both. Used by the admin view to reconcile who is admitted at
-        the Cloudflare Access edge against who actually has a reason to be.
+        it, or both.
         """
         with sqlite_connect(self.db_path) as conn:
             rows = conn.execute(
@@ -1498,102 +1470,6 @@ class SQLiteBackend(DatabaseBackend):
                 "SELECT * FROM blocked_hashes ORDER BY blocked_at DESC"
             ).fetchall()
             return [dict(r) for r in rows]
-
-    # ── Registration requests ────────────────────────────────
-
-    def upsert_registration_request(
-        self, email: str, name: str = "", organization: str = "", note: str = "",
-        request_ip: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Create a pending request, or re-open/refresh the address's existing row.
-
-        A pending row keeps its place in the queue (details refreshed, attempt
-        counted); a denied row goes back to pending so the admin sees it
-        again; an approved row is returned untouched.
-        """
-        email = email.strip().lower()
-        ts = datetime.utcnow().isoformat()
-        with sqlite_connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT * FROM registration_requests WHERE email = ?", (email,)
-            ).fetchone()
-            if row is None:
-                rid = str(uuid.uuid4())
-                conn.execute(
-                    """INSERT INTO registration_requests
-                       (id, email, name, organization, note, status, requested_at, request_ip, attempts)
-                       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 1)""",
-                    (rid, email, name or "", organization or "", note or "", ts, request_ip),
-                )
-                conn.commit()
-                return self.get_registration_request(rid)
-            if row["status"] == "approved":
-                return dict(row)
-            conn.execute(
-                """UPDATE registration_requests
-                      SET name = ?, organization = ?, note = ?, status = 'pending',
-                          requested_at = ?, decided_at = NULL, decided_by = NULL,
-                          decision_note = NULL, request_ip = ?, attempts = attempts + 1
-                    WHERE id = ?""",
-                (name or row["name"] or "", organization or row["organization"] or "",
-                 note or row["note"] or "", ts, request_ip, row["id"]),
-            )
-            conn.commit()
-            return self.get_registration_request(row["id"])
-
-    def get_registration_request(self, request_id: str) -> Optional[Dict[str, Any]]:
-        with sqlite_connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT * FROM registration_requests WHERE id = ?", (request_id,)
-            ).fetchone()
-            return dict(row) if row else None
-
-    def get_registration_request_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        with sqlite_connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT * FROM registration_requests WHERE email = ?", (email.strip().lower(),)
-            ).fetchone()
-            return dict(row) if row else None
-
-    def list_registration_requests(self, status: Optional[str] = None, limit: int = 500) -> List[Dict[str, Any]]:
-        with sqlite_connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            if status:
-                rows = conn.execute(
-                    "SELECT * FROM registration_requests WHERE status = ? ORDER BY requested_at DESC LIMIT ?",
-                    (status, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM registration_requests ORDER BY requested_at DESC LIMIT ?", (limit,)
-                ).fetchall()
-            return [dict(r) for r in rows]
-
-    def decide_registration_request(
-        self, request_id: str, status: str, decided_by: Optional[str], note: str = "",
-    ) -> Optional[Dict[str, Any]]:
-        ts = datetime.utcnow().isoformat()
-        with sqlite_connect(self.db_path) as conn:
-            cursor = conn.execute(
-                """UPDATE registration_requests
-                      SET status = ?, decided_at = ?, decided_by = ?, decision_note = ?
-                    WHERE id = ?""",
-                (status, ts, decided_by, note or "", request_id),
-            )
-            conn.commit()
-            if cursor.rowcount == 0:
-                return None
-        return self.get_registration_request(request_id)
-
-    def count_registration_requests(self, status: str = "pending") -> int:
-        with sqlite_connect(self.db_path) as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM registration_requests WHERE status = ?", (status,)
-            ).fetchone()
-            return int(row[0] or 0)
 
     # ── User Preferences ─────────────────────────────────────
 

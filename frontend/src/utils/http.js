@@ -74,6 +74,13 @@ http.interceptors.response.use(
           ? data.detail.detail
           : null
 
+    // The session ended (expired, signed out elsewhere, account disabled).
+    // The server flags it so a wrong-password 401 from the sign-in form is
+    // not mistaken for it. Imported lazily: authStore itself uses this client.
+    if (status === 401 && data?.login_required) {
+      import('../stores/authStore').then(({ useAuthStore }) => useAuthStore().markSignedOut())
+    }
+
     if (status === 429) {
       const seconds = data?.retry_after_seconds
       const message =

@@ -79,7 +79,7 @@
       </button>
 
       <!-- Review notifications (admins only): held/flagged content, injection
-           warnings, user reports and access requests waiting for a decision -->
+           warnings and user reports waiting for a decision -->
       <ReviewBell variant="header" @open="openReview" />
 
       <!-- Help menu (desktop; phones get it in the overflow menu) -->
@@ -135,18 +135,24 @@
         <Settings :size="16" />
       </button>
 
-      <!-- Signed-in identity + sign out (Cloudflare Access deployments only) -->
-      <div v-if="me.authenticated_via === 'cloudflare-access'" class="dropdown dropdown-end hidden md:block">
+      <!-- Signed-in identity, password and sign out (built-in accounts) -->
+      <div v-if="me.can_sign_out" class="dropdown dropdown-end hidden md:block">
         <button tabindex="0" class="btn btn-ghost btn-circle btn-sm" :title="me.identity || 'Signed in'" aria-label="Account menu">
           <CircleUser :size="16" />
         </button>
         <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-50 w-64 p-2 shadow border border-base-300">
           <li class="menu-title"><span class="truncate">{{ me.identity || 'Signed in' }}</span></li>
           <li>
-            <a :href="me.logout_url" class="text-error">
+            <button type="button" @click="openAccount(); closeMenus()">
+              <KeyRound :size="14" />
+              Change password
+            </button>
+          </li>
+          <li>
+            <button type="button" class="text-error" @click="signOut">
               <LogOut :size="14" />
               Sign out
-            </a>
+            </button>
           </li>
         </ul>
       </div>
@@ -211,11 +217,17 @@
               About Clio
             </button>
           </li>
-          <li v-if="me.authenticated_via === 'cloudflare-access'">
-            <a :href="me.logout_url" class="text-error">
+          <li v-if="me.can_sign_out">
+            <button type="button" @click="openAccount(); closeMenus()">
+              <KeyRound :size="14" />
+              Change password
+            </button>
+          </li>
+          <li v-if="me.can_sign_out">
+            <button type="button" class="text-error" @click="signOut">
               <LogOut :size="14" />
               Sign out
-            </a>
+            </button>
           </li>
         </ul>
       </div>
@@ -794,6 +806,7 @@
     <CommandPalette :open="showPalette" :commands="paletteCommands" @close="showPalette = false" />
     <ShortcutsDialog :open="showShortcuts" @close="showShortcuts = false" />
     <AboutDialog :open="showAbout" @close="showAbout = false" />
+    <AccountDialog ref="accountDialog" />
 
     <!-- Search-index readiness. One quiet bar at the top: progress while the
          model downloads, a way forward when it is missing or failed, nothing
@@ -1340,10 +1353,11 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
-import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert } from 'lucide-vue-next'
+import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, KeyRound, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert } from 'lucide-vue-next'
 import CommandPalette from './components/CommandPalette.vue'
 import ShortcutsDialog from './components/ShortcutsDialog.vue'
 import AboutDialog from './components/AboutDialog.vue'
+import AccountDialog from './components/AccountDialog.vue'
 import { isTypingTarget, isMod, MOD } from './utils/shortcuts'
 import { useChatStore } from './stores/chatStore'
 import http from './utils/http'
@@ -1389,6 +1403,7 @@ import {
 } from './utils/aiProviders.js'
 import { useCollectionStore } from './stores/collectionStore'
 import { useUserStore } from './stores/userStore'
+import { useAuthStore } from './stores/authStore'
 import { useReviewStore } from './stores/reviewStore'
 import { useSearchStore } from './stores/searchStore'
 import { useBackgroundJobsStore } from './stores/backgroundJobsStore'
@@ -1476,8 +1491,15 @@ const startResize = (e) => {
   window.addEventListener('mouseup', onUp)
 }
 
-// Signed-in identity (Cloudflare Access deployments); drives the account menu.
-const me = ref({ authenticated_via: null, identity: null, logout_url: null })
+// Signed-in identity (built-in accounts); drives the account menu.
+const me = ref({ authenticated_via: null, identity: null, can_sign_out: false })
+const authStore = useAuthStore()
+const accountDialog = ref(null)
+const openAccount = () => accountDialog.value?.open()
+const signOut = async () => {
+  closeMenus()
+  await authStore.logout()
+}
 const loadMe = async () => {
   try {
     const resp = await http.get('/api/me')
@@ -1943,7 +1965,7 @@ const switchTab = (tabName) => {
 const openReview = (target = 'review') => {
   switchTab('admin')
   // The Admin tab is a lazy chunk, so its sections may not exist yet.
-  const id = target === 'access' ? 'admin-access' : 'admin-review'
+  const id = target === 'people' ? 'admin-people' : 'admin-review'
   let tries = 0
   const scrollWhenReady = () => {
     const el = document.getElementById(id)

@@ -22,16 +22,15 @@ describe('review notifications', () => {
     expect(wrapper.find('button').exists()).toBe(false)
   })
 
-  it('shows a badge with held, injection and access-request counts combined', async () => {
+  it('shows a badge with held and injection counts combined', async () => {
     const user = useUserStore()
     user.adminConsole = true
-    user.pendingRegistrations = 1
     const review = useReviewStore()
     review.setSummary({ pending: 3, held: 1, injection: 2 })
 
     const wrapper = mountBell()
-    expect(wrapper.get('[data-testid="review-badge"]').text()).toBe('4')
-    expect(wrapper.get('button').attributes('aria-label')).toContain('1 held · 2 injection · 1 access request')
+    expect(wrapper.get('[data-testid="review-badge"]').text()).toBe('3')
+    expect(wrapper.get('button').attributes('aria-label')).toContain('1 held · 2 injection')
     // Something is held from search, so the badge is the urgent colour
     expect(wrapper.get('[data-testid="review-badge"]').classes()).toContain('bg-error')
   })
@@ -39,14 +38,13 @@ describe('review notifications', () => {
   it('asks the dropdown row to open the right part of Admin', async () => {
     const user = useUserStore()
     user.adminConsole = true
-    user.pendingRegistrations = 2
     useReviewStore().setSummary({ pending: 1, injection: 1 })
 
     const wrapper = mountBell()
     const rows = wrapper.findAll('ul button')
-    expect(rows.map((r) => r.text())).toEqual(['Prompt-injection warnings1', 'Access requests2'])
-    await rows[1].trigger('click')
-    expect(wrapper.emitted('open')[0]).toEqual(['access'])
+    expect(rows.map((r) => r.text())).toEqual(['Prompt-injection warnings1'])
+    await rows[0].trigger('click')
+    expect(wrapper.emitted('open')[0]).toEqual(['review'])
   })
 
   it('says so when the queue is clear, in both placements', () => {

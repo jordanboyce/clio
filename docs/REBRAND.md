@@ -17,14 +17,11 @@ record; Prometheus brings the fire. Tagline: *The record remembers.*
 | Test env-file override | `ASYMPTOTE_ENV_FILE` | `CLIO_ENV_FILE` (old name still honoured) |
 | Docker image default | `asymptote:local` | `clio:local` |
 | Compose service / `container_name` | `asymptote` | `clio` |
-| Tunnel sidecar `container_name` | `asymptote-tunnel` | `clio-tunnel` |
 | Image env vars | `ASYMPTOTE_IMAGE`, `ASYMPTOTE_PULL_POLICY` | `CLIO_IMAGE`, `CLIO_PULL_POLICY` |
 | Image label / version env | `ASYMPTOTE_VERSION` | `CLIO_VERSION` |
 | Packaged image tarball | `asymptote-<tag>.tar.gz` | `clio-<tag>.tar.gz` |
 | Container registry path | `ghcr.io/jordanboyce/asymptote` | `ghcr.io/jordanboyce/clio` (see below) |
 | Browser storage keys | `asymptote_*` | `clio_*` (migrated automatically) |
-| `provision_cloudflare.py` inputs | `ASYMPTOTE_HOSTNAME`, `ASYMPTOTE_ALLOW_EMAIL` | `CLIO_HOSTNAME`, `CLIO_ALLOW_EMAIL` |
-| Cloudflare objects the provision script creates | tunnel `asymptote`, policy `asymptote-invited`, token `asymptote-mcp` | `clio`, `clio-invited`, `clio-mcp` |
 
 ## What did **not** change
 
@@ -47,10 +44,6 @@ record; Prometheus brings the fire. Tagline: *The record remembers.*
   value already there), then removes the old key. Chat history, current
   collection, search settings, provider selection and per-surface overrides
   survive the upgrade. See `frontend/src/utils/storageMigration.js`.
-- **Tunnel ingress.** `docker-compose.remote.yml` gives the `clio` service a
-  network alias `asymptote`, so a Cloudflare tunnel whose ingress still says
-  `http://asymptote:8473` keeps working without a change on the Cloudflare
-  side. New tunnels from `provision_cloudflare.py` point at `http://clio:8473`.
 - **`ASYMPTOTE_ENV_FILE`** is still read when `CLIO_ENV_FILE` is unset.
 
 ## Still tied to the GitHub repository name
@@ -77,9 +70,8 @@ images live under `ghcr.io/jordanboyce/asymptote`.
    same.
 5. Reconnect MCP clients if you pinned the old server name; the endpoint URL
    (`/mcp`) is unchanged.
-6. Do **not** re-run `provision_cloudflare.py` against an existing deployment
-   without setting `CLIO_HOSTNAME` to the hostname you already serve: its
-   defaults now name the tunnel, Access apps and policies `clio…` and would
-   create a second set beside the `asymptote…` ones rather than update them.
+6. If a reverse proxy or tunnel of your own addresses the container by its
+   old service name (`asymptote`), point it at `clio` (port `8473` is
+   unchanged).
 
 Your `data/` directory carries over untouched — no reindexing required.

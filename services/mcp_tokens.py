@@ -1,10 +1,9 @@
 """Personal MCP access tokens.
 
-Lets anyone who can already reach the app (an SSO session, or the shared
+Lets anyone who can already reach the app (a signed-in account, or the shared
 AUTH_PASSWORD) mint their own long-lived bearer credential for headless MCP
-clients — Claude Code, Codex, GitHub Copilot — instead of provisioning a
-Cloudflare Access service token and hand-editing .env / .mcp.json /
-config.toml on every machine that wants a connection.
+clients — Claude Code, Codex, GitHub Copilot — instead of hand-editing
+.env / .mcp.json / config.toml on every machine that wants a connection.
 
 A token is deliberately narrow:
   - main.py's auth middleware only ever accepts it on paths under /mcp, so a
@@ -27,7 +26,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Recognizable prefix: lets verify_token() reject obviously-foreign bearer
-# values (e.g. the AUTH_PASSWORD or a Cloudflare service-token secret) with a
+# values (e.g. the AUTH_PASSWORD or an OIDC access token) with a
 # cheap string check before ever touching the database.
 TOKEN_PREFIX = "asy_mcp_"
 _PREFIX_DISPLAY_LEN = len(TOKEN_PREFIX) + 6

@@ -9,12 +9,12 @@ at once.
 
 Token bucket per (class, identity): O(1) state, natural burst headroom for
 someone firing follow-up questions, and an exact Retry-After. Identity is
-the verified Cloudflare Access email when the auth middleware resolved one,
-else the client IP (behind cloudflared that is CF-Connecting-IP). In-memory
+the verified identity when the auth middleware resolved one, else the
+client IP (behind a reverse proxy, the address uvicorn reports). In-memory
 by design — the app is a single process (see docs/DEPLOYMENT.md).
 
 This is deliberately separate from the auth middleware: auth only exists
-when AUTH_PASSWORD or PRIVATE_COLLECTIONS is configured, and an open
+when accounts, an identity provider or AUTH_PASSWORD is configured, and an open
 deployment still deserves limits. Registration order in main.py makes auth
 run first, so the identity is already on request.state here.
 
@@ -52,10 +52,6 @@ def _classify(path: str) -> Optional[str]:
         return "chat"
     if path.startswith("/api/search"):
         return "search"
-    # The public registration form is reachable without any credential, so
-    # it gets its own tight budget keyed on IP (no identity exists yet).
-    if path == "/api/register" or path.startswith("/api/register/"):
-        return "register"
     return "default"
 
 
@@ -66,8 +62,8 @@ class RateLimiter:
         self._lock = threading.Lock()
         # (class, key) -> [tokens, last_refill_monotonic]
         self._buckets: Dict[Tuple[str, str], list] = {}
-        self._allowed = {"chat": 0, "search": 0, "default": 0, "register": 0, "mcp": 0}
-        self._rejected = {"chat": 0, "search": 0, "default": 0, "register": 0, "mcp": 0}
+        self._allowed = {"chat": 0, "search": 0, "default": 0, "mcp": 0}
+        self._rejected = {"chat": 0, "search": 0, "default": 0, "mcp": 0}
 
     @staticmethod
     def _limit_for(cls: str) -> int:
@@ -75,7 +71,6 @@ class RateLimiter:
             "chat": settings.rate_limit_chat_per_minute,
             "search": settings.rate_limit_search_per_minute,
             "default": settings.rate_limit_default_per_minute,
-            "register": settings.rate_limit_register_per_minute,
             "mcp": settings.rate_limit_mcp_per_minute,
         }[cls]
 
@@ -148,12 +143,9 @@ def resolve_limit_key(request) -> str:
     identity = getattr(request.state, "auth_identity", None)
     if identity:
         return identity
-    # Behind cloudflared every connection comes from the tunnel, so the
-    # socket address collapses to one host; Cloudflare's header carries the
-    # real client. Direct/LAN callers fall through to the socket address.
-    cf_ip = request.headers.get("cf-connecting-ip")
-    if cf_ip:
-        return cf_ip.strip()
+    # Never a client-supplied header: anything the caller can set, the caller
+    # can rotate to dodge the limit. Behind a trusted reverse proxy, run
+    # uvicorn with --proxy-headers and FORWARDED_ALLOW_IPS set to the proxy.
     return request.client.host if request.client else "unknown"
 
 

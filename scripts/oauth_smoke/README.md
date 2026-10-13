@@ -21,7 +21,7 @@ Its own data directory, never a real one.
 ```bash
 IDENTITY_PROVIDER=oidc OIDC_ISSUER=http://localhost:8080/realms/clio OIDC_AUDIENCE=clio \
 MCP_PUBLIC_URL=http://localhost:8473/mcp MCP_ALLOWED_HOSTS=localhost PRIVATE_COLLECTIONS=true \
-MCP_AUDIT_TOOL_CALLS=true AUTH_PASSWORD= CF_ACCESS_TEAM_DOMAIN= CF_ACCESS_AUD= DATA_DIR=/tmp/asy-oauth \
+MCP_AUDIT_TOOL_CALLS=true AUTH_PASSWORD= DATA_DIR=/tmp/asy-oauth \
 python main.py
 ```
 

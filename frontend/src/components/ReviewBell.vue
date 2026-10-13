@@ -69,7 +69,7 @@ const show = computed(() => userStore.adminConsole)
 
 const label = computed(() => {
   if (review.total === 0) return 'Review queue — nothing waiting'
-  return `${review.total} item${review.total === 1 ? '' : 's'} waiting for review: ${reviewSummaryText(review.summary, review.registrations)}`
+  return `${review.total} item${review.total === 1 ? '' : 's'} waiting for review: ${reviewSummaryText(review.summary)}`
 })
 
 const rows = computed(() => {
@@ -79,7 +79,6 @@ const rows = computed(() => {
     { id: 'flagged', label: 'Flagged by the scan', count: s.flagged, cls: 'badge-warning', target: 'review' },
     { id: 'injection', label: 'Prompt-injection warnings', count: s.injection, cls: 'badge-warning', target: 'review' },
     { id: 'reports', label: 'Reported by users', count: s.reports, cls: 'badge-warning', target: 'review' },
-    { id: 'access', label: 'Access requests', count: review.registrations, cls: 'badge-info', target: 'access' },
   ].filter((r) => r.count > 0)
 })
 

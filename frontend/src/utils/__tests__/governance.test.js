@@ -20,9 +20,9 @@ describe('review queue helpers', () => {
   })
 
   it('describes the queue on one line and skips zero counts', () => {
-    expect(reviewSummaryText({ held: 2, flagged: 0, injection: 1, reports: 3 }, 1))
-      .toBe('2 held · 1 injection · 3 reported · 1 access request')
-    expect(reviewSummaryText({}, 2)).toBe('2 access requests')
+    expect(reviewSummaryText({ held: 2, flagged: 0, injection: 1, reports: 3 }))
+      .toBe('2 held · 1 injection · 3 reported')
+    expect(reviewSummaryText({})).toBe('')
     expect(reviewSummaryText(null)).toBe('')
   })
 

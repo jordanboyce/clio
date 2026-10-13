@@ -32,39 +32,3 @@ export async function revokeShare(shareId) {
   const response = await http.delete(`/api/shares/${shareId}`)
   return response.data
 }
-
-// ── Edge admissions (admin only) ─────────────────────────────────────────
-
-export async function listAdmissions() {
-  const response = await http.get('/api/access/admissions')
-  return response.data
-}
-
-export async function admitEmail(email) {
-  const response = await http.post('/api/access/admissions', { email })
-  return response.data
-}
-
-export async function withdrawEmail(email) {
-  const response = await http.delete(`/api/access/admissions/${encodeURIComponent(email)}`)
-  return response.data
-}
-
-// ── Online registration requests (admin only) ─────────────────────────────
-
-export async function listRegistrations(status = null) {
-  const response = await http.get('/api/access/registrations', {
-    params: status ? { status_filter: status } : {},
-  })
-  return response.data
-}
-
-export async function approveRegistration(id, note = '') {
-  const response = await http.post(`/api/access/registrations/${encodeURIComponent(id)}/approve`, { note })
-  return response.data
-}
-
-export async function denyRegistration(id, note = '') {
-  const response = await http.post(`/api/access/registrations/${encodeURIComponent(id)}/deny`, { note })
-  return response.data
-}

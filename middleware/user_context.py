@@ -1,10 +1,11 @@
 """Request-scoped user identity for private-collections mode.
 
 Identity is never taken from a client-controlled header. The auth middleware
-in main.py verifies the Cloudflare Access JWT (signature, issuer, audience,
-expiry) and records the result on ``request.state.auth_identity`` — a person's
-email for SSO logins, the service token's common_name for MCP clients, or
-``None`` for AUTH_PASSWORD callers, who are authenticated but anonymous.
+in main.py verifies the credential (a built-in account's session cookie, an
+OIDC bearer JWT, or a proxy-vouched header) and records the result on
+``request.state.auth_identity`` - a person's email, the owner of a personal
+MCP token for agent clients, or ``None`` for AUTH_PASSWORD callers, who are
+authenticated but anonymous.
 
 Two consumers need that identity:
 
@@ -90,7 +91,7 @@ def get_current_user_id(request: Request) -> Optional[str]:
     """FastAPI dependency: the current user's verified identity.
 
     Single-user mode: always ``settings.default_user_id``.
-    Private-collections mode: the Access JWT identity, or None for
+    Private-collections mode: the verified identity, or None for
     password-authenticated (anonymous) callers.
     """
     if not settings.private_collections:

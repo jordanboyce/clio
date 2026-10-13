@@ -7,7 +7,8 @@ export const useUserStore = defineStore('user', () => {
   const displayName = ref('')
   const privateCollections = ref(false)
   const dbBackend = ref('sqlite')
-  const edgeAdmission = ref(false)
+  // 'local' (built-in accounts), 'oidc', 'trusted_header' or 'none'.
+  const authProvider = ref('none')
   const isAdmin = ref(false)
   // Whether the Admin tab is available: admins under private collections,
   // everyone on an open (shared-appliance) deployment.
@@ -22,17 +23,12 @@ export const useUserStore = defineStore('user', () => {
   const sensitivityLevels = ref(['public', 'internal', 'confidential', 'restricted'])
   // Set by anything that wants the policy shown on demand (sidebar link).
   const aupOpen = ref(false)
-  // Online registration (/register): the mode the deployment runs in and,
-  // for admins, how many requests are waiting for review.
-  const registrationMode = ref('off')
-  const pendingRegistrations = ref(0)
   // Per-collection storage cap in bytes (0 = unlimited).
   const collectionStorageLimitBytes = ref(0)
 
   const isPrivateMode = computed(() => privateCollections.value)
-  // Only an admin on a deployment with edge admission configured can invite
-  // someone who cannot already reach the app.
-  const canInviteNewPeople = computed(() => edgeAdmission.value && isAdmin.value)
+  // Only an admin on a deployment with built-in accounts can create accounts.
+  const canManageUsers = computed(() => authProvider.value === 'local' && isAdmin.value)
   // The modal takes over until accepted; it can also be opened voluntarily.
   const mustAcceptAup = computed(() => aup.value.required && !aup.value.accepted)
 
@@ -43,7 +39,7 @@ export const useUserStore = defineStore('user', () => {
       displayName.value = response.data.display_name
       privateCollections.value = response.data.private_collections
       dbBackend.value = response.data.db_backend
-      edgeAdmission.value = response.data.edge_admission || false
+      authProvider.value = response.data.auth_provider || 'none'
       isAdmin.value = response.data.is_admin || false
       adminConsole.value = response.data.admin_console ?? isAdmin.value
       if (response.data.aup) aup.value = response.data.aup
@@ -51,8 +47,6 @@ export const useUserStore = defineStore('user', () => {
       if (Array.isArray(response.data.sensitivity_levels)) {
         sensitivityLevels.value = response.data.sensitivity_levels
       }
-      registrationMode.value = response.data.registration_mode || 'off'
-      pendingRegistrations.value = response.data.pending_registrations || 0
       collectionStorageLimitBytes.value = response.data.collection_storage_limit_bytes || 0
       loaded.value = true
     } catch (err) {
@@ -62,7 +56,7 @@ export const useUserStore = defineStore('user', () => {
       displayName.value = 'Default User'
       privateCollections.value = false
       dbBackend.value = 'sqlite'
-      edgeAdmission.value = false
+      authProvider.value = 'none'
       isAdmin.value = false
       adminConsole.value = false
       loaded.value = true
@@ -85,7 +79,7 @@ export const useUserStore = defineStore('user', () => {
     displayName,
     privateCollections,
     dbBackend,
-    edgeAdmission,
+    authProvider,
     isAdmin,
     adminConsole,
     loaded,
@@ -93,11 +87,9 @@ export const useUserStore = defineStore('user', () => {
     aupOpen,
     contentPolicyAction,
     sensitivityLevels,
-    registrationMode,
-    pendingRegistrations,
     collectionStorageLimitBytes,
     isPrivateMode,
-    canInviteNewPeople,
+    canManageUsers,
     mustAcceptAup,
     loadCurrentUser,
     acceptAup,

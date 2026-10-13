@@ -1,19 +1,17 @@
 """Verified request identity, from whichever source the site actually runs.
 
 ``PRIVATE_COLLECTIONS`` enforces per-person ownership, and it is only as
-trustworthy as the identity it enforces against. Cloudflare Access was the
-first source this app accepted (services/access_jwt.py) and it remains the
-right answer for an internet-facing deployment. It is the wrong answer — and
-frequently an impossible one — for an internal or air-gapped install, where
-there is no Cloudflare in the path and the agency already runs its own
-identity provider.
+trustworthy as the identity it enforces against. A self-hosted install may
+have nothing in front of it at all, or may sit inside an organisation that
+already runs its own identity provider; this module serves both.
 
 This module is the seam. One verifier per deployment, chosen by
 ``IDENTITY_PROVIDER``:
 
-  cloudflare_access  Cf-Access-Jwt-Assertion, verified against the team's
-                     JWKS. The historical default; auto-selected when
-                     CF_ACCESS_* are set and IDENTITY_PROVIDER is empty.
+  local              Built-in accounts (services/local_auth.py): email and
+                     password, a session cookie, invite links. The default
+                     whenever PRIVATE_COLLECTIONS is on and nothing else is
+                     named, and the answer for a laptop or a small team's box.
   oidc               Authorization: Bearer <JWT> from the site's own IdP
                      (Keycloak, Entra ID, Okta, PingFederate). Signature,
                      issuer, audience and expiry are verified against the
@@ -73,9 +71,9 @@ logger = logging.getLogger(__name__)
 
 _JWKS_TTL_SECONDS = 3600
 
-# Providers that establish identity. "" means auto-detect (Cloudflare when
-# configured, otherwise no verified identity at all).
-IDENTITY_PROVIDERS = ("cloudflare_access", "oidc", "trusted_header")
+# Providers that establish identity. "" means auto-detect: built-in accounts
+# when private collections are on, otherwise no verified identity at all.
+IDENTITY_PROVIDERS = ("local", "oidc", "trusted_header")
 
 
 def is_mcp_path(path: str) -> bool:
@@ -174,32 +172,6 @@ class JWKSCache:
                 logger.warning(f"JWKS refresh failed for {self.url}: {e}")
                 return None
         return self._keys.get(kid)
-
-
-# ── Cloudflare Access ───────────────────────────────────────────────────────
-
-
-class CloudflareAccessIdentity:
-    """Adapter over the existing Access verifier, unchanged in behaviour."""
-
-    via = "cloudflare-access"
-
-    def __init__(self, verifier):
-        self._verifier = verifier
-
-    def has_candidate(self, headers: Mapping[str, str]) -> bool:
-        return bool(headers.get("cf-access-jwt-assertion"))
-
-    def verify_request(
-        self, headers: Mapping[str, str], client_ip: Optional[str]
-    ) -> Optional[str]:
-        assertion = headers.get("cf-access-jwt-assertion", "")
-        if not assertion:
-            return None
-        claims = self._verifier.verify(assertion)
-        if claims is None:
-            return None
-        return self._verifier.identity_from_claims(claims)
 
 
 # ── Generic OIDC / OAuth 2 bearer ───────────────────────────────────────────
@@ -479,17 +451,25 @@ def _ip_in_networks(client_ip: Optional[str], networks: list) -> bool:
 def active_provider() -> str:
     """The provider this deployment uses: an explicit choice, or auto-detect.
 
-    Auto-detect keeps every existing Cloudflare deployment working without a
-    new setting: CF_ACCESS_* configured means cloudflare_access.
+    Private collections need an identity to enforce against, so turning them
+    on without naming a provider selects the built-in accounts: the common
+    self-hosted install then needs one setting, not a second system to run.
     """
     from config import settings
 
     explicit = (settings.identity_provider or "").strip().lower()
     if explicit:
         return explicit
-    if settings.cf_access_team_domain and settings.cf_access_aud:
-        return "cloudflare_access"
+    if settings.private_collections:
+        return "local"
     return ""
+
+
+def requires_identity() -> bool:
+    """True when every request must carry a verified identity to be served."""
+    from config import settings
+
+    return settings.auth_require_identity or active_provider() == "local"
 
 
 def validate_config() -> None:
@@ -511,12 +491,8 @@ def validate_config() -> None:
             f"Use one of: {', '.join(IDENTITY_PROVIDERS)}."
         )
 
-    if provider == "cloudflare_access":
-        if not (settings.cf_access_team_domain and settings.cf_access_aud):
-            raise RuntimeError(
-                "IDENTITY_PROVIDER=cloudflare_access needs CF_ACCESS_TEAM_DOMAIN "
-                "and CF_ACCESS_AUD. See docs/DEPLOYMENT.md."
-            )
+    if provider == "local":
+        pass  # accounts live in the data directory; nothing to configure
 
     elif provider == "oidc":
         if not settings.oidc_issuer:
@@ -642,7 +618,7 @@ def mcp_oauth_config() -> Optional[MCPOAuthConfig]:
 
     MCP_OAUTH_ISSUER names one explicitly (any deployment shape); otherwise
     an ``oidc`` identity provider is reused as-is, so an OIDC deployment
-    admits connector clients with no further settings. A Cloudflare Access
+    admits connector clients with no further settings. A local-accounts
     or trusted-header deployment without MCP_OAUTH_ISSUER has no OAuth on
     /mcp - its MCP clients keep using personal tokens.
     """
@@ -752,7 +728,7 @@ class _ChainedVerifier:
     """Try each verifier that sees a candidate credential, first hit wins.
 
     Used on /mcp for a deployment whose browser identity is not a bearer
-    JWT (Cloudflare Access, a trusted proxy header) but whose MCP clients
+    JWT (a session cookie, a trusted proxy header) but whose MCP clients
     sign in at an IdP: the OAuth verifier looks only at a JWS-shaped bearer,
     the deployment's own verifier only at its own header, so the two never
     contend for one request. InsufficientScope propagates untouched.
@@ -807,10 +783,8 @@ def get_mcp_oauth_verifier() -> Optional[OIDCIdentity]:
 
 # Only the OIDC backend is cached, and only because it owns a JWKS cache
 # worth keeping warm across requests. The other two are cheap value objects
-# built per request on purpose: Cloudflare's delegates to access_jwt, which
-# does its own caching and can be swapped underneath us (config reload, and
-# every test that substitutes a verifier), so holding a wrapper around a
-# stale one would silently reject valid identities.
+# built per request on purpose, so a config reload or a test that swaps the
+# underlying store is never shadowed by a stale wrapper.
 _oidc_verifier: Optional[OIDCIdentity] = None
 _oidc_signature: Optional[tuple] = None
 
@@ -840,11 +814,10 @@ def get_identity_verifier(path: str = "") -> Optional[IdentityVerifier]:
     if not provider:
         return None
 
-    if provider == "cloudflare_access":
-        from services.access_jwt import get_verifier as get_access_verifier
+    if provider == "local":
+        from services.local_auth import LocalSessionIdentity
 
-        access = get_access_verifier()
-        return CloudflareAccessIdentity(access) if access is not None else None
+        return LocalSessionIdentity()
 
     if provider == "oidc":
         signature = (

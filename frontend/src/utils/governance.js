@@ -102,13 +102,12 @@ export function injectionEvidence(injection) {
 }
 
 // One line for the bell and footer: "2 held · 3 injection · 1 reported".
-export function reviewSummaryText(summary, pendingRegistrations = 0) {
+export function reviewSummaryText(summary) {
   const s = summary || {}
   const parts = []
   if (s.held) parts.push(`${s.held} held`)
   if (s.flagged) parts.push(`${s.flagged} flagged`)
   if (s.injection) parts.push(`${s.injection} injection`)
   if (s.reports) parts.push(`${s.reports} reported`)
-  if (pendingRegistrations) parts.push(`${pendingRegistrations} access request${pendingRegistrations === 1 ? '' : 's'}`)
   return parts.join(' · ')
 }

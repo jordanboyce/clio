@@ -1,5 +1,7 @@
 # Product assessment — September 12, 2026
 
+> Historical (Sept 2026). Cloudflare-based access and online registration described here were later removed; see IDENTITY.md.
+
 ## Judgment
 
 Clio is useful as a **self-hosted knowledge workspace with an MCP server**.

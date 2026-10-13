@@ -81,10 +81,9 @@ async def update_mcp_config(updates: dict):
 
 
 # ── Personal MCP access tokens ──────────────────────────────────────────────
-# Self-serve alternative to a Cloudflare Access service token: anyone who can
-# already reach the app mints their own bearer credential for headless MCP
-# clients here, instead of provisioning Access + hand-editing .env/.mcp.json.
-# These endpoints sit behind the normal app auth (password / SSO), same as
+# Anyone who can already reach the app mints their own bearer credential for
+# headless MCP clients here, instead of hand-editing .env/.mcp.json.
+# These endpoints sit behind the normal app auth (account / password), same as
 # /api/shares; the token they hand out is separately scoped to /mcp only by
 # the auth middleware in main.py.
 

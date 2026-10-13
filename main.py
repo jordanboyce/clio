@@ -24,16 +24,17 @@ from services.indexer_manager import indexer_manager
 from services.reindex_service import reindex_service
 from services.mcp_server import embedded_mcp_app, mcp_server_lifespan
 from api import deps
+from services import identity as identity_service
 from api import (
     admin,
     artifacts,
+    auth,
     chat,
     collections,
     documents,
     expertise,
     governance,
     mcp,
-    register,
     search,
     sharing,
     system,
@@ -47,8 +48,9 @@ logger = logging.getLogger(__name__)
 
 
 # ── Security posture ────────────────────────────────────────────────────────
-# The app has no authentication unless AUTH_PASSWORD or AUTH_REQUIRE_IDENTITY
-# is set, and every route —
+# The app has no authentication unless built-in accounts (IDENTITY_PROVIDER=local
+# or PRIVATE_COLLECTIONS=true), another identity provider, or AUTH_PASSWORD is
+# set, and every route —
 # search, upload, delete, chat on your provider keys, the whole /mcp tool
 # surface — is reachable by anyone who can open a socket to it. So the two
 # settings that decide who can open that socket are checked before we serve.
@@ -74,10 +76,10 @@ def _check_security_posture() -> None:
             "tools accept any collection_id without an ownership check, so it "
             "never isolated anything. Remove ENABLE_MULTI_USER. For per-person "
             "collections with enforced ownership, set PRIVATE_COLLECTIONS=true "
-            "behind Cloudflare Access - see docs/DEPLOYMENT.md."
+            "(built-in accounts) - see docs/IDENTITY.md."
         )
 
-    # Identity source (Cloudflare Access, your own OIDC provider, or an
+    # Identity source (built-in accounts, your own OIDC provider, or an
     # authenticating reverse proxy). Validated whether or not private
     # collections are on: a deployment that configured an identity source at
     # all should learn immediately that it is wrong.
@@ -88,19 +90,8 @@ def _check_security_posture() -> None:
     if settings.auth_require_identity and not identity_service.active_provider():
         raise RuntimeError(
             "AUTH_REQUIRE_IDENTITY requires a verified identity source. Set "
-            "CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD for Cloudflare Access, "
-            "or configure another identity provider. See docs/IDENTITY.md."
-        )
-
-    if settings.private_collections and not identity_service.active_provider():
-        raise RuntimeError(
-            "PRIVATE_COLLECTIONS requires a verified identity source. Set "
-            "IDENTITY_PROVIDER to one of: cloudflare_access (CF_ACCESS_* - "
-            "internet-facing), oidc (OIDC_ISSUER + OIDC_AUDIENCE - your own "
-            "IdP, the on-prem answer), or trusted_header (an authenticating "
-            "reverse proxy). Without one, ownership would be enforced against "
-            "an identity anyone can forge, which is the half-boundary this "
-            "app refuses to ship. See docs/IDENTITY.md."
+            "IDENTITY_PROVIDER to local (built-in accounts), oidc or "
+            "trusted_header. See docs/IDENTITY.md."
         )
 
     # Deployment default LLM (on-prem private endpoints). A typo here would
@@ -127,19 +118,19 @@ def _check_security_posture() -> None:
         )
 
     if settings.host not in _LOOPBACK_HOSTS and not (
-        settings.auth_password or settings.auth_require_identity
+        settings.auth_password or identity_service.requires_identity()
     ):
         logger.warning(
             "SECURITY: bound to %s (reachable from the network) with no "
             "authentication requirement set. Anyone who can reach this port can read, "
             "modify and delete every document, and spend your AI provider "
-            "credits. Set AUTH_PASSWORD or AUTH_REQUIRE_IDENTITY, or set "
+            "credits. Set PRIVATE_COLLECTIONS=true (built-in accounts) or AUTH_PASSWORD, or set "
             "HOST=127.0.0.1 to bind loopback only. See docs/DEPLOYMENT.md.",
             settings.host,
         )
 
     if settings.cors_allow_origins.strip() == "*" and not (
-        settings.auth_password or settings.auth_require_identity
+        settings.auth_password or identity_service.requires_identity()
     ):
         logger.warning(
             "SECURITY: CORS_ALLOW_ORIGINS=* with no authentication requirement set. Any web "
@@ -202,6 +193,12 @@ async def lifespan(app: FastAPI):
         reindex_service.reload_callback = reload_indexer
 
         deps.mark_initialized()
+
+        # First run with built-in accounts: print the code that claims the
+        # first administrator account.
+        if identity_service.active_provider() == "local":
+            from services.local_auth import announce_setup
+            announce_setup()
 
         # Retention sweeps for the unbounded log tables (search_history
         # stores result snippets; chat_usage grows per turn). First run is
@@ -301,25 +298,33 @@ def _password_from_auth_header(header: str) -> str:
     return ""
 
 
-# Paths a person can reach before they have any identity: the health probe
-# and the online-registration page with its two endpoints. Everything the
-# registration endpoints do is validated and rate-limited on their own
-# (api/register.py); a deployment that enables registration must also allow
-# these paths through its identity proxy.
+# Paths a person can reach before they have any identity: the health probe,
+# and, with built-in accounts, the SPA shell plus the sign-in endpoints (the
+# shell is what renders the sign-in page; it holds no secrets).
 _PUBLIC_PATHS = {
     "/health",
-    "/register",
-    "/api/register",
-    "/api/register/config",
-    "/request-access",
 }
-# The built frontend bundle is public too: the registration page is the same
+_LOCAL_AUTH_PUBLIC_PATHS = {
+    "/",
+    "/index.html",
+    "/api/auth/status",
+    "/api/auth/setup",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/link",
+    "/api/auth/accept",
+}
+# The built frontend bundle is public too: the sign-in page is the same
 # SPA, so its hashed assets and brand files must load before sign-in. The
 # bundle holds no secrets — every fact about the deployment comes from the
 # API, which stays gated.
 _PUBLIC_STATIC = {"/favicon.ico", "/manifest.webmanifest", "/apple-touch-icon.png",
                   "/clio-mark.png", "/clio-mark-dark.png", "/clio-icon-maskable.png",
                   "/clio-og.png"}
+
+
+def _local_accounts_active() -> bool:
+    return identity_service.active_provider() == "local"
 
 
 def _client_ip(request) -> str | None:
@@ -333,6 +338,7 @@ def _client_ip(request) -> str | None:
 def _is_public_path(path: str) -> bool:
     return (
         path in _PUBLIC_PATHS
+        or (path in _LOCAL_AUTH_PUBLIC_PATHS and _local_accounts_active())
         or path in _PUBLIC_STATIC
         or path.startswith("/assets/")
         or path.startswith("/icons/")
@@ -353,9 +359,9 @@ async def require_auth(request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    # Verified identity: a Cloudflare Access assertion, a bearer JWT from the
-    # site's own IdP, or a header an authenticating proxy already vouched for
-    # (services/identity.py). Any of these is stronger auth than the shared
+    # Verified identity: a built-in account's session cookie, a bearer JWT
+    # from the site's own IdP, or a header an authenticating proxy already
+    # vouched for (services/identity.py). Any of these is stronger auth than the shared
     # password — per-identity and revocable at the source — and accepting one
     # removes the browser's second login prompt after SSO. Verification runs
     # in a thread: it can hit the network for a JWKS refresh.
@@ -382,20 +388,28 @@ async def require_auth(request, call_next):
                 headers={"WWW-Authenticate": challenge(request, error="insufficient_scope")},
             )
         if who:
+            if verifier.via == "local_session":
+                # A cookie is sent by the browser on the caller's behalf, so a
+                # write must be shown to come from this site (CSRF).
+                from services.local_auth import csrf_ok
+                if not csrf_ok(request.method, request.headers):
+                    return JSONResponse(
+                        {"detail": "Cross-site request refused."}, status_code=403
+                    )
             request.state.auth_identity = who
             request.state.auth_via = verifier.via
             return await _call_with_user_context(request, call_next)
 
     presented = _password_from_auth_header(request.headers.get("authorization", ""))
 
-    if settings.auth_password and not settings.auth_require_identity:
+    if settings.auth_password and not identity_service.requires_identity():
         if presented and secrets.compare_digest(presented, settings.auth_password):
             request.state.auth_identity = None
             request.state.auth_via = "password"
             return await _call_with_user_context(request, call_next)
 
-    # Personal MCP access tokens: self-serve alternative to a Cloudflare
-    # Access service token, minted from the app itself (Settings → MCP)
+    # Personal MCP access tokens: a bearer credential for headless agent
+    # clients, minted from the app itself (Settings → MCP)
     # by anyone who can already reach it. Deliberately scoped to /mcp —
     # a leaked token cannot touch the rest of the API or the UI. Under
     # private collections it resolves to the identity that created it,
@@ -425,7 +439,7 @@ async def require_auth(request, call_next):
     # anonymous (fully trusted) request.
     if (
         not settings.auth_password
-        and not settings.auth_require_identity
+        and not identity_service.requires_identity()
         and not settings.private_collections
         and not (
             presented and presented.startswith("asy_mcp_")
@@ -441,6 +455,10 @@ async def require_auth(request, call_next):
     if is_mcp_path(request.url.path):
         from services.mcp_oauth import challenge
         www_authenticate = challenge(request, error="invalid_token" if presented else None)
+    elif _local_accounts_active():
+        # The app renders its own sign-in page; a Basic challenge would pop
+        # the browser's native dialog over it.
+        return JSONResponse({"detail": "Not authenticated", "login_required": True}, status_code=401)
     else:
         www_authenticate = 'Basic realm="Clio"'
     return JSONResponse(
@@ -472,7 +490,7 @@ async def _call_with_user_context(request, call_next):
             reset_request_user(user_token)
         reset_request_identity(identity_token)
 
-for module in (system, documents, search, chat, artifacts, collections, mcp, sharing, expertise, admin, governance, register):
+for module in (system, documents, search, chat, artifacts, collections, mcp, sharing, expertise, admin, governance, auth):
     app.include_router(module.router)
 
 
@@ -527,57 +545,6 @@ def _spa_response() -> HTMLResponse:
 async def web_interface():
     """Serve the web interface."""
     return _spa_response()
-
-
-@app.get("/register", response_class=HTMLResponse, tags=["ui"], include_in_schema=False)
-async def register_page():
-    """The public registration page: the same SPA bundle, which renders the
-    registration view when loaded at this path (frontend/src/main.js)."""
-    return _spa_response()
-
-
-@app.get(
-    "/request-access",
-    response_class=HTMLResponse,
-    tags=["ui"],
-    include_in_schema=False,
-)
-async def request_access_page():
-    """Give people who are not on the Access allowlist a contact path."""
-    return HTMLResponse(
-        content="""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <title>Request access · Clio</title>
-  <style>
-    :root { color-scheme: light dark; font: 16px/1.6 system-ui, sans-serif; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center;
-      background: Canvas; color: CanvasText; }
-    main { box-sizing: border-box; width: min(100% - 2rem, 34rem); padding: 2rem 0; }
-    h1 { margin: 0; font-size: 1.65rem; line-height: 1.2; letter-spacing: -.025em; }
-    p { margin: 1rem 0; color: color-mix(in srgb, CanvasText 75%, Canvas); }
-    a { color: LinkText; }
-    .contact { display: inline-block; margin-top: .5rem; padding: .6rem .9rem;
-      border: 1px solid currentColor; border-radius: .4rem; text-decoration: none;
-      font-weight: 600; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Request access to Clio</h1>
-    <p>Access is limited to invited people. Email Jordan with your name and the
-       email address you want to use, and he can add you to the sign-in list.</p>
-    <a class="contact" href="mailto:jordan.boyce@cyberlion.dev?subject=Clio%20access%20request">
-      Email Jordan
-    </a>
-  </main>
-</body>
-</html>""",
-        headers={"Cache-Control": "no-store"},
-    )
 
 
 # Mounts must come after all routes so they don't override API routes.

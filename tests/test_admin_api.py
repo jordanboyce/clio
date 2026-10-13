@@ -42,41 +42,27 @@ def _settings_objects():
     return list(objs.values())
 
 
-class _FakeVerifier:
-    def verify(self, token):
-        return {"email": token} if token and "@" in token else None
-
-    @staticmethod
-    def identity_from_claims(claims):
-        return claims.get("email")
-
-
 @pytest.fixture()
 def private_admin_client(fresh_db, monkeypatch):
-    import services.access_jwt as access_jwt
     import main
+    from tests import identity_helpers
 
     saved = []
     for s in _settings_objects():
-        saved.append((s, s.private_collections, s.cf_access_team_domain,
-                      s.cf_access_aud, s.admin_emails))
+        saved.append((s, s.private_collections, s.admin_emails))
         s.private_collections = True
-        s.cf_access_team_domain = "testteam.cloudflareaccess.com"
-        s.cf_access_aud = "aud-test"
         s.admin_emails = ADMIN
-    monkeypatch.setattr(access_jwt, "get_verifier", lambda: _FakeVerifier())
+    identity_helpers.install(monkeypatch)
     reloaded = importlib.reload(main)
     yield TestClient(reloaded.app)
-    for s, private, team, aud, admins in saved:
+    for s, private, admins in saved:
         s.private_collections = private
-        s.cf_access_team_domain = team
-        s.cf_access_aud = aud
         s.admin_emails = admins
     importlib.reload(main)
 
 
 def _as(email):
-    return {"cf-access-jwt-assertion": email}
+    return {"x-test-user": email}
 
 
 # ── Private mode: fails closed ──────────────────────────────────────────────

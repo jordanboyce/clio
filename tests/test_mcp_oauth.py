@@ -316,7 +316,7 @@ def test_personal_tokens_and_the_password_still_work_beside_oauth(app, oidc_mcp,
 
 @pytest.fixture()
 def separate_issuer(identity_settings, fake_idp):
-    """A Cloudflare-style deployment (no bearer identity for browsers) that
+    """A password-gated deployment (no bearer identity for browsers) that
     names an IdP for its MCP clients only."""
     identity_settings.identity_provider = ""
     identity_settings.mcp_oauth_issuer = MCP_ISSUER
@@ -355,28 +355,18 @@ def test_metadata_for_a_separate_issuer(separate_issuer):
     assert doc["authorization_servers"] == [MCP_ISSUER]
 
 
-def test_chained_verifier_keeps_the_deployment_identity_on_mcp(separate_issuer, monkeypatch):
-    """A Cloudflare service-token client on /mcp is still verified by the
-    Access verifier when an MCP issuer is added beside it."""
+def test_chained_verifier_keeps_the_deployment_identity_on_mcp(separate_issuer):
+    """A proxy-vouched client on /mcp is still verified by the trusted-header
+    verifier when an MCP issuer is added beside it."""
     _, settings = separate_issuer
-    settings.identity_provider = "cloudflare_access"
-    settings.cf_access_team_domain = "team.cloudflareaccess.com"
-    settings.cf_access_aud = "aud-tag"
-    import services.access_jwt as access_jwt
-
-    class _V:
-        @staticmethod
-        def verify(token):
-            return {"email": "svc@agency.test"}
-
-        @staticmethod
-        def identity_from_claims(claims):
-            return claims.get("email")
-
-    monkeypatch.setattr(access_jwt, "get_verifier", lambda: _V())
+    settings.identity_provider = "trusted_header"
+    settings.trusted_header_name = "X-Forwarded-User"
+    settings.host = "127.0.0.1"  # the guard that makes trusted_header valid
     verifier = identity_service.get_identity_verifier("/mcp/")
-    assert verifier.verify_request({"cf-access-jwt-assertion": "x"}, None) == "svc@agency.test"
-    assert verifier.via == "cloudflare-access"
+    headers = {"x-forwarded-user": "svc@agency.test"}
+    assert verifier.has_candidate(headers) is True
+    assert verifier.verify_request(headers, None) == "svc@agency.test"
+    assert verifier.via == "trusted-header"
 
 
 # ── Startup refusals ────────────────────────────────────────────────────────

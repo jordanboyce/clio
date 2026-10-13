@@ -431,19 +431,21 @@ async def whoami(request: Request):
     """
     Identity and sign-out info for the header menu.
 
-    - Behind Cloudflare Access with CF_ACCESS_* configured, `identity` is the
-      SSO email (or service-token name) from the verified Access JWT, and
-      `logout_url` is Cloudflare's session-clearing endpoint on this host.
+    - With built-in accounts, `identity` is the signed-in email and the app
+      signs out with POST /api/auth/logout (`can_sign_out`).
     - Password-authenticated or open deployments report those modes instead;
       browsers cache Basic credentials, so there is no reliable app-side
       sign-out for the password path.
     """
+    from services.identity import active_provider
+
     via = getattr(request.state, "auth_via", None) or ("open" if not settings.auth_password else "password")
     identity = getattr(request.state, "auth_identity", None)
     return {
         "authenticated_via": via,
         "identity": identity,
-        "logout_url": "/cdn-cgi/access/logout" if via == "cloudflare-access" else None,
+        "auth_provider": active_provider() or "none",
+        "can_sign_out": via == "local_session",
     }
 
 

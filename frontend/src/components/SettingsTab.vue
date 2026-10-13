@@ -1076,7 +1076,6 @@ const ALL_SECTIONS = [
   { id: 'data', label: 'Data' },
   { id: 'system', label: 'System' },
 ]
-// (Edge-admission administration lives on the Admin tab now.)
 const SECTIONS = computed(() => ALL_SECTIONS)
 
 const THEMES = [

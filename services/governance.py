@@ -533,11 +533,11 @@ def review_summary(*, max_age: float = _SUMMARY_TTL) -> Dict[str, Any]:
 
 
 def suspend_user(email: str, *, actor: Any = _UNSET, reason: str = "") -> Dict[str, Any]:
-    """Cut an identity off: withdraw edge admission (when configured) and
-    revoke every MCP token they hold. Their documents are left in place —
-    removal is a separate, reviewable decision."""
-    from services.access_provisioning import access_provisioning_enabled, revoke_email
+    """Cut an identity off: disable their built-in account (when there is one),
+    end their sessions and revoke every MCP token they hold. Their documents
+    are left in place - removal is a separate, reviewable decision."""
     from services.app_database import app_db
+    from services.identity import active_provider
 
     target = (email or "").strip().lower()
     if not target:
@@ -547,13 +547,17 @@ def suspend_user(email: str, *, actor: Any = _UNSET, reason: str = "") -> Dict[s
 
         actor = get_request_user()
 
-    result: Dict[str, Any] = {"email": target, "tokens_revoked": 0, "edge_revoked": None}
+    result: Dict[str, Any] = {"email": target, "tokens_revoked": 0, "account_disabled": None}
     result["tokens_revoked"] = app_db.revoke_all_mcp_tokens_for_user(target)
-    if access_provisioning_enabled():
+    if active_provider() == "local":
+        from services.local_auth import AuthError, get_store
+
         try:
-            result["edge_revoked"] = revoke_email(target)
-        except Exception as e:
-            result["edge_error"] = str(e)
+            get_store().update_account(target, disabled=True)
+            result["account_disabled"] = True
+        except AuthError as e:
+            result["account_disabled"] = False
+            result["account_error"] = e.message
     audit.record("admin.suspend_user", actor=actor, target=target,
                  detail={"reason": reason or None, **{k: v for k, v in result.items() if k != "email"}})
     return result
@@ -565,7 +569,7 @@ def report_document(
     collection_id: str, document_id: str, reason: str, *, actor: Any = _UNSET, app_url: str = ""
 ) -> Dict[str, Any]:
     """A user flagged a document for review: audit it and tell the admins."""
-    from services.access_provisioning import admin_emails
+    from services.admins import admin_emails
     from services.indexer_manager import indexer_manager
 
     store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store

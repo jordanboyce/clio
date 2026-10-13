@@ -2,17 +2,19 @@
 
 Clio has two separate questions, and they are often confused:
 
-- **Can this caller in at all?** Usually the network edge; `AUTH_PASSWORD`
-  can add an app-side shared-secret gate, while `AUTH_REQUIRE_IDENTITY=true`
-  makes the app require a verified identity-provider assertion. See
-  [DEPLOYMENT.md](DEPLOYMENT.md).
+- **Can this caller get in at all?** Either the network (loopback, a VPN, a
+  firewall), `AUTH_PASSWORD` (a shared-secret gate), or an identity: with
+  `IDENTITY_PROVIDER=local` every request needs a signed-in account, and
+  `AUTH_REQUIRE_IDENTITY=true` makes the other providers require a verified
+  assertion too. See [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Who is this caller?** `IDENTITY_PROVIDER`. This page.
 
 The second one only matters when something acts on it. Two things do:
 `PRIVATE_COLLECTIONS` (per-person ownership and sharing) and the audit trail
-(`actor` on every recorded event). Without a verified identity the app is a
-shared appliance: everyone who gets in sees the whole corpus, which is the
-right model for a team and the wrong one for an agency.
+(`actor` on every recorded event). Without a verified identity the app is an
+open appliance: everyone who can reach it sees the whole corpus, which is the
+right model for a machine only you use and the wrong one for a group with
+different access needs.
 
 The app **refuses to start** on an identity configuration it cannot enforce.
 That is deliberate: a boundary that is advertised but not enforced is worse
@@ -22,14 +24,140 @@ than no boundary, because people put things behind it.
 
 | `IDENTITY_PROVIDER` | Use when | Identity comes from |
 | --- | --- | --- |
-| *(empty)* | Team appliance, or you already set `CF_ACCESS_*` | Auto: Cloudflare if configured, else nobody |
-| `cloudflare_access` | Internet-facing, via Cloudflare Tunnel | `Cf-Access-Jwt-Assertion` |
+| *(empty)* | The default. | Auto: `local` when `PRIVATE_COLLECTIONS=true`; otherwise nobody (an open appliance, optionally behind `AUTH_PASSWORD`) |
+| `local` | **Most self-hosted installs.** A laptop, home server or team box with no identity provider of its own | Built-in accounts: email + password, a session cookie |
 | `oidc` | **On-prem / air-gapped.** You run Keycloak, Entra ID, Okta, PingFederate, ADFS | `Authorization: Bearer <JWT>` |
 | `trusted_header` | An authenticating proxy already fronts the app (mTLS, SPNEGO/Kerberos, a site SSO proxy) | A header that proxy sets |
 
-Leaving `IDENTITY_PROVIDER` empty keeps every existing Cloudflare deployment
-working unchanged — `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` still select
-Cloudflare on their own.
+If you do not already run an identity provider, use `local`: set
+`PRIVATE_COLLECTIONS=true` and the rest happens in the browser.
+
+---
+
+## `local` - built-in accounts
+
+Clio can keep its own accounts, so a self-hosted install needs no identity
+provider, no cloud service and no outbound connection to sign people in.
+
+```bash
+PRIVATE_COLLECTIONS=true          # implies IDENTITY_PROVIDER=local
+# IDENTITY_PROVIDER=local         # explicit form; also works without
+#                                 # PRIVATE_COLLECTIONS, as a login in front
+#                                 # of one shared corpus
+# SETUP_CODE=                     # optional, see First run
+ADMIN_EMAILS=                     # optional break-glass administrators
+```
+
+### First run
+
+A fresh install has no accounts, so something has to prevent whoever reaches
+it first from claiming it. That something is a one-time **setup code**,
+printed to the server log:
+
+```bash
+docker logs clio          # or read the terminal running `python main.py`
+```
+
+The first visit to the app shows a setup screen. Enter the code, an email
+address and a password (at least 10 characters) and that account becomes the
+first administrator, signed in. Setup then closes: once any account exists
+the code is dead and the screen never comes back.
+
+For an unattended install, choose the code yourself with `SETUP_CODE=` in
+`.env` instead of reading it from the log. Treat it like a password until the
+first account exists, and remove it afterwards.
+
+### Adding people
+
+There is no public sign-up and no email requirement. An administrator opens
+**Admin -> People**, enters an address and gets an **invite link**. Send it
+to the person yourself (chat, email, in person); opening it lets them choose
+a password and signs them in. Links are single use, expire after 7 days, and
+are stored hashed, so the link shown once is the only copy.
+
+A person who forgot their password does not need a mail server either: an
+administrator creates a **reset link** for them in the same place (valid 24
+hours, single use). Invite and reset links are not emailed automatically
+yet; you hand them over yourself.
+
+### Roles
+
+- **Administrator** - the `is_admin` flag on an account, granted or removed in
+  Admin -> People. Administrators manage people, deployment-wide settings,
+  the audit trail and content review.
+- **Everyone else** - signs in, owns the collections they create, and sees
+  what others share with them or publish.
+- **`ADMIN_EMAILS`** - an always-on, environment-level administrator list.
+  Use it as a break-glass route (it works even if the database flag is lost)
+  and, for `oidc` and `trusted_header` deployments, as the only way to name
+  administrators. The last-admin guard stops anyone from demoting, disabling
+  or deleting the final administrator through the UI.
+
+### Sharing with an account holder
+
+An owner shares a collection by link or by email address, exactly as in
+[DEPLOYMENT.md](DEPLOYMENT.md#private-collections). The recipient needs an
+account first, so an administrator invites them; the share response reports
+`has_account` so the owner can tell when an invitation is still outstanding.
+
+### Sessions and agents
+
+Signing in sets an `HttpOnly`, `SameSite=Lax` cookie named `clio_session`
+(marked `Secure` automatically when the request arrived over https or with
+`X-Forwarded-Proto: https`). The session lives on the server; the browser
+holds only an opaque token. Agent clients do not use the cookie: mint a
+**personal MCP token** in Settings -> MCP (prefix `asy_mcp_`). It carries the
+identity of the person who minted it, is the simplest way to attach Claude
+Code, Codex and similar clients, and works against `/mcp` only. OAuth sign-in
+for connector-style clients still needs an OIDC provider; see
+[OAuth for MCP clients](#oauth-for-mcp-clients).
+
+### What is protected
+
+- **Passwords** are hashed with scrypt, with a per-account salt, minimum
+  length 10. Nothing reversible is stored.
+- **Sessions** are random server-side tokens, hashed at rest. They expire
+  after 14 days idle (sliding) and never outlive 60 days from sign-in.
+- **Invite and reset links** are single use, hashed at rest, and expire (7
+  days / 24 hours).
+- **Guessing** is throttled: 5 failed sign-ins per address and email per 15
+  minutes, and 40 per address. Behind a reverse proxy this needs real client
+  addresses, so trust the proxy's forwarding headers only from the proxy
+  itself (`FORWARDED_ALLOW_IPS`; see [DEPLOYMENT.md](DEPLOYMENT.md)).
+- **Cross-site requests**: writes that arrive with the session cookie must
+  carry a same-origin `Origin` / `Sec-Fetch-Site`; others are refused.
+- **Credential changes end sessions**: changing your password signs out your
+  other devices; disabling or deleting an account ends all its sessions.
+- **Last-admin guard**: the final active administrator cannot be removed.
+- **Audit**: setup, sign-ins (and failed ones), password changes,
+  invitations, resets, role changes and deletions are recorded
+  (Admin -> Audit).
+
+### Where it lives, and backing it up
+
+Accounts are stored in `accounts.db` in the data directory, a SQLite file
+separate from the app database even when `DB_BACKEND=postgres`. It is part of
+the data directory backup; restoring the directory restores every account.
+Without it the install is back at first run (a new setup code is printed),
+and the collections on disk have no sign-ins until the accounts are
+recreated with the same email addresses.
+
+### Coming from another identity provider
+
+Built-in accounts are keyed by **email address**, the same key earlier
+deployments used for collection ownership. If your existing collections are
+owned by `jordan@example.com`, creating the first administrator (or inviting
+a person) with that exact address gives them those collections back. Nothing
+is migrated or rewritten. Collections owned by `default` stay the shared
+team tier.
+
+### What it is not
+
+Built-in accounts are deliberately small. There is no single sign-on, no
+multi-factor authentication, no self-service password reset by email and no
+sign-up form. If you need those, put your identity provider in front with
+`oidc` or `trusted_header`; see the next sections. They are listed in the
+[roadmap](ROADMAP.md).
 
 ---
 
@@ -269,24 +397,23 @@ this problem.
 
 ### A different IdP for `/mcp` only
 
-A Cloudflare Access deployment's browser identity is the Access assertion,
-not a bearer JWT, so it has no authorization server to advertise. Name one
-for `/mcp` only:
+With `local` accounts (or `trusted_header`) the browser identity is not a
+bearer JWT, so the app has no authorization server to advertise. If you do
+run an OIDC provider, name it for `/mcp` only:
 
 ```bash
-MCP_OAUTH_ISSUER=https://sso.agency.gov/realms/main    # or Access for SaaS (OIDC)
+MCP_OAUTH_ISSUER=https://sso.agency.gov/realms/main
 MCP_OAUTH_AUDIENCE=clio-mcp
 MCP_OAUTH_JWKS_URL=                                    # optional, skips discovery
 MCP_PUBLIC_URL=https://clio.agency.gov/mcp
 ```
 
 Tokens from that issuer are accepted on `/mcp` and nowhere else, and the
-Access-verified identity keeps working on `/mcp` beside them (a service
-token, for instance). The edge must let `/mcp` and
-`/.well-known/oauth-protected-resource` through to the app —
-`scripts/provision_cloudflare.py` adds both bypasses. Use the identity
-claim that matches what Access reports (email), so a person is the same
-person on both paths.
+browser identity keeps working beside them. Anything in front of the app
+must let `/mcp` and `/.well-known/oauth-protected-resource` through
+unauthenticated, so the 401 challenge and the metadata reach the client. Use
+the identity claim that matches how people are known to the app (their
+email), so a person is the same person on both paths.
 
 ### What is refused
 
@@ -337,7 +464,7 @@ row per tool call — an agent turn is typically several.
 
 ## Checklist
 
-- [ ] `IDENTITY_PROVIDER` set (or `CF_ACCESS_*` for the Cloudflare default)
+- [ ] `IDENTITY_PROVIDER` set (or `PRIVATE_COLLECTIONS=true` for built-in accounts)
 - [ ] The app starts — a refusal here names exactly what is missing
 - [ ] `OIDC_AUDIENCE` is this app's client id, not a shared or wildcard value
 - [ ] `PRIVATE_COLLECTIONS=true` if people should not see each other's sources
@@ -346,4 +473,7 @@ row per tool call — an agent turn is typically several.
 - [ ] `MCP_AUDIT_TOOL_CALLS=true` where reads must be accountable
 - [ ] `ADMIN_EMAILS` lists identities as this provider reports them (the
       email claim, the certificate CN — whatever `OIDC_IDENTITY_CLAIM` or the
-      proxy header actually contains)
+      proxy header actually contains). For `local`, grant administrators in
+      Admin -> People instead and keep `ADMIN_EMAILS` as break-glass
+- [ ] For `local`: the setup code is used (or `SETUP_CODE` removed), and the
+      data directory including `accounts.db` is backed up

@@ -63,8 +63,7 @@
 
         <!-- Email invitations (uses the permission/expiry selected above).
              Accepts several addresses at once — comma, space, or newline
-             separated; the backend admits the whole batch in one policy
-             write and reports per address. -->
+             separated; the backend reports per address. -->
         <div class="flex gap-2 items-start">
           <textarea
             v-model="inviteEmail"
@@ -83,30 +82,30 @@
         <div v-if="inviteSent" class="alert alert-success py-2 text-sm">
           <CheckCircle :size="16" />
           <span>
-            Invitation emailed to {{ inviteSent }}<span v-if="inviteAdmitted">, and they can now sign in</span>.
+            Invitation emailed to {{ inviteSent }}.
           </span>
         </div>
         <!-- Per-address results for a batch invite -->
         <ul v-if="bulkResults.length" class="space-y-1 text-xs rounded border border-base-300 bg-base-200 p-2">
           <li v-for="r in bulkResults" :key="r.email" class="flex items-center gap-1.5">
-            <CheckCircle v-if="r.email_sent && (r.edge_admitted !== false || !r.edge_error)" :size="12" class="text-success flex-shrink-0" />
+            <CheckCircle v-if="r.email_sent && r.has_account !== false" :size="12" class="text-success flex-shrink-0" />
             <AlertTriangle v-else :size="12" class="text-warning flex-shrink-0" />
             <span class="font-medium truncate max-w-[18ch]">{{ r.email }}</span>
             <span class="text-base-content/55 truncate">
-              {{ r.error || r.email_error || (r.edge_error ? `invited, but: ${r.edge_error}`
-                 : r.email_sent ? (r.edge_admitted ? 'invited + admitted' : 'invited') : 'failed') }}
+              {{ r.error || r.email_error || (r.email_sent
+                 ? (r.has_account === false ? 'invited, but has no account yet' : 'invited') : 'failed') }}
             </span>
           </li>
         </ul>
-        <!-- Says plainly when the invitation will dead-end at the login, so
-             nobody sends one expecting it to work. -->
+        <!-- Says plainly when the invitation cannot open yet, so nobody sends
+             one expecting it to work. -->
         <div v-if="inviteNote" class="alert alert-warning py-2 text-sm">
           <AlertTriangle :size="16" />
           <span>{{ inviteNote }}</span>
         </div>
         <div v-if="inviteError" class="alert alert-error py-2 text-sm">{{ inviteError }}</div>
-        <p v-else-if="!userStore.canInviteNewPeople" class="text-xs text-base-content/50">
-          Invitations reach people who can already sign in to this deployment.
+        <p v-else-if="!userStore.canManageUsers" class="text-xs text-base-content/50">
+          Invitations reach people who already have an account here. An administrator can add someone new.
         </p>
       </div>
 
@@ -243,7 +242,6 @@ const sendingInvite = ref(false)
 const inviteSent = ref('')
 const inviteError = ref('')
 const inviteNote = ref('')
-const inviteAdmitted = ref(false)
 const bulkResults = ref([])
 
 watch(() => props.visible, async (v) => {
@@ -278,16 +276,15 @@ async function emailInvite() {
   inviteSent.value = ''
   inviteError.value = ''
   inviteNote.value = ''
-  inviteAdmitted.value = false
   bulkResults.value = []
   try {
     if (addresses.length === 1) {
       const share = await createShare(
         props.collectionId, newPermission.value, newExpiresDays.value, addresses[0]
       )
-      inviteAdmitted.value = share.edge_admitted === true
-      if (share.edge_note) inviteNote.value = share.edge_note
-      if (share.edge_error) inviteNote.value = `Could not admit them at the login: ${share.edge_error}`
+      if (share.has_account === false) {
+        inviteNote.value = `${addresses[0]} has no account yet. Ask an administrator to invite them so the link can open.`
+      }
       if (share.email_sent) {
         inviteSent.value = addresses[0]
         inviteEmail.value = ''
@@ -299,7 +296,10 @@ async function emailInvite() {
         props.collectionId, addresses, newPermission.value, newExpiresDays.value
       )
       bulkResults.value = data.results || []
-      if (data.edge_note) inviteNote.value = data.edge_note
+      const missing = bulkResults.value.filter((r) => r.has_account === false).length
+      if (missing) {
+        inviteNote.value = `${missing} ${missing === 1 ? 'person has' : 'people have'} no account yet. Ask an administrator to invite them so the links can open.`
+      }
       if (bulkResults.value.every((r) => r.email_sent)) inviteEmail.value = ''
     }
     await loadShareList()

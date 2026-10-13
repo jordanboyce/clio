@@ -65,8 +65,8 @@ research tools in chat and MCP clients.
 | Situation | Run it as | Who gets in | Read |
 |---|---|---|---|
 | **Just you, on your machine** | `python main.py` or `docker compose up -d` | Loopback only; no password needed | [Quick Start](#quick-start) |
-| **A team on an internal network** | Docker with `BIND_ADDRESS` and `AUTH_PASSWORD` | Everyone with the password sees the shared corpus | [DEPLOYMENT.md](docs/DEPLOYMENT.md) |
-| **A team reachable from anywhere** | Docker + Cloudflare Tunnel + Access, no inbound ports | Email PIN for an explicit allowlist; Jordan-only Clio administration; `/request-access` contact page | [REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md) |
+| **A few people on your LAN** | Docker with `BIND_ADDRESS=0.0.0.0` and `PRIVATE_COLLECTIONS=true` | Built-in accounts: the first administrator is created with a setup code, everyone else gets an invite link; collections are private until shared. `AUTH_PASSWORD` is the lighter alternative (one shared corpus) | [DEPLOYMENT.md](docs/DEPLOYMENT.md), [IDENTITY.md](docs/IDENTITY.md) |
+| **A team over HTTPS** | Docker behind a TLS reverse proxy (Caddy, nginx, Traefik), or on a Tailscale / WireGuard network | Built-in accounts, as above; the proxy is the only route in | [DEPLOYMENT.md](docs/DEPLOYMENT.md) |
 | **An organisation hosting it internally** | The portable image, your own IdP (`IDENTITY_PROVIDER=oidc` or an authenticating proxy), your own models (`AI_PROVIDER`) | Identities from Keycloak, Entra ID, Okta, mTLS or Kerberos; private collections; OAuth sign-in for connector clients; a full audit trail | [ONPREM.md](docs/ONPREM.md), [IDENTITY.md](docs/IDENTITY.md), [AGENCY_PILOT.md](docs/AGENCY_PILOT.md) |
 | **Fully air-gapped** | The offline bundle with `OFFLINE_MODE=1` | As above, with cloud providers and model downloads disabled | [AIRGAP.md](docs/AIRGAP.md) |
 | **A hosted PaaS (Railway, Render, Fly.io, Coolify)** | The Dockerfile, a volume at `/app/data`, `AUTH_PASSWORD` | The password, or an SSO proxy in front | [Hosting on a PaaS](#hosting-on-a-paas-railway-render-flyio-coolify-) |
@@ -125,13 +125,27 @@ That's the whole setup — the image builds the frontend, bundles OCR (Tesseract
 
 `docker compose up -d` publishes port 8473 to **127.0.0.1 only**. To expose it on a trusted network, explicitly set `BIND_ADDRESS` and configure authentication first. Read [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) before granting team access.
 
+### First run: accounts and the setup code
+
+With the defaults, Clio is a single-user app on your own machine and opens straight to the workspace. To give it accounts (several people, or just a login in front of your own documents), set `PRIVATE_COLLECTIONS=true` in `.env` and restart. The server then prints a one-time **setup code** in its log:
+
+```bash
+docker logs clio          # or look at the terminal running `python main.py`
+```
+
+The first visit to the app asks for that code, an email address and a password (at least 10 characters) and creates the first administrator. Setup closes as soon as an account exists. For an unattended install, set `SETUP_CODE` in `.env` to choose the code yourself. The administrator adds everyone else under **Admin → People**, which produces an invite link to send them.
+
+### Accounts and privacy
+
+Clio is self-hosted and open source (MIT). Your documents, indexes and accounts live in the data directory on your machine; nothing in the product depends on a cloud service or an identity provider you don't run. Built-in accounts store email addresses and salted scrypt password hashes in `accounts.db` inside that directory, and sessions are server-side cookies that are hashed at rest. Local embeddings and search never leave the machine; if you configure a hosted model for answers, that provider receives the passages it is asked about, and `OFFLINE_MODE=1` disables cloud providers and model downloads. If you already run single sign-on, use it instead: `IDENTITY_PROVIDER=oidc` or `trusted_header` ([docs/IDENTITY.md](docs/IDENTITY.md)).
+
 ### Sharing it with a team
 
-Choose an access model deliberately. In the default shared-appliance mode, everyone admitted can access the team corpus. `PRIVATE_COLLECTIONS=true` enables collection ownership and read/readwrite sharing, enforced against a verified identity: Cloudflare Access at the edge, your own OIDC provider (`IDENTITY_PROVIDER=oidc` — Keycloak, Entra ID, Okta, PingFederate), or an authenticating reverse proxy (`trusted_header` — mTLS, Kerberos, a site SSO proxy). Configure `ADMIN_EMAILS` for operators. The app refuses to start with private collections on and no identity source it can enforce. Setup and verification: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) and [docs/IDENTITY.md](docs/IDENTITY.md).
+Choose an access model deliberately. With no identity source, the app is an open appliance: everyone who can reach it can access the whole corpus, which is right for a machine only you use. `PRIVATE_COLLECTIONS=true` turns on the built-in accounts (`IDENTITY_PROVIDER=local`) and collection ownership with read/readwrite sharing, enforced at every entry point. If the site already has single sign-on, point `IDENTITY_PROVIDER` at your own OIDC provider (`oidc` — Keycloak, Entra ID, Okta, PingFederate) or an authenticating reverse proxy (`trusted_header` — mTLS, Kerberos, a site SSO proxy). `ADMIN_EMAILS` names operators who are always administrators. The app refuses to start with private collections on and no identity source it can enforce. Setup and verification: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) and [docs/IDENTITY.md](docs/IDENTITY.md).
 
-To reach a home or lab box from anywhere without opening a port, put it behind Cloudflare Tunnel + Access; `scripts/provision_cloudflare.py` creates the tunnel, the Access apps and the DNS record in one run. Set `CLIO_ALLOW_EMAILS` to the exact addresses to admit; people sign in with Cloudflare's emailed one-time PIN, with no app password or public registration. Recipe: [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md).
+To put it on a network, set `BIND_ADDRESS=0.0.0.0` (Docker) or `HOST=0.0.0.0`, and put a TLS-terminating reverse proxy such as Caddy in front of it, or reach it over Tailscale or WireGuard. There is no public sign-up: an administrator invites each person from Admin → People. [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) has a complete Caddy example.
 
-People can also ask for access themselves: `REGISTRATION_MODE=approval` (queue for an admin) or `open` (admit matching addresses at once) turns on a public `/register` page, with an optional email-domain allowlist and a seat cap. Each collection holds up to 5 GiB of sources by default (`COLLECTION_STORAGE_LIMIT_BYTES`); usage is shown in the Sources panel.
+Each collection holds up to 5 GiB of sources by default (`COLLECTION_STORAGE_LIMIT_BYTES`); usage is shown in the Sources panel.
 
 ### On-premises with your own models
 
@@ -393,7 +407,7 @@ Use **Connect** in the UI to:
   endpoint URL alone: the app is the OAuth 2.1 resource server and your IdP signs people in
   ([docs/IDENTITY.md](docs/IDENTITY.md#oauth-for-mcp-clients)).
 - **Generate a personal access token** — a self-serve bearer credential scoped to `/mcp` only, so
-  connecting a client never requires editing `.env` or provisioning anything in Cloudflare. Pick an
+  connecting a client never requires editing `.env` or setting up an identity provider. Pick an
   expiry (90 days by default, or never), optionally limit the token to specific collections, and
   revoke it from the same screen when a machine is retired; the table shows last use and call counts.
 - **Let agents write back** — tick *Allow adding and updating sources* on a token and the agent gets
@@ -1038,15 +1052,16 @@ The defaults are safe together: a loopback-only bind needs no password. Change
 one and you must change the other — the app warns loudly at startup if it is
 bound to the network with no password set.
 
-**For a team deployment, put an SSO proxy in front** (Cloudflare Access,
-Tailscale, oauth2-proxy, Authelia) and bind the app so the proxy is the only
-route in. Colleagues get in with the SSO they already have — no password to
-type, share, or rotate — and you get per-person revocation and an access log
-without writing any code. Full walkthrough, including how to verify the bypass
-is closed: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+**For a team deployment, turn on accounts and put TLS in front.** Set
+`PRIVATE_COLLECTIONS=true` for built-in accounts (invite links, no mail server
+needed), and run a reverse proxy such as Caddy or nginx, or a private network
+such as Tailscale, so the proxy or network is the only route in. If you
+already have single sign-on, an authenticating proxy or OIDC provider works
+too. Full walkthrough, including how to verify the bypass is closed:
+**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
 By default everyone who gets in sees the whole corpus. With a verified
-identity source — Cloudflare Access, your own OIDC provider, or an
+identity source — the built-in accounts, your own OIDC provider, or an
 authenticating proxy ([docs/IDENTITY.md](docs/IDENTITY.md)) — set
 `PRIVATE_COLLECTIONS=true` for per-person collections: each collection is
 visible only to its owner until shared (read or readwrite share links),
@@ -1259,7 +1274,7 @@ A: The default ONNX backend keeps it in `<DATA_DIR>/models/fastembed/` (or `/opt
 A: Tested up to 1000+ pages. Limited by RAM.
 
 **Q: Can multiple users access it?**
-A: Yes. The simplest shape is a shared password (`AUTH_PASSWORD`), where everyone sees the same corpus. For per-person collections, sharing, an audit trail and self-serve registration, give it a verified identity source — Cloudflare Access, your own OIDC provider, or an authenticating proxy — and set `PRIVATE_COLLECTIONS=true` ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), [docs/IDENTITY.md](docs/IDENTITY.md)).
+A: Yes. The simplest shape is a shared password (`AUTH_PASSWORD`), where everyone sees the same corpus. For per-person collections, sharing and an audit trail, set `PRIVATE_COLLECTIONS=true`: the built-in accounts take over, with an administrator inviting each person by link. If you already run single sign-on, use your own OIDC provider or an authenticating proxy instead ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), [docs/IDENTITY.md](docs/IDENTITY.md)).
 
 **Q: Can Claude Desktop, claude.ai or ChatGPT use it?**
 A: Yes, when the deployment has an identity provider. They add the `/mcp` URL as a custom connector and sign in there; the app is the OAuth resource server and your IdP does the login. Claude Code, Codex, VS Code and AnythingLLM can do the same or use a personal token from Connect ([docs/IDENTITY.md](docs/IDENTITY.md#oauth-for-mcp-clients)).

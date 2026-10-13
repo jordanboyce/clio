@@ -197,14 +197,6 @@ def test_trusted_header_candidate_check(keypair):
     assert v.has_candidate({}) is False
 
 
-def test_cloudflare_candidate_check():
-    from services.identity import CloudflareAccessIdentity
-
-    v = CloudflareAccessIdentity(object())
-    assert v.has_candidate({"cf-access-jwt-assertion": "tok"}) is True
-    assert v.has_candidate({}) is False
-
-
 def test_required_claims_gate_admission(keypair, monkeypatch):
     key, _ = keypair
     jwks = {"keys": [_jwk(key, "kid-1")]}
@@ -349,7 +341,7 @@ def _settings_objects():
 def identity_settings(monkeypatch):
     """Isolate the identity settings; the repo's own .env sets some of them."""
     for field, value in (
-        ("identity_provider", ""), ("cf_access_team_domain", ""), ("cf_access_aud", ""),
+        ("identity_provider", ""), ("private_collections", False), ("auth_require_identity", False),
         ("oidc_issuer", ""), ("oidc_audience", ""), ("oidc_jwks_url", ""),
         ("oidc_identity_claim", "email"), ("oidc_required_claims", ""),
         ("trusted_header_name", "X-Forwarded-User"), ("trusted_header_proxies", ""),
@@ -452,13 +444,31 @@ def test_hmac_secret_without_a_signature_header_refuses_to_start(identity_settin
         identity_service.validate_config()
 
 
-def test_cloudflare_is_auto_detected_for_existing_deployments(identity_settings):
-    """No IDENTITY_PROVIDER set: CF_ACCESS_* still selects Cloudflare, so
-    every deployment configured before this setting existed is unchanged."""
-    identity_settings.cf_access_team_domain = "team.cloudflareaccess.com"
-    identity_settings.cf_access_aud = "aud-tag"
-    assert identity_service.active_provider() == "cloudflare_access"
+def test_private_collections_select_builtin_accounts(identity_settings):
+    """Turning on private collections without naming a provider needs no
+    second system: the built-in accounts are the identity source."""
+    identity_settings.private_collections = True
+    assert identity_service.active_provider() == "local"
+    assert identity_service.requires_identity() is True
     identity_service.validate_config()  # must not raise
+
+
+def test_explicit_provider_wins_over_private_collections_default(identity_settings):
+    identity_settings.private_collections = True
+    identity_settings.identity_provider = "oidc"
+    identity_settings.oidc_issuer = ISSUER
+    identity_settings.oidc_audience = AUDIENCE
+    assert identity_service.active_provider() == "oidc"
+    identity_service.validate_config()  # must not raise
+
+
+def test_requires_identity_follows_provider_and_flag(identity_settings):
+    assert identity_service.requires_identity() is False
+    identity_settings.auth_require_identity = True
+    assert identity_service.requires_identity() is True
+    identity_settings.auth_require_identity = False
+    identity_settings.identity_provider = "local"
+    assert identity_service.requires_identity() is True
 
 
 def test_no_identity_source_is_a_valid_appliance_config(identity_settings):
@@ -467,9 +477,11 @@ def test_no_identity_source_is_a_valid_appliance_config(identity_settings):
     assert identity_service.get_identity_verifier() is None
 
 
-def test_explicit_cloudflare_without_credentials_refuses_to_start(identity_settings):
+def test_cloudflare_access_is_no_longer_a_provider(identity_settings):
+    """A deployment still naming the removed provider must fail loudly at
+    startup, not silently fall back to "everyone is anonymous"."""
     identity_settings.identity_provider = "cloudflare_access"
-    with pytest.raises(RuntimeError, match="CF_ACCESS_TEAM_DOMAIN"):
+    with pytest.raises(RuntimeError, match="local, oidc, trusted_header"):
         identity_service.validate_config()
 
 
@@ -481,6 +493,11 @@ def test_no_verifier_is_built_when_nothing_is_configured(identity_settings):
 
 
 def test_each_provider_builds_its_own_verifier(identity_settings):
+    from services.local_auth import LocalSessionIdentity
+
+    identity_settings.identity_provider = "local"
+    assert isinstance(identity_service.get_identity_verifier(), LocalSessionIdentity)
+
     identity_settings.identity_provider = "oidc"
     identity_settings.oidc_issuer = ISSUER
     identity_settings.oidc_audience = AUDIENCE
@@ -489,35 +506,6 @@ def test_each_provider_builds_its_own_verifier(identity_settings):
     identity_settings.identity_provider = "trusted_header"
     identity_settings.trusted_header_secret = "s3cret"
     assert isinstance(identity_service.get_identity_verifier(), TrustedHeaderIdentity)
-
-
-def test_cloudflare_verifier_is_never_cached_across_a_swap(identity_settings, monkeypatch):
-    """A wrapper held over a replaced Access verifier would silently reject
-    valid identities after a config reload."""
-    import services.access_jwt as access_jwt
-
-    identity_settings.identity_provider = "cloudflare_access"
-    identity_settings.cf_access_team_domain = "team.cloudflareaccess.com"
-    identity_settings.cf_access_aud = "aud-tag"
-
-    class _V:
-        def __init__(self, who):
-            self.who = who
-
-        def verify(self, token):
-            return {"email": self.who}
-
-        @staticmethod
-        def identity_from_claims(claims):
-            return claims.get("email")
-
-    monkeypatch.setattr(access_jwt, "get_verifier", lambda: _V("first@x.test"))
-    first = identity_service.get_identity_verifier()
-    assert first.verify_request({"cf-access-jwt-assertion": "x"}, None) == "first@x.test"
-
-    monkeypatch.setattr(access_jwt, "get_verifier", lambda: _V("second@x.test"))
-    second = identity_service.get_identity_verifier()
-    assert second.verify_request({"cf-access-jwt-assertion": "x"}, None) == "second@x.test"
 
 
 # ── Through the real auth middleware ────────────────────────────────────────

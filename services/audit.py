@@ -53,9 +53,17 @@ ACTIONS: List[str] = [
     "admin.unblock_hash",
     "admin.suspend_user",
     "admin.remove_document",    # admin removal (optionally with hash block)
-    "access.register",          # someone asked for access from /register
-    "access.approve_registration",
-    "access.deny_registration",
+    "auth.setup",               # first administrator account created
+    "auth.login",
+    "auth.login_failed",        # target = the address tried
+    "auth.logout",
+    "auth.password_changed",
+    "auth.password_reset",      # a reset link was redeemed
+    "auth.invite_created",
+    "auth.invite_accepted",
+    "auth.reset_created",
+    "auth.account_updated",     # admin granted/revoked admin, or disabled/enabled
+    "auth.account_deleted",
 ]
 
 _UNSET = object()
