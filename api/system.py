@@ -36,6 +36,27 @@ def _health_embedding() -> dict:
     return info
 
 
+@router.get(
+    "/api/system/readiness",
+    summary="Is this deployment ready to run where it is going?",
+    tags=["system"],
+)
+def deployment_readiness(probe: bool = False):
+    """Posture, models, capabilities and storage checks, plus every outbound
+    path the configuration allows (``egress``). ``ready`` is false when any
+    check fails. ``probe=true`` also contacts the configured model endpoint.
+
+    Deployment-wide facts, so it follows the same admin rule as the other
+    deployment settings: open on a personal appliance, admin-only once an
+    identity provider and ADMIN_EMAILS exist.
+    """
+    from api.deps import require_admin
+    from services import readiness
+
+    require_admin("view the deployment readiness report")
+    return readiness.run_checks(probe=probe)
+
+
 @router.get("/health", tags=["health"])
 async def health(collection_id: str = "default"):
     """Health check endpoint."""
@@ -44,6 +65,7 @@ async def health(collection_id: str = "default"):
         return {
             "status": "healthy",
             "offline_mode": settings.offline_mode,
+            "profile": settings.clio_profile,
             "collection_id": collection_id,
             "indexed_chunks": stats["total_chunks"],
             "total_documents": stats["total_documents"],
@@ -203,6 +225,7 @@ async def get_about():
         "embedding_model": settings.embedding_model,
         "mcp_enabled": settings.enable_mcp,
         "offline_mode": settings.offline_mode,
+        "profile": settings.clio_profile,
     }
 
 

@@ -13,6 +13,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 CLOUD_AI_PROVIDERS = ("anthropic", "openai", "grok", "google", "github", "openrouter", "ollama_cloud", "openai_compatible")
 ALL_AI_PROVIDERS = CLOUD_AI_PROVIDERS + ("ollama",)
 
+# What CLIO_PROFILE=secure turns on. Each is only a *default*: a value the
+# operator sets explicitly (environment or .env) always wins, so a site can
+# still, say, run the secure profile with link indexing re-enabled.
+SECURE_PROFILE_DEFAULTS = {
+    "offline_mode": True,            # no cloud providers, hosted embeddings or downloads
+    "mcp_audit_tool_calls": True,    # every agent read is attributable
+    "link_indexing_enabled": False,  # the server does not fetch arbitrary web pages
+}
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables or .env file."""
@@ -26,6 +35,16 @@ class Settings(BaseSettings):
     # The app makes NO outbound network connections beyond the endpoints you
     # explicitly configure on your own network. See docs/AIRGAP.md.
     offline_mode: bool = False
+
+    # Deployment profile. "standard" is the open, zero-configuration appliance.
+    # "secure" is for environments that must be able to prove their posture:
+    # it defaults the settings in SECURE_PROFILE_DEFAULTS (offline mode, full
+    # agent-read audit, no server-side web fetching) and, unlike the standard
+    # profile, REFUSES TO START instead of warning when the deployment is
+    # reachable without authentication, allows any CORS origin, or points at a
+    # hosted model or embedding service (services/readiness.py). Check a
+    # deployment with `python scripts/preflight.py` or GET /api/system/readiness.
+    clio_profile: Literal["standard", "secure"] = "standard"
 
     # Data storage
     data_dir: Path = Path("./data")
@@ -551,6 +570,10 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        if self.clio_profile == "secure":
+            for name, value in SECURE_PROFILE_DEFAULTS.items():
+                if name not in self.model_fields_set:
+                    setattr(self, name, value)
         # Fail at startup, not on the first upload, when EMBEDDING_PROVIDER
         # names something the catalog doesn't know.
         from services.embedding_providers import PROVIDER_IDS

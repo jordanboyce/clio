@@ -143,6 +143,12 @@ only feature that requires one.
 
 ## Hardening checklist
 
+Set `CLIO_PROFILE=secure` and run `python scripts/preflight.py --probe`
+([SECURE_PROFILE.md](SECURE_PROFILE.md)): it checks the items below, confirms
+every model is already on the machine, and lists each outbound path the
+configuration allows. The profile also makes Clio refuse to start when the
+first three boxes are not true.
+
 - [ ] `OFFLINE_MODE=1` set (verify: `curl http://<host>:8473/health` reports
       `"offline_mode": true`)
 - [ ] `AUTH_PASSWORD` set — without it every endpoint, including MCP, is open

@@ -35,7 +35,7 @@ Shipped 2026-09-12: the answer cache keys on the whole request (corpus version, 
 - **Retrieval benchmark** — a versioned corpus with answerable, unanswerable, exact-identifier, negation, date, table and cross-user cases; report recall@k, citation correctness, abstention and latency.
 - **Privacy and authorization review** — exercise every API/tool/resource as owner, reader, outsider, revoked token and anonymous; confirm egress for embeddings, OCR, reranking and chat.
 - **One dependable connector** — watched folder or SharePoint, with incremental sync, deletion propagation, resumable jobs and visible failure state.
-- **Reproducible deployment** — locked dependencies, validated container + Postgres path, backup/restore and upgrade drills.
+- **Reproducible deployment** — locked dependencies, validated container + Postgres path, backup/restore and upgrade drills. Started 2026-10-16: `CLIO_PROFILE=secure` plus `scripts/preflight.py` / `GET /api/system/readiness` check posture, local model presence and every outbound path against the live configuration ([docs/SECURE_PROFILE.md](SECURE_PROFILE.md)). Remaining: locked dependency hashes, an SBOM in the offline bundle, and backup/restore drills.
 
 ## Always-on constraints
 
