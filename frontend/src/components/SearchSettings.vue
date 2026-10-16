@@ -33,16 +33,24 @@
         </fieldset>
 
         <section class="border-t border-base-300 pt-5" aria-labelledby="search-tune-title">
-          <h3 id="search-tune-title" class="font-semibold">Matching balance</h3>
+          <h3 id="search-tune-title" class="font-semibold">How passages are matched</h3>
+          <p class="text-sm text-base-content/75 mt-1 leading-relaxed">Automatic is right for almost every search. Change it only if a search keeps missing what you expect.</p>
+          <div class="mt-3 space-y-1" role="radiogroup" aria-labelledby="search-tune-title">
+            <label v-for="option in matchModes" :key="option.value"
+              class="flex items-start gap-3 rounded-lg px-3 py-2 cursor-pointer hover:bg-base-200/60"
+              :class="{ 'bg-base-200/60': searchMode === option.value }">
+              <input v-model="searchMode" type="radio" name="match-mode" :value="option.value" class="radio radio-primary radio-sm mt-1" />
+              <span><span class="block text-sm font-medium">{{ option.label }}</span><span class="block text-sm text-base-content/75">{{ option.description }}</span></span>
+            </label>
+          </div>
           <template v-if="searchMode === 'hybrid'">
-            <p class="text-sm text-base-content/75 mt-1 leading-relaxed">How much “Meaning + keywords” leans on related ideas versus exact words.</p>
+            <p class="text-sm text-base-content/75 mt-4 leading-relaxed">How much the fixed blend leans on related ideas versus exact words.</p>
             <label class="block mt-4">
               <span class="block text-sm font-medium mb-3">{{ Math.round(semanticWeight * 100) }}% meaning · {{ Math.round((1 - semanticWeight) * 100) }}% keywords</span>
               <input v-model.number="semanticWeight" type="range" min="0" max="1" step="0.1" aria-label="Meaning weight" class="range range-primary range-sm w-full" />
               <span class="flex justify-between text-sm text-base-content/75 mt-2"><span>More keywords</span><span>More meaning</span></span>
             </label>
           </template>
-          <p v-else class="text-sm text-base-content/75 mt-1 leading-relaxed">Only applies to “Meaning + keywords”. Pick that mode in the toolbar to adjust the balance.</p>
         </section>
       </div>
       <footer class="border-t border-base-300 p-4 flex justify-end"><button class="btn btn-primary min-h-11" @click="modal.close()">Done</button></footer>
@@ -58,16 +66,22 @@ import { useModal } from '../composables/useModal'
 import { useProviderStore } from '../stores/providerStore'
 import { getProviderDisplayName, isLocalProvider } from '../utils/aiProviders'
 
-// Mode and result count are set in the Find toolbar; this drawer holds the
-// settings that need explanation: AI assistance and the hybrid balance. Which
-// model answers is not one of them: it is chosen once, in the top bar.
+// Result count is set in the Find toolbar; this drawer holds the settings that
+// need explanation: AI assistance and how passages are matched. Which model
+// answers is not one of them: it is chosen once, in the top bar.
 defineProps({
   configuredProviders: { type: Array, default: () => [] },
   providerId: { type: String, default: '' },
-  searchMode: { type: String, default: 'hybrid' },
 })
 const emit = defineEmits(['switch-tab'])
 const open = defineModel('open', { type: Boolean, default: false })
+const searchMode = defineModel('searchMode', { type: String, default: 'auto' })
+const matchModes = [
+  { value: 'auto', label: 'Automatic (recommended)', description: 'Blends meaning and exact words, leaning on exact words for codes, names and quoted phrases.' },
+  { value: 'hybrid', label: 'Meaning + keywords', description: 'A fixed blend of related ideas and matching words.' },
+  { value: 'semantic', label: 'Meaning only', description: 'Find related ideas, even when the wording differs.' },
+  { value: 'keyword', label: 'Keywords only', description: 'Match the exact words, names and terms you typed.' },
+]
 const semanticWeight = defineModel('semanticWeight', { type: Number, default: 0.7 })
 const rerank = defineModel('rerank', { type: Boolean, default: true })
 const synthesize = defineModel('synthesize', { type: Boolean, default: true })

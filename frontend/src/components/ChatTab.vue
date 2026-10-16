@@ -774,7 +774,10 @@ const settingsDrawerOpen = ref(false)
 
 // Chat options (persisted)
 const topK = ref(parseInt(localStorage.getItem('chat_top_k') || '5'))
-const searchMode = ref(localStorage.getItem('chat_search_mode') || 'hybrid')
+// 'auto' picks the keyword/meaning balance per question. New key: the old
+// 'chat_search_mode' defaulted to a fixed blend, and a value stored under it
+// may just be that default.
+const searchMode = ref(localStorage.getItem('chat_match_mode') || 'auto')
 const scope = ref(localStorage.getItem('chat_scope') || 'current')
 const rerank = ref(localStorage.getItem('chat_rerank') === 'true')
 // Answer-cache similarity floor. A stored value is the user's own choice;
@@ -1399,7 +1402,7 @@ const clearChat = () => {
 
 // Persist options
 watch(topK, (v) => localStorage.setItem('chat_top_k', String(v)))
-watch(searchMode, (v) => localStorage.setItem('chat_search_mode', v))
+watch(searchMode, (v) => localStorage.setItem('chat_match_mode', v))
 watch(scope, (v) => localStorage.setItem('chat_scope', v))
 watch(rerank, (v) => localStorage.setItem('chat_rerank', String(v)))
 watch(cacheThreshold, (v) => {

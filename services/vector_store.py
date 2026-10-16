@@ -75,6 +75,8 @@ class VectorStore:
 
         # BM25 keyword search index
         self.bm25_index = BM25Index(self.bm25_db_path)
+        if self.bm25_index.needs_rebuild:
+            self._rebuild_bm25()
 
         # FAISS indexes are NOT thread-safe under concurrent mutation: an
         # upload batch adding vectors while a delete removes them (or a search
@@ -85,6 +87,25 @@ class VectorStore:
         self._index_lock = threading.RLock()
 
         self._load_or_create_index()
+
+    def _rebuild_bm25(self) -> None:
+        """Re-tokenize every stored chunk into the keyword index.
+
+        Runs once when a collection is opened after the tokenizer changed. The
+        chunk text is the source of truth, so nothing is re-extracted or
+        re-embedded. The swap is one transaction (BM25Index.rebuild), so a
+        failure leaves the old index serving and retries on the next open.
+        """
+        logger.info("Rebuilding keyword index with the current tokenizer")
+        try:
+            total = self.bm25_index.rebuild(
+                (chunk_id, text or "")
+                for chunk_id, _document_id, _filename, _page, text in self.metadata_store.iter_chunk_texts()
+            )
+            logger.info(f"Keyword index rebuilt: {total} chunks")
+        except Exception as e:  # noqa: BLE001 - keep serving; retried on next open
+            logger.warning(f"Keyword index rebuild failed; the previous index stays in use "
+                           f"and the rebuild is retried on next open: {e}")
 
     def _new_index(self) -> faiss.Index:
         """Create an empty id-mapped index (cosine similarity via normalized IP)."""

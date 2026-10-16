@@ -125,16 +125,54 @@ class CrossEncoderReranker:
 _reranker: Optional[CrossEncoderReranker] = None
 _reranker_lock = threading.Lock()
 
+# model name -> (checked_at, usable). A missing model can be seeded while the
+# server runs (an offline bundle is copied in), so a "no" is rechecked.
+_auto_cache: dict = {}
+_AUTO_RECHECK_SECONDS = 60.0
+
+
+def _locally_available(model_name: str) -> bool:
+    """True when the cross-encoder can load with no network access at all."""
+    import importlib.util
+    import time
+
+    now = time.monotonic()
+    cached = _auto_cache.get(model_name)
+    if cached and (cached[1] or now - cached[0] < _AUTO_RECHECK_SECONDS):
+        return cached[1]
+
+    usable = False
+    try:
+        if importlib.util.find_spec("sentence_transformers") is not None:
+            from huggingface_hub import snapshot_download
+
+            snapshot_download(model_name, local_files_only=True)
+            usable = True
+    except Exception:  # noqa: BLE001 - not cached / not installed: simply off
+        usable = False
+    _auto_cache[model_name] = (now, usable)
+    return usable
+
+
+def reranker_enabled() -> bool:
+    """Resolve ``ENABLE_RERANKER``: explicit true/false wins, unset is automatic."""
+    from config import settings
+
+    configured = getattr(settings, "enable_reranker", None)
+    if configured is None:
+        return _locally_available(settings.reranker_model)
+    return bool(configured)
+
 
 def get_reranker() -> Optional[CrossEncoderReranker]:
-    """Return the shared reranker if enabled in settings, else None.
+    """Return the shared reranker if enabled (or automatically available).
 
     The instance is created once and reused. Returns None when reranking is
-    disabled so callers can cheaply skip the wider candidate fetch.
+    off so callers can cheaply skip the wider candidate fetch.
     """
     from config import settings
 
-    if not getattr(settings, "enable_reranker", False):
+    if not reranker_enabled():
         return None
 
     global _reranker

@@ -164,7 +164,7 @@ only feature that requires one.
 |---|---|---|
 | Document indexing (PDF, DOCX, TXT, MD, CSV/XLSX, code) | ✅ | Fully local |
 | Semantic + keyword + hybrid search | ✅ | FAISS/BM25, local embeddings |
-| Reranking | ✅ | With baked/pre-seeded model |
+| Reranking | ✅ | Automatic: on whenever the baked/pre-seeded model is present (`ENABLE_RERANKER` unset); never downloads |
 | OCR of scanned PDFs | ✅ | Docling/Tesseract locally; vision-LLM OCR only via local Ollama |
 | Audio transcription | ✅ | Local Whisper, with baked/pre-seeded model |
 | Grounded chat | ✅ | Via local Ollama or self-hosted OpenAI-compatible server |

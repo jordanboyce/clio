@@ -310,7 +310,7 @@ def _normalize_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "inline_row_threshold": max(0, min(int(profile.get("inline_row_threshold", _DEFAULT_INLINE_ROW_THRESHOLD)), 2000)),
     }
 
-    if normalized["mode"] not in {"semantic", "keyword", "hybrid"}:
+    if normalized["mode"] not in {"auto", "semantic", "keyword", "hybrid"}:
         normalized["mode"] = settings.mcp_mode
 
     return normalized
@@ -703,7 +703,7 @@ def get_collection_info(
         "total_chunks": stats.get("total_chunks", 0),
         "total_pages": stats.get("total_pages", 0),
         "file_types": file_types,
-        "search_modes": ["semantic", "keyword", "hybrid"],
+        "search_modes": ["auto", "semantic", "keyword", "hybrid"],
     }
     if detail == "with_documents":
         payload["documents"] = doc_list
@@ -766,7 +766,7 @@ def get_collection_facets(collection_id: str | None = None) -> dict[str, Any]:
 
 def search_all_collections_sync(
     query: str,
-    mode: Literal["semantic", "keyword", "hybrid"] | None = None,
+    mode: Literal["auto", "semantic", "keyword", "hybrid"] | None = None,
     top_k_per_collection: int = 3,
     collection_ids: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -854,7 +854,7 @@ def search_all_collections_sync(
 @_clio_mcp.tool(title="Search all collections", annotations=_read_only("Search all collections"))
 async def search_all_collections(
     query: str,
-    mode: Literal["semantic", "keyword", "hybrid"] | None = None,
+    mode: Literal["auto", "semantic", "keyword", "hybrid"] | None = None,
     top_k_per_collection: Annotated[int, Field(ge=1, le=10)] = 3,
     collection_ids: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -866,7 +866,8 @@ async def search_all_collections(
 
     Parameters:
       - query: Natural-language or keyword query.
-      - mode: "semantic", "keyword", or "hybrid". Defaults to server setting.
+      - mode: Omit it. Defaults to "auto", which tunes the keyword/meaning
+        balance per query; "semantic", "keyword" or "hybrid" force one.
       - top_k_per_collection: Results returned per collection (1–10, default 3).
         Kept small to avoid context explosion across many collections.
       - collection_ids: Optional list of specific collection IDs to include.
@@ -1187,7 +1188,7 @@ async def research_documents(
 def search_collection_sync(
     query: str,
     collection_id: str | None = None,
-    mode: Literal["semantic", "keyword", "hybrid"] | None = None,
+    mode: Literal["auto", "semantic", "keyword", "hybrid"] | None = None,
     top_k: int | None = None,
     filters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1212,7 +1213,7 @@ def search_collection_sync(
         resolved_mode = SearchMode(mode_source)
     except ValueError:
         raise ValueError(
-            f"Invalid mode '{mode_source}'. Must be one of: semantic, keyword, hybrid."
+            f"Invalid mode '{mode_source}'. Must be one of: auto, semantic, keyword, hybrid."
         )
     resolved_weight = max(0.0, min(float(request_profile.get("semantic_weight", settings.mcp_semantic_weight)), 1.0))
     resolved_include_sources = request_profile.get("include_sources", settings.mcp_include_sources)
@@ -1386,11 +1387,11 @@ def search_collection_sync(
 async def search_collection(
     query: str,
     collection_id: str | None = None,
-    mode: Literal["semantic", "keyword", "hybrid"] | None = None,
+    mode: Literal["auto", "semantic", "keyword", "hybrid"] | None = None,
     top_k: Annotated[int, Field(ge=1, le=20)] | None = None,
     filters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Search indexed documents using semantic, keyword, or hybrid retrieval.
+    """Search indexed documents. Retrieval strategy is chosen automatically.
 
     Parameters:
       - query: Natural-language query for semantic mode or exact terms for keyword.
@@ -1398,11 +1399,12 @@ async def search_collection(
         collection. When the user names a specific collection, project, or
         archive, first call `list_collections` to find the right id, then
         pass it here.
-      - mode: Retrieval strategy. "semantic" uses vector similarity (best for
-        conceptual / paraphrased questions). "keyword" uses BM25 and is the
-        right pick for exact phrases, proper nouns, identifiers, or quoted
-        strings the user cites verbatim. "hybrid" blends both and is a safe
-        default. Omit to use the server-configured default.
+      - mode: Almost always omit this. The default, "auto", blends meaning and
+        keyword matching and tunes the balance to the query (identifiers and
+        quoted phrases lean on exact matches, questions lean on meaning).
+        Only force a strategy when auto missed: "keyword" (BM25 only) for an
+        exact string, "semantic" (vectors only) for a paraphrased concept,
+        "hybrid" for a fixed blend.
       - top_k: Max number of chunks to return (1-20). Omit to use the
         server-configured default. Smaller values produce tighter, more
         focused context; larger values widen the recall net.

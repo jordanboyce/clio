@@ -47,7 +47,7 @@ research tools in chat and MCP clients.
 | You want to… | Where | How it works |
 |---|---|---|
 | **Ask a question and see the evidence** | Ask | Grounded answers cite `[Source N]`; open the passage, the page, and the original file. The assistant says when the sources do not establish something. |
-| **Find the exact passage or identifier** | Find | Hybrid search (semantic + keyword) without any answer model; exact strings, numbers, and negation stay intact. |
+| **Find the exact passage or identifier** | Find | Automatic hybrid search (meaning + keywords, balanced per query: codes, names and quotes lean on exact words) without any answer model; exact strings, numbers, and negation stay intact. |
 | **Research a multi-part question** | Ask, MCP | `research_documents` runs focused subqueries, reports coverage gaps and weak evidence, and spans collections. [Guide](docs/AGENTIC_RESEARCH.md). |
 | **Query spreadsheets, not just prose** | Ask, MCP | CSV/XLSX become typed tables; counts, sums, filters, and rankings run as SQL, never as guessed passage search. |
 | **Turn a collection into a document** | Generate (under More) | Source-grounded briefings, summaries, and reports with citations to review before sharing. |
@@ -230,7 +230,7 @@ you trust.
 Clio lets you:
 
 1. **Upload Documents** - Drop in PDFs, Office docs, spreadsheets, code, audio, or images (books, papers, manuals, data, photos of whiteboards)
-2. **Hybrid Search** - Combine semantic understanding with keyword precision in one retrieval workflow
+2. **Automatic Search** - Meaning and keyword matching are combined and balanced per query; there is no mode to pick (an Advanced setting exists for the rare miss)
 3. **Privacy-Aware AI Options** (Optional) - Use private/local or external providers for reranking and answer synthesis based on data sensitivity
 4. **Get Results** - Find relevant passages with page numbers and direct document links
 5. **Scale Up** - Handle hundreds to thousands of documents locally

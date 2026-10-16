@@ -16,7 +16,7 @@
       v-model:open="searchSettingsOpen"
       :configured-providers="configuredProviderIds"
       :provider-id="selectedProviders[0] || ''"
-      :search-mode="searchMode"
+      v-model:search-mode="searchMode"
       v-model:semantic-weight="semanticWeight"
       v-model:rerank="localRerank"
       v-model:synthesize="localSynthesize"
@@ -37,25 +37,11 @@
         </div>
       </div>
       <div class="search-toolbar flex flex-wrap items-center gap-x-2 gap-y-2 mt-3">
-        <div class="join" role="group" aria-label="Match passages by">
-          <button v-for="option in matchModes" :key="option.value" type="button"
-            class="btn btn-sm join-item min-h-11 font-medium"
-            :class="searchMode === option.value ? 'btn-primary' : 'btn-outline border-base-content/25'"
-            :aria-pressed="searchMode === option.value" :title="option.description" :disabled="loading"
-            @click="searchMode = option.value">{{ option.label }}</button>
-        </div>
-
         <label class="option-chip" :class="{ 'is-on': localSynthesize && aiActive, 'is-unavailable': !configuredProviderIds.length }"
           :title="configuredProviderIds.length ? 'Summarize the matching passages with source references' : 'Connect an AI provider in Settings to enable answers'">
           <input v-model="localSynthesize" type="checkbox" class="toggle toggle-sm toggle-primary" :disabled="loading || !configuredProviderIds.length" />
           <span>AI answer</span>
         </label>
-        <label class="option-chip" :class="{ 'is-on': localRerank && aiActive, 'is-unavailable': !configuredProviderIds.length }"
-          :title="configuredProviderIds.length ? 'Let the AI put the most relevant passages first (slower)' : 'Connect an AI provider in Settings to enable ranking'">
-          <input v-model="localRerank" type="checkbox" class="toggle toggle-sm toggle-primary" :disabled="loading || !configuredProviderIds.length" />
-          <span>AI ranking</span>
-        </label>
-
         <label class="option-chip">
           <span>Results</span>
           <select v-model.number="searchStore.topK" class="select select-sm min-h-9 h-9 w-auto pr-8 bg-base-100 border-none focus:outline-none" aria-label="Maximum results" :disabled="loading">
@@ -382,12 +368,15 @@ const useSearchSuggestion = (suggestion) => {
 // Match settings live in the store (persisted) so they survive tab switches.
 const { searchMode, semanticWeight } = storeToRefs(searchStore)
 
-const matchModes = [
-  { value: 'hybrid', label: 'Meaning + keywords', description: 'Combine related ideas with matching words (recommended)' },
-  { value: 'semantic', label: 'Meaning', description: 'Find related ideas, even when the wording differs' },
-  { value: 'keyword', label: 'Keywords', description: 'Prioritize matching words, names, and terms' },
-]
-const searchModeLabel = computed(() => matchModes.find(option => option.value === searchMode.value)?.label || 'Meaning')
+// The picker lives in the Search settings drawer; this is just the label for
+// the progress badge while a search runs.
+const searchModeLabels = {
+  auto: 'Automatic matching',
+  hybrid: 'Meaning + keywords',
+  semantic: 'Meaning',
+  keyword: 'Keywords',
+}
+const searchModeLabel = computed(() => searchModeLabels[searchMode.value] || 'Automatic matching')
 
 // Result-count presets; an unusual saved value stays selectable rather than being silently changed.
 const resultLimits = computed(() => {

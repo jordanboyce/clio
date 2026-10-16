@@ -39,6 +39,11 @@ os.environ["AI_API_KEY"] = ""
 # 429s in unrelated tests. Rate-limit tests re-enable it explicitly.
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 
+# The reranker turns itself on when its model happens to be cached on the
+# developer's machine; that would reorder results in unrelated ranking tests.
+# Reranker tests set it (or the auto-detection) explicitly.
+os.environ["ENABLE_RERANKER"] = "false"
+
 
 import pytest  # noqa: E402
 

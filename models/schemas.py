@@ -177,9 +177,10 @@ class AIOptions(BaseModel):
 class SearchMode(str, Enum):
     """Search mode options."""
 
+    AUTO = "auto"          # Hybrid, balance chosen per query (the default everywhere)
     SEMANTIC = "semantic"  # Pure semantic/embedding search
     KEYWORD = "keyword"    # Pure BM25 keyword search
-    HYBRID = "hybrid"      # Combined semantic + keyword
+    HYBRID = "hybrid"      # Combined semantic + keyword, fixed balance
 
 
 class SearchFilters(BaseModel):
@@ -204,10 +205,16 @@ class SearchRequest(BaseModel):
 
     query: str = Field(..., description="Search query text", min_length=1)
     top_k: int = Field(10, description="Number of results to return", ge=1, le=50)
-    mode: SearchMode = Field(SearchMode.SEMANTIC, description="Search mode: semantic, keyword, or hybrid")
+    mode: SearchMode = Field(
+        SearchMode.AUTO,
+        description="Search mode. 'auto' (default) runs hybrid retrieval and picks the balance "
+                    "between meaning and keywords for each query; 'semantic', 'keyword' and "
+                    "'hybrid' force one strategy.",
+    )
     semantic_weight: float = Field(
         0.7,
-        description="Weight for semantic search in hybrid mode (0-1). Higher = more semantic.",
+        description="Weight for semantic search in 'hybrid' mode (0-1). Higher = more semantic. "
+                    "Ignored by 'auto', which chooses per query.",
         ge=0.0,
         le=1.0
     )
@@ -241,6 +248,11 @@ class SearchResponse(BaseModel):
     total_results: int = Field(..., description="Total number of results returned")
     synthesis: Optional[str] = Field(None, description="AI-generated answer with citations")
     ai_usage: Optional[AIUsage] = Field(None, description="AI token usage for cost transparency")
+    retrieval: Optional[Dict[str, Any]] = Field(
+        None,
+        description="How the query was actually retrieved: the strategy 'auto' resolved to, "
+                    "the semantic weight used, why, and whether results were reranked",
+    )
 
 
 class DocumentListResponse(BaseModel):
@@ -331,7 +343,7 @@ class ChatRequest(BaseModel):
 
     messages: List[ChatMessage] = Field(..., description="Conversation history including the latest user message")
     provider: str = Field("anthropic", description="AI provider: 'anthropic', 'openai', or 'ollama'")
-    mode: SearchMode = Field(SearchMode.SEMANTIC, description="Search mode for context retrieval")
+    mode: SearchMode = Field(SearchMode.AUTO, description="Search mode for context retrieval ('auto' picks per query)")
     scope: str = Field("current", description="Collection scope: 'current' (single collection) or 'all' (search across all collections)")
     rerank: bool = Field(False, description="Rerank retrieved context chunks using AI before generating a response")
     top_k: int = Field(5, description="Number of source chunks to consider", ge=1, le=20)
@@ -411,7 +423,7 @@ class ArtifactRequest(BaseModel):
     artifact_type: str = Field(..., description="Artifact type, e.g. 'summary', 'faq', 'timeline', 'briefing', 'study_guide'")
     provider: str = Field("anthropic", description="AI provider")
     scope: str = Field("current", description="'current' (this collection) or 'all'")
-    mode: SearchMode = Field(SearchMode.HYBRID, description="Search mode for context retrieval")
+    mode: SearchMode = Field(SearchMode.AUTO, description="Search mode for context retrieval ('auto' picks per query)")
     top_k: int = Field(8, description="Chunks per retrieval call during generation", ge=1, le=20)
     focus: Optional[str] = Field(None, description="Optional subject to narrow the artifact to")
     custom_instructions: Optional[str] = Field(None, description="Optional extra freeform guidance")

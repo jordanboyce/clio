@@ -54,8 +54,9 @@ _TOOLS: List[Dict[str, Any]] = [
     {
         "name": "search_documents",
         "description": (
-            "Semantic / keyword / hybrid search across the active document "
-            "collection. Use for narrative, prose, or conceptual questions "
+            "Search the active document collection. Meaning and exact keywords "
+            "are balanced automatically per query, so leave `mode` unset unless "
+            "an earlier search missed. Use for narrative, prose, or conceptual questions "
             "about PDFs, text, or code. Returns ranked chunks with filename, "
             "page number, and a similarity score. Pass `filters` to restrict "
             "retrieval to specific documents, file types, or a date range — "
@@ -65,7 +66,7 @@ _TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Natural-language query or exact keywords."},
-                "mode": {"type": "string", "enum": ["semantic", "keyword", "hybrid"]},
+                "mode": {"type": "string", "enum": ["auto", "semantic", "keyword", "hybrid"]},
                 "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
                 "collection_id": {"type": "string", "description": "Omit to use the active chat collection."},
                 "filters": {

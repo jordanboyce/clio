@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -142,11 +142,14 @@ class Settings(BaseSettings):
 
     # Local cross-encoder reranker (second-stage relevance reordering).
     # Runs locally (no API tokens, no PII egress) and applies to every search
-    # caller, including the MCP tools. Opt-in because it downloads/loads a model
-    # on first use. When enabled, retrieval fetches a wider candidate pool
-    # (top_k * reranker_candidate_multiplier, capped) and the cross-encoder
-    # reorders it down to top_k.
-    enable_reranker: bool = False
+    # caller, including the MCP tools. When enabled, retrieval fetches a wider
+    # candidate pool (top_k * reranker_candidate_multiplier, capped) and the
+    # cross-encoder reorders it down to top_k.
+    # Unset (the default) means automatic: on exactly when sentence-transformers
+    # is installed AND the model is already in the local cache, so it never
+    # triggers a download and a disconnected install just uses it. Set true to
+    # force it on (the model may download), false to force it off.
+    enable_reranker: Optional[bool] = None
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranker_candidate_multiplier: int = 5
 
@@ -208,7 +211,7 @@ class Settings(BaseSettings):
     # that reaches for search_collection instead of research_documents still
     # sees enough to notice when the corpus disagrees with its first guess.
     mcp_top_k: int = 8
-    mcp_mode: Literal["semantic", "keyword", "hybrid"] = "hybrid"
+    mcp_mode: Literal["auto", "semantic", "keyword", "hybrid"] = "auto"
     mcp_semantic_weight: float = 0.7
     mcp_include_sources: bool = True
     mcp_max_source_length: int = 500
