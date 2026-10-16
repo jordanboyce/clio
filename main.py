@@ -209,6 +209,11 @@ async def lifespan(app: FastAPI):
         from services.retention import retention_loop
         retention_task = asyncio.create_task(retention_loop())
 
+        # Watched sources (folders and git repositories) re-sync on their own
+        # and raise Updates; a no-op until someone turns Watch on.
+        from services.source_watcher import watcher_loop
+        watcher_task = asyncio.create_task(watcher_loop())
+
         logger.info("Clio API ready")
         logger.info(f"Data directory: {settings.data_dir}")
         logger.info(f"Embedded MCP server: {'enabled' if settings.enable_mcp else 'disabled'}")
@@ -218,6 +223,7 @@ async def lifespan(app: FastAPI):
         # Cleanup on shutdown
         logger.info("Shutting down Clio API...")
         retention_task.cancel()
+        watcher_task.cancel()
         indexer_manager.save_all()
         logger.info("Shutdown complete")
 

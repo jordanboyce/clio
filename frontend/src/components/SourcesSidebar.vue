@@ -158,13 +158,13 @@
               </button>
             </template>
             <button
-              v-if="capabilities.link_indexing !== false"
+              v-if="webLinksAvailable || gitAvailable"
               @click="linkPanelOpen = !linkPanelOpen"
               class="btn btn-xs flex-1 gap-1"
               :class="linkPanelOpen ? 'btn-secondary' : 'btn-outline'"
               :disabled="indexing || isRecording"
               :aria-expanded="linkPanelOpen"
-              title="Index the content behind a link"
+              :title="gitAvailable ? 'Index a web link or a git repository' : 'Index the content behind a link'"
             >
               <Link :size="12" />
               Link
@@ -206,7 +206,45 @@
           <!-- Link panel: paste one or more URLs; the server fetches each one
                and indexes the page (or the PDF/file behind it) in the background -->
           <div v-if="linkPanelOpen" class="space-y-1.5">
+            <div v-if="webLinksAvailable && gitAvailable" class="join w-full" role="group" aria-label="What to add">
+              <button type="button" class="btn btn-xs join-item flex-1" :class="activeLinkKind === 'web' ? 'btn-primary' : 'btn-ghost border border-base-300'" :aria-pressed="activeLinkKind === 'web'" @click="linkKind = 'web'">Web page</button>
+              <button type="button" class="btn btn-xs join-item flex-1" :class="activeLinkKind === 'git' ? 'btn-primary' : 'btn-ghost border border-base-300'" :aria-pressed="activeLinkKind === 'git'" @click="linkKind = 'git'">Git repository</button>
+            </div>
+            <div v-if="activeLinkKind === 'git'" class="space-y-1.5" data-testid="git-panel">
+              <input
+                v-model="gitUrl"
+                type="text"
+                class="input input-bordered input-xs w-full font-mono"
+                placeholder="https://git.example.com/team/repo.git"
+                aria-label="Git repository address"
+                :disabled="gitSubmitting"
+                @keydown.enter.prevent="indexGit"
+              />
+              <div class="flex items-center gap-2">
+                <input
+                  v-model="gitBranch"
+                  type="text"
+                  class="input input-bordered input-xs flex-1 min-w-0 font-mono"
+                  placeholder="Branch (default)"
+                  aria-label="Branch"
+                  :disabled="gitSubmitting"
+                />
+                <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none" title="Check the repository every 15 minutes and tell me when it changes">
+                  <input v-model="gitWatch" type="checkbox" class="toggle toggle-xs toggle-primary" :disabled="gitSubmitting" />
+                  Watch
+                </label>
+              </div>
+              <div class="flex items-center gap-2 text-xs">
+                <span class="flex-1 text-base-content/50 leading-tight">Cloned on the server (read-only). Files in .gitignore are skipped. Private repositories use the server's git credentials.</span>
+                <button class="btn btn-primary btn-xs gap-1 flex-shrink-0" @click="indexGit" :disabled="gitSubmitting || !gitUrl.trim()">
+                  <span v-if="gitSubmitting" class="loading loading-spinner loading-xs"></span>
+                  <GitBranch v-else :size="11" />
+                  {{ gitSubmitting ? 'Cloning…' : 'Add repository' }}
+                </button>
+              </div>
+            </div>
             <textarea
+              v-else
               v-model="linkInput"
               class="textarea textarea-bordered textarea-xs w-full leading-snug font-mono"
               rows="3"
@@ -216,7 +254,7 @@
               @keydown.ctrl.enter.prevent="indexLinks"
               @keydown.meta.enter.prevent="indexLinks"
             ></textarea>
-            <div class="flex items-center gap-2 text-xs">
+            <div v-if="activeLinkKind === 'web'" class="flex items-center gap-2 text-xs">
               <span class="flex-1 text-base-content/50 leading-tight">Public web pages, PDFs and files. Pages are saved and indexed as they are now.</span>
               <button class="btn btn-primary btn-xs gap-1 flex-shrink-0" @click="indexLinks" :disabled="linkSubmitting || parsedLinks.length === 0">
                 <span v-if="linkSubmitting" class="loading loading-spinner loading-xs"></span>
@@ -238,21 +276,37 @@
                file has gone from disk. -->
           <div v-if="syncFolders.length > 0 && selectedPaths.length === 0" class="space-y-0.5" data-testid="synced-folders">
             <div class="flex items-center justify-between px-0.5">
-              <span class="side-label text-base-content/50">Synced folders</span>
+              <span class="side-label text-base-content/50">Synced sources</span>
             </div>
             <div
               v-for="folder in syncFolders"
               :key="folder.path"
               class="group flex items-center gap-1.5 text-xs rounded-md px-1 py-1 hover:bg-base-content/[0.05]"
             >
-              <FolderSync :size="12" class="flex-shrink-0 text-base-content/45" aria-hidden="true" />
+              <GitBranch v-if="folder.git" :size="12" class="flex-shrink-0 text-base-content/45" aria-hidden="true" />
+              <FolderSync v-else :size="12" class="flex-shrink-0 text-base-content/45" aria-hidden="true" />
               <span class="flex-1 min-w-0">
-                <span class="block truncate text-base-content/80" :title="folder.path">{{ folderLabel(folder.path) }}</span>
+                <span class="block truncate text-base-content/80" :title="folder.git_url || folder.path">{{ folder.label || folderLabel(folder.path) }}</span>
                 <span class="block text-[10px] text-base-content/45 truncate">
                   <template v-if="!folder.exists">Folder not found</template>
-                  <template v-else-if="folder.last_synced_at">Synced {{ formatSyncTime(folder.last_synced_at) }}<template v-if="folder.pruned_count"> · {{ folder.pruned_count }} pruned</template></template>
+                  <template v-else-if="folder.last_error"><span class="text-error" :title="folder.last_error">Check failed: {{ folder.last_error }}</span></template>
+                  <template v-else-if="folder.last_synced_at">
+                    <template v-if="folder.git && folder.git_branch">{{ folder.git_branch }}<template v-if="folder.git_head"> @ {{ folder.git_head.slice(0, 7) }}</template> · </template>Synced {{ formatSyncTime(folder.last_synced_at) }}<template v-if="folder.pruned_count"> · {{ folder.pruned_count }} pruned</template>
+                  </template>
                 </span>
               </span>
+              <button
+                class="btn btn-ghost btn-xs h-6 min-h-0 px-1.5"
+                :class="folder.watch ? 'text-primary' : 'hover-reveal text-base-content/60'"
+                :disabled="watchingPath === folder.path"
+                :aria-pressed="!!folder.watch"
+                :title="folder.watch ? 'Watching: checked automatically and changes appear under source updates. Click to stop.' : 'Watch this source: check it automatically and tell me when it changes'"
+                :aria-label="folder.watch ? `Stop watching ${folder.label || folderLabel(folder.path)}` : `Watch ${folder.label || folderLabel(folder.path)}`"
+                @click="toggleWatch(folder)"
+              >
+                <Eye v-if="folder.watch" :size="12" />
+                <EyeOff v-else :size="12" />
+              </button>
               <button
                 class="btn btn-ghost btn-xs h-6 min-h-0 px-1.5 hover-reveal"
                 :disabled="indexing || syncingPath === folder.path || !folder.exists"
@@ -930,7 +984,7 @@
 <script setup>
 import { ref, computed, markRaw, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import http from '../utils/http'
-import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync } from 'lucide-vue-next'
+import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync, GitBranch, EyeOff } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useUiStore } from '../stores/uiStore'
 import { useUserStore } from '../stores/userStore'
@@ -983,6 +1037,19 @@ const justIndexed = ref(false)
 const linkPanelOpen = ref(false)
 const linkInput = ref('')
 const linkSubmitting = ref(false)
+// The same panel adds a git repository (cloned on the server, optionally watched).
+const linkKind = ref('web')
+const webLinksAvailable = computed(() => capabilities.value.link_indexing !== false)
+const gitAvailable = computed(() => !!capabilities.value.git_sources)
+const activeLinkKind = computed(() => {
+  if (linkKind.value === 'git' && gitAvailable.value) return 'git'
+  if (linkKind.value === 'web' && webLinksAvailable.value) return 'web'
+  return webLinksAvailable.value ? 'web' : 'git'
+})
+const gitUrl = ref('')
+const gitBranch = ref('')
+const gitWatch = ref(true)
+const gitSubmitting = ref(false)
 const parsedLinks = computed(() => [...new Set(linkInput.value.split(/\s+/).map(s => s.trim()).filter(Boolean))])
 const isLinkDoc = (doc) => doc?.source_type === 'url' && /^https?:\/\//i.test(doc.source_path || '')
 
@@ -1603,6 +1670,60 @@ const indexLinks = async () => {
     indexError.value = err?.message || 'Could not add links'
   } finally {
     linkSubmitting.value = false
+  }
+}
+
+const indexGit = async () => {
+  const url = gitUrl.value.trim()
+  if (!url || gitSubmitting.value) return
+  const collectionId = collectionStore.currentCollectionId
+  gitSubmitting.value = true
+  indexError.value = ''
+  try {
+    const { data } = await http.post('/documents/sync-git', {
+      url,
+      branch: gitBranch.value.trim() || null,
+      collection_id: collectionId,
+      watch: gitWatch.value,
+    }, { timeout: 0 })
+    if (data.job_id) {
+      backgroundJobsStore.addUploadJob({
+        job_id: data.job_id, collection_id: collectionId, status: 'pending',
+        total_files: data.queued || 0, processed_files: 0, progress_percent: 0, job_type: 'index',
+      })
+      emit('background-job-started')
+    }
+    ui.notify(`${folderLabel(url.replace(/\.git$/, ''))}: ${data.queued ? `${data.queued.toLocaleString()} files queued` : 'up to date'}${gitWatch.value ? ' · watching for changes' : ''}`, data.job_id ? 'info' : 'success')
+    gitUrl.value = ''
+    gitBranch.value = ''
+    linkPanelOpen.value = false
+    addSectionOpen.value = false
+    loadDocuments()
+    emit('document-deleted')
+  } catch (err) {
+    // The server's reason (policy refusal, unreachable host) is the useful part.
+    indexError.value = err?.response?.data?.detail || err?.message || 'Could not add the repository'
+  } finally {
+    gitSubmitting.value = false
+    loadSyncFolders()
+  }
+}
+
+const watchingPath = ref('')
+const toggleWatch = async (folder) => {
+  watchingPath.value = folder.path
+  try {
+    await http.post('/documents/sync-folders/watch', {
+      collection_id: collectionStore.currentCollectionId,
+      path: folder.path,
+      watch: !folder.watch,
+    })
+    ui.notify(folder.watch ? 'No longer watching this source' : 'Watching: changes will show under source updates', 'success')
+  } catch (err) {
+    ui.toastError(err, 'Could not change watching')
+  } finally {
+    watchingPath.value = ''
+    loadSyncFolders()
   }
 }
 

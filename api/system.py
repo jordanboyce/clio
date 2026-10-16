@@ -159,6 +159,7 @@ async def get_capabilities():
     from importlib.util import find_spec
     from services.file_picker import is_native_picker_available
     from services.link_fetcher import link_indexing_available
+    from services.git_source import git_available
     return {
         "native_file_picker": is_native_picker_available(),
         "ocr_available": find_spec("docling") is not None or find_spec("pytesseract") is not None,
@@ -167,6 +168,11 @@ async def get_capabilities():
         # Off under OFFLINE_MODE or LINK_INDEXING_ENABLED=false; the Sources
         # panel hides "Link" rather than offering a button that always fails.
         "link_indexing": link_indexing_available(),
+        # Remote git repositories: needs the git binary, and in offline mode
+        # an allowlisted internal git host (GIT_ALLOWED_HOSTS).
+        "git_sources": git_available() and (
+            not settings.offline_mode or bool(settings.git_allowed_hosts.strip())
+        ),
     }
 
 

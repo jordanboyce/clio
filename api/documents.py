@@ -26,6 +26,8 @@ from models.schemas import (
     RepoUploadRequest,
     RepoUploadResponse,
     SyncFolderRequest,
+    SyncGitRequest,
+    SyncWatchRequest,
     SyncFolderResponse,
     SyncFolderRecord,
     SyncFoldersResponse,
@@ -36,7 +38,7 @@ from services.form_field_extractor import (
     estimate_form_likelihood,
     is_form_like_text,
 )
-from services import audit, governance, storage_quota
+from services import audit, git_source, governance, source_changes, storage_quota
 from services.content_policy import BlockedContentError, ContentRejectedError
 from services.storage_quota import StorageLimitExceeded
 from services.link_fetcher import LinkError, LinkRefused, link_indexing_available, validate_link
@@ -873,6 +875,13 @@ def sync_folder(  # sync: hashing and pruning run in FastAPI's threadpool, not o
             for e in request.file_extensions
         ]
 
+    remember = {}
+    if request.watch is not None:
+        remember["watch"] = request.watch
+        remember["watch_owner"] = get_request_user()
+    if request.interval_minutes:
+        remember["interval_minutes"] = request.interval_minutes
+
     try:
         outcome = upload_service.sync_folder(
             path=request.path,
@@ -882,6 +891,7 @@ def sync_folder(  # sync: hashing and pruning run in FastAPI's threadpool, not o
             exclude_patterns=request.exclude_patterns,
             prune_missing=request.prune_missing,
             uploaded_by=get_request_user(),
+            remember=remember or None,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -889,6 +899,10 @@ def sync_folder(  # sync: hashing and pruning run in FastAPI's threadpool, not o
         # The waiting list is full
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
+    return _sync_response(outcome, response)
+
+
+def _sync_response(outcome: dict, response: Response) -> SyncFolderResponse:
     parts = []
     if outcome["queued"]:
         parts.append(f"indexing {outcome['queued']} new or changed file(s)")
@@ -907,6 +921,104 @@ def sync_folder(  # sync: hashing and pruning run in FastAPI's threadpool, not o
     return SyncFolderResponse(message=message, **outcome)
 
 
+@router.post(
+    "/documents/sync-git",
+    response_model=SyncFolderResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Index a remote git repository (shallow clone, optionally watched)",
+    tags=["documents"],
+)
+def sync_git(request: SyncGitRequest, response: Response) -> SyncFolderResponse:
+    """
+    Clone (or refresh) a remote repository under the server's data directory
+    and sync it into a collection exactly like a folder: only new and
+    changed files are indexed, and files deleted upstream are removed. With
+    ``watch`` the remote is checked on a schedule and every change lands in
+    the collection's Updates feed.
+
+    The address must pass the deployment's git policy (``GIT_ALLOWED_HOSTS``;
+    refused outright in offline mode unless the host is allowlisted) and may
+    not carry credentials.
+    """
+    _require_ingest(request.collection_id)
+    try:
+        get_indexer(request.collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    if not git_source.git_available():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="git is not installed on this server")
+    try:
+        info = git_source.validate_remote(request.url, request.branch)
+        clone = git_source.ensure_clone(info["url"], info["branch"])
+    except git_source.GitRefused as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except git_source.GitError as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Could not fetch the repository: {e}")
+
+    file_extensions = None
+    if request.file_extensions:
+        file_extensions = [e.lower() if e.startswith(".") else "." + e.lower() for e in request.file_extensions]
+    remember = {"git_url": info["url"], "git_ref": info["branch"],
+                "watch": request.watch, "watch_owner": get_request_user()}
+    if request.interval_minutes:
+        remember["interval_minutes"] = request.interval_minutes
+    try:
+        outcome = upload_service.sync_folder(
+            path=str(clone), collection_id=request.collection_id, recursive=True,
+            file_extensions=file_extensions, exclude_patterns=request.exclude_patterns,
+            prune_missing=True, uploaded_by=get_request_user(), remember=remember,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    return _sync_response(outcome, response)
+
+
+@router.post(
+    "/documents/sync-folders/watch",
+    response_model=SyncFolderRecord,
+    summary="Turn automatic updating of a source on or off",
+    tags=["documents"],
+)
+def watch_sync_folder(request: SyncWatchRequest) -> SyncFolderRecord:
+    """Start or stop watching a remembered folder or git source."""
+    _require_ingest(request.collection_id)
+    fields = {"watch": request.watch, "watch_owner": get_request_user(), "last_error": None}
+    if request.interval_minutes:
+        fields["interval_minutes"] = request.interval_minutes
+    entry = upload_service.update_sync_folder(request.collection_id, request.path, **fields)
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="That source is not in this collection")
+    return _sync_record(entry)
+
+
+@router.get(
+    "/documents/changes",
+    summary="Updates feed: what changed in this collection's sources",
+    tags=["documents"],
+)
+def list_changes(collection_id: str = "default", since: int = 0, limit: int = 50) -> dict:
+    """Source changes after event id ``since`` (oldest first). ``latest_id`` is
+    the newest id in the collection; compare it with what you last saw to
+    know whether anything is new without fetching the events."""
+    try:
+        get_indexer(collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    return source_changes.list_events(collection_id, since_id=max(0, since), limit=limit)
+
+
+def _sync_record(entry: dict) -> SyncFolderRecord:
+    known = {k: v for k, v in entry.items() if k in SyncFolderRecord.model_fields}
+    known["exists"] = Path(entry["path"]).is_dir()
+    if entry.get("git_url"):
+        known["label"] = git_source.display_name(entry["git_url"])
+    return SyncFolderRecord(**known)
+
+
 @router.get(
     "/documents/sync-folders",
     response_model=SyncFoldersResponse,
@@ -922,11 +1034,7 @@ def list_sync_folders(collection_id: str = "default") -> SyncFoldersResponse:
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
-    folders = []
-    for entry in upload_service.list_sync_folders(collection_id):
-        known = {k: v for k, v in entry.items() if k in SyncFolderRecord.model_fields}
-        known["exists"] = Path(entry["path"]).is_dir()
-        folders.append(SyncFolderRecord(**known))
+    folders = [_sync_record(entry) for entry in upload_service.list_sync_folders(collection_id)]
     return SyncFoldersResponse(collection_id=collection_id, folders=folders)
 
 

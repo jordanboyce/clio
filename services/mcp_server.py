@@ -2915,6 +2915,36 @@ def list_index_jobs(
     }, "list_index_jobs")
 
 
+@_clio_mcp.tool(title="List source changes", annotations=_read_only("List source changes"))
+def list_changes(
+    collection_id: str | None = None,
+    since_id: Annotated[int, Field(ge=0)] = 0,
+    limit: Annotated[int, Field(ge=1, le=50)] = 20,
+) -> dict[str, Any]:
+    """What changed in a collection's watched folders and git repositories.
+
+    Parameters:
+      - collection_id: Optional; defaults like the other tools.
+      - since_id: Return only events newer than this id. Pass the
+        `latest_id` from your previous call to ask "anything new?".
+      - limit: max events (default 20, cap 50), oldest first.
+
+    Each event has an id, time, the source's label, a one-line summary
+    ("3 added, 1 changed"), the file paths added/changed/removed (relative to
+    the source), and for a git source the commits since the last sync
+    (sha, author, subject) and the new head. Use it to learn that indexed
+    content moved before answering from it, or to report what changed since
+    a task began. An empty list with an unchanged `latest_id` means nothing
+    changed.
+    """
+    from services import source_changes
+
+    resolved = _resolve_collection_id(collection_id)
+    payload = source_changes.list_events(resolved, since_id=since_id, limit=limit)
+    payload["corpus_version"] = _corpus_version(resolved)
+    return _tool_response(payload, "list_changes")
+
+
 @_clio_mcp.tool(title="Index job status", annotations=_read_only("Index job status"))
 def get_index_job(job_id: Annotated[int, Field(ge=1)]) -> dict[str, Any]:
     """Return one indexing job with its progress and per-file failures.

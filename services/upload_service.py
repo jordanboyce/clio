@@ -23,7 +23,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 
 from config import settings
-from services import audit, storage_quota
+from services import audit, git_source, source_changes, storage_quota
 from services.app_database import app_db
 from services.indexer_manager import indexer_manager
 from services.collection_service import collection_service
@@ -834,6 +834,16 @@ class UploadService:
             return True
 
         files: List[str] = []
+        # A git work tree is listed by git itself: .gitignore is honoured and
+        # nothing is guessed from directory names. Anything that is not a
+        # readable repository falls through to the plain walk below.
+        tracked = git_source.list_files(repo, recursive) if git_source.is_worktree(repo) else None
+        if tracked is not None:
+            for rel in tracked:
+                fp = repo / rel
+                if fp.is_file() and admit(fp):
+                    files.append(str(fp))
+            return FolderScan(files=files, skipped_unsupported=skipped_unsupported)
         if recursive:
             for root, dirs, names in os.walk(repo):
                 dirs[:] = [
@@ -937,10 +947,28 @@ class UploadService:
         remembered = app_db.get_config(self._sync_memory_key(collection_id), {}) or {}
         if not isinstance(remembered, dict):
             remembered = {}
-        entry = {"last_synced_at": datetime.utcnow().isoformat(), **fields}
+        # Keep what a sync does not decide itself (watch settings, git
+        # remote, last error) from the previous entry.
+        previous = remembered.get(str(root))
+        entry = dict(previous) if isinstance(previous, dict) else {}
+        entry.update({"last_synced_at": datetime.utcnow().isoformat(), **fields})
         remembered[str(root)] = entry
         app_db.set_config(self._sync_memory_key(collection_id), remembered)
         return dict(entry, path=str(root))
+
+    def update_sync_folder(self, collection_id: str, path: str, **fields: Any) -> Optional[Dict[str, Any]]:
+        """Change remembered settings of a folder (watch on/off, interval, last error).
+
+        None when the folder is not remembered for this collection.
+        """
+        key = self._sync_memory_key(collection_id)
+        remembered = app_db.get_config(key, {}) or {}
+        root = str(Path(path).resolve())
+        if not isinstance(remembered, dict) or not isinstance(remembered.get(root), dict):
+            return None
+        remembered[root].update(fields)
+        app_db.set_config(key, remembered)
+        return dict(remembered[root], path=root)
 
     def forget_sync_folder(self, collection_id: str, path: str) -> bool:
         """Drop a remembered folder. Documents are untouched."""
@@ -1042,6 +1070,8 @@ class UploadService:
         exclude_patterns: Optional[List[str]] = None,
         prune_missing: bool = False,
         uploaded_by: Optional[str] = None,
+        trigger: str = "manual",
+        remember: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Bring a collection up to date with a folder on disk.
 
@@ -1057,6 +1087,14 @@ class UploadService:
         Only new and changed files go through the indexing job. Returns the
         counts the endpoint reports; ``job_id`` is None when nothing needed
         indexing.
+
+        A folder that is a git work tree is listed by git (``.gitignore``
+        honoured) and its HEAD is remembered. Every sync after the first that
+        adds, replaces or removes something leaves an event in the Updates
+        feed (services/source_changes.py), with the commits since the last
+        sync for a git source. ``trigger`` records who started it ("manual" or
+        "watch"); ``remember`` is extra memory to keep with the folder (a
+        managed clone's remote URL, watch settings).
         """
         from services import governance
 
@@ -1064,6 +1102,10 @@ class UploadService:
         if not repo.exists() or not repo.is_dir():
             raise ValueError(f"Invalid folder path: {path}")
         root = repo.resolve()
+        previous_entry = next(
+            (e for e in self.list_sync_folders(collection_id) if e.get("path") == str(root)), None
+        )
+        git_info = git_source.head_info(root)
 
         scan = self._scan_folder(root, recursive, file_extensions, exclude_patterns)
         files_found = scan.files
@@ -1078,6 +1120,8 @@ class UploadService:
 
         replaced: List[str] = []
         pruned: List[str] = []
+        replaced_paths: List[str] = []
+        pruned_paths: List[str] = []
         removed_ids: set = set()
         for doc in tracked:
             doc_id = doc["document_id"]
@@ -1088,9 +1132,9 @@ class UploadService:
             if current is not None:
                 if current == doc.get("content_hash"):
                     continue  # still the same bytes
-                action, bucket = "document.sync_replace", replaced
+                action, bucket, paths = "document.sync_replace", replaced, replaced_paths
             elif prune_missing and not Path(source_path).exists():
-                action, bucket = "document.sync_prune", pruned
+                action, bucket, paths = "document.sync_prune", pruned, pruned_paths
             else:
                 continue  # excluded by the filters this time, or prune is off
             try:
@@ -1101,6 +1145,7 @@ class UploadService:
                 continue  # already gone
             removed_ids.add(doc_id)
             bucket.append(doc.get("filename") or Path(source_path).name)
+            paths.append(source_path)
 
         job_id: Optional[int] = None
         if files_to_index:
@@ -1130,9 +1175,43 @@ class UploadService:
                 recursive=recursive,
                 file_extensions=file_extensions, exclude_patterns=exclude_patterns,
                 prune_missing=prune_missing,
+                git=bool(git_info),
+                git_head=git_info["head"] if git_info else None,
+                git_branch=git_info["branch"] if git_info else None,
+                last_checked_at=datetime.utcnow().isoformat(), last_error=None,
+                **(remember or {}),
             )
         except Exception as e:
             logger.warning(f"Could not remember sync folder {root}: {e}")
+
+        # The Updates feed. The first sync of a folder is the initial import,
+        # not news, so it records nothing.
+        if previous_entry is not None:
+            try:
+                def rel(p: str) -> str:
+                    try:
+                        return Path(p).resolve().relative_to(root).as_posix()
+                    except ValueError:
+                        return Path(p).name
+
+                replaced_set = set(replaced_paths)
+                added_names = [rel(fp) for fp in files_to_index
+                               if str(Path(fp).resolve()) not in replaced_set]
+                label = (git_source.display_name(remembered.get("git_url") or "")
+                         if remembered.get("git_url") else root.name) or root.name
+                source_changes.record(
+                    collection_id, source=str(root), label=label,
+                    added=added_names, changed=[rel(p) for p in replaced_paths],
+                    removed=[rel(p) for p in pruned_paths],
+                    commits=git_source.commits_between(
+                        root, previous_entry.get("git_head"), git_info["head"]) if git_info else [],
+                    head=git_info["head"] if git_info else None,
+                    previous_head=previous_entry.get("git_head"),
+                    branch=git_info["branch"] if git_info else None,
+                    trigger=trigger,
+                )
+            except Exception as e:  # noqa: BLE001 - the sync itself succeeded
+                logger.warning(f"Could not record change event for {root}: {e}")
 
         logger.info(
             f"Folder sync {root} -> '{collection_id}': {len(files_to_index)} queued, "
