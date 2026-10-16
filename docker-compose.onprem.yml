@@ -46,6 +46,10 @@ services:
       # are ever contacted. Set OFFLINE_MODE=false in .env if this deployment
       # is allowed to reach hosted providers.
       - OFFLINE_MODE=${OFFLINE_MODE:-1}
+      # standard | secure. "secure" also refuses to start when the deployment
+      # is reachable without AUTH_PASSWORD or points at a hosted model.
+      # docs/SECURE_PROFILE.md
+      - CLIO_PROFILE=${CLIO_PROFILE:-standard}
       # The deployment's own model — every person gets it with no per-browser
       # setup. Configure in .env; see .env.onprem.example.
       - AI_PROVIDER=${AI_PROVIDER:-}

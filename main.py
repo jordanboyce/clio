@@ -103,6 +103,17 @@ def _check_security_posture() -> None:
             "docs/IDENTITY.md."
         )
 
+    # The secure profile turns the warnings below into refusals: a deployment
+    # that declared itself hardened must not come up in a weaker shape.
+    from services import readiness
+
+    problems = readiness.secure_profile_errors()
+    if problems:
+        raise RuntimeError(
+            "CLIO_PROFILE=secure refuses to start:\n  - " + "\n  - ".join(problems) +
+            "\nFix these, or run with CLIO_PROFILE=standard. See docs/SECURE_PROFILE.md."
+        )
+
     # Deployment default LLM (on-prem private endpoints). A typo here would
     # otherwise surface as a failed chat hours later, on someone else's
     # screen, so it fails at startup like the other deployment-shape flags.
