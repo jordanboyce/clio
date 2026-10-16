@@ -8,10 +8,13 @@ export const useSearchStore = defineStore('search', () => {
   const topK = ref(parseInt(localStorage.getItem('clio_default_top_k')) || 10)
   // Match settings persist like topK: the Find tab unmounts when the user
   // switches tabs, so component-local state would silently reset.
-  const MODE_KEY = 'clio_search_mode'
+  // 'auto' picks the keyword/meaning balance per query. The key changed when
+  // 'auto' became the default so nobody stays pinned to the old fixed default;
+  // only an explicit choice made from here on is remembered.
+  const MODE_KEY = 'clio_match_mode'
   const WEIGHT_KEY = 'clio_search_semantic_weight'
   const savedMode = localStorage.getItem(MODE_KEY)
-  const searchMode = ref(['semantic', 'keyword', 'hybrid'].includes(savedMode) ? savedMode : 'hybrid')
+  const searchMode = ref(['auto', 'semantic', 'keyword', 'hybrid'].includes(savedMode) ? savedMode : 'auto')
   const savedWeight = Number(localStorage.getItem(WEIGHT_KEY))
   const semanticWeight = ref(Number.isFinite(savedWeight) && savedWeight > 0 && savedWeight <= 1 ? savedWeight : 0.7)
   watch(searchMode, value => { try { localStorage.setItem(MODE_KEY, value) } catch { /* storage unavailable */ } })

@@ -18,7 +18,7 @@ import sqlite3
 from pathlib import Path
 
 from services.sqlite_utils import sqlite_connect
-from typing import List, Dict, Tuple
+from typing import Dict, Iterable, List, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,16 @@ _STOPWORDS = {
     'than', 'too', 'very', 'can', 'just', 'should', 'now'
 }
 
-_TOKEN_RE = re.compile(r'\b[a-z0-9]+\b')
+# Letters and digits in any script, split on everything else, including the
+# underscore. The earlier pattern (word boundaries around [a-z0-9]+) treated
+# "_" as a word character and so dropped snake_case names and codes like
+# ERR_4021 from the index altogether, along with all non-ASCII text.
+_TOKEN_RE = re.compile(r'[^\W_]+')
+
+# Bump when tokenization changes: an index built by an older tokenizer is
+# rebuilt from the stored chunk text the next time its collection opens
+# (see VectorStore._rebuild_bm25).
+TOKENIZER_VERSION = 2
 
 # SQLite's default host-parameter limit is 999; stay under it for IN (...).
 _IN_CLAUSE_BATCH = 900
@@ -62,6 +71,9 @@ class BM25Index:
         self.db_path = db_path
         self.k1 = k1
         self.b = b
+        # True when documents indexed by an older tokenizer are present; the
+        # owner rebuilds from chunk text, then calls mark_tokenizer_current().
+        self.needs_rebuild = False
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -96,8 +108,28 @@ class BM25Index:
                     "search requires. Use a standard CPython build (3.9+)."
                 ) from e
 
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS bm25_meta (key TEXT PRIMARY KEY, value TEXT)"
+            )
+
             migrated = self._migrate_legacy(conn)
             conn.commit()
+
+            row = conn.execute(
+                "SELECT value FROM bm25_meta WHERE key = 'tokenizer_version'"
+            ).fetchone()
+            has_docs = conn.execute("SELECT 1 FROM bm25_docs LIMIT 1").fetchone()
+            if row is not None and int(row[0]) == TOKENIZER_VERSION:
+                pass
+            elif has_docs:
+                self.needs_rebuild = True
+            else:
+                # Nothing indexed yet, so nothing was tokenized the old way.
+                conn.execute(
+                    "INSERT OR REPLACE INTO bm25_meta (key, value) VALUES ('tokenizer_version', ?)",
+                    (str(TOKENIZER_VERSION),),
+                )
+                conn.commit()
 
         if migrated:
             # Reclaim the space freed by dropping the legacy tables (they were
@@ -154,12 +186,22 @@ class BM25Index:
     def _tokenize(text: str) -> List[str]:
         """Normalize text into index/query tokens.
 
-        Lowercases, keeps alphanumeric tokens of length >= 2, and removes
-        common English stopwords — identical to the pre-FTS5 behavior so
-        existing search semantics are preserved.
+        Lowercases, splits on anything that is not a letter or digit (so
+        ``snake_case`` and ``ERR_4021`` become searchable parts), keeps tokens
+        of length >= 2, and removes common English stopwords.
         """
         tokens = _TOKEN_RE.findall(text.lower())
         return [t for t in tokens if len(t) >= 2 and t not in _STOPWORDS]
+
+    def mark_tokenizer_current(self):
+        """Record that every stored document uses the current tokenizer."""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO bm25_meta (key, value) VALUES ('tokenizer_version', ?)",
+                (str(TOKENIZER_VERSION),),
+            )
+            conn.commit()
+        self.needs_rebuild = False
 
     def _delete_chunks(self, conn: sqlite3.Connection, chunk_ids: List[str]) -> int:
         """Delete chunks by id from both tables. Returns number deleted."""
@@ -288,6 +330,37 @@ class BM25Index:
             """, (match_expr, max(1, int(top_k)))).fetchall()
 
         return [(chunk_id, float(score)) for chunk_id, score in rows]
+
+    def rebuild(self, documents: Iterable[Tuple[str, str]], batch_size: int = 500) -> int:
+        """Replace the whole index with ``documents`` in one transaction.
+
+        Used when the tokenizer changed: the old rows are dropped, every chunk
+        is re-tokenized and the tokenizer version is recorded, all inside a
+        single transaction. A failure part-way rolls back, so the old index
+        keeps serving exactly as it was and ``needs_rebuild`` stays set for
+        the next open. Returns the number of chunks indexed.
+        """
+        total = 0
+        with self._connect() as conn:
+            conn.execute("DELETE FROM bm25_fts")
+            conn.execute("DELETE FROM bm25_docs")
+            batch: List[Tuple[str, str]] = []
+            for item in documents:
+                batch.append(item)
+                if len(batch) >= batch_size:
+                    self._insert_documents(conn, batch)
+                    total += len(batch)
+                    batch = []
+            if batch:
+                self._insert_documents(conn, batch)
+                total += len(batch)
+            conn.execute(
+                "INSERT OR REPLACE INTO bm25_meta (key, value) VALUES ('tokenizer_version', ?)",
+                (str(TOKENIZER_VERSION),),
+            )
+            conn.commit()
+        self.needs_rebuild = False
+        return total
 
     def clear(self):
         """Clear all data from the BM25 index."""

@@ -878,7 +878,7 @@ class DocumentIndexer:
         top_k: int = 10,
         ai_service=None,
         ai_options: Optional[AIOptions] = None,
-        mode: SearchMode = SearchMode.SEMANTIC,
+        mode: SearchMode = SearchMode.AUTO,
         semantic_weight: float = 0.7,
         collection_overview: Optional[str] = None,
         structured_context: Optional[str] = None,
@@ -893,8 +893,12 @@ class DocumentIndexer:
             top_k: Number of results to return
             ai_service: Optional AIService instance (created from user's API key)
             ai_options: Optional AI feature flags
-            mode: Search mode (semantic, keyword, or hybrid)
-            semantic_weight: Weight for semantic search in hybrid mode (0-1)
+            mode: Search mode. ``auto`` (default) runs hybrid retrieval with a
+                per-query balance (services/retrieval_planner.py) and falls
+                back to keyword search if the embedding model is unavailable;
+                ``semantic``, ``keyword`` and ``hybrid`` force one strategy.
+            semantic_weight: Weight for semantic search in hybrid mode (0-1);
+                the base balance for ``auto``
             filters: Optional metadata pre-filter dict. Recognized keys:
                 document_ids, source_formats, filenames, date_from, date_to.
                 Restricts retrieval to chunks whose document matches before
@@ -903,7 +907,19 @@ class DocumentIndexer:
         Returns:
             Dict with 'results', and optionally 'enhanced_query', 'synthesis', 'ai_usage'
         """
-        logger.info(f"Searching for: {query[:100]} (mode={mode.value})")
+        # ``auto`` resolves to a concrete hybrid balance before anything else
+        # looks at the mode, so every later branch deals in real strategies.
+        plan = None
+        if mode == SearchMode.AUTO:
+            from services.retrieval_planner import plan_retrieval
+            plan = plan_retrieval(query, base_weight=semantic_weight)
+            mode, semantic_weight = plan.mode, plan.semantic_weight
+        retrieval_reason = plan.reason if plan else "fixed by request"
+        query_embedding = None
+        logger.info(
+            f"Searching for: {query[:100]} (mode={mode.value}"
+            f"{', auto: ' + retrieval_reason if plan else ''})"
+        )
 
         # Resolve the metadata pre-filter to a concrete set of allowed chunk_ids.
         # None => no restriction. Empty set => filter matched nothing; bail early.
@@ -937,6 +953,18 @@ class DocumentIndexer:
         mult = max(1, getattr(_settings, "reranker_candidate_multiplier", 5))
         fetch_k = min(top_k * mult, 50) if want_wider_pool else top_k
 
+        # Under ``auto`` the person never chose embeddings, so a missing
+        # embedding model (offline box that hasn't been seeded yet) must not
+        # turn into an error: answer from keywords and say so.
+        if plan is not None:
+            from services.embedder import EmbeddingUnavailable
+            try:
+                query_embedding = self.embedding_service.embed_query(query)
+            except EmbeddingUnavailable as e:
+                logger.warning(f"Embeddings unavailable; auto search is using keywords only: {e}")
+                mode = SearchMode.KEYWORD
+                retrieval_reason = "embedding model unavailable, keywords only"
+
         # Perform search based on mode
         if mode == SearchMode.KEYWORD:
             # Pure BM25 keyword search. When filtering, pull the full ranked list
@@ -950,7 +978,8 @@ class DocumentIndexer:
             results = self._bm25_to_search_results(bm25_results)
         elif mode == SearchMode.HYBRID:
             # Combined semantic + keyword search
-            query_embedding = self.embedding_service.embed_query(query)
+            if query_embedding is None:
+                query_embedding = self.embedding_service.embed_query(query)
             results = self.vector_store.search_hybrid(
                 query=query,
                 query_embedding=query_embedding,
@@ -960,7 +989,8 @@ class DocumentIndexer:
             )
         else:
             # Default: pure semantic search
-            query_embedding = self.embedding_service.embed_query(query)
+            if query_embedding is None:
+                query_embedding = self.embedding_service.embed_query(query)
             results = self.vector_store.search(
                 query_embedding, top_k=fetch_k, allowed_chunk_ids=allowed_chunk_ids
             )
@@ -977,7 +1007,7 @@ class DocumentIndexer:
                 results=results,
                 fetch_k=fetch_k,
                 mode=mode,
-                query_embedding=locals().get("query_embedding"),
+                query_embedding=query_embedding,
                 allowed_chunk_ids=allowed_chunk_ids,
             )
 
@@ -1096,6 +1126,13 @@ class DocumentIndexer:
             "results": results,
             "synthesis": synthesis,
             "ai_usage": ai_usage,
+            "retrieval": {
+                "requested": "auto" if plan else mode.value,
+                "mode": mode.value,
+                "semantic_weight": semantic_weight if mode == SearchMode.HYBRID else None,
+                "reason": retrieval_reason,
+                "reranked": reranked_locally,
+            },
         }
 
     def list_documents_page(self, limit: int, offset: int = 0, q: str = "",

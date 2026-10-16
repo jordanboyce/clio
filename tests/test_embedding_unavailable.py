@@ -116,7 +116,15 @@ def test_api_lists_sources_and_answers_503_on_search(unavailable_model, monkeypa
     assert listing.status_code == 200, listing.text
     assert listing.json()["documents"] == []
 
-    resp = client.post("/search", json={"query": "anything", "top_k": 3, "collection_id": "default"})
+    # Automatic matching degrades to keywords instead of failing, and says so.
+    auto = client.post("/search", json={"query": "anything", "top_k": 3, "collection_id": "default"})
+    assert auto.status_code == 200, auto.text
+    assert auto.json()["retrieval"]["mode"] == "keyword"
+    assert "unavailable" in auto.json()["retrieval"]["reason"]
+
+    # A search that was explicitly told to use embeddings still reports why it cannot.
+    resp = client.post("/search", json={"query": "anything", "top_k": 3, "mode": "semantic",
+                                        "collection_id": "default"})
     assert resp.status_code == 503, resp.text
     body = resp.json()
     assert body["code"] == "embedding_unavailable"

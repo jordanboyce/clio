@@ -203,6 +203,7 @@ async def search_documents(
             total_results=len(results),
             synthesis=search_result.get("synthesis"),
             ai_usage=search_result.get("ai_usage"),
+            retrieval=search_result.get("retrieval"),
         )
 
     except EmbeddingUnavailable:

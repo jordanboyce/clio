@@ -86,14 +86,20 @@
               />
             </label>
 
-            <label class="flex items-center justify-between">
-              <span class="text-sm">Search mode</span>
-              <select v-model="searchMode" class="select select-bordered select-xs" aria-label="Search mode">
-                <option value="semantic">Semantic</option>
-                <option value="keyword">Keyword</option>
-                <option value="hybrid">Hybrid</option>
-              </select>
-            </label>
+            <div class="space-y-1">
+              <label class="flex items-center justify-between gap-2">
+                <span class="text-sm">Matching</span>
+                <select v-model="searchMode" class="select select-bordered select-xs" aria-label="Matching">
+                  <option value="auto">Automatic</option>
+                  <option value="hybrid">Meaning + keywords</option>
+                  <option value="semantic">Meaning only</option>
+                  <option value="keyword">Keywords only</option>
+                </select>
+              </label>
+              <p v-if="searchMode === 'auto'" class="text-xs text-base-content/50">
+                Blends meaning and exact words, leaning on exact words for codes, names and quotes. Recommended.
+              </p>
+            </div>
 
             <label v-if="hasWeight && searchMode === 'hybrid'" class="space-y-1 block">
               <span class="text-sm">Semantic weight: {{ Math.round(semanticWeight * 100) }}%</span>
@@ -176,7 +182,7 @@ defineEmits(['switch-tab'])
 // doesn't bind them the corresponding control is hidden.
 const open = defineModel('open', { type: Boolean, default: false })
 const topK = defineModel('topK', { type: Number, default: 10 })
-const searchMode = defineModel('searchMode', { type: String, default: 'hybrid' })
+const searchMode = defineModel('searchMode', { type: String, default: 'auto' })
 const semanticWeight = defineModel('semanticWeight', { type: Number, default: undefined })
 const rerank = defineModel('rerank', { type: Boolean, default: false })
 const synthesize = defineModel('synthesize', { type: Boolean, default: undefined })
@@ -204,9 +210,9 @@ const displayName = getProviderDisplayName
 // (and therefore the same persistence) as the Advanced knobs.
 
 const PRESETS = [
-  { key: 'fast',     label: 'Fast',     values: { topK: 5,  mode: 'semantic', semanticWeight: 0.7, rerank: false } },
-  { key: 'balanced', label: 'Balanced', values: { topK: 10, mode: 'hybrid',   semanticWeight: 0.7, rerank: true } },
-  { key: 'thorough', label: 'Thorough', values: { topK: 20, mode: 'hybrid',   semanticWeight: 0.6, rerank: true } },
+  { key: 'fast',     label: 'Fast',     values: { topK: 5,  mode: 'auto', semanticWeight: 0.7, rerank: false } },
+  { key: 'balanced', label: 'Balanced', values: { topK: 10, mode: 'auto', semanticWeight: 0.7, rerank: true } },
+  { key: 'thorough', label: 'Thorough', values: { topK: 20, mode: 'auto', semanticWeight: 0.7, rerank: true } },
 ]
 
 const activePreset = computed(() => {
@@ -215,8 +221,8 @@ const activePreset = computed(() => {
     if (
       topK.value === v.topK &&
       searchMode.value === v.mode &&
-      rerank.value === v.rerank &&
-      (!hasWeight.value || Math.abs(semanticWeight.value - v.semanticWeight) < 0.001)
+      rerank.value === v.rerank
+      // The weight is not compared: 'auto' ignores it.
     ) return p.key
   }
   return null

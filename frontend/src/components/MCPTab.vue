@@ -337,9 +337,10 @@
                 <div class="form-control">
                   <label class="label p-0 pb-1" for="mcp-default-mode"><span class="label-text font-medium">Default search mode</span></label>
                   <select id="mcp-default-mode" v-model="mcpSettings.mcp_mode" class="select select-bordered w-full">
-                    <option value="semantic">Semantic</option>
-                    <option value="keyword">Keyword</option>
-                    <option value="hybrid">Hybrid</option>
+                    <option value="auto">Automatic (recommended)</option>
+                    <option value="hybrid">Meaning + keywords (fixed blend)</option>
+                    <option value="semantic">Meaning only</option>
+                    <option value="keyword">Keywords only</option>
                   </select>
                 </div>
                 <div class="form-control">
@@ -470,7 +471,7 @@ const mcpSettings = ref({
   enable_mcp: true,
   mcp_default_collection: 'default',
   mcp_top_k: 5,
-  mcp_mode: 'semantic',
+  mcp_mode: 'auto',
   mcp_semantic_weight: 0.7,
   mcp_include_sources: true,
   mcp_max_source_length: 500,
