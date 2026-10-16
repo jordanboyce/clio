@@ -82,6 +82,9 @@
            warnings and user reports waiting for a decision -->
       <ReviewBell variant="header" @open="openReview" />
 
+      <!-- Source updates: what changed in watched folders and git repositories -->
+      <ChangesBell />
+
       <!-- Help menu (desktop; phones get it in the overflow menu) -->
       <div class="dropdown dropdown-end hidden md:block">
         <button tabindex="0" class="btn btn-ghost btn-circle btn-sm" title="Help" aria-label="Help menu" aria-haspopup="menu">
@@ -1336,6 +1339,7 @@ import SourcesSidebar from './components/SourcesSidebar.vue'
 import StudioSidebar from './components/StudioSidebar.vue'
 import WorkspaceNav from './components/WorkspaceNav.vue'
 import ReviewBell from './components/ReviewBell.vue'
+import ChangesBell from './components/ChangesBell.vue'
 import ModelPicker from './components/ModelPicker.vue'
 import CollectionPicker from './components/CollectionPicker.vue'
 import ExportCollectionModal from './components/ExportCollectionModal.vue'

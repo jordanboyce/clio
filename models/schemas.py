@@ -538,6 +538,33 @@ class SyncFolderRequest(BaseModel):
         False,
         description="Remove documents this folder was synced from whose file no longer exists",
     )
+    watch: Optional[bool] = Field(
+        None,
+        description="Keep this folder up to date automatically and raise Updates when it changes. "
+                    "Omitted leaves the folder's current setting alone.",
+    )
+    interval_minutes: Optional[int] = Field(None, ge=1, le=10080, description="How often a watched source is checked")
+
+
+class SyncGitRequest(BaseModel):
+    """Request for indexing a remote git repository (shallow clone, one branch)."""
+
+    url: str = Field(..., description="https:// or ssh:// repository address (no credentials in it)")
+    branch: Optional[str] = Field(None, description="Branch to follow; the remote's default when omitted")
+    collection_id: str = Field("default", description="Collection to sync into")
+    file_extensions: Optional[List[str]] = Field(None, description="Extensions to include; all supported files when unset")
+    exclude_patterns: Optional[List[str]] = Field(None, description="Glob patterns to exclude")
+    watch: bool = Field(False, description="Check the remote on a schedule and raise Updates when it moves")
+    interval_minutes: Optional[int] = Field(None, ge=1, le=10080)
+
+
+class SyncWatchRequest(BaseModel):
+    """Turn watching of a remembered source on or off."""
+
+    collection_id: str = "default"
+    path: str = Field(..., description="The source's path as listed by /documents/sync-folders")
+    watch: bool
+    interval_minutes: Optional[int] = Field(None, ge=1, le=10080)
 
 
 class SyncFolderResponse(BaseModel):
@@ -574,6 +601,15 @@ class SyncFolderRecord(BaseModel):
     exclude_patterns: Optional[List[str]] = None
     prune_missing: bool = False
     exists: bool = Field(True, description="Whether the folder is still present on disk")
+    git: bool = Field(False, description="The folder is a git work tree (listed by git, HEAD tracked)")
+    git_url: Optional[str] = Field(None, description="Remote address for a managed clone")
+    git_branch: Optional[str] = None
+    git_head: Optional[str] = None
+    watch: bool = False
+    interval_minutes: Optional[int] = None
+    last_checked_at: Optional[str] = None
+    last_error: Optional[str] = None
+    label: Optional[str] = Field(None, description="Display name (the repository name for a remote clone)")
 
 
 class SyncFoldersResponse(BaseModel):

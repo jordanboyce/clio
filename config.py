@@ -487,6 +487,32 @@ class Settings(BaseSettings):
     bulk_flush_chunks: int = 256
     bulk_extract_workers: int = 4
 
+    # Git repositories as sources (services/git_source.py). Local checkouts are
+    # read with `git ls-files`, so .gitignore is honoured. Remote repositories
+    # are shallow-cloned under DATA_DIR/repos. GIT_ALLOWED_HOSTS (comma
+    # separated, "*.corp.example" allowed) is the allowlist: when set, only
+    # those hosts may be cloned, private addresses included, which is how an
+    # on-prem git server is reached. When empty, public hosts only, and
+    # OFFLINE_MODE refuses remote clones entirely. Credentials never go in the
+    # address: GIT_HTTP_TOKEN (sent over https only, and only to a host in
+    # GIT_ALLOWED_HOSTS, since anyone who can add a source can type an
+    # address) or an ssh key / credential helper on the server.
+    git_allowed_hosts: str = ""
+    git_http_user: str = "x-access-token"
+    git_http_token: str = ""
+    git_timeout_seconds: int = 300
+
+    # Change alerts. A watched source (Sources panel, "Watch") is re-synced on
+    # its own and every real change is recorded in the Updates feed. When
+    # ALERT_WEBHOOK_URL is set each change is also POSTed there as JSON
+    # (Slack/Teams/ntfy/any internal endpoint); ALERT_WEBHOOK_SECRET signs the
+    # body (HMAC-SHA256 in X-Clio-Signature). Set by the operator, never by
+    # an API caller, so it may point at an internal host. 0 disables the loop.
+    source_watch_tick_seconds: int = 60
+    source_watch_default_minutes: int = 15
+    alert_webhook_url: str = ""
+    alert_webhook_secret: str = ""
+
     # Link indexing: "Add link" fetches the page or file behind a URL into
     # the collection's documents directory and indexes the saved copy like
     # an upload. The server makes the request, so by default it refuses

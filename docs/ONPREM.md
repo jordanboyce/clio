@@ -161,6 +161,27 @@ to know: hosted providers see your document text at index time, and
 re-indexing every collection, since the vectors are not comparable across
 models.
 
+## Git repositories and change alerts
+
+Point Clio at your internal git server and it keeps a collection current and
+tells people when the code or documents change:
+
+```bash
+GIT_ALLOWED_HOSTS=git.corp.example          # the only hosts that may be cloned
+GIT_HTTP_TOKEN=<read-only token>            # https, sent only to allowlisted hosts; or mount an ssh key for ssh:// and git@host: addresses
+ALERT_WEBHOOK_URL=https://chat.corp.example/hooks/clio   # optional
+ALERT_WEBHOOK_SECRET=<shared secret>                     # signs each POST (X-Clio-Signature)
+```
+
+`OFFLINE_MODE=1` normally refuses remote clones; an allowlisted host is the
+exception, so an air-gapped site can still follow a repository on its own
+network. Local checkouts need none of this: add the folder and Clio reads it
+with `git ls-files`, so `.gitignore` is respected. Clones are read-only,
+shallow and live under `DATA_DIR/repos`. Turn on **Watch** for a source in the
+Sources panel and every real change appears in the header's Updates bell, the
+MCP `list_changes` tool and, if configured, the webhook. The image includes
+`git` and the ssh client.
+
 ## Who can reach it
 
 There is no per-user isolation by default: everyone who can reach the port
