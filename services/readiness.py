@@ -49,8 +49,24 @@ def _secure_or(secure_status: str, other: str = WARN) -> str:
     return secure_status if is_secure_profile() else other
 
 
-def _reachable_beyond_host() -> bool:
-    return settings.host not in _LOOPBACK_HOSTS
+def reachable_beyond_host(cfg=None) -> bool:
+    """Can another machine open the port?
+
+    HOST decides, except inside a container, where HOST is always 0.0.0.0
+    and the published interface (BIND_ADDRESS, passed through by compose) is
+    what actually limits exposure. A loopback publish is loopback.
+
+    ``cfg`` lets a caller that holds a fresher Settings (main.py after a
+    reload under test) be judged on that rather than the one imported here.
+    """
+    cfg = cfg if cfg is not None else settings
+    if cfg.host in _LOOPBACK_HOSTS:
+        return False
+    bind = cfg.bind_address.strip()
+    return not bind or bind not in _LOOPBACK_HOSTS
+
+
+_reachable_beyond_host = reachable_beyond_host
 
 
 def _has_gate() -> Optional[str]:

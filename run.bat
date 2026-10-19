@@ -21,10 +21,14 @@ if not exist "venv\.installed" (
     type nul > venv\.installed
 )
 
-REM Create .env if it doesn't exist
+REM First run: decide who can reach the app (only this machine, or others on
+REM the network behind a shared password) and write .env. Re-run
+REM `python scripts\setup.py` any time to change it.
 if not exist ".env" (
-    echo Creating .env file from template...
-    copy .env.example .env
+    echo.
+    python scripts\setup.py
+    if not exist ".env" copy .env.example .env
+    echo.
 )
 
 REM Build the frontend if no build exists yet (requires Node.js)

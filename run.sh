@@ -21,10 +21,13 @@ if [ ! -f "venv/.installed" ]; then
     touch venv/.installed
 fi
 
-# Create .env if it doesn't exist
+# First run: decide who can reach the app (only this machine, or others on
+# the network behind a shared password) and write .env. Re-run
+# `python scripts/setup.py` any time to change it.
 if [ ! -f ".env" ]; then
-    echo "Creating .env file from template..."
-    cp .env.example .env
+    echo ""
+    python scripts/setup.py || cp .env.example .env
+    echo ""
 fi
 
 # Build the frontend if no build exists yet (requires Node.js)

@@ -188,6 +188,20 @@ def test_loopback_without_password_is_quiet(reloaded_main, caplog):
     assert not any("SECURITY" in r.message for r in caplog.records)
 
 
+def test_loopback_publish_in_docker_is_quiet(reloaded_main, caplog):
+    """Inside a container HOST is 0.0.0.0, but compose publishes the port on
+    127.0.0.1 and says so with BIND_ADDRESS; that is not network exposure."""
+    with caplog.at_level("WARNING"):
+        reloaded_main(HOST="0.0.0.0", BIND_ADDRESS="127.0.0.1", AUTH_PASSWORD="")
+    assert not any("SECURITY" in r.message for r in caplog.records)
+
+
+def test_network_publish_in_docker_still_warns(reloaded_main, caplog):
+    with caplog.at_level("WARNING"):
+        reloaded_main(HOST="0.0.0.0", BIND_ADDRESS="0.0.0.0", AUTH_PASSWORD="")
+    assert any("SECURITY" in r.message for r in caplog.records)
+
+
 def test_wildcard_cors_without_password_warns(reloaded_main, caplog):
     with caplog.at_level("WARNING"):
         reloaded_main(HOST="127.0.0.1", AUTH_PASSWORD="", CORS_ALLOW_ORIGINS="*")

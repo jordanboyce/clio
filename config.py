@@ -205,6 +205,12 @@ class Settings(BaseSettings):
     # because there the container boundary is what limits exposure.
     host: str = "127.0.0.1"
     port: int = 8473
+    # The host interface a container's port is published on. docker-compose
+    # passes its BIND_ADDRESS through so the posture checks can tell a
+    # loopback-only publish (nobody else can reach it, no password needed)
+    # from a network one, even though HOST is always 0.0.0.0 inside the
+    # container. Empty outside Docker: HOST alone decides.
+    bind_address: str = ""
 
     # CORS: comma-separated list of allowed browser origins, or "*" for any.
     # Empty (the default) sends no CORS headers, so only the same origin can

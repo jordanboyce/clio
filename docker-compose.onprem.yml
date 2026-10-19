@@ -38,6 +38,9 @@ services:
       - DATA_DIR=/app/data
       - HOST=0.0.0.0
       - PORT=8473
+      # The interface the port is published on, so the posture checks and
+      # the secure profile judge real exposure rather than HOST=0.0.0.0.
+      - BIND_ADDRESS=${BIND_ADDRESS:-127.0.0.1}
       # Search embeddings stay on this machine. The picker in Settings can
       # switch to a hosted API, which OFFLINE_MODE then refuses.
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-local}

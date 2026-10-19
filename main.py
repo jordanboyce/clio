@@ -137,14 +137,17 @@ def _check_security_posture() -> None:
             f" (model {settings.ai_model})" if settings.ai_model else "",
         )
 
-    if settings.host not in _LOOPBACK_HOSTS and not (
+    # Inside Docker HOST is always 0.0.0.0; readiness also looks at the
+    # published interface (BIND_ADDRESS) so a loopback-only container does
+    # not warn about a network it is not on.
+    if readiness.reachable_beyond_host(settings) and not (
         settings.auth_password or identity_service.requires_identity()
     ):
         logger.warning(
             "SECURITY: bound to %s (reachable from the network) with no "
             "authentication requirement set. Anyone who can reach this port can read, "
             "modify and delete every document, and spend your AI provider "
-            "credits. Set AUTH_PASSWORD, or set "
+            "credits. Set AUTH_PASSWORD (python scripts/setup.py --password), or set "
             "HOST=127.0.0.1 to bind loopback only. See docs/DEPLOYMENT.md.",
             settings.host,
         )

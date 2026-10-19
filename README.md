@@ -99,7 +99,8 @@ through the app's access checks.
 # 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Start the server
+# 2. Start the server (no configuration needed: only this machine can reach it,
+#    and nothing asks for a password)
 python main.py
 
 # 3. Open your browser
@@ -123,7 +124,7 @@ open http://localhost:8473
 
 That's the whole setup — the image builds the frontend, bundles OCR (Tesseract + Poppler), bakes the embedding model into the image, and persists documents/indexes in `./data`. No `.env` is required to start; add one to override defaults. For corporate CA certificates, drop `.crt` files into `certs/ca/` before building (see [Corporate SSL Configuration](#corporate-ssl-configuration)).
 
-`docker compose up -d` publishes port 8473 to **127.0.0.1 only**, so nothing else on your network can reach it. There is no account to create and no sign-in: open the browser, add sources, ask.
+`docker compose up -d` publishes port 8473 to **127.0.0.1 only**, so nothing else on your network can reach it. There is no account to create and no sign-in: open the browser, add sources, ask. Whether a password is asked for is your choice, made once in `.env` (see [If others can reach it](#if-others-can-reach-it)); `run.sh` and `run.bat` ask on first run, and `python scripts/setup.py` asks the same question for a Docker install.
 
 Then:
 
@@ -137,12 +138,22 @@ Clio is self-hosted and open source (MIT). Your documents and indexes live in th
 
 ### If others can reach it
 
-Clio has no accounts: anyone who can open the port sees the whole corpus. That is right for a machine only you use. If other people can reach it (a LAN, a server, a VPN), set a shared password in `.env`:
+Clio has no accounts: anyone who can open the port sees the whole corpus. That is right for a machine only you use, and it is the default: no password, reachable from this machine only. If other people can reach it (a LAN, a server, a VPN), choose a shared password. The setup script asks one question and writes the matching settings to `.env`:
+
+```bash
+python scripts/setup.py              # asks: only me, or others on my network?
+python scripts/setup.py --password   # others on the network; generates a password
+python scripts/setup.py --open       # back to this machine only, no password
+```
+
+`run.sh` and `run.bat` run it on first start. The same thing by hand, in `.env`:
 
 ```bash
 AUTH_PASSWORD=choose-a-long-passphrase
 BIND_ADDRESS=0.0.0.0        # Docker only; python main.py uses HOST=0.0.0.0
 ```
+
+A running container picks the change up on the next `docker compose up -d`. A password with the port still on 127.0.0.1 protects nothing and only gets in the way; `python scripts/setup.py --show` points that out.
 
 Browsers prompt for the password natively (any username); API and MCP clients send `Authorization: Bearer <password>`. Agents should use a personal MCP token from the Connect tab instead. For anything beyond a trusted LAN, put a TLS reverse proxy such as Caddy in front, or reach it over Tailscale or WireGuard; [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) has a complete Caddy example.
 

@@ -43,6 +43,9 @@ services:
       - DATA_DIR=/app/data
       - HOST=0.0.0.0
       - PORT=8473
+      # Tell the app which host interface the port above is published on,
+      # so a loopback-only install is not warned about network exposure.
+      - BIND_ADDRESS=${BIND_ADDRESS:-127.0.0.1}
       # Starting point for embeddings: the built-in model inside the container.
       # Settings → Indexing → Embedding can switch to a hosted provider
       # (Google Gemini, Mistral, Voyage, Jina, OpenAI, …) at runtime; that
