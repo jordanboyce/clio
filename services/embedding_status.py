@@ -366,6 +366,14 @@ class EmbeddingStatus:
         error (the model IS ready)."""
         if "PYTEST_CURRENT_TEST" in os.environ or sys.modules.get("pytest") is not None:
             return
+        # The reranker rides along: fetched once, in the background, only
+        # when downloads are allowed and it is not on disk yet.
+        try:
+            from services import reranker
+
+            reranker.warm_in_background()
+        except Exception as e:  # noqa: BLE001 - never an embedding error
+            logger.warning(f"Reranker warm-up could not start: {e}")
         try:
             from services.indexer_manager import indexer_manager
 

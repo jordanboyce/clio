@@ -307,7 +307,9 @@ def test_generic_languages_find_declarations(extractor):
 
 def test_tiny_file_still_yields_one_chunk(doc_extractor, tmp_path):
     path = tmp_path / "tiny.py"
-    path.write_text("x = 1\ny = 2\nz=x+y\n", encoding="utf-8")   # 20 chars over 3 lines
+    # newline="\n": on Windows write_text would translate to CRLF and the
+    # chunk text would carry \r, which is not what the test is about.
+    path.write_text("x = 1\ny = 2\nz=x+y\n", encoding="utf-8", newline="\n")   # 20 chars over 3 lines
     chunks = _chunks(doc_extractor, path)
     assert len(chunks) == 1
     assert chunks[0].text.strip() == "x = 1\ny = 2\nz=x+y"
@@ -352,7 +354,7 @@ def test_utf16_and_bom_files_decode(extractor, tmp_path):
 def test_minified_js_chunks_by_size_with_minified_metadata(doc_extractor, tmp_path):
     path = tmp_path / "bundle.js"
     one_line = "!function(e){" + "var a=e.foo(1);" * 800 + "}(window);"
-    path.write_text(one_line + "\n", encoding="utf-8")
+    path.write_text(one_line + "\n", encoding="utf-8", newline="\n")  # no CRLF on Windows
     chunks = _chunks(doc_extractor, path)
     assert len(chunks) > 1
     assert all(c.symbol_type == "generated" for c in chunks)

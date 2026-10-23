@@ -26,7 +26,7 @@ class _FakeModel:
     "most relevant" text deterministically sorts first.
     """
 
-    def predict(self, pairs):
+    def predict(self, pairs, batch_size=None):
         scores = []
         for query, text in pairs:
             q_tokens = query.lower().split()

@@ -7,7 +7,8 @@
 # certificates and data all arrive at run time (see docs/ONPREM.md). The only
 # build-time choices are which optional model weights to include
 # (OFFLINE_BUNDLE, WITH_DOCLING, BAKE_EMBEDDING), because those are downloads,
-# not config.
+# not config — and SLIM, which drops the optional ML runtimes for a lean
+# image that still indexes, searches, reranks, chats and serves MCP.
 
 # ── Stage 1: build the Vue frontend ──
 # (debian-based node image: the pinned rollup/esbuild natives are glibc builds)
@@ -70,15 +71,27 @@ ENV PATH="/opt/venv/bin:$PATH"
 # It brings torchvision along, installed from the SAME CPU index as torch so
 # the compiled ops match (a PyPI torchvision against index torch segfaults).
 #
-# The image keeps torch (docling and the reranker need it), so both embedding
-# backends are installed: fastembed from requirements.txt and
-# sentence-transformers from requirements-torch.txt.
+# The default image keeps torch (docling and the wider sentence-transformers
+# model catalog need it), so both embedding backends are installed: fastembed
+# from requirements.txt and sentence-transformers from requirements-torch.txt.
+#
+# SLIM=1 builds the lean image: the core requirements only — fastembed (ONNX)
+# serves the embedding model AND the search reranker, so nothing is lost for
+# indexing, search, chat and MCP. What goes: PyTorch, the sentence-transformers
+# catalog, Tesseract/Docling OCR of scanned PDFs and Whisper transcription.
+# About 40% of the size (1.6 GB vs 3.9 GB); the right image for a knowledge base that
+# serves agents:   docker compose build --build-arg SLIM=1
 ARG WITH_DOCLING=0
+ARG SLIM=0
 COPY requirements.txt requirements-torch.txt requirements-ocr.txt requirements-audio.txt requirements-docling.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir "torch==2.11.0" --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir -r requirements.txt -r requirements-torch.txt -r requirements-ocr.txt -r requirements-audio.txt \
-    && if [ "$WITH_DOCLING" = "1" ]; then \
+    && if [ "$SLIM" = "1" ]; then \
+         pip install --no-cache-dir -r requirements.txt; \
+       else \
+         pip install --no-cache-dir "torch==2.11.0" --index-url https://download.pytorch.org/whl/cpu \
+         && pip install --no-cache-dir -r requirements.txt -r requirements-torch.txt -r requirements-ocr.txt -r requirements-audio.txt; \
+       fi \
+    && if [ "$WITH_DOCLING" = "1" ] && [ "$SLIM" != "1" ]; then \
          pip install --no-cache-dir torchvision --index-url https://download.pytorch.org/whl/cpu \
          && pip install --no-cache-dir -r requirements-docling.txt; \
        fi
@@ -102,17 +115,22 @@ WORKDIR /app
 #                     local Docling OCR raised ImportError on the first scanned
 #                     PDF even though the image advertises OCR out of the box.
 # The build-time smoke test below keeps all of this from regressing silently.
+# SLIM=1 skips the OCR packages (no torch, no docling, no tesseract).
+ARG SLIM=0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     git \
     openssh-client \
     libgomp1 \
-    libgl1 \
-    libglib2.0-0 \
-    tesseract-ocr \
-    tesseract-ocr-eng \
-    poppler-utils \
+    && if [ "$SLIM" != "1" ]; then \
+         apt-get install -y --no-install-recommends \
+           libgl1 \
+           libglib2.0-0 \
+           tesseract-ocr \
+           tesseract-ocr-eng \
+           poppler-utils; \
+       fi \
     && rm -rf /var/lib/apt/lists/*
 
 # Corporate CA certificates again, this time for outbound TLS at runtime
@@ -140,8 +158,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 # dlopen the system libs above, and importing them is fast and side-effect-free
 # (importing docling itself would try to resolve model caches).
 ARG WITH_DOCLING=0
-RUN python -c "import torch, faiss, fastembed, sentence_transformers, fastapi, uvicorn, ctranslate2, pytesseract; print('runtime deps ok')" \
-    && if [ "$WITH_DOCLING" = "1" ]; then python -c "import cv2; print('docling deps ok')"; fi
+RUN if [ "$SLIM" = "1" ]; then \
+      python -c "import faiss, fastembed, onnxruntime, fastapi, uvicorn, mcp; from fastembed.rerank.cross_encoder import TextCrossEncoder; print('slim runtime deps ok')"; \
+    else \
+      python -c "import torch, faiss, fastembed, sentence_transformers, fastapi, uvicorn, ctranslate2, pytesseract; print('runtime deps ok')"; \
+    fi \
+    && if [ "$WITH_DOCLING" = "1" ] && [ "$SLIM" != "1" ]; then python -c "import cv2; print('docling deps ok')"; fi
 
 # Bake the embedding model into the image. Cold starts stay fast on platforms
 # with ephemeral filesystems (Railway, Render, Fly), and the container never
@@ -160,6 +182,14 @@ RUN python -c "import torch, faiss, fastembed, sentence_transformers, fastapi, u
 # hosted API) — otherwise the model is fetched at first start instead.
 ARG BAKE_EMBEDDING=1
 ARG EMBEDDING_MODEL=all-MiniLM-L6-v2
+# The reranker rides along with the embedding bake, so a stock image reranks
+# every search from the first query (ENABLE_RERANKER unset = on whenever the
+# model is on disk). RERANKER_MODEL is the name the app is configured with;
+# RERANKER_FASTEMBED_MODEL is fastembed's id for the same weights (the ONNX
+# export; services/reranker.py holds the mapping, which is not on the image
+# yet at this layer). Override both together to bake a different model.
+ARG RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+ARG RERANKER_FASTEMBED_MODEL=Xenova/ms-marco-MiniLM-L-6-v2
 ENV HF_HOME=/opt/hf-cache
 # Best effort: a build behind a firewall that blocks huggingface.co must
 # still produce a working image. If the bake cannot download, the build
@@ -167,8 +197,11 @@ ENV HF_HOME=/opt/hf-cache
 # progress) at first start, or Ollama / a hosted provider instead.
 RUN if [ "$BAKE_EMBEDDING" = "1" ]; then \
       ( python -c "from fastembed import TextEmbedding; m='${EMBEDDING_MODEL}'; TextEmbedding(m if '/' in m else 'sentence-transformers/' + m, cache_dir='/opt/clio/models/fastembed')" \
-        && python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL}')" ) \
+        && ( [ "$SLIM" = "1" ] || python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL}')" ) ) \
       || echo "WARNING: could not bake the embedding model '${EMBEDDING_MODEL}' (huggingface.co unreachable from this build?). The image still works: the app downloads it at first start, or pick Ollama / a hosted provider. See docs/AIRGAP.md to pre-seed."; \
+      ( python -c "from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder('${RERANKER_FASTEMBED_MODEL}', cache_dir='/opt/clio/models/fastembed')" \
+        && ( [ "$SLIM" = "1" ] || python -c "from sentence_transformers import CrossEncoder; CrossEncoder('${RERANKER_MODEL}')" ) ) \
+      || echo "WARNING: could not bake the reranker '${RERANKER_MODEL}'. Search still works, in retrieval order; the app fetches the reranker at first start when it can. See docs/AIRGAP.md to pre-seed."; \
     fi
 
 # Optional full offline bundle for air-gapped deployments: additionally bake

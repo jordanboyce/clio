@@ -1052,8 +1052,10 @@ class DocumentIndexer:
         reranked_locally = False
         if local_reranker is not None and len(results) > 1:
             try:
-                results = local_reranker.rerank(query, results, top_k)
-                reranked_locally = True
+                # False when the reranker shed the request under load
+                # (RERANK_MAX_CONCURRENT / RERANK_QUEUE_TIMEOUT_SECONDS):
+                # the response then says so in `retrieval.reranked`.
+                results, reranked_locally = local_reranker.rerank_with_status(query, results, top_k)
             except Exception as e:
                 logger.warning(f"Local reranking failed, using retrieval order: {e}")
 
