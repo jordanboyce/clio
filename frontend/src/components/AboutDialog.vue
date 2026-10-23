@@ -81,7 +81,7 @@
         <a href="https://github.com/jordanboyce/clio#readme" target="_blank" rel="noopener" class="link link-hover text-base-content/70">Documentation</a>
         <span class="text-base-content/25">·</span>
         <a href="https://github.com/jordanboyce/clio/blob/master/LICENSE" target="_blank" rel="noopener" class="link link-hover text-base-content/70">MIT License</a>
-        <span class="ml-auto text-base-content/40">Part of the Prometheus ecosystem</span>
+        <span class="ml-auto text-base-content/40">The record remembers.</span>
       </div>
     </div>
     <form method="dialog" class="modal-backdrop"><button aria-label="Close">close</button></form>

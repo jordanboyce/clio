@@ -1,8 +1,7 @@
 # Rebrand: Asymptote → Clio
 
-The project was renamed from **Asymptote** to **Clio** to align with the DOE
-Prometheus ecosystem. Clio — Muse of history, daughter of Mnemosyne — keeps the
-record; Prometheus brings the fire. Tagline: *The record remembers.*
+The project was renamed from **Asymptote** to **Clio**: the Muse of history,
+the one who keeps the record. Tagline: *The record remembers.*
 
 ## What changed
 

@@ -11,10 +11,7 @@ whatever model you trust, hosted or on your own hardware. Nothing in the
 product depends on a cloud service, there are no accounts to create, and the
 default install needs no configuration at all.
 
-Clio is part of the DOE **Prometheus** ecosystem: Prometheus brings the fire
-(compute, models); Clio keeps the record (grounded, citable knowledge). The
-name — Clio, Muse of history, daughter of Mnemosyne — leaves room for a future
-family of related tools under the Mnemosyne umbrella.
+The name is Clio, the Muse of history: the record remembers.
 
 [Deployment](docs/DEPLOYMENT.md) · [Architecture](docs/ARCHITECTURE.md) ·
 [Roadmap](docs/ROADMAP.md) · [Agentic research guide](docs/AGENTIC_RESEARCH.md) ·
