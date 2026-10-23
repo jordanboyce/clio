@@ -164,13 +164,37 @@ class Settings(BaseSettings):
     # caller, including the MCP tools. When enabled, retrieval fetches a wider
     # candidate pool (top_k * reranker_candidate_multiplier, capped) and the
     # cross-encoder reorders it down to top_k.
-    # Unset (the default) means automatic: on exactly when sentence-transformers
-    # is installed AND the model is already in the local cache, so it never
-    # triggers a download and a disconnected install just uses it. Set true to
-    # force it on (the model may download), false to force it off.
+    # Unset (the default) means automatic: on exactly when the model is already
+    # on disk for an installed backend. Search never waits on a download: the
+    # Docker image bakes the model next to the embedding model, and on a
+    # connected install the startup warm-up fetches it once in the background
+    # (never under OFFLINE_MODE / HF_HUB_OFFLINE). Set true to force it on
+    # (the model may download on first use), false to force it off.
     enable_reranker: Optional[bool] = None
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    reranker_candidate_multiplier: int = 5
+    # Which in-process runtime serves the model: auto picks fastembed (the
+    # ONNX export on onnxruntime — already installed for embeddings, no
+    # PyTorch) when it has the model, else sentence-transformers.
+    reranker_backend: Literal["auto", "fastembed", "sentence-transformers"] = "auto"
+    # Candidates the cross-encoder scores: top_k * multiplier (capped at 50).
+    # Its cost is linear in that pool, and the gain is in reordering the top
+    # of it: 3x reorders what matters at under half the cost of 5x.
+    # Measured (scripts/retrieval_bench.py, 2026-10-23): 2x, 3x and 5x ranked
+    # the fixture corpus identically while p50 latency went 315 / 500 / 792 ms,
+    # so 5x buys nothing; 3x keeps headroom for first-stage misses on large
+    # collections that the small fixture cannot show.
+    reranker_candidate_multiplier: int = 3
+    # Cross-encoder passes in flight at once (0 = unbounded). One pass uses
+    # every core, so more parallel passes only thrash. A search that waits
+    # longer than the timeout for a slot answers in retrieval order instead
+    # (`retrieval.reranked` is false on that response): bounded latency under
+    # a burst of agent calls beats a precise ordering that arrives too late.
+    # Measured (scripts/retrieval_bench.py, 2026-10-23, eight parallel callers,
+    # 12 cores): 2 slots gave 5.6 queries/s and p95 1.9 s against 2.7 queries/s
+    # and p95 3.3 s unbounded, shedding 60% of searches to retrieval order at
+    # no measured recall cost.
+    rerank_max_concurrent: int = 2
+    rerank_queue_timeout_seconds: float = 1.0
 
     # Entity-graph retrieval boost (services/entity_graph.py). Entities are
     # extracted heuristically per chunk at index time (proper nouns, acronyms,
@@ -366,6 +390,17 @@ class Settings(BaseSettings):
     # question). Set a per-token budget only for abuse protection on a shared
     # deployment; it is keyed on the personal token, not the IP.
     rate_limit_mcp_per_minute: int = 0
+
+    # Worker threads for everything the event loop hands off: sync endpoints
+    # (chat turns, uploads), every MCP tool, document reads and table queries.
+    # Both pools the app uses — asyncio's default executor (asyncio.to_thread,
+    # which the MCP tools use) and anyio's limiter (FastAPI's sync handlers) —
+    # are set to this size at startup. Python's own default for the former is
+    # min(32, cpus + 4): on a 4-vCPU host that is 8 threads, so the ninth
+    # concurrent agent call queued behind the others. 64 keeps a few dozen
+    # agents' tool calls in flight; the threads are cheap when idle, and the
+    # real ceiling is CPU. A chat turn holds one slot for its whole loop.
+    worker_threads: int = 64
 
     # research_documents runs up to seven retrieval branches against the
     # vector index and metadata store. Parallel research calls compete for

@@ -52,10 +52,27 @@ def fetch_fastembed(model_name: str) -> str:
 
 
 def fetch_reranker(model_name: str) -> str:
-    from sentence_transformers import CrossEncoder
+    """Seed the reranker for whichever backend the runtime will use.
 
-    CrossEncoder(model_name)
-    return f"reranker '{model_name}'"
+    fastembed's ONNX export is the primary copy (into the image cache, so an
+    offline container starts warm). The sentence-transformers copy is added
+    when that package is installed, so a RERANKER_BACKEND switch stays offline.
+    """
+    repo = os.environ.get("CLIO_ROOT") or os.getcwd()
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    from services import reranker
+    from services.embedder import FASTEMBED_IMAGE_CACHE, sentence_transformers_importable
+
+    notes = []
+    if reranker.resolve_backend(model_name, "fastembed"):
+        os.environ.setdefault("CLIO_MODEL_BAKE_DIR", str(FASTEMBED_IMAGE_CACHE))
+        notes.append(reranker.prefetch(model_name, "fastembed"))
+    if sentence_transformers_importable():
+        notes.append(reranker.prefetch(model_name, "sentence-transformers"))
+    if not notes:
+        raise RuntimeError("no reranker backend installed (fastembed or sentence-transformers)")
+    return "; ".join(notes)
 
 
 def fetch_whisper(model_size: str) -> str:
@@ -118,9 +135,13 @@ def main() -> int:
 
     steps = [
         ("fastembed", lambda: fetch_fastembed(args.embedding_model), True),
-        ("embedding", lambda: fetch_embedding(args.embedding_model), True),
         ("reranker", lambda: fetch_reranker(args.reranker_model), True),
     ]
+    try:
+        import sentence_transformers  # noqa: F401
+        steps.insert(1, ("embedding", lambda: fetch_embedding(args.embedding_model), True))
+    except ImportError:
+        print("[prefetch] sentence-transformers not installed: PyTorch copies skipped (fastembed serves them)")
     if not args.skip_whisper:
         steps.append(("whisper", lambda: fetch_whisper(args.whisper_model), False))
     if not args.skip_docling:

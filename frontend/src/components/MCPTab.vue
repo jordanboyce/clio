@@ -497,6 +497,8 @@ const configTabs = [
   { key: 'copilot', label: 'VS Code' },
   { key: 'windsurf', label: 'Windsurf' },
   { key: 'anythingllm', label: 'AnythingLLM' },
+  { key: 'hermes', label: 'Hermes Agent' },
+  { key: 'generic', label: 'Any MCP client' },
 ]
 
 // Client configs are generated locally — the server URL plus a collection_id
@@ -577,6 +579,18 @@ const activeTabMeta = computed(() => {
       content: JSON.stringify({ mcpServers: { [serverId.value]: { url: serverUrl.value, headers } } }, null, 2),
       filename: '.cursor/mcp.json',
       hint: 'Save as .cursor/mcp.json in your project (or ~/.cursor/mcp.json for every project), then enable the server under Cursor Settings → MCP. Keep the credential private.',
+    },
+    hermes: {
+      label: 'Hermes Agent config',
+      content: `mcp_servers:\n  ${serverId.value}:\n    url: "${serverUrl.value}"\n    headers:\n      Authorization: "Bearer ${authHeaderValue.value}"\n`,
+      filename: '~/.hermes/config.yaml',
+      hint: 'Merge this entry under mcp_servers in ~/.hermes/config.yaml. Hermes connects over streamable HTTP (its mcp package needs HTTP client support); the URL must be reachable from where Hermes runs. Keep the credential private.',
+    },
+    generic: {
+      label: 'Any MCP client',
+      content: `Transport: MCP streamable HTTP (stateless; JSON responses)\nEndpoint:  ${serverUrl.value}\nHeader:    Authorization: Bearer ${authHeaderValue.value}\n\nFirst call: health_check, then list_collections. Hosted connectors (ChatGPT, Grok, claude.ai) need a URL reachable from the vendor's servers and use sign-in (OAuth) when the deployment has an identity provider.`,
+      filename: 'clio-mcp.txt',
+      hint: 'Every MCP client that speaks streamable HTTP can attach with the endpoint URL and this bearer header: LangChain and the Python/TypeScript MCP SDKs, Grok and ChatGPT custom connectors (via the connector dialog, OAuth), Open WebUI, LibreChat and others. Keep the credential private.',
     },
     windsurf: {
       label: 'Windsurf config',

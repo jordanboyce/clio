@@ -38,8 +38,9 @@ docker load < clio-1.0.0.tar.gz
 ```
 
 Add `--offline-bundle` when the target will never reach the internet: it
-bakes the reranker, Whisper and local-OCR models in, because those cannot be
-fetched later.
+bakes the Whisper and local-OCR models in, because those cannot be fetched
+later (the embedding model and the search reranker are in every image
+already).
 
 Building yourself is equally fine — `docker compose build` — but a site with
 no compiler, no internet and a change-control process usually wants the

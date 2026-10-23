@@ -223,6 +223,29 @@ wrinkle: **MCP clients authenticate with a token, not by signing in.**
 - With `AUTH_PASSWORD` alone (no personal token), clients send
   `Authorization: Bearer <password>` and work normally, but anonymously -
   see below.
+- **Any other MCP client.** `/mcp` is a standard MCP *streamable HTTP*
+  endpoint (stateless, JSON responses), so anything that speaks the
+  protocol attaches with the URL and a bearer header: Hermes Agent (an
+  entry under `mcp_servers` in `~/.hermes/config.yaml` with `url` and a
+  `headers: Authorization` line - the Connect tab writes it), LangChain and
+  the Python / TypeScript MCP SDKs, Open WebUI, LibreChat. Hosted
+  assistants add it as a custom connector from their own settings - Grok
+  (grok.com -> Connectors -> Custom), ChatGPT and claude.ai - and because
+  they connect from the vendor's servers, the endpoint must be reachable
+  from the internet and should offer sign-in (the OAuth shape above) rather
+  than a pasted token. The Connect tab's *Any MCP client* entry has the
+  three facts every client needs. Whatever the client, the first call to
+  make is `health_check` (it reports the collections, the embedding model
+  and whether reranking is active), then `list_collections`.
+- **A finished answer in one call.** When the deployment runs a model of
+  its own (`AI_PROVIDER`, see shape **E**), the tool list gains
+  `ask_documents`: the client sends a question and receives the grounded,
+  cited answer the in-app chat would give, with the numbered sources. It is
+  the right call for a client whose own model is small or busy, or for an
+  automation that just needs the answer; everything else stays
+  evidence-first (`research_documents`, `search_collection`), because the
+  intelligence belongs to the client's model. It does not exist without a
+  deployment model, so a client never plans around it in vain.
 - **Sign in from the client (OAuth).** Claude Desktop, claude.ai, ChatGPT
   and Claude Code (`claude mcp login`) can attach with just the endpoint
   URL and a browser sign-in at your identity provider - no token to paste
@@ -414,10 +437,27 @@ database; vectors and per-collection stores stay on local disk, so it is
 neither HA nor a path to replicas.
 
 The comfortable envelope is a team appliance: **roughly 10–50 people** on
-an always-on host. Two shared chokepoints define it — the request
-threadpool (~40 slots; a chat turn holds one for its whole agent loop, up
-to ~11 provider round-trips) and a single embedding lock every query and
-indexing batch passes through. There is no seat limit; the host is the limit.
+an always-on host, plus the agents they connect — an agent turn fans out
+several MCP calls at once, so plan for calls, not seats. Two shared
+chokepoints define it — the worker-thread pool (`WORKER_THREADS`, 64 by
+default: every MCP tool call, chat turn and upload runs in one; a chat turn
+holds its slot for the whole agent loop, up to ~11 provider round-trips) and
+the CPU-bound inference every query passes through (one embedding lock, and
+at most `RERANK_MAX_CONCURRENT` cross-encoder passes). The event loop itself
+only accepts connections and relays results, so a slow query never freezes
+the UI or other clients. There is no seat limit; the host is the limit.
+
+`scripts/mcp_load.py` is the way to find that limit for your host and
+corpus: it opens N MCP sessions, fires a realistic mix of tool calls for a
+fixed time, and reports per-tool latency percentiles plus the latency of a
+`/health` probe that runs alongside (the event loop's responsiveness, which
+is what every *other* client feels). Run it against a staging copy before
+handing out the URL, and again after changing `WORKER_THREADS` or the
+reranker settings:
+
+```bash
+python scripts/mcp_load.py --url https://clio.example.org/mcp --token <personal token> --sessions 32 --duration 60
+```
 
 What protects the deployment when many people share it:
 
@@ -429,6 +469,9 @@ What protects the deployment when many people share it:
 | `RATE_LIMIT_MCP_PER_MINUTE` | 0 | `/mcp` agent calls, keyed per personal token; 0 = unlimited |
 | `RESEARCH_MAX_CONCURRENT` | 3 | Parallel `research_documents` calls; extra callers queue |
 | `RESEARCH_QUEUE_TIMEOUT_SECONDS` | 60 | How long a queued research call waits before a retryable "busy" error |
+| `WORKER_THREADS` | 64 | Worker threads shared by every MCP tool call, chat turn, upload and document read; callers queue beyond it |
+| `RERANK_MAX_CONCURRENT` | 2 | Cross-encoder reranking passes in flight at once (each uses every core); `0` = unbounded |
+| `RERANK_QUEUE_TIMEOUT_SECONDS` | 1 | A search that waits longer than this for a reranking slot answers in retrieval order and says so (`retrieval.reranked: false`) |
 | `CHAT_DAILY_TOKEN_BUDGET` | 0 (off) | Provider tokens one identity may spend on chat per UTC day. Cached answers stay free once capped. |
 | `MAX_CONCURRENT_INDEX_JOBS` | 2 | Indexing jobs across all collections |
 | `COLLECTION_STORAGE_LIMIT_BYTES` | 5 GiB | Most a single collection may hold, as the sum of its source files. Every ingest path (upload, staged upload, local/repo index jobs, `write_document` over MCP) refuses a file that would cross it with a **413** carrying the numbers; the Sources panel and the collections overview show usage. `0` = unlimited. |
