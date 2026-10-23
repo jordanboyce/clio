@@ -3936,7 +3936,44 @@ class ToggleableMCPApp:
             _request_mcp_profile.reset(token)
 
 
-embedded_mcp_app = ToggleableMCPApp(_clio_mcp.streamable_http_app())
+def _with_legacy_sse(app):
+    """Serve the older HTTP+SSE transport beside streamable HTTP.
+
+    Streamable HTTP (one POST per call at ``/mcp``) is the current MCP
+    transport and what every maintained client speaks. The 2024-11-05
+    transport — a long-lived ``GET /mcp/sse`` event stream plus
+    ``POST /mcp/sse/messages/?session_id=…`` for each message — is still the
+    only shape some automation tools and older clients offer. It costs one
+    extra route pair and shares everything else: the same FastMCP server,
+    the same auth middleware (both paths sit under ``/mcp``), the same
+    ``?collection_id`` profile (tool calls run inside the GET request's
+    context), the same DNS-rebinding protection. Sessions live in process
+    memory for the life of the stream, which is why the stateless transport
+    stays the one to recommend.
+    """
+    from mcp.server.sse import SseServerTransport
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from starlette.routing import Mount, Route
+
+    # Relative to the mount: the transport prefixes the request's root_path
+    # ("/mcp") when it announces the endpoint to the client.
+    sse = SseServerTransport("/sse/messages/", security_settings=_transport_security())
+
+    async def handle_sse(request: Request):
+        async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
+            await _clio_mcp._mcp_server.run(
+                streams[0], streams[1], _clio_mcp._mcp_server.create_initialization_options(),
+            )
+        return Response()
+
+    # Before the streamable catch-all route, which answers everything else.
+    app.router.routes.insert(0, Route("/sse", endpoint=handle_sse, methods=["GET"]))
+    app.router.routes.insert(1, Mount("/sse/messages", app=sse.handle_post_message))
+    return app
+
+
+embedded_mcp_app = ToggleableMCPApp(_with_legacy_sse(_clio_mcp.streamable_http_app()))
 
 
 @asynccontextmanager

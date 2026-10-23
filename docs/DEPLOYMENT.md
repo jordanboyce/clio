@@ -224,19 +224,26 @@ wrinkle: **MCP clients authenticate with a token, not by signing in.**
   `Authorization: Bearer <password>` and work normally, but anonymously -
   see below.
 - **Any other MCP client.** `/mcp` is a standard MCP *streamable HTTP*
-  endpoint (stateless, JSON responses), so anything that speaks the
-  protocol attaches with the URL and a bearer header: Hermes Agent (an
-  entry under `mcp_servers` in `~/.hermes/config.yaml` with `url` and a
-  `headers: Authorization` line - the Connect tab writes it), LangChain and
-  the Python / TypeScript MCP SDKs, Open WebUI, LibreChat. Hosted
-  assistants add it as a custom connector from their own settings - Grok
-  (grok.com -> Connectors -> Custom), ChatGPT and claude.ai - and because
-  they connect from the vendor's servers, the endpoint must be reachable
-  from the internet and should offer sign-in (the OAuth shape above) rather
-  than a pasted token. The Connect tab's *Any MCP client* entry has the
-  three facts every client needs. Whatever the client, the first call to
-  make is `health_check` (it reports the collections, the embedding model
-  and whether reranking is active), then `list_collections`.
+  endpoint (stateless, JSON responses, served at `/mcp` with no redirect),
+  so anything that speaks the protocol attaches with the URL and a bearer
+  header. The Connect tab writes the exact configuration for each of:
+  Claude Code, Codex, Gemini CLI, Cursor, VS Code, Copilot CLI, Windsurf,
+  Zed, Cline, Roo Code, Kiro, OpenCode (coding agents and IDEs); Claude
+  Desktop, claude.ai, ChatGPT, Grok, Hermes Agent, Goose, AnythingLLM,
+  LibreChat, Open WebUI (desktop and chat apps); n8n, LangChain, the Python
+  and TypeScript MCP SDKs, the OpenAI Responses API, the Anthropic Messages
+  API MCP connector and the xAI API (automation, frameworks and APIs), plus
+  a generic entry with the three facts every other client needs. Hosted
+  assistants (claude.ai, ChatGPT, Grok) connect from the vendor's servers,
+  so the endpoint must be reachable from the internet and they sign in
+  with OAuth (the shape above) rather than a pasted token. Clients that
+  still only speak the older HTTP+SSE transport use `/mcp/sse` (same
+  header, same scoping; the server announces its message endpoint on
+  connect) - prefer streamable HTTP whenever the client offers it, since
+  SSE sessions live in process memory for the life of the stream. Whatever
+  the client, the first call to make is `health_check` (it reports the
+  collections, the embedding model and whether reranking is active), then
+  `list_collections`.
 - **A finished answer in one call.** When the deployment runs a model of
   its own (`AI_PROVIDER`, see shape **E**), the tool list gains
   `ask_documents`: the client sends a question and receives the grounded,

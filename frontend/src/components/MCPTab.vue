@@ -265,19 +265,28 @@
           </div>
 
           <div class="rounded-lg border border-base-300 bg-base-100 overflow-hidden">
-            <!-- Tab bar -->
-            <div class="flex flex-wrap border-b border-base-300 bg-base-200/30">
-              <button
-                v-for="tab in configTabs"
-                :key="tab.key"
-                class="px-4 py-2 text-xs font-medium transition-colors relative"
-                :class="activeTab === tab.key
-                  ? 'text-primary border-b-2 border-primary -mb-px bg-base-100/50'
-                  : 'text-base-content/50 hover:text-base-content/80'"
-                @click="activeTab = tab.key"
+            <!-- Client picker: one row per group, every client a small button -->
+            <div class="border-b border-base-300 bg-base-200/30 px-3 py-2 space-y-1.5">
+              <div
+                v-for="group in MCP_CLIENT_GROUPS"
+                :key="group.title"
+                class="flex flex-wrap items-center gap-1"
               >
-                {{ tab.label }}
-              </button>
+                <span class="w-full sm:w-36 shrink-0 text-[11px] uppercase tracking-wide text-base-content/40">
+                  {{ group.title }}
+                </span>
+                <button
+                  v-for="client in group.clients"
+                  :key="client.key"
+                  type="button"
+                  class="btn btn-xs"
+                  :class="activeTab === client.key ? 'btn-primary' : 'btn-ghost text-base-content/60'"
+                  :aria-pressed="activeTab === client.key"
+                  @click="activeTab = client.key"
+                >
+                  {{ client.label }}
+                </button>
+              </div>
             </div>
 
             <!-- Config content -->
@@ -439,6 +448,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { ShieldAlert } from 'lucide-vue-next'
 import http from '../utils/http'
 import { useUserStore } from '../stores/userStore'
+import { MCP_CLIENT_GROUPS, buildClientConfig } from '../utils/mcpClients'
 const userStore = useUserStore()
 
 // MCP state
@@ -489,20 +499,9 @@ const oauthIssuerHost = computed(() => {
   }
 })
 
-const configTabs = [
-  { key: 'claude', label: 'Claude Code' },
-  { key: 'desktop', label: 'Claude Desktop' },
-  { key: 'cursor', label: 'Cursor' },
-  { key: 'codex', label: 'Codex' },
-  { key: 'copilot', label: 'VS Code' },
-  { key: 'windsurf', label: 'Windsurf' },
-  { key: 'anythingllm', label: 'AnythingLLM' },
-  { key: 'hermes', label: 'Hermes Agent' },
-  { key: 'generic', label: 'Any MCP client' },
-]
-
-// Client configs are generated locally — the server URL plus a collection_id
-// query param is all a client needs; server defaults cover the rest.
+// Client configs are generated locally from the recipes in utils/mcpClients.js
+// — the server URL plus a collection_id query param is all a client needs;
+// server defaults cover the rest.
 const sanitizeServerId = (value) =>
   (value.toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/^[-_]+|[-_]+$/g, '')) || 'clio'
 
@@ -527,8 +526,13 @@ watch(newTokenAllowlist, (on) => {
 })
 
 const serverId = computed(() => sanitizeServerId(`clio-${exportCollectionId.value}`))
+// Bare /mcp is served directly (no redirect), which is the form every client
+// documents; the legacy SSE transport lives beside it at /mcp/sse.
 const serverUrl = computed(() =>
-  `${window.location.origin}/mcp/?collection_id=${encodeURIComponent(exportCollectionId.value)}`
+  `${window.location.origin}/mcp?collection_id=${encodeURIComponent(exportCollectionId.value)}`
+)
+const sseUrl = computed(() =>
+  `${window.location.origin}/mcp/sse?collection_id=${encodeURIComponent(exportCollectionId.value)}`
 )
 
 // The selected token's plaintext is only ever known right after creation.
@@ -546,72 +550,13 @@ const authHeaderValue = computed(() =>
   selectedTokenPlaintext.value || '<PASTE_YOUR_TOKEN — shown once, right after you generate it>'
 )
 
-const activeTabMeta = computed(() => {
-  const headers = { 'Authorization': `Bearer ${authHeaderValue.value}` }
-  const httpEntry = { type: 'http', url: serverUrl.value, headers }
-  const tabs = {
-    anythingllm: {
-      label: 'AnythingLLM config',
-      content: JSON.stringify({ mcpServers: { [serverId.value]: { ...httpEntry, type: 'streamable' } } }, null, 2),
-      filename: 'anythingllm_mcp_servers.json',
-      hint: 'Merge this entry into anythingllm_mcp_servers.json in your AnythingLLM storage/plugins directory, then reload MCP servers in AnythingLLM. The URL must be reachable from AnythingLLM; localhost inside Docker refers to that container. Keep the credential private.',
-    },
-    claude: {
-      label: 'Claude Code config',
-      content: JSON.stringify({ mcpServers: { [serverId.value]: httpEntry } }, null, 2),
-      filename: '.mcp.json',
-      hint: 'Save as .mcp.json in your project root. This configuration contains a credential; keep it out of version control.',
-    },
-    codex: {
-      label: 'Codex config',
-      content: `[mcp_servers.${serverId.value}]\nurl = "${serverUrl.value}"\nhttp_headers = { "Authorization" = "Bearer ${authHeaderValue.value}" }\n`,
-      filename: 'config.toml',
-      hint: 'Merge this entry into your existing Codex config.toml. Keep the credential private.',
-    },
-    copilot: {
-      label: 'VS Code (GitHub Copilot) config',
-      content: JSON.stringify({ servers: { [serverId.value]: httpEntry } }, null, 2),
-      filename: '.vscode/mcp.json',
-      hint: 'Place this file at .vscode/mcp.json in your project, or merge into your VS Code settings.',
-    },
-    cursor: {
-      label: 'Cursor config',
-      content: JSON.stringify({ mcpServers: { [serverId.value]: { url: serverUrl.value, headers } } }, null, 2),
-      filename: '.cursor/mcp.json',
-      hint: 'Save as .cursor/mcp.json in your project (or ~/.cursor/mcp.json for every project), then enable the server under Cursor Settings → MCP. Keep the credential private.',
-    },
-    hermes: {
-      label: 'Hermes Agent config',
-      content: `mcp_servers:\n  ${serverId.value}:\n    url: "${serverUrl.value}"\n    headers:\n      Authorization: "Bearer ${authHeaderValue.value}"\n`,
-      filename: '~/.hermes/config.yaml',
-      hint: 'Merge this entry under mcp_servers in ~/.hermes/config.yaml. Hermes connects over streamable HTTP (its mcp package needs HTTP client support); the URL must be reachable from where Hermes runs. Keep the credential private.',
-    },
-    generic: {
-      label: 'Any MCP client',
-      content: `Transport: MCP streamable HTTP (stateless; JSON responses)\nEndpoint:  ${serverUrl.value}\nHeader:    Authorization: Bearer ${authHeaderValue.value}\n\nFirst call: health_check, then list_collections. Hosted connectors (ChatGPT, Grok, claude.ai) need a URL reachable from the vendor's servers and use sign-in (OAuth) when the deployment has an identity provider.`,
-      filename: 'clio-mcp.txt',
-      hint: 'Every MCP client that speaks streamable HTTP can attach with the endpoint URL and this bearer header: LangChain and the Python/TypeScript MCP SDKs, Grok and ChatGPT custom connectors (via the connector dialog, OAuth), Open WebUI, LibreChat and others. Keep the credential private.',
-    },
-    windsurf: {
-      label: 'Windsurf config',
-      content: JSON.stringify({ mcpServers: { [serverId.value]: { serverUrl: serverUrl.value, headers } } }, null, 2),
-      filename: '~/.codeium/windsurf/mcp_config.json',
-      hint: 'Merge this entry into ~/.codeium/windsurf/mcp_config.json and refresh the MCP list in Windsurf. Keep the credential private.',
-    },
-    desktop: {
-      label: 'Claude Desktop config',
-      content: JSON.stringify({ mcpServers: { [serverId.value]: {
-        command: 'npx',
-        args: ['-y', 'mcp-remote', serverUrl.value, '--header', `Authorization: Bearer ${authHeaderValue.value}`],
-      } } }, null, 2),
-      filename: 'claude_desktop_config.json',
-      hint: oauth.value.enabled
-        ? 'With sign-in enabled you can skip this: add the server URL as a custom connector under Settings → Connectors and sign in from the client. This token-based form needs Node.js for the mcp-remote bridge.'
-        : 'Claude Desktop speaks stdio to local servers, so mcp-remote (needs Node.js) bridges it to this URL. Merge into claude_desktop_config.json (Settings → Developer → Edit Config) and restart Claude Desktop.',
-    },
-  }
-  return tabs[activeTab.value]
-})
+const activeTabMeta = computed(() => buildClientConfig(activeTab.value, {
+  id: serverId.value,
+  url: serverUrl.value,
+  sseUrl: sseUrl.value,
+  token: authHeaderValue.value,
+  oauthEnabled: Boolean(oauth.value.enabled),
+}))
 
 // Live tool catalog from the server. Grouped by what an agent is trying to
 // do rather than by implementation, so a reader can scan it.

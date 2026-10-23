@@ -109,10 +109,15 @@ call), so many agents can be connected at once. From the **Connect** tab:
    and can be limited to specific collections; revoke one from the same
    screen when a machine is retired. Tick *Allow adding and updating sources*
    to let that agent save notes and summaries back into a collection.
-2. **Pick your client and copy the snippet** — Claude Code, Claude Desktop,
-   Cursor, Codex, VS Code, Windsurf, AnythingLLM, Hermes Agent, or the
-   generic entry (URL, bearer header, first call to make) for LangChain, the
-   MCP SDKs, Open WebUI, LibreChat and anything else that speaks the protocol.
+2. **Pick your client and copy the snippet.** Coding agents and IDEs:
+   Claude Code, Codex, Gemini CLI, Cursor, VS Code, Copilot CLI, Windsurf,
+   Zed, Cline, Roo Code, Kiro, OpenCode. Desktop and chat apps: Claude
+   Desktop, claude.ai, ChatGPT, Grok, Hermes Agent, Goose, AnythingLLM,
+   LibreChat, Open WebUI. Automation and APIs: n8n, LangChain, the Python
+   and TypeScript MCP SDKs, the OpenAI Responses API, the Anthropic MCP
+   connector, the xAI API, and a generic entry (URL, bearer header, first
+   call to make) for everything else. Clients that only speak the older
+   HTTP+SSE transport use `/mcp/sse` with the same header.
 3. Hosted assistants — claude.ai, ChatGPT, Grok — add the URL as a custom
    connector from their own settings. They connect from the vendor's servers,
    so the endpoint must be reachable from the internet; with an identity
