@@ -2,47 +2,188 @@
 
 **Ask your sources. Check the evidence. Connect your AI tools.**
 
-Clio is a self-hosted knowledge workspace for individuals, teams, and
-organisations that want to keep their documents on their own infrastructure.
-Add documents to a collection, ask questions with citations, or find the exact
-passage you need. Expose the same knowledge to the AI clients you already use —
-Claude Desktop, claude.ai, ChatGPT, Claude Code, Codex, VS Code — over MCP.
-Local embeddings work out of the box; answer generation uses a model you
-configure, from a hosted API to a model running on your own hardware. Hosted
-providers receive the text they process.
+Clio is a self-hosted knowledge base for people and for the AI agents they
+use. Add documents to a collection, ask questions that are answered with
+citations, find the exact passage you need, and hand the same knowledge to
+Claude, ChatGPT, Grok, Hermes Agent, Claude Code, Codex, VS Code or any other
+MCP client. Indexing, search and reranking run locally; answers come from
+whatever model you trust, hosted or on your own hardware. Nothing in the
+product depends on a cloud service, there are no accounts to create, and the
+default install needs no configuration at all.
 
 Clio is part of the DOE **Prometheus** ecosystem: Prometheus brings the fire
 (compute, models); Clio keeps the record (grounded, citable knowledge). The
 name — Clio, Muse of history, daughter of Mnemosyne — leaves room for a future
 family of related tools under the Mnemosyne umbrella.
 
-The everyday workspace has three destinations:
-
-- **Ask** — converse with your collection and open supporting sources.
-- **Find** — search passages without requiring an answer-generation model.
-- **Connect** — attach your AI client: sign in from the client, or mint a
-  personal MCP token.
-
-Reports, saved instructions, and administration are under **More**. Notes and
-tools open on demand. Existing collections, saved conversations, and API routes
-remain available.
-
-Start with a curated knowledge collection: engineering runbooks, product docs,
-research, or internal procedures. This project does not yet provide the connector
-breadth or source permission syncing of an enterprise search platform.
-
 [Deployment](docs/DEPLOYMENT.md) · [Architecture](docs/ARCHITECTURE.md) ·
-[Product assessment and priorities](docs/PRODUCT_ASSESSMENT.md) · [Roadmap](docs/ROADMAP.md)
-
-[Agentic research guide](docs/AGENTIC_RESEARCH.md): investigate multiple
-subquestions, find exact wording, inspect evidence coverage, and use the same
-research tools in chat and MCP clients.
+[Roadmap](docs/ROADMAP.md) · [Agentic research guide](docs/AGENTIC_RESEARCH.md) ·
+[Product assessment](docs/PRODUCT_ASSESSMENT.md)
 
 ---
 
-## Use cases
+## Table of Contents
 
-### What people do with it
+- [Quick start](#quick-start)
+- [Connect an AI client](#connect-an-ai-client)
+- [If others can reach it](#if-others-can-reach-it)
+- [Where people run it](#where-people-run-it)
+- [What people do with it](#what-people-do-with-it)
+- [More ways to deploy](#more-ways-to-deploy)
+- [Configuration](#configuration)
+- [Frontend development](#frontend-development)
+- [API Usage](#api-usage)
+- [Troubleshooting](#troubleshooting)
+- [Advanced Topics](#advanced-topics)
+- [FAQ](#faq)
+
+---
+
+## Quick start
+
+Pick one. Either way you get http://localhost:8473, reachable from this
+machine only, with nothing to configure and no sign-in.
+
+**Docker**
+
+```bash
+docker compose up -d
+```
+
+The image builds the frontend, bakes the embedding model and the search
+reranker in (nothing downloads at start), bundles OCR for scanned PDFs, and
+keeps documents and indexes in `./data`. After pulling new code, rebuild with
+`docker compose up -d --build`. For a lean image without PyTorch, OCR or audio
+transcription (1.6 GB instead of 3.9 GB, everything an agent-facing knowledge
+base needs), build with `SLIM=1 docker compose build`.
+
+**Python 3.12 or newer**
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+The search model (about 90 MB) and the reranker download in the background
+the first time, with progress shown in the app; search works as soon as they
+are in. Optional extras, each a large ML runtime, so install only what you
+use:
+
+```bash
+pip install -r requirements-ocr.txt       # OCR for scanned PDFs (Tesseract)
+pip install -r requirements-audio.txt     # audio transcription (Whisper)
+pip install -r requirements-torch.txt     # PyTorch backend: wider local embedding model catalog
+pip install -r requirements-postgres.txt  # PostgreSQL for the app database
+```
+
+**Then, in the browser**
+
+1. **Add sources** — files, a folder, a git repository, or links. PDF, Office,
+   Markdown, text, HTML, JSON, CSV/XLSX, sixty-plus programming languages,
+   audio (transcribed) and images (described by a vision model). A folder or
+   repository can be kept in sync.
+2. **Ask** — pick a model in the top bar and ask; answers cite their sources
+   and say when the sources do not establish something. **Find** searches
+   passages and needs no model at all.
+3. **Connect** — give the same knowledge to the AI client you already use
+   (next section).
+
+For a model that everyone on the deployment shares, set it once in `.env`
+(see [Configuration](#configuration)); otherwise each person picks a provider
+in Settings. The Anthropic, OpenAI, Google, OpenRouter, xAI and Ollama Cloud
+APIs, and anything you run yourself (Ollama, vLLM, LM Studio, llama.cpp, any
+OpenAI-compatible endpoint), all work.
+
+## Connect an AI client
+
+Every MCP client talks to the same endpoint:
+
+```
+http://localhost:8473/mcp
+```
+
+It is a standard MCP streamable HTTP server (stateless, one request per
+call), so many agents can be connected at once. From the **Connect** tab:
+
+1. **Generate a personal token.** Tokens are read-only by default, can expire,
+   and can be limited to specific collections; revoke one from the same
+   screen when a machine is retired. Tick *Allow adding and updating sources*
+   to let that agent save notes and summaries back into a collection.
+2. **Pick your client and copy the snippet** — Claude Code, Claude Desktop,
+   Cursor, Codex, VS Code, Windsurf, AnythingLLM, Hermes Agent, or the
+   generic entry (URL, bearer header, first call to make) for LangChain, the
+   MCP SDKs, Open WebUI, LibreChat and anything else that speaks the protocol.
+3. Hosted assistants — claude.ai, ChatGPT, Grok — add the URL as a custom
+   connector from their own settings. They connect from the vendor's servers,
+   so the endpoint must be reachable from the internet; with an identity
+   provider configured they sign in there instead of pasting a token
+   ([docs/IDENTITY.md](docs/IDENTITY.md#oauth-for-mcp-clients)).
+
+What the agent gets, scoped server-side to the collections its credential
+may see:
+
+| Tool | Use it for |
+|---|---|
+| `health_check`, `list_collections`, `get_collection_info` | Orientation: what is here, which embedding model, whether reranking is active |
+| `search_collection`, `search_all_collections` | One quick lookup; retrieval strategy is chosen per query |
+| `research_documents` | A multi-part question: focused subqueries, literal checks, diverse cited passages, coverage gaps |
+| `find_in_documents`, `get_document_context` | Exact strings and identifiers; the surrounding text before quoting |
+| `list_tables`, `get_table_schema`, `query_table`, `aggregate_table` | Counts, sums, filters and rankings over CSV/XLSX data, never guessed from passages |
+| `ask_documents` | A finished, cited answer in one call — present when the deployment runs a model of its own (`AI_PROVIDER`) |
+| `write_document`, `reindex_document`, `update_document_metadata` | Write-enabled tokens: save sources back, re-index one, set a sensitivity label |
+| `search`, `fetch` | The two tools a ChatGPT custom connector requires, over the same scoping |
+
+*What agents can do here* on the Connect tab lists the live catalog
+(`GET /api/mcp/catalog`). To see how many agents a host can serve, run
+`python scripts/mcp_load.py --url http://localhost:8473/mcp --sessions 32`
+([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#capacity--scaling)).
+
+## If others can reach it
+
+Clio has no accounts: anyone who can open the port sees the whole corpus.
+That is right for a machine only you use, and it is the default — no
+password, reachable from this machine only. If other people can reach it (a
+LAN, a server, a VPN), choose a shared password. One question, written to
+`.env`:
+
+```bash
+python scripts/setup.py              # asks: only me, or others on my network?
+```
+
+(`--password` and `--open` answer it without asking; `run.sh` and `run.bat`
+ask on first start.) By hand, the same thing is two lines in `.env`:
+
+```bash
+AUTH_PASSWORD=choose-a-long-passphrase
+BIND_ADDRESS=0.0.0.0        # Docker; `python main.py` uses HOST=0.0.0.0
+```
+
+Browsers prompt for the password natively (any username); API clients send
+`Authorization: Bearer <password>`; agents should use a personal MCP token
+instead. Beyond a trusted LAN, put a TLS reverse proxy such as Caddy in front
+or reach it over Tailscale or WireGuard — [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+has the complete Caddy example. An organisation that already runs single
+sign-on can use it (`IDENTITY_PROVIDER=oidc` or `trusted_header`), which also
+enables per-person collections and sharing ([docs/IDENTITY.md](docs/IDENTITY.md));
+a personal or small-team install does not need this.
+
+## Where people run it
+
+| Situation | Run it as | Who gets in | Read |
+|---|---|---|---|
+| **Just you, on your machine** | `python main.py` or `docker compose up -d` | Loopback only; no sign-in, nothing to configure | [Quick start](#quick-start) |
+| **A few people on your LAN** | Docker with `BIND_ADDRESS=0.0.0.0` and `AUTH_PASSWORD` set | Everyone who knows the shared password; one shared corpus | [DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| **A team over HTTPS** | Docker behind a TLS reverse proxy (Caddy, nginx, Traefik), or on a Tailscale / WireGuard network | The password, plus the proxy or private network as the only route in | [DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| **Agents, lots of them** | The same image (or `SLIM=1`), personal tokens per agent, `WORKER_THREADS` sized to the host | Each token sees the collections it was given; `scripts/mcp_load.py` tells you the host's envelope | [Connect an AI client](#connect-an-ai-client) |
+| **An organisation that already runs sign-in** | The portable image, your own IdP (`IDENTITY_PROVIDER=oidc` or an authenticating proxy), your own models (`AI_PROVIDER`) | Identities from Keycloak, Entra ID, Okta, mTLS or Kerberos; optional private collections; OAuth sign-in for connector clients; a full audit trail | [ONPREM.md](docs/ONPREM.md), [IDENTITY.md](docs/IDENTITY.md), [AGENCY_PILOT.md](docs/AGENCY_PILOT.md) |
+| **Fully air-gapped** | The offline bundle with `CLIO_PROFILE=secure` | As above, with cloud providers and model downloads disabled, refusal to start when unsafely exposed, and a `scripts/preflight.py` report of exactly where data can go | [AIRGAP.md](docs/AIRGAP.md), [SECURE_PROFILE.md](docs/SECURE_PROFILE.md) |
+| **A hosted PaaS (Railway, Render, Fly.io, Coolify)** | The Dockerfile, a volume at `/app/data`, `AUTH_PASSWORD` | The password, or an SSO proxy in front | [Hosting on a PaaS](#hosting-on-a-paas-railway-render-flyio-coolify-) |
+
+Every shape uses the same image and the same code path for authorization:
+whether the request comes from the browser, the API, or an MCP client, it
+goes through the app's access checks.
+
+## What people do with it
 
 | You want to… | Where | How it works |
 |---|---|---|
@@ -53,116 +194,21 @@ research tools in chat and MCP clients.
 | **Query spreadsheets, not just prose** | Ask, MCP | CSV/XLSX become typed tables; counts, sums, filters, and rankings run as SQL, never as guessed passage search. |
 | **Turn a collection into a document** | Generate (under More) | Source-grounded briefings, summaries, and reports with citations to review before sharing. |
 | **Teach it your house style or domain** | Expertise (under More) | Expertise packs add instructions and terminology per collection, versioned alongside the corpus. |
-| **Give your AI assistant a private knowledge source** | Connect | Claude Desktop, claude.ai, ChatGPT, Grok and Claude Code sign in through your identity provider; Codex, VS Code, Cursor, Windsurf, AnythingLLM, Hermes Agent, Claude Code and any MCP SDK can also use a personal token (standard streamable HTTP, stateless, so many agents can be connected at once). Agents can write notes and summaries back when a token allows it. |
+| **Give your AI assistant a private knowledge source** | Connect | Claude Desktop, claude.ai, ChatGPT, Grok and Claude Code sign in through your identity provider; Codex, VS Code, Cursor, Windsurf, AnythingLLM, Hermes Agent, Claude Code and any MCP SDK can also use a personal token. Agents can write notes and summaries back when a token allows it. |
 | **Index scanned paper, photos, audio, code** | Add sources | OCR (local Tesseract/Docling or a vision model), Whisper transcription, code-aware chunking, image description. |
-| **Index a whole source tree** | Add sources | Sixty-plus languages and config formats chunk by symbol (functions, classes, SQL objects, Terraform resources, shell functions, Vue/Svelte scripts), with `Makefile`, `Dockerfile` and friends recognised by name. Parsing is lenient by design: syntax errors, unbalanced braces, unterminated strings, mixed tabs and spaces, odd encodings and minified files still index; binaries, lockfiles, build output and vendored dependencies are skipped. Every passage keeps its symbol name and line range, so Find, Ask and MCP results say *which function* they came from. The Sources panel shows a type tile per file and chips (Code · Docs · Data · Media) that filter the list. |
-| **Share an indexed collection with another Clio** | Collections | *Export* writes one `.clio.zip`: the extracted text, pages and tables, the vectors, and a plain statement of which embedding model made them (optionally the original files). *Import* previews it first: contents, the model, and whether this server will reuse the vectors (same model, ready almost at once) or embed the text again with its own (no extraction or OCR is redone). Held sources never leave; this server's blocklist applies on the way in. |
-| **Keep a folder in sync** | Add sources | Point Clio at a folder once; every later sync hashes the tree, skips unchanged files, re-indexes changed ones, and can prune documents whose file was deleted. Remembered folders show *Sync* and *Prune* in the Sources panel (`POST /documents/sync-folder`). |
-| **Move fast with the keyboard** | Everywhere | `⌘K` / `Ctrl+K` opens a command palette for every destination, collection, recent chat, theme and action; `?` shows the shortcuts; `g` then a letter jumps between Ask, Find, Connect, Collections and Settings. |
+| **Index a whole source tree** | Add sources | Sixty-plus languages and config formats chunk by symbol (functions, classes, SQL objects, Terraform resources, shell functions, Vue/Svelte scripts), with `Makefile`, `Dockerfile` and friends recognised by name. Parsing is lenient: syntax errors, odd encodings and minified files still index; binaries, lockfiles, build output and vendored dependencies are skipped. Every passage keeps its symbol name and line range. |
+| **Keep a folder or repository in sync** | Add sources | Point Clio at a folder or a git repository once; every later sync hashes the tree, skips unchanged files, re-indexes changed ones, and can prune documents whose file was deleted. *Watch* re-syncs on an interval and every real change lands in the Updates feed (and an optional signed webhook). |
+| **Share an indexed collection with another Clio** | Collections | *Export* writes one `.clio.zip` (extracted text, pages, tables, vectors, and which embedding model made them); *Import* previews it and reuses the vectors when the model matches. |
+| **Move fast with the keyboard** | Everywhere | `⌘K` / `Ctrl+K` opens a command palette for every destination, collection, recent chat, theme and action; `?` shows the shortcuts. |
 | **Keep a shared corpus accountable** | More → Admin | Attribution on every document, an append-only audit trail (including agent reads if enabled), content-policy scanning with flag/quarantine/reject, sensitivity labels, blocklists, an acceptable-use gate. |
 
-### Where people run it
+**Privacy.** Clio is self-hosted and open source (MIT). Documents and indexes
+live in the data directory on your machine; local embeddings, keyword search
+and reranking never leave it. External AI is optional: a hosted model you
+configure receives only the passages it is asked about, and `OFFLINE_MODE=1`
+disables cloud providers and model downloads entirely.
 
-| Situation | Run it as | Who gets in | Read |
-|---|---|---|---|
-| **Just you, on your machine** | `python main.py` or `docker compose up -d` | Loopback only; no sign-in, nothing to configure | [Quick Start](#quick-start) |
-| **A few people on your LAN** | Docker with `BIND_ADDRESS=0.0.0.0` and `AUTH_PASSWORD` set | Everyone who knows the shared password; one shared corpus | [DEPLOYMENT.md](docs/DEPLOYMENT.md) |
-| **A team over HTTPS** | Docker behind a TLS reverse proxy (Caddy, nginx, Traefik), or on a Tailscale / WireGuard network | The password, plus the proxy or private network as the only route in | [DEPLOYMENT.md](docs/DEPLOYMENT.md) |
-| **An organisation that already runs sign-in** | The portable image, your own IdP (`IDENTITY_PROVIDER=oidc` or an authenticating proxy), your own models (`AI_PROVIDER`) | Identities from Keycloak, Entra ID, Okta, mTLS or Kerberos; optional private collections; OAuth sign-in for connector clients; a full audit trail | [ONPREM.md](docs/ONPREM.md), [IDENTITY.md](docs/IDENTITY.md), [AGENCY_PILOT.md](docs/AGENCY_PILOT.md) |
-| **Fully air-gapped** | The offline bundle with `CLIO_PROFILE=secure` | As above, with cloud providers and model downloads disabled, refusal to start when unsafely exposed, and a `scripts/preflight.py` report of exactly where data can go | [AIRGAP.md](docs/AIRGAP.md), [SECURE_PROFILE.md](docs/SECURE_PROFILE.md) |
-| **A hosted PaaS (Railway, Render, Fly.io, Coolify)** | The Dockerfile, a volume at `/app/data`, `AUTH_PASSWORD` | The password, or an SSO proxy in front | [Hosting on a PaaS](#hosting-on-a-paas-railway-render-flyio-coolify-) |
-
-Every shape uses the same image and the same code path for authorization:
-whether the request comes from the browser, the API, or an MCP client, it goes
-through the app's access checks.
-
----
-
-## Table of Contents
-
-- [Use cases](#use-cases)
-- [Quick Start](#quick-start)
-- [What It Does](#what-it-does)
-- [Technology Stack](#technology-stack)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [API Usage](#api-usage)
-- [Troubleshooting](#troubleshooting)
-- [Advanced Topics](#advanced-topics)
-
----
-
-## Quick Start
-
-### Python (Recommended)
-
-```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Start the server (no configuration needed: only this machine can reach it,
-#    and nothing asks for a password)
-python main.py
-
-# 3. Open your browser
-open http://localhost:8473
-```
-
-Optional feature sets (each pulls in large ML runtimes — install only what you use):
-
-```bash
-pip install -r requirements-ocr.txt       # OCR for scanned PDFs
-pip install -r requirements-audio.txt     # audio transcription (Whisper)
-pip install -r requirements-postgres.txt  # optional PostgreSQL backend (multi-user mode)
-```
-
-### Docker (recommended for internal-network deployment)
-
-```bash
-docker compose up -d
-open http://localhost:8473
-```
-
-That's the whole setup — the image builds the frontend, bundles OCR (Tesseract + Poppler), bakes the embedding model and the search reranker into the image, and persists documents/indexes in `./data`. No `.env` is required to start; add one to override defaults. For corporate CA certificates, drop `.crt` files into `certs/ca/` before building (see [Corporate SSL Configuration](#corporate-ssl-configuration)).
-
-Want a lean image? `SLIM=1 docker compose build` drops PyTorch, OCR of scanned PDFs and audio transcription — 1.6 GB instead of 3.9 GB — and keeps everything a knowledge base for agents needs: indexing, hybrid search, the local reranker, grounded chat and MCP. The embedding model and reranker both run on the ONNX runtime, so nothing is downloaded at start either way.
-
-`docker compose up -d` publishes port 8473 to **127.0.0.1 only**, so nothing else on your network can reach it. There is no account to create and no sign-in: open the browser, add sources, ask. Whether a password is asked for is your choice, made once in `.env` (see [If others can reach it](#if-others-can-reach-it)); `run.sh` and `run.bat` ask on first run, and `python scripts/setup.py` asks the same question for a Docker install.
-
-Then:
-
-1. **Add sources** — drop in files, a folder, or links.
-2. **Ask** — choose an AI model (or just use **Find**, which needs none) and ask a question. Answers cite their sources.
-3. **Connect** (optional) — attach Claude Code, Codex, VS Code or another MCP client from the Connect tab.
-
-### Privacy
-
-Clio is self-hosted and open source (MIT). Your documents and indexes live in the data directory on your machine, and nothing in the product depends on a cloud service. Local embeddings and search never leave the machine. External AI is optional: if you configure a hosted model for answers, that provider receives only the passages it is asked about, and `OFFLINE_MODE=1` disables cloud providers and model downloads entirely.
-
-### If others can reach it
-
-Clio has no accounts: anyone who can open the port sees the whole corpus. That is right for a machine only you use, and it is the default: no password, reachable from this machine only. If other people can reach it (a LAN, a server, a VPN), choose a shared password. The setup script asks one question and writes the matching settings to `.env`:
-
-```bash
-python scripts/setup.py              # asks: only me, or others on my network?
-python scripts/setup.py --password   # others on the network; generates a password
-python scripts/setup.py --open       # back to this machine only, no password
-```
-
-`run.sh` and `run.bat` run it on first start. The same thing by hand, in `.env`:
-
-```bash
-AUTH_PASSWORD=choose-a-long-passphrase
-BIND_ADDRESS=0.0.0.0        # Docker only; python main.py uses HOST=0.0.0.0
-```
-
-A running container picks the change up on the next `docker compose up -d`. A password with the port still on 127.0.0.1 protects nothing and only gets in the way; `python scripts/setup.py --show` points that out.
-
-Browsers prompt for the password natively (any username); API and MCP clients send `Authorization: Bearer <password>`. Agents should use a personal MCP token from the Connect tab instead. For anything beyond a trusted LAN, put a TLS reverse proxy such as Caddy in front, or reach it over Tailscale or WireGuard; [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) has a complete Caddy example.
-
-An organisation that already runs single sign-on can use it instead (`IDENTITY_PROVIDER=oidc` or `trusted_header`), which also enables per-person collections and sharing ([docs/IDENTITY.md](docs/IDENTITY.md)). You do not need this for a personal or small-team install.
-
-Each collection holds up to 5 GiB of sources by default (`COLLECTION_STORAGE_LIMIT_BYTES`); usage is shown in the Sources panel.
+## More ways to deploy
 
 ### On-premises with your own models
 
@@ -191,451 +237,89 @@ AI_PROVIDER_LABEL=Acme Internal LLM
 ```
 
 Then nobody configures a model in their browser: chat, report generation,
-OCR and the content-policy reviewer all use that endpoint, and the UI shows
-it as connected. A per-request key still overrides it, so an individual can
-bring their own provider. Endpoints with a private CA are handled by
-dropping the `.crt` into `certs/ca/` — trusted at container start, no
-rebuild. Registry users can `docker pull ghcr.io/jordanboyce/clio`
-instead of carrying a file. Full guide: [docs/ONPREM.md](docs/ONPREM.md).
+OCR, the content-policy reviewer and the MCP `ask_documents` tool all use that
+endpoint. A per-request key still overrides it, so an individual can bring
+their own provider. Endpoints with a private CA are handled by dropping the
+`.crt` into `certs/ca/` — trusted at container start, no rebuild. Registry
+users can `docker pull ghcr.io/jordanboyce/clio` instead of carrying a file.
+Full guide: [docs/ONPREM.md](docs/ONPREM.md).
 
 ### Air-gapped / offline deployment
 
-Clio runs fully disconnected: build with `--build-arg OFFLINE_BUNDLE=1` to bake every runtime model (reranker, Whisper, Docling OCR) into the image, transfer it with `docker save`/`docker load`, and run with `OFFLINE_MODE=1` — which disables cloud AI providers and all HuggingFace downloads, limiting supported provider paths to the local or self-hosted endpoints you configure. Enforce a network egress policy for a verifiable no-egress deployment. Full walkthrough: [docs/AIRGAP.md](docs/AIRGAP.md).
+Clio runs fully disconnected: build with `--build-arg OFFLINE_BUNDLE=1` to
+bake the remaining runtime models (Whisper, Docling OCR) into the image next
+to the embedding model and reranker, transfer it with `docker save` /
+`docker load`, and run with `OFFLINE_MODE=1`, which disables cloud AI
+providers and every model download. `CLIO_PROFILE=secure` refuses to start in
+a weaker shape, and `scripts/preflight.py` reports exactly where data can go.
+Full walkthrough: [docs/AIRGAP.md](docs/AIRGAP.md), [docs/SECURE_PROFILE.md](docs/SECURE_PROFILE.md).
 
 ### Hosting on a PaaS (Railway, Render, Fly.io, Coolify, …)
 
-The image is designed to deploy anywhere that builds from a Dockerfile. Three things to configure:
+The image deploys anywhere that builds from a Dockerfile. Three things to configure:
 
 1. **Port** — the container listens on the platform's injected `PORT` (falls back to `8473`). Platforms that ask for an internal port instead (Fly, Coolify): use `8473`.
-2. **Persistent volume** — mount one at `/app/data`. Everything stateful (documents, vector indexes, app database) lives under that single path. Without a volume the app still runs, but data is lost on redeploy.
-3. **Auth** — the app has no login of its own, so before exposing a public URL set `AUTH_PASSWORD=<secret>` in the environment. Browsers prompt for it natively (HTTP Basic, any username); API and MCP clients send `Authorization: Bearer <secret>`. `/health` stays open for platform health checks. A shared password gives no per-person revocation or audit trail — for a standing team deployment prefer an SSO proxy ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
-
-The embedding model is baked into the image at build time, so cold starts don't download anything and the container works on fully ephemeral filesystems (as long as `/app/data` is a volume). TLS is the platform's job — leave `SSL_CERTFILE`/`SSL_KEYFILE` unset and let the platform terminate HTTPS.
-
-#### Railway
-
-The repo ships a [railway.json](railway.json) (Dockerfile builder, `/health` healthcheck, restart-on-failure), so deploying is:
-
-1. **New Project → Deploy from GitHub repo** — Railway detects the Dockerfile and builds it (the image is large: CPU torch + OCR + Whisper; expect a long first build).
-2. **Attach a volume** to the service (right-click the service → *Attach Volume*) with mount path `/app/data`.
-3. **Set the `AUTH_PASSWORD` variable** on the service before generating a public domain — the app is unauthenticated without it.
-4. **Settings → Networking → Generate Domain.** Railway injects `PORT` and terminates HTTPS at the edge automatically; when prompted for a target port, any value works since the app listens on `$PORT`.
-
-API and MCP clients then authenticate with `Authorization: Bearer <AUTH_PASSWORD>` against `https://<your-app>.up.railway.app`.
-
-### What You Get
-
-- **Web Interface**: http://localhost:8473 - Simple UI for searching, uploading, and managing documents
-- **API Docs**: http://localhost:8473/docs - Interactive OpenAPI documentation
-- **API Endpoint**: http://localhost:8473/api - REST API for programmatic access
-- **MCP Endpoint**: http://localhost:8473/mcp - Streamable-HTTP MCP server for external agents
-
-**First time setup**: the search model (about 90 MB) downloads in the background the first
-time the server starts, with progress shown in the app. Setup also asks where you want the
-search index to run: on this machine, in an Ollama you already run, or at a hosted provider
-you trust.
-
-**SSL/TLS Support**: For corporate environments with custom CA certificates, see the [Corporate SSL Configuration](#corporate-ssl-configuration) section below.
-
----
-
-## What It Does
-
-Clio lets you:
-
-1. **Upload Documents** - Drop in PDFs, Office docs, spreadsheets, code, audio, or images (books, papers, manuals, data, photos of whiteboards)
-2. **Automatic Search** - Meaning and keyword matching are combined and balanced per query; there is no mode to pick (an Advanced setting exists for the rare miss)
-3. **Privacy-Aware AI Options** (Optional) - Use private/local or external providers for reranking and answer synthesis based on data sensitivity
-4. **Get Results** - Find relevant passages with page numbers and direct document links
-5. **Scale Up** - Handle hundreds to thousands of documents locally
-
-**Supported file types:** PDF, TXT, DOCX, CSV/XLSX, Markdown, HTML, JSON/JSONL, source code, audio (transcribed), images (PNG/JPG/WEBP/TIFF — described and transcribed by a vision model)
-
-**Links too:** paste URLs into *Add sources → Link* and the server fetches each one — a web page is saved as HTML with its navigation and footer stripped, a link straight to a PDF or file is saved as that file — and indexes it like an upload. Only public hosts are fetched by default (`LINK_ALLOW_PRIVATE_NETWORKS=1` opens intranet links); `OFFLINE_MODE` turns the feature off.
-
-**Example:**
-- Query: *"How do I optimize database queries?"*
-- Result: Points you to page 47 of your database textbook with a direct link
-
----
-
-## Technology Stack
-
-### Core Dependencies
-
-| Package | Version | Purpose | Used In |
-|---------|---------|---------|---------|
-| **fastapi** | 0.115.5 | Web framework that powers the REST API | `main.py` |
-| **uvicorn** | 0.32.1 | ASGI server that runs FastAPI | `main.py` |
-| **python-multipart** | 0.0.18 | Handles file uploads (PDFs) | `main.py` |
-
-### Document Processing
-
-| Package | Version | Purpose | Used In |
-|---------|---------|---------|---------|
-| **pypdf** | 5.1.0 | Extracts text from standard PDFs | `services/document_extractor.py` |
-| **pdfplumber** | 0.11.4 | Extracts text from complex PDF layouts (columns, tables) | `services/document_extractor.py` |
-| **python-docx** | 1.1.2 | Extracts text from DOCX files | `services/document_extractor.py` |
-| **pandas** | 2.2.3 | Extracts data from CSV files | `services/document_extractor.py` |
-
-**Why two PDF libraries?** We try pdfplumber first (handles complex layouts better), then fall back to pypdf if needed.
-
-**Supported formats:** PDF, TXT, DOCX, CSV/XLSX, Markdown, HTML, JSON/JSONL, code, audio, images
-
-### Search & Embeddings
-
-| Package | Version | Purpose | Used In |
-|---------|---------|---------|---------|
-| **sentence-transformers** | 3.3.1 | Converts text to semantic embeddings (vectors) | `services/embedder.py` |
-| **faiss-cpu** | 1.9.0 | Fast similarity search over millions of vectors | `services/vector_store.py` |
-
-**What are embeddings?** They convert text to numbers that capture meaning. Similar meanings = similar numbers, enabling semantic search.
-
-### AI Integration (Optional)
-
-| Package | Version | Purpose | Used In |
-|---------|---------|---------|---------|
-| **anthropic** | 0.42.0 | Anthropic Claude API client for AI reranking and synthesis | `services/ai_service.py` |
-| **openai** | 1.59.5 | OpenAI GPT API client for AI reranking and synthesis | `services/ai_service.py` |
-
-**AI Features** (optional, requires API keys stored in browser localStorage):
-- **Result Reranking**: Uses AI to re-order search results by relevance
-- **Answer Synthesis**: Generates natural language answers from retrieved documents
-- **Multi-Provider**: Run both Claude and OpenAI simultaneously to compare responses
-
-### Configuration & Data
-
-| Package | Version | Purpose | Used In |
-|---------|---------|---------|---------|
-| **pydantic** | 2.10.3 | Data validation for API requests/responses | `models/schemas.py` |
-| **pydantic-settings** | 2.6.1 | Loads configuration from `.env` files | `config.py` |
-| **python-dotenv** | 1.0.1 | Reads `.env` files | `config.py` |
-
-### Frontend (Web Interface)
-
-| Package | Version | Purpose | Used In |
-|---------|---------|---------|---------|
-| **vue** | 3.5.27 | Progressive JavaScript framework for building UIs | `frontend/src/*.vue` |
-| **vite** | 7.3.1 | Fast build tool and dev server | `vite.config.js` |
-| **tailwindcss** | 4.0.0 | Utility-first CSS framework | `frontend/src/style.css` |
-| **daisyui** | 5.5.17 | Tailwind CSS component library | UI components |
-| **axios** | 1.13.4 | HTTP client for API requests | `frontend/src/components/*.vue` |
-
-**Modern UI Stack:** Built with Vue 3 Composition API, styled with Tailwind CSS 4 and DaisyUI 5 components, bundled with Vite for lightning-fast development and production builds.
-
-**Frontend Features:**
-- Dark/light theme with persistent preference
-- Sticky navigation tabs
-- Search history with caching (localStorage-based)
-- Real-time stats display (documents, pages, chunks)
-- Multi-provider AI selection (Anthropic, OpenAI, INL HPC, and Ollama)
-- Responsive design for mobile and desktop
-
-### Development & Testing
-
-| Package | Version | Purpose | Used In |
-|---------|---------|---------|---------|
-| **pytest** | 8.3.4 | Testing framework | `tests/` |
-| **httpx** | 0.28.1 | HTTP client for testing APIs | `tests/` |
-
----
-
-## Installation
-
-### Prerequisites
-
-- **Python 3.13** (highly recommended) or **Python 3.8+** (check: `python --version`)
-- **4GB RAM minimum** (8GB recommended for large collections)
-- **500MB disk space** (more for storing PDFs and indexes)
-
-### Step 1: Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-**What happens:** Downloads and installs the core packages. Takes 2-5 minutes.
-
-Scanned-PDF OCR, audio transcription, and the PostgreSQL backend are optional
-extras — add `-r requirements-ocr.txt`, `-r requirements-audio.txt`, or
-`-r requirements-postgres.txt` if you need them. The app runs fine without
-them and tells you which extra to install if you enable a feature that needs it.
-
-### Step 2: Configure (Optional)
-
-```bash
-cp .env.example .env
-```
-
-**Default settings work fine for most users.** Only edit `.env` if you need to:
-- Change the port
-- Use a different embedding model
-- Adjust chunk sizes
-- Choose metadata storage (JSON vs SQLite)
-
-### Step 3: Run the Server
-
-```bash
-python main.py
-```
-
-**First run:** the search model downloads in the background (about 90 MB, one to two
-minutes) and the app shows a progress bar until it is ready. If a corporate firewall blocks
-the download, nothing else stops: the app opens, existing sources list and settings work,
-search and indexing answer with the reason (HTTP 503) until a model is available, and the
-readiness bar offers a retry or another provider (an Ollama you run, or a hosted API). The core install runs embeddings
-on a small ONNX runtime (`fastembed`); the PyTorch-based `sentence-transformers` backend, which
-unlocks the wider model catalog, is optional:
-
-```bash
-pip install -r requirements-torch.txt   # optional: PyTorch backend, wider model catalog
-```
-
-Set `LOCAL_EMBEDDING_BACKEND=fastembed|sentence-transformers` to pick one explicitly; `auto`
-(the default) uses `fastembed` when it serves the chosen model and PyTorch otherwise.
-
-**You'll see:**
-```
-INFO - Loading embedding model: all-MiniLM-L6-v2
-INFO - Initializing vector store (metadata: json)
-INFO - Clio API ready
-INFO - Uvicorn running on http://127.0.0.1:8473
-```
-
-**Access the API:**
-- Interactive docs: http://localhost:8473/docs
-- Health check: http://localhost:8473/health
-
-To reach it from another machine, set `HOST=0.0.0.0` — and read
-[Security Considerations](#security-considerations) first, since the app is
-unauthenticated until you set `AUTH_PASSWORD`.
-
-### MCP Integration
-
-Clio now exposes an embedded HTTP MCP endpoint at `http://localhost:8473/mcp` when `ENABLE_MCP=true` (default).
-
-Use **Connect** in the UI to:
-- Enable or disable the MCP server without restarting
-- Choose the default collection and retrieval settings used by MCP
-- Keep MCP in search-only mode (recommended) to avoid duplicate model usage
-- Optionally enable Ollama-backed synthesis for MCP when you explicitly want server-side answering
-- **Sign in from the client** — with an OIDC identity provider configured (`IDENTITY_PROVIDER=oidc`,
-  `MCP_PUBLIC_URL`), Claude Desktop, claude.ai, ChatGPT and `claude mcp login` attach with the
-  endpoint URL alone: the app is the OAuth 2.1 resource server and your IdP signs people in
-  ([docs/IDENTITY.md](docs/IDENTITY.md#oauth-for-mcp-clients)).
-- **Generate a personal access token** — a self-serve bearer credential scoped to `/mcp` only, so
-  connecting a client never requires editing `.env` or setting up an identity provider. Pick an
-  expiry (90 days by default, or never), optionally limit the token to specific collections, and
-  revoke it from the same screen when a machine is retired; the table shows last use and call counts.
-- **Let agents write back** — tick *Allow adding and updating sources* on a token and the agent gets
-  a `write_document` tool: it can save markdown notes, summaries, JSON, or CSV into a collection
-  (`create`, `replace`, or `append`), indexed like any upload and subject to the same content policy,
-  attribution, and audit trail. Tokens are read-only unless you opt in.
-- **ChatGPT connectors and deep research** — the server also exposes the two tools OpenAI's
-  connector spec requires, `search` and `fetch`, over the same auth and collection scoping as every
-  other tool, so a ChatGPT custom connector (or any client that only speaks that shape) works
-  without a bridge.
-- **Let agents manage the index** — `list_index_jobs` and `get_index_job` show what is being
-  indexed; write-enabled tokens also get `reindex_document` (re-run extraction and embedding for
-  one source as a tracked, cancellable job) and `update_document_metadata` (set the sensitivity
-  label). Every tool schema carries its numeric limits and a human title, and every resource is
-  named and typed, so clients render them properly.
-- **See exactly what agents can do** — *What agents can do here* on the Connect tab lists the
-  tools, resources and prompts read live from the server (`GET /api/mcp/catalog`), grouped by
-  task and marked where a tool writes.
-- Copy or download ready-made snippets for Claude Code `.mcp.json`, Claude Desktop
-  `claude_desktop_config.json` (via `mcp-remote`), Cursor `.cursor/mcp.json`, Codex `config.toml`,
-  VS Code `.vscode/mcp.json`, Windsurf `mcp_config.json`, and AnythingLLM
-  `anythingllm_mcp_servers.json`. Newly created tokens are filled in; existing tokens require
-  pasting the credential you saved.
-
-For AnythingLLM, merge the entry into its storage `plugins/anythingllm_mcp_servers.json`
-and reload MCP servers in AnythingLLM. The export uses its `streamable` transport.
-Use an Clio URL reachable from the AnythingLLM host or container; a container's
-`localhost` points to itself. See [AnythingLLM's MCP setup](https://docs.anythingllm.com/mcp-compatibility/overview).
-
-### Step 4: Verify Setup
-
-```bash
-# Check health
-curl http://localhost:8473/health
-
-# Expected response:
-{"status":"healthy","indexed_chunks":0}
-```
-
----
-
-## Frontend Development
-
-The web interface is built with Vue 3 + Vite and located in the `frontend/` directory. The production build is automatically served by the FastAPI backend.
-
-### Development Mode
-
-To work on the frontend with hot-reload:
-
-```bash
-# Navigate to frontend directory
-cd frontend
-
-# Install Node.js dependencies (one-time setup)
-npm install
-
-# Start the Vite dev server
-npm run dev
-```
-
-This starts the dev server at http://localhost:5173 with hot-reload. The backend must be running separately at http://localhost:8473.
-
-### Building for Production
-
-```bash
-# From the frontend directory
-cd frontend
-npm run build
-```
-
-This compiles the Vue app into `frontend/dist/` (gitignored), which the FastAPI backend serves automatically at http://localhost:8473 — hashed assets get long-lived immutable cache headers, so repeat loads are fast and deploys are picked up immediately. Docker images build the frontend in a dedicated stage; `run.sh`/`run.bat` build it on first run.
-
-### Frontend Stack
-
-- **Framework**: Vue 3 with Composition API + Pinia for state management
-- **Build Tool**: Vite 7.3.1
-- **Styling**: Tailwind CSS 4.0 + DaisyUI 5.5
-- **HTTP Client**: Axios
-- **Features**:
-  - Hybrid semantic + keyword search with configurable weighting and keyword highlighting
-  - AI-powered answer synthesis (optional, with Claude/GPT)
-  - Search history with caching (localStorage-based, case-insensitive)
-  - Multi-file document upload (PDF, TXT, DOCX, CSV) with progress tracking
-  - Document management with bulk delete functionality
-  - Dark/light theme toggle with persistent preference
-  - Sticky navigation tabs
-  - Real-time stats in header (documents, pages, chunks)
-  - Responsive design for mobile and desktop
-
----
+2. **Persistent volume** — mount one at `/app/data`. Everything stateful lives under that single path.
+3. **Auth** — set `AUTH_PASSWORD=<secret>` before exposing a public URL. `/health` stays open for platform health checks. A shared password gives no per-person revocation or audit trail — for a standing team deployment prefer an SSO proxy ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
+
+The models are baked into the image, so cold starts download nothing and the
+container works on ephemeral filesystems as long as `/app/data` is a volume.
+TLS is the platform's job — leave `SSL_CERTFILE` / `SSL_KEYFILE` unset.
+
+**Railway:** the repo ships a [railway.json](railway.json) (Dockerfile builder,
+`/health` healthcheck, restart on failure). *New Project → Deploy from GitHub
+repo*, attach a volume at `/app/data`, set `AUTH_PASSWORD`, then *Settings →
+Networking → Generate Domain*. Expect a long first build; `SLIM=1` as a build
+argument shortens it.
+
+### Corporate SSL configuration
+
+Behind a TLS-intercepting proxy or a private CA, drop the `.crt` files into
+`certs/ca/`:
+
+- **Docker, building yourself:** `docker compose up -d --build` installs them
+  into the image's trust store at both the dependency and runtime stages.
+- **Docker, prebuilt or air-gapped image:** the entrypoint installs whatever is
+  mounted at `/certs/ca` on every start — into the system store *and* certifi's
+  bundle, which is what the Python HTTP clients use. `docker-compose.onprem.yml`
+  mounts `certs/ca` already; `docker compose -f docker-compose.onprem.yml restart clio`.
+- **Python:** set `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` to the certificate path.
+
+Use `certs/ca/` specifically, not `certs/`: the parent directory holds the dev
+self-signed pair and is excluded from the build context so its private key
+never lands in an image. Certificate contents are gitignored in both.
 
 ## Configuration
 
-Create a `.env` file to customize settings:
+Everything is a setting in `.env`; [.env.example](.env.example) documents all
+of them. The ones that matter most:
+
+| Setting | What it decides |
+|---|---|
+| `AUTH_PASSWORD`, `BIND_ADDRESS` / `HOST` | Whether others can reach it, and whether they need a password ([If others can reach it](#if-others-can-reach-it)) |
+| `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` | The model the whole deployment uses; leave empty and each person picks one in Settings → AI Providers |
+| `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL` | Where the search index runs: the built-in local model (default), an Ollama you run, or a hosted embedding API. Changing it means re-indexing |
+| `ENABLE_RERANKER`, `RERANKER_MODEL`, `RERANK_MAX_CONCURRENT` | The local cross-encoder that reorders the best candidates of every search; automatic by default |
+| `WORKER_THREADS`, `RATE_LIMIT_*`, `RESEARCH_MAX_CONCURRENT` | How much concurrent work one host takes before callers queue ([Capacity](docs/DEPLOYMENT.md#capacity--scaling)) |
+| `COLLECTION_STORAGE_LIMIT_BYTES` | Most a single collection may hold (5 GiB default) |
+| `OFFLINE_MODE`, `CLIO_PROFILE` | No cloud providers, no downloads; refuse to start when unsafely exposed |
+| `IDENTITY_PROVIDER`, `PRIVATE_COLLECTIONS` | Your own sign-in, and per-person collections enforced against it |
+| `DATA_DIR` | Where documents, indexes and the app database live (`./data`) |
+
+Provider API keys entered in the browser stay in that browser; a team key
+saved under Settings → AI Providers is stored server-side for everyone on the
+deployment.
+
+## Frontend development
 
 ```bash
-# Data storage
-DATA_DIR=./data                          # Where documents and indexes are stored
-
-# Embeddings — see "Choosing where embeddings run" below
-EMBEDDING_PROVIDER=local                # local | google | mistral | voyage | jina | openrouter | openai | ollama | openai_compatible
-EMBEDDING_MODEL=all-MiniLM-L6-v2        # model for the local provider
-LOCAL_EMBEDDING_BACKEND=auto            # auto | fastembed (ONNX, light) | sentence-transformers (PyTorch)
-REMOTE_EMBEDDING_MODEL=                 # model for any other provider (blank = its recommended one)
-EMBEDDING_API_KEY=                      # blank = reuse the matching AI Providers key
-
-# The LLM the whole deployment uses (optional — leave empty and each person
-# connects their own provider in Settings). See docs/ONPREM.md.
-AI_PROVIDER=                            # openai_compatible | ollama | anthropic | openai | ...
-AI_BASE_URL=                            # required for openai_compatible, e.g. http://vllm.internal:8000/v1
-AI_MODEL=                               # e.g. llama-3.3-70b-instruct
-AI_API_KEY=                             # optional; empty for an endpoint needing no auth
-AI_PROVIDER_LABEL=                      # what the UI calls it
-
-# Text chunking
-CHUNK_SIZE=600                          # Characters per chunk
-CHUNK_OVERLAP=100                       # Overlap between chunks
-
-# Search
-DEFAULT_TOP_K=10                        # Default number of results
-MAX_TOP_K=50                            # Maximum results allowed
-
-# Server
-HOST=127.0.0.1                          # This machine only. See Security below
-                                        # before changing to 0.0.0.0.
-PORT=8473
+cd frontend && npm install && npm run dev    # http://localhost:5173, proxies to the backend on :8473
+cd frontend && npm run build                 # production build into frontend/dist (gitignored; served by FastAPI)
 ```
 
-### AI Features (Optional)
-
-Clio supports optional AI integration for enhanced search results:
-
-**Features:**
-- **Result Reranking**: AI re-orders search results by semantic relevance
-- **Answer Synthesis**: AI generates natural language answers from retrieved documents
-- **Multi-Provider**: Use Anthropic Claude, OpenAI GPT, INL HPC AI, and Ollama
-
-**Setup:**
-1. Open the web interface at http://localhost:8473
-2. Navigate to the **Settings** tab
-3. Select your AI provider (Anthropic, OpenAI, INL HPC, or Ollama)
-4. Enter your API key (stored securely in browser localStorage, never sent to server)
-5. Enable desired features:
-   - **Reranking**: Improves result ordering (~$0.0005/search)
-   - **Synthesis**: Generates AI answers (~$0.015/search)
-
-**Multi-Provider Mode:**
-- If both Anthropic and OpenAI keys are configured, you can select which provider(s) to use per search
-- Compare responses side-by-side from both models
-- Selection preference persists between searches
-
-**Security Note:** API keys are stored only in your browser's localStorage and are sent directly to the AI providers. The Clio server never sees or stores your API keys.
-
-**Get API Keys:**
-- **Anthropic**: https://console.anthropic.com/
-- **OpenAI**: https://platform.openai.com/api-keys
-- **INL HPC**: Use your INL HPC API key for `https://api.hpc.inl.gov/llm/v1`
-
----
-
-### Corporate SSL Configuration
-
-For organizations using custom SSL certificates or corporate proxies:
-
-**Option 1: Docker (built in)**
-
-Place your corporate CA certificate(s) — `.crt` files — into the `certs/ca/` directory and rebuild; the standard Dockerfile installs anything it finds there into the image's system trust store, at both dependency-install and runtime stages (a no-op when the directory is empty):
-
-```bash
-cp /path/to/your/cert.crt certs/ca/
-docker compose up -d --build
-```
-
-**Option 1b: Docker, no rebuild (prebuilt or air-gapped images)**
-
-An image you loaded from a file or pulled from a registry can't have your CA
-baked in, so the entrypoint installs whatever is mounted at `/certs/ca` on
-every start — into the system trust store *and* certifi's bundle, which is
-what the Python HTTP clients actually use (a CA in the system store alone
-still gives `CERTIFICATE_VERIFY_FAILED` from an endpoint `curl` reaches
-fine). `docker-compose.onprem.yml` mounts `certs/ca` already:
-
-```bash
-cp /path/to/your/cert.crt certs/ca/
-docker compose -f docker-compose.onprem.yml restart clio
-```
-
-**Important Notes:**
-- Certificate files must have `.crt` extension
-- Multiple certificates can be placed in `certs/ca/`
-- Use `certs/ca/` specifically, **not** `certs/`. The parent `certs/` directory holds the dev self-signed pair from `generate-cert.sh`; it is excluded from the build context so its private key never lands in an image and its certificate is never trusted as a CA. Only `certs/ca/` is copied in.
-
-**Option 2: Python Direct Configuration**
-
-For Python deployments, set the SSL certificate path:
-
-```bash
-# Add to .env
-SSL_CERT_FILE=/path/to/your/cert.crt
-# Or set environment variable
-export SSL_CERT_FILE=/path/to/your/cert.crt
-export REQUESTS_CA_BUNDLE=/path/to/your/cert.crt
-```
-
-**What this solves:**
-- Corporate proxy SSL interception
-- Custom CA certificates
-- Internal certificate authorities
-- SSL verification errors when downloading models or making AI API calls
-
-**Security Note:** Certificate contents are gitignored in both `certs/` and `certs/ca/` (only the `.gitkeep` markers are tracked), so certificates and private keys are never committed. `certs/` is additionally excluded from the Docker build context; `certs/ca/` is the sole exception, since installing those CAs is the point.
+Vue 3 + Vite + Pinia + Tailwind/DaisyUI. The backend serves `frontend/dist`
+with immutable cache headers for hashed assets; Docker builds it in a
+dedicated stage and `run.sh` / `run.bat` build it on first run.
 
 ---
 
@@ -983,10 +667,10 @@ pip install --user -r requirements.txt
 
 ### Performance & Scalability
 
-**Current capacity:**
-- 100-1,000 documents: Works great
-- 1,000-10,000 documents: Recommend SQLite metadata storage
-- 10,000+ documents: Consider FAISS IVF index or pgvector
+**Current capacity:** one process, FAISS flat indexes and SQLite per
+collection; hundreds to a few thousand documents per collection are routine,
+and `scripts/mcp_load.py` measures what a given host serves concurrently
+([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#capacity--scaling)).
 
 **Memory usage estimates:**
 
@@ -1117,7 +801,7 @@ opinion is off by default. Full description in
    unaffected either way. Credentialed cross-origin requests are never allowed
    for the wildcard.
 3. **Rate limits and budgets** are built in — per-identity request limits for
-   chat, search and registration are on by default, an MCP class and a daily
+   chat and search are on by default, an MCP class and a daily
    provider-token budget per person are opt-in, and each collection has a
    storage cap (`RATE_LIMIT_*`, `CHAT_DAILY_TOKEN_BUDGET`,
    `COLLECTION_STORAGE_LIMIT_BYTES`). Tune them for your model's capacity; a
@@ -1130,20 +814,22 @@ never returned to a client.
 
 ### Backup & Recovery
 
-**What to backup:**
+**What to back up:** the whole data directory (`DATA_DIR`, `./data` by
+default, the `/app/data` volume in Docker). It holds everything stateful:
+
 ```bash
-# Documents (all file types)
-data/documents/
-
-# JSON metadata storage
-data/indexes/json/faiss.index
-data/indexes/json/metadata.json
-data/indexes/json/embeddings.npy
-
-# SQLite metadata storage
-data/indexes/sqlite/faiss.index
-data/indexes/sqlite/metadata.db
+data/app.db                 # collections, settings, tokens, audit trail
+data/answer_cache.db        # cached answers (safe to drop)
+data/collections/<id>/      # one folder per collection: source files + indexes
+data/collections/<id>/indexes/metadata.db   # chunks and metadata (SQLite)
+data/collections/<id>/indexes/bm25.db       # keyword index (FTS5)
+data/collections/<id>/indexes/*.index       # vectors (FAISS)
+data/models/                # downloaded embedding/reranker models (re-downloadable)
 ```
+
+Stop the server (or use `docker compose stop`) before copying: SQLite
+write-ahead logs (`*-wal`) belong to the running process. A collection can
+also be exported on its own as a `.clio.zip` from the Collections view.
 
 **Backup script:**
 ```bash
@@ -1188,7 +874,7 @@ clio/
 │   ├── embedder.py           # Generates embeddings
 │   ├── vector_store.py       # FAISS index with SQLite metadata
 │   ├── metadata_store.py     # SQLite metadata storage
-│   ├── ai_service.py         # AI provider abstraction (Anthropic, OpenAI, INL HPC, Ollama)
+│   ├── ai_service.py         # AI provider abstraction (Anthropic, OpenAI, Google, OpenRouter, Ollama, OpenAI-compatible)
 │   └── indexing/
 │       └── indexer.py        # Orchestrates indexing pipeline
 │
