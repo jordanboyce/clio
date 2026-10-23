@@ -1,0 +1,527 @@
+{
+  "version": 2,
+  "description": "Synthetic internal knowledge base of a fictional logistics company (Halvard Logistics). Every passage is indexed as exactly one chunk with id '<doc>#<n>' (1-based), so labels in queries.json stay stable regardless of the chunker. Version 2 added distractor documents and appended passages (near-identical error codes, a staging config, neighbouring dates, sibling tickets, more tables) so recall@5 separates configurations. Bump `version` whenever a passage or label changes: benchmark numbers are only comparable within one version.",
+  "documents": [
+    {
+      "id": "err-codes-importer",
+      "filename": "importer-error-reference.md",
+      "format": "md",
+      "passages": [
+        "Importer error reference. ERR_4020 — archive checksum mismatch. The uploaded archive's SHA-256 does not match the manifest. Usually a truncated upload over a flaky connection; ask the sender to re-export and upload again. The importer never retries a checksum failure on its own.",
+        "ERR_4021 — archive exceeds the streaming limit. The importer streams archives up to 2 GiB (the max_upload_bytes setting, 2147483648 by default). Larger archives fail at the first byte past the limit with ERR_4021. Fix: split the export into several archives under 2 GiB, or enable chunked upload on the sending side so the archive arrives in 256 MiB parts.",
+        "ERR_4022 — unsupported compression. Only gzip, zstd and uncompressed tar are accepted. Archives compressed with bzip2 or 7z are rejected before any data is read. Re-pack with `tar --zstd` and retry; no data is lost."
+      ]
+    },
+    {
+      "id": "err-codes-sync",
+      "filename": "sync-error-reference.md",
+      "format": "md",
+      "passages": [
+        "Sync service error reference. ERR_4120 — remote refused TLS handshake. The partner endpoint closed the connection during the handshake, typically because its certificate chain is incomplete or it only offers TLS 1.1. Verify the chain with openssl s_client and ask the partner to enable TLS 1.2 or later.",
+        "ERR_4121 — clock skew too large. The sync protocol signs every request with a timestamp and the receiver rejects anything more than 300 seconds off its own clock. A node that reports ERR_4121 on every request almost always lost NTP; check `timedatectl status` and the ntp pool configured in /etc/chrony.conf.",
+        "ERR_5003 — partner quota exceeded. The partner's daily document quota is used up; further pushes are refused until the quota resets at 00:00 UTC. Raise the quota in the partner record or wait. ERR_5003 is informational and does not page on-call."
+      ]
+    },
+    {
+      "id": "runbook-importer-stuck",
+      "filename": "runbook-importer-stuck.md",
+      "format": "md",
+      "passages": [
+        "Runbook: importer job stuck in queued. Symptoms: a job sits in state queued for more than ten minutes while the worker pool shows idle workers. Most often the queue lease expired after a worker crashed mid-job, and the job was never handed back. Check the worker logs for a restart around the time the job was created; a checksum failure (ERR_4020) in a previous job is a common trigger for the crash loop.",
+        "Recovery: run `halvardctl jobs release --stale` to return expired leases to the queue, then watch `halvardctl jobs list --state queued`. If the job is picked up and fails again, do not release it a third time; escalate to the platform on-call with the job id. Restarting the whole worker pool is a last resort because it aborts every running import."
+      ]
+    },
+    {
+      "id": "postmortem-2026-03-14",
+      "filename": "postmortem-eu-ingest-2026-03-14.md",
+      "format": "md",
+      "passages": [
+        "Postmortem: EU ingest outage, 14 March 2026. Timeline (UTC): 03:10 the Frankfurt sync nodes were patched and rebooted as part of the monthly window. 03:42 partner pushes to the EU region began failing; the dashboard showed a 100% error rate by 03:55. 04:20 on-call was paged after the SLA alert fired. 05:05 the root cause was identified and the nodes were corrected. 05:30 the backlog had drained and the incident was closed.",
+        "Root cause: the patch window replaced /etc/chrony.conf with the vendor default, which points at a pool the Frankfurt network blocks. The nodes drifted more than 300 seconds within half an hour of the reboot, and every signed request was rejected with ERR_4121 (clock skew). Impact: 1 hour 48 minutes of refused partner pushes in the EU region, 2,300 documents delayed, no data lost.",
+        "Action items: pin chrony.conf in the configuration management repository so a patch cannot replace it (owner: platform, due 31 March 2026); alert on clock skew above 60 seconds rather than waiting for sync failures (owner: observability, due 15 April 2026); add the patch window to the on-call hand-over so the first responder knows what changed."
+      ]
+    },
+    {
+      "id": "postmortem-2025-11-02",
+      "filename": "postmortem-search-latency-2025-11-02.md",
+      "format": "md",
+      "passages": [
+        "Postmortem: search latency regression, 2 November 2025. After the upgrade to v2.3.0 on the evening of 1 November, p95 search latency climbed from 400 ms to 3.8 s overnight. Cause: the new query planner in v2.3.0 fetched candidates from every shard sequentially instead of in parallel. The regression was not caught in staging because staging has a single shard.",
+        "Resolution: the planner was fixed in v2.3.1 and deployed on 5 November 2025. Follow-ups: staging now runs with three shards, and the release checklist gained a latency comparison against the previous version before a production deploy."
+      ]
+    },
+    {
+      "id": "release-notes-2.3",
+      "filename": "release-notes-v2.3.md",
+      "format": "md",
+      "passages": [
+        "Release notes v2.3.0 (released 1 November 2025). New: a parallel query planner for multi-shard searches; shipment labels can be batch-printed from the Shipments view; the webhooks page shows the last ten deliveries per endpoint. Changed: the default page size of the list endpoints is now 50 instead of 20.",
+        "Release notes v2.3.1 (released 5 November 2025). Hotfix: the query planner introduced in v2.3.0 fetched shards sequentially, causing a large latency regression on multi-shard deployments; it now fans out in parallel again. No other changes. Everyone on v2.3.0 should upgrade."
+      ]
+    },
+    {
+      "id": "release-notes-2.4",
+      "filename": "release-notes-v2.4.md",
+      "format": "md",
+      "passages": [
+        "Release notes v2.4.0 (released 10 February 2026). New: chunked uploads for archives above 2 GiB (opt-in, see the importer settings); an Idempotency-Key header on POST /v2/shipments; webhook replay protection with a five-minute window. Changed: rate limits are now enforced per API key rather than per account.",
+        "Deprecations in v2.4.0: the v1 API is deprecated as of this release and will be removed on a date to be announced separately; the legacy XML export is removed; the `labels_v1` feature flag is gone and batch labels are always on."
+      ]
+    },
+    {
+      "id": "hr-remote-work",
+      "filename": "remote-work-policy.md",
+      "format": "md",
+      "passages": [
+        "Remote work policy. Any employee whose role does not require a physical presence (warehouse, fleet and reception roles do) may work remotely up to three days a week by agreement with their manager. The company provides a laptop, a monitor and a headset; a desk and chair allowance of €400 is available once.",
+        "Working from abroad: employees may not work remotely from outside the European Economic Area for more than 30 days per calendar year without written approval from HR and their director, because of tax and social-security consequences. Days inside the EEA are not limited beyond the normal three-days-a-week agreement. Keep your manager informed of your location when travelling."
+      ]
+    },
+    {
+      "id": "hr-leave",
+      "filename": "leave-policy.md",
+      "format": "md",
+      "passages": [
+        "Leave policy. Full-time employees receive 28 days of annual leave per calendar year in addition to public holidays. Up to 5 unused days may be carried over into the next year and must be taken by 31 March; anything beyond 5 days is forfeited. Leave is requested in the HR portal and approved by the line manager.",
+        "Sick leave: tell your manager before your normal start time. A doctor's certificate is required from the fourth consecutive day. Sick days are paid in full for the first six weeks of any twelve-month period. Compassionate leave of up to five days is granted for the death of a close family member.",
+        "Public holidays follow the site where you are employed: the Netherlands for Rotterdam, Saxony for Leipzig, Catalonia for Barcelona. Working on a public holiday is compensated with a day in lieu, to be taken within three months. Remote employees follow the holidays of their contractual site, not of the place they happen to be."
+      ]
+    },
+    {
+      "id": "hr-expenses",
+      "filename": "expense-policy.md",
+      "format": "md",
+      "passages": [
+        "Expense policy. Meals while travelling are reimbursed up to €45 per day (€60 in Switzerland, Norway and Iceland). Hotels are reimbursed up to €150 per night in most cities and €220 in London, Paris, Zurich and Oslo. Receipts are required for any single item over €25. Claims are submitted within 30 days in the expense tool.",
+        "Not reimbursable: alcohol, minibar items, fines and parking tickets, upgrades to business or first class, personal entertainment, and anything bought for a family member travelling with you. Tips up to 10% are fine. If in doubt, ask finance before you spend rather than after."
+      ]
+    },
+    {
+      "id": "hr-travel",
+      "filename": "travel-booking-policy.md",
+      "format": "md",
+      "passages": [
+        "Travel booking policy. All flights, trains and hotels are booked through TripDesk so that duty-of-care tracking works; bookings made elsewhere are reimbursed only with a director's approval. Flights under six hours are booked in economy. Flights of six hours or more may be booked in premium economy; business class requires director approval and first class is never booked.",
+        "Trains are preferred over flights for journeys under four hours (for example Rotterdam to Leipzig). Book at least seven days ahead where possible. Rental cars require a company driving record check, which HR completes once a year."
+      ]
+    },
+    {
+      "id": "hr-onboarding",
+      "filename": "onboarding-checklist.md",
+      "format": "md",
+      "passages": [
+        "Onboarding checklist for new hires. Before day one: HR creates the account, IT ships the laptop and hardware key, the manager assigns a buddy and books the first-week calendar. Day one: security briefing (password standard, MFA, phishing), sign the acceptable-use policy, join the team channels.",
+        "First week: complete the warehouse safety course (mandatory for everyone, including office roles), set up TripDesk and the expense tool, and have the first one-to-one with your manager. Day 30 and day 90: structured check-ins with HR. The buddy stays assigned for the first three months."
+      ]
+    },
+    {
+      "id": "sec-password",
+      "filename": "password-mfa-standard.md",
+      "format": "md",
+      "passages": [
+        "Password and MFA standard. Passwords are at least 14 characters, are not reused across systems, and never expire on a schedule; they are changed only on suspicion of compromise. A password manager is provided and its use is required for shared service credentials. Multi-factor authentication is mandatory for every account.",
+        "Second factors: staff may use the authenticator app or a hardware key. Accounts with administrative rights (domain admins, cloud owners, payroll approvers) must use a hardware key; SMS codes are not permitted as a second factor for administrators because of SIM-swap risk. Lost hardware keys are reported to IT within 24 hours."
+      ]
+    },
+    {
+      "id": "sec-vpn",
+      "filename": "vpn-network-access.md",
+      "format": "md",
+      "passages": [
+        "VPN and network access. The company VPN uses split tunnelling: only traffic to internal address ranges goes through the tunnel, everything else leaves directly. Internal systems (the ERP, the HR portal, the admin consoles) require the VPN from outside the office networks. Contractors cannot access the finance VLAN at all, with or without VPN.",
+        "On-site exceptions: when you are on the office or warehouse network, the VPN is not required, and access to the warehouse camera network does not require VPN at all because it is reachable only from inside the warehouse. Guest Wi-Fi is treated as external: use the VPN on it.",
+        "Contractor access: contractors receive a VPN profile limited to the systems named in their statement of work, valid for the contract term plus seven days. Their accounts are reviewed monthly by the contract owner. Contractor laptops that are not company-managed may not join the office network and must use guest Wi-Fi with the VPN."
+      ]
+    },
+    {
+      "id": "sec-cve-advisory",
+      "filename": "advisory-cve-2025-48731-libarchive.md",
+      "format": "md",
+      "passages": [
+        "Security advisory: CVE-2025-48731 in libarchive. A crafted tar header can cause a heap overflow in libarchive versions 3.7.0 through 3.7.6. The importer links libarchive, so a malicious partner archive could crash the importer worker or, in the worst case, run code. Fixed in libarchive 3.7.7.",
+        "Remediation: all importer hosts must run libarchive 3.7.7 or later by 30 September 2025. The platform team rolled the fix to production on 18 September 2025; on-prem partners were notified by email the same day. Severity: high (CVSS 8.1)."
+      ]
+    },
+    {
+      "id": "sec-cve-advisory-2",
+      "filename": "advisory-cve-2026-11042-openssl.md",
+      "format": "md",
+      "passages": [
+        "Security advisory: CVE-2026-11042 in OpenSSL. A denial-of-service in the TLS 1.3 session ticket handling affects OpenSSL 3.2.0 to 3.2.3. Our API gateway and sync nodes were affected. Fixed in OpenSSL 3.2.4.",
+        "Status: patched on all internet-facing hosts on 22 January 2026; internal hosts followed by 29 January 2026. No exploitation was observed. Severity: medium (CVSS 5.9). No action is required from partners."
+      ]
+    },
+    {
+      "id": "fin-q3-2025",
+      "filename": "revenue-q3-2025.csv",
+      "format": "csv",
+      "passages": [
+        "Quarterly revenue Q3 2025 by region (EUR millions). Region | Revenue | YoY | Share\nEMEA | 12.4 | +6.1% | 47%\nAmericas | 9.8 | +11.3% | 37%\nAPAC | 4.1 | +2.5% | 16%\nTotal | 26.3 | +7.4% | 100%\nNotes: Americas growth driven by the two new cross-dock sites; APAC flat on currency."
+      ]
+    },
+    {
+      "id": "fin-q4-2025",
+      "filename": "revenue-q4-2025.csv",
+      "format": "csv",
+      "passages": [
+        "Quarterly revenue Q4 2025 by region (EUR millions). Region | Revenue | YoY | Share\nEMEA | 13.1 | +4.8% | 46%\nAmericas | 10.6 | +9.3% | 37%\nAPAC | 4.9 | +8.9% | 17%\nTotal | 28.6 | +6.9% | 100%\nNotes: peak-season volumes in all regions; APAC recovered on the Singapore hub opening."
+      ]
+    },
+    {
+      "id": "fin-q1-2026",
+      "filename": "revenue-q1-2026.csv",
+      "format": "csv",
+      "passages": [
+        "Quarterly revenue Q1 2026 by region (EUR millions). Region | Revenue | YoY | Share\nEMEA | 12.9 | +5.7% | 44%\nAmericas | 11.2 | +12.0% | 38%\nAPAC | 5.3 | +10.4% | 18%\nTotal | 29.4 | +8.5% | 100%\nNotes: first quarter in which Americas exceeded 11 million; EMEA seasonally soft."
+      ]
+    },
+    {
+      "id": "fin-headcount",
+      "filename": "headcount-2025-12.csv",
+      "format": "csv",
+      "passages": [
+        "Headcount by department, 31 December 2025. Department | Heads | Open roles\nWarehouse operations | 412 | 18\nFleet and drivers | 236 | 9\nEngineering | 84 | 6\nCustomer support | 57 | 3\nFinance | 22 | 1\nHR | 14 | 0\nSales | 41 | 4\nTotal | 866 | 41",
+        "Contractors and agency staff, 31 December 2025 (not included in the headcount above). Area | People\nWarehouse agency staff (peak) | 95\nEngineering contractors | 11\nCustomer support (outsourced evenings) | 14\nTotal | 120\nAgency staff numbers fall to roughly 20 outside peak season."
+      ]
+    },
+    {
+      "id": "fin-budget-it-2026",
+      "filename": "it-budget-2026.csv",
+      "format": "csv",
+      "passages": [
+        "IT budget 2026 (EUR). Line | 2026 budget | 2025 actual\nCloud infrastructure | 1,800,000 | 1,520,000\nSoftware licences | 620,000 | 590,000\nHardware refresh | 410,000 | 275,000\nSecurity tooling | 240,000 | 180,000\nTraining | 60,000 | 45,000\nTotal | 3,130,000 | 2,610,000\nApproved at the finance review on 2 December 2025."
+      ]
+    },
+    {
+      "id": "ops-warehouse-hours",
+      "filename": "warehouse-operating-hours.md",
+      "format": "md",
+      "passages": [
+        "Warehouse operating hours. Rotterdam: Monday to Saturday 06:00–22:00, closed on Sunday. Leipzig: Monday to Friday 05:00–23:00, Saturday 06:00–18:00, closed on Sunday except during peak season (15 November to 24 December) when it opens 08:00–16:00. Barcelona: Monday to Friday 07:00–20:00, closed at weekends. Inbound docks close one hour before the site.",
+        "Holiday closures: all three sites close on 25 and 26 December and 1 January. Rotterdam also closes on King's Day (27 April); Leipzig on Reformation Day (31 October); Barcelona on 24 June and 11 September. Peak-season extended hours are announced in October each year by the operations director."
+      ]
+    },
+    {
+      "id": "ops-fleet",
+      "filename": "fleet-maintenance-intervals.csv",
+      "format": "csv",
+      "passages": [
+        "Fleet maintenance intervals. Vehicle class | Service interval | Tyre check | Annual inspection\nVans (up to 3.5 t) | every 20,000 km or 12 months | every 10,000 km | yes\nRigid trucks (7.5–18 t) | every 40,000 km or 12 months | every 15,000 km | yes\nArticulated trucks | every 60,000 km or 12 months | every 15,000 km | yes, plus trailer brake test every 6 months\nElectric vans | every 30,000 km or 24 months | every 10,000 km | yes"
+      ]
+    },
+    {
+      "id": "ops-sla",
+      "filename": "delivery-sla-tiers.csv",
+      "format": "csv",
+      "passages": [
+        "Delivery SLA tiers. Tier | Delivery promise | Tracking updates | Late-delivery credit\nExpress | next day by 12:00 | every 15 minutes | 100% of shipping fee\nStandard | within 72 hours | every 15 minutes | 50% of shipping fee\nEconomy | within 5 business days | every 4 hours | none\nCredits are applied automatically when the proof of delivery timestamp is after the promise."
+      ]
+    },
+    {
+      "id": "eng-api-auth",
+      "filename": "api-authentication.md",
+      "format": "md",
+      "passages": [
+        "API authentication. Every request carries a bearer token obtained from POST /v2/auth/token with the client id and secret. Tokens are valid for 3600 seconds. Example:\n\ncurl -X POST https://api.halvard.example/v2/auth/token \\\n  -d client_id=$CLIENT_ID -d client_secret=$CLIENT_SECRET\n\ncurl https://api.halvard.example/v2/shipments \\\n  -H \"Authorization: Bearer $TOKEN\"",
+        "Rotating an expired token: do not refresh in a loop. Call POST /v2/auth/token again when a request returns 401 with error=token_expired, cache the new token for its expires_in, and retry the original request once. Client secrets themselves are rotated from the developer console; the old secret keeps working for 24 hours after a new one is issued."
+      ]
+    },
+    {
+      "id": "eng-api-shipments",
+      "filename": "api-shipments.md",
+      "format": "md",
+      "passages": [
+        "Shipments API. Create a shipment with POST /v2/shipments. Required fields: sender, recipient, parcels (array of weight_kg and dimensions_cm), service_tier (express, standard or economy). Example body:\n\n{\n  \"sender\": {\"name\": \"Halvard Rotterdam\", \"postcode\": \"3011 AB\"},\n  \"recipient\": {\"name\": \"A. Jansen\", \"postcode\": \"8911 CA\"},\n  \"parcels\": [{\"weight_kg\": 2.4, \"dimensions_cm\": [30, 20, 15]}],\n  \"service_tier\": \"standard\"\n}",
+        "Idempotency: send an Idempotency-Key header (any string up to 128 characters, a UUID is recommended) on POST /v2/shipments. A retry with the same key within 24 hours returns the original shipment instead of creating a second one. Without the header every retry after a timeout creates a new shipment and a new label."
+      ]
+    },
+    {
+      "id": "eng-api-ratelimits",
+      "filename": "api-rate-limits.md",
+      "format": "md",
+      "passages": [
+        "API rate limits. Each API key may make 600 requests per minute, measured in a sliding window, with bursts of up to 100 requests in any second. Above the limit the API answers 429 Too Many Requests with a Retry-After header in seconds; back off for at least that long. Limits are per key since v2.4.0, so a partner with several integrations should use one key per integration. Bulk label printing counts one request per label.",
+        "Bulk endpoints: POST /v2/labels/batch accepts up to 200 shipments per call and counts one request per label against the per-key limit, so a 200-label batch uses a third of a minute's allowance. Partners needing more than 600 requests per minute sustained can request a raised limit through their partner manager; raises above 2,000 per minute need a capacity review."
+      ]
+    },
+    {
+      "id": "eng-webhooks",
+      "filename": "webhooks.md",
+      "format": "md",
+      "passages": [
+        "Webhooks. Shipment events (created, picked_up, in_transit, delivered, exception) are POSTed to the endpoint registered in the developer console. Every delivery carries an X-Halvard-Signature header: hex HMAC-SHA256 of the raw body with the endpoint secret, and an X-Halvard-Timestamp header. Deliveries older than five minutes are rejected to prevent replay. Failed deliveries are retried with exponential backoff for 24 hours.",
+        "Verifying the signature in Python:\n\nimport hmac, hashlib, time\n\ndef verify(raw_body: bytes, headers: dict, secret: str) -> bool:\n    ts = headers[\"X-Halvard-Timestamp\"]\n    if abs(time.time() - int(ts)) > 300:\n        return False\n    expected = hmac.new(secret.encode(), ts.encode() + b\".\" + raw_body, hashlib.sha256).hexdigest()\n    return hmac.compare_digest(expected, headers[\"X-Halvard-Signature\"])"
+      ]
+    },
+    {
+      "id": "eng-db-retention",
+      "filename": "database-retention-backups.md",
+      "format": "md",
+      "passages": [
+        "Database retention and backups. Nightly snapshots of the primary database are taken at 02:00 UTC and kept for 35 days; this is the retention period for backups and it is not configurable per table. Point-in-time recovery covers the last 7 days from the write-ahead log archive. Restores are rehearsed on the first Monday of every month.",
+        "Archiving old shipments: rows older than 24 months move to shipments_archive once a week.\n\nINSERT INTO shipments_archive\nSELECT * FROM shipments\nWHERE delivered_at < now() - interval '24 months';\nDELETE FROM shipments\nWHERE delivered_at < now() - interval '24 months';\n\nThe archive table is read-only for application roles."
+      ]
+    },
+    {
+      "id": "eng-config-example",
+      "filename": "config.yaml",
+      "format": "yaml",
+      "passages": [
+        "# Service configuration (config.yaml) — production values\nserver:\n  port: 8080\n  request_timeout_seconds: 30\nimporter:\n  max_upload_bytes: 2147483648   # 2 GiB streaming limit; larger archives need chunked upload\n  chunked_upload: false\n  queue_workers: 8\nsearch:\n  rerank: true\n  candidates_per_shard: 50\nwebhooks:\n  replay_window_seconds: 300\n  retry_hours: 24"
+      ]
+    },
+    {
+      "id": "eng-deploy-runbook",
+      "filename": "deploy-runbook.md",
+      "format": "md",
+      "passages": [
+        "Deploy runbook. 1. Confirm the release checklist is green, including the latency comparison against the previous version. 2. Announce the deploy in #platform-ops. 3. Run `make deploy ENV=prod TAG=<version>`; the pipeline deploys to one canary host first and waits ten minutes. 4. Watch the error rate and p95 dashboards. 5. Promote with `make promote ENV=prod` once the canary is clean.",
+        "Rolling back: run `scripts/rollback.sh --to <sha>` with the previous release's commit; it redeploys that build to every host in under five minutes and does not touch the database. Database migrations are forward-only, so a rollback across a migration needs the platform on-call to apply the matching down-script by hand first.",
+        "Staging deploys use the same pipeline with `make deploy ENV=staging TAG=<version>` and no canary step. Staging has run three shards since the November 2025 latency regression, so planner changes show their real behaviour there. A broken staging build is simply redeployed; the production rollback script is not used for staging."
+      ]
+    },
+    {
+      "id": "eng-sql-cookbook",
+      "filename": "sql-cookbook-late-deliveries.md",
+      "format": "md",
+      "passages": [
+        "SQL cookbook: late deliveries. A shipment is late when the proof-of-delivery timestamp is after the promised time. Late shipments per tier for the last 30 days:\n\nSELECT service_tier, count(*) AS late\nFROM shipments\nWHERE delivered_at > promised_at\n  AND delivered_at >= now() - interval '30 days'\nGROUP BY service_tier\nORDER BY late DESC;\n\nUse promised_at, not created_at: the promise is set at pickup."
+      ]
+    },
+    {
+      "id": "eng-python-retry",
+      "filename": "retry-helper.md",
+      "format": "md",
+      "passages": [
+        "Retry helper used by the partner clients. It retries a callable a fixed number of times with exponential backoff and re-raises the last error:\n\nimport time\n\ndef with_retry(fn, attempts=3, backoff=0.5):\n    for i in range(attempts):\n        try:\n            return fn()\n        except Exception:\n            if i == attempts - 1:\n                raise\n            time.sleep(backoff * (2 ** i))\n\nNever wrap non-idempotent calls (shipment creation without an Idempotency-Key) in with_retry."
+      ]
+    },
+    {
+      "id": "eng-feature-flags",
+      "filename": "feature-flags.md",
+      "format": "md",
+      "passages": [
+        "Feature flags. Flags live in the flags service and are evaluated per account. Current flags: new_router_v2 (default off; the rewritten route optimiser, on for the Rotterdam pilot accounts), batch_labels (default on since v2.4.0), partner_quota_warnings (default on), legacy_xml_export (removed in v2.4.0). Flip a flag with `halvardctl flags set <name> --account <id> on|off`; changes apply within 30 seconds.",
+        "Flag lifecycle: a flag is created with an owner and a removal date at most 90 days out. Flags are named <area>_<change>_v<n>, lower case, so new_router_v2 is the second iteration of the router change. When a flag has been fully on or fully off for 30 days its owner removes it and the dead code path; the flags service lists overdue flags on its dashboard."
+      ]
+    },
+    {
+      "id": "eng-oncall",
+      "filename": "on-call-rotation.md",
+      "format": "md",
+      "passages": [
+        "On-call rotation and escalation. Platform on-call rotates weekly on Tuesday at 10:00. Severity 1 (customer-facing outage) pages the primary immediately; severity 2 pages during extended hours (07:00–23:00); severity 3 is a ticket. If the primary does not acknowledge within 15 minutes the page escalates to the secondary, and after a further 15 minutes to the engineering manager. Hand-over notes are written in the on-call channel every Tuesday.",
+        "Severity definitions. Severity 1: customers cannot create shipments, print labels or receive tracking, or data is at risk. Severity 2: a degraded feature with a workaround, or a single partner fully blocked. Severity 3: anything else, including cosmetic defects and questions. The on-call engineer may raise or lower the severity once they have looked; the reporter's choice is a starting point."
+      ]
+    },
+    {
+      "id": "meeting-2026-01-20",
+      "filename": "platform-sync-2026-01-20.md",
+      "format": "md",
+      "passages": [
+        "Platform sync, 20 January 2026. Attendees: platform, importer and API teams. Decisions: chunked upload becomes the default for archives above 2 GiB by the end of Q2 2026 (owner: importer team); the OpenSSL advisory patch is confirmed for 22 January; the rate-limit change to per-key enforcement ships in v2.4.0. Open: whether to keep the legacy XML export (decided later: removed)."
+      ]
+    },
+    {
+      "id": "meeting-2026-04-07",
+      "filename": "platform-sync-2026-04-07.md",
+      "format": "md",
+      "passages": [
+        "Platform sync, 7 April 2026. Decisions: the v1 API will be switched off on 30 September 2026; partners still on v1 (eleven accounts) are contacted by the partner team in April and May and get a migration guide. The chunked-upload default is on track for June. Clock-skew alerting from the March postmortem is live. Next sync: 5 May 2026."
+      ]
+    },
+    {
+      "id": "meeting-2025-12-02",
+      "filename": "finance-review-2025-12-02.md",
+      "format": "md",
+      "passages": [
+        "Finance review, 2 December 2025. The 2026 IT budget of €3.13 million was approved as proposed, with the cloud line to be reviewed again in June. The headcount freeze in place since August 2025 was lifted for engineering and customer support; warehouse hiring continues as planned. Q4 revenue is tracking slightly above forecast."
+      ]
+    },
+    {
+      "id": "vendor-list",
+      "filename": "approved-vendors.csv",
+      "format": "csv",
+      "passages": [
+        "Approved vendors. Category | Vendor | Contract owner | Renewal\nCloud infrastructure | Nimbus Cloud | Platform | March\nPayroll | PayTrail | HR | January\nTravel booking | TripDesk | Finance | July\nIdentity and MFA | KeyHarbour | Security | October\nFleet telematics | RouteSense | Operations | May\nOffice supplies | Kontor Direkt | Facilities | rolling"
+      ]
+    },
+    {
+      "id": "procurement-thresholds",
+      "filename": "procurement-approval-thresholds.md",
+      "format": "md",
+      "passages": [
+        "Procurement approval thresholds. Amount (per order, excl. VAT) | Approver\nUp to €5,000 | line manager\n€5,000 to €50,000 | director\nAbove €50,000 | CFO, in addition to the director\nAbove €250,000 | CFO and CEO, and a competitive tender\nPurchases above €50,000 cannot be approved by a director alone, and splitting an order to stay under a threshold is a disciplinary matter."
+      ]
+    },
+    {
+      "id": "customer-refunds-hw",
+      "filename": "refund-policy-hardware.md",
+      "format": "md",
+      "passages": [
+        "Refund policy: hardware. Label printers, scanners and scales bought from the Halvard shop may be returned within 30 days of delivery for a full refund if unopened. Opened items returned within 30 days are refunded minus a 10% restocking fee. After 30 days only warranty repairs apply. Return shipping is free with the label from the shop portal."
+      ]
+    },
+    {
+      "id": "customer-refunds-sw",
+      "filename": "refund-policy-software.md",
+      "format": "md",
+      "passages": [
+        "Refund policy: software subscriptions. A new subscription may be cancelled for a full refund within 14 days of the first payment. After 14 days subscriptions are not refundable; cancellation stops the next renewal and the service continues to the end of the paid period. Downgrades take effect at the next renewal and are credited pro rata."
+      ]
+    },
+    {
+      "id": "glossary",
+      "filename": "glossary.md",
+      "format": "md",
+      "passages": [
+        "Glossary. PITR: point-in-time recovery, restoring the database to any moment within the write-ahead log window. SLA: service level agreement, the delivery promise per tier. EEA: European Economic Area, the EU plus Iceland, Liechtenstein and Norway. PoD: proof of delivery, the signed or photographed confirmation whose timestamp decides whether a shipment was late. Cross-dock: a site where inbound freight is sorted and shipped out without being stored.",
+        "More terms. WAL: write-ahead log, the database change stream that point-in-time recovery replays. Canary: the single production host a release reaches first. Lease: the time-limited claim a worker holds on a queued job. Shard: one of the independent search indexes a multi-shard deployment spreads documents over. Cross-dock sites hold no stock overnight."
+      ]
+    },
+    {
+      "id": "faq-tracking",
+      "filename": "customer-faq-tracking.md",
+      "format": "md",
+      "passages": [
+        "Customer FAQ: tracking. A tracking number looks like HLV- followed by eight digits, for example HLV-00482913, and is printed under the barcode on the label. Tracking updates every 15 minutes for Express and Standard shipments and every 4 hours for Economy. If a shipment shows no scan for 48 hours, contact support with the tracking number; do not create a new shipment.",
+        "Delivery notifications: recipients receive an email or SMS at pickup, when the parcel is out for delivery, and at delivery with the proof-of-delivery photo where one was taken. Notifications are sent from notify.halvard.example and never ask for payment; a message asking for a customs or redelivery fee is a scam and should be forwarded to abuse@halvard.example."
+      ]
+    },
+    {
+      "id": "ticket-100234",
+      "filename": "ticket-100234.md",
+      "format": "md",
+      "passages": [
+        "Support ticket 100234: label printer offline in Leipzig. Reported 3 February 2026 by the Leipzig outbound lead: the dock 4 label printer showed offline in the Shipments view although it printed a test page locally. Resolution: the printer had received a new DHCP address after a power cut and the print server still held the old one; the print server entry was updated to the printer's hostname instead of its IP. Closed 3 February 2026."
+      ]
+    },
+    {
+      "id": "ticket-100271",
+      "filename": "ticket-100271.md",
+      "format": "md",
+      "passages": [
+        "Support ticket 100271: duplicate shipments created. Reported 19 February 2026 by partner Nordlys Retail: the same order produced two shipments and two labels on several occasions. Root cause: the partner's client retried POST /v2/shipments after a timeout without an Idempotency-Key header, so each retry created a new shipment. Resolution: the partner added the header; duplicate labels from before the fix were voided and credited. Closed 24 February 2026."
+      ]
+    },
+    {
+      "id": "err-codes-labels",
+      "filename": "label-service-error-reference.md",
+      "format": "md",
+      "passages": [
+        "Label service error reference. ERR_4220 — printer unreachable. The print server cannot open a connection to the printer named in the dock configuration. Most often the printer has a new address after a power cut; register printers by hostname, not IP. ERR_4221 — paper size mismatch. The label template is 100 x 150 mm but the printer reports a different roll; change the roll or the dock's template.",
+        "ERR_4023 — label template missing. The account's custom label template was deleted or never published; the label service falls back to the standard template and raises ERR_4023 as a warning on the shipment. Republish the template from the developer console. Unlike the importer's ERR_402x errors this one never blocks a shipment."
+      ]
+    },
+    {
+      "id": "err-codes-legacy",
+      "filename": "sync-error-reference-v1-legacy.md",
+      "format": "md",
+      "passages": [
+        "Legacy (v1) sync error reference — retained for partners still on the v1 API. ERR_4101 — authentication failed: the v1 API key is wrong or revoked. ERR_4102 — payload too large: v1 requests are limited to 10 MiB per call; larger exports must be split. Both codes disappear with the v2 migration, where limits are per archive and authentication is token based.",
+        "ERR_5001 — partner quota at 80%: a warning emitted once a day when the partner's document quota is nearly used. ERR_5002 — partner quota at 95%. Neither code refuses anything; they exist so partners can raise their quota before pushes start being refused. The refusal itself is ERR_5003 in both v1 and v2."
+      ]
+    },
+    {
+      "id": "postmortem-2026-03-11",
+      "filename": "postmortem-webhook-delays-2026-03-11.md",
+      "format": "md",
+      "passages": [
+        "Postmortem: webhook delivery delays, 11 March 2026. Between 09:20 and 11:45 UTC webhook deliveries to all partners ran up to 40 minutes late. Cause: a partner endpoint began answering every delivery with a slow 503, and the retry scheduler processed that endpoint's growing retry queue in the same worker pool as fresh deliveries, starving them.",
+        "Resolution and follow-ups: retries for an endpoint that has failed more than 50 times in a row now move to a separate low-priority pool, and an endpoint failing for 24 hours is disabled with an email to its owner. No deliveries were lost; late deliveries carried their original X-Halvard-Timestamp, so partners enforcing the five-minute replay window rejected them and had to re-pull events, which is documented as expected behaviour."
+      ]
+    },
+    {
+      "id": "release-notes-2.2",
+      "filename": "release-notes-v2.2.md",
+      "format": "md",
+      "passages": [
+        "Release notes v2.2.0 (released 2 September 2025). New: webhooks for shipment events with HMAC-SHA256 signatures; the sync error codes were renumbered into the ERR_41xx range (ERR_4120, ERR_4121) with the v1 codes kept for v1 callers. Changed: list endpoints return created_at in UTC with an explicit offset.",
+        "Release notes v2.2.3 (released 15 September 2025). Hotfix: webhook deliveries to endpoints behind redirects were signed over the redirected URL and failed verification; the signature now covers the body only, as documented. Also includes the libarchive 3.7.7 update for the importer."
+      ]
+    },
+    {
+      "id": "fin-q2-2025",
+      "filename": "revenue-q2-2025.csv",
+      "format": "csv",
+      "passages": [
+        "Quarterly revenue Q2 2025 by region (EUR millions). Region | Revenue | YoY | Share\nEMEA | 11.7 | +3.9% | 48%\nAmericas | 8.8 | +7.2% | 36%\nAPAC | 4.0 | +1.1% | 16%\nTotal | 24.5 | +4.6% | 100%\nNotes: EMEA affected by the Rotterdam dock rebuild; Americas cross-dock sites not yet open."
+      ]
+    },
+    {
+      "id": "fin-forecast-2026",
+      "filename": "revenue-forecast-fy2026.csv",
+      "format": "csv",
+      "passages": [
+        "Revenue forecast FY2026 by quarter (EUR millions, group total). Quarter | Forecast | Status\nQ1 2026 | 29.4 | actual\nQ2 2026 | 30.1 | forecast\nQ3 2026 | 31.0 | forecast\nQ4 2026 | 33.2 | forecast\nFY2026 | 123.7 | forecast\nAssumptions: Americas growth holds at 10% YoY; APAC Singapore hub at full capacity from Q3; no new sites. Reviewed quarterly by finance."
+      ]
+    },
+    {
+      "id": "ops-sla-pickup",
+      "filename": "pickup-sla.csv",
+      "format": "csv",
+      "passages": [
+        "Pickup SLA (collections from senders). Tier | Pickup window | Booking cut-off | Missed-pickup credit\nExpress | within 2 hours | 16:00 same day | 25% of shipping fee\nStandard | same day | 14:00 same day, else next business day | 25% of shipping fee\nEconomy | next business day | 18:00 | none\nEconomy shipments are not eligible for same-day pickup. Pickup windows are measured from the booking confirmation, not from label creation."
+      ]
+    },
+    {
+      "id": "eng-api-addresses",
+      "filename": "api-addresses.md",
+      "format": "md",
+      "passages": [
+        "Addresses API. Validate and normalise an address with POST /v2/addresses/validate before creating a shipment. Example body:\n\n{\n  \"name\": \"A. Jansen\",\n  \"street\": \"Nieuwestad 12\",\n  \"postcode\": \"8911CA\",\n  \"city\": \"Leeuwarden\",\n  \"country\": \"NL\"\n}\n\nThe response returns the normalised address (postcode \"8911 CA\"), a confidence score and, when the address is ambiguous, up to five candidates.",
+        "Validation rules: country is ISO 3166-1 alpha-2; postcodes are normalised per country; a PO box is rejected for Express shipments. Validation calls count against the API key's rate limit like any other request and are not cached across keys. An address validated within the last 30 days can be referenced by its address_id in POST /v2/shipments instead of repeating the fields."
+      ]
+    },
+    {
+      "id": "eng-api-labels",
+      "filename": "api-labels.md",
+      "format": "md",
+      "passages": [
+        "Labels API. Fetch a shipment's label with GET /v2/shipments/{id}/label?format=pdf|zpl|png. PDF labels are 100 x 150 mm; ZPL is for thermal printers at 203 dpi. Labels are generated at shipment creation and cached for 90 days. A re-fetch returns the same label unless the shipment was changed, which voids the old label.",
+        "Batch printing: POST /v2/labels/batch with up to 200 shipment ids returns one merged PDF, or a ZIP of ZPL files, as a job you poll at GET /v2/labels/batch/{job_id}. Each label counts as one request against the rate limit. Batch labels have been on for every account since v2.4.0; the earlier labels_v1 flag is gone."
+      ]
+    },
+    {
+      "id": "eng-webhooks-events",
+      "filename": "webhook-event-payloads.md",
+      "format": "md",
+      "passages": [
+        "Webhook event payloads. Every event body has the same envelope:\n\n{\n  \"id\": \"evt_01HV9Y3K7Q\",\n  \"type\": \"shipment.delivered\",\n  \"occurred_at\": \"2026-02-19T14:03:11Z\",\n  \"shipment_id\": \"shp_4F8Z2\",\n  \"data\": {\"pod_url\": \"https://api.halvard.example/v2/shipments/shp_4F8Z2/pod\", \"signed_by\": \"J. de Vries\"}\n}\n\nTypes: shipment.created, shipment.picked_up, shipment.in_transit, shipment.delivered, shipment.exception.",
+        "Delivery semantics: events are delivered at least once and may arrive out of order; use id for de-duplication and occurred_at for ordering. The signature scheme and its verification are described in the Webhooks guide; the payload format itself is identical for every event type. Exception events carry a reason code (address_unknown, refused, damaged, customs_hold) in data.reason."
+      ]
+    },
+    {
+      "id": "eng-config-staging",
+      "filename": "config.staging.yaml",
+      "format": "yaml",
+      "passages": [
+        "# Service configuration (config.staging.yaml) — staging overrides\nserver:\n  port: 8080\n  request_timeout_seconds: 60\nimporter:\n  max_upload_bytes: 536870912    # 512 MiB on staging; production allows 2 GiB\n  chunked_upload: true\n  queue_workers: 2\nsearch:\n  rerank: false\n  shards: 3\nwebhooks:\n  replay_window_seconds: 300\n  retry_hours: 1"
+      ]
+    },
+    {
+      "id": "meeting-2026-03-03",
+      "filename": "platform-sync-2026-03-03.md",
+      "format": "md",
+      "passages": [
+        "Platform sync, 3 March 2026. The monthly patch window for the Frankfurt sync nodes is scheduled for the night of 14 March; the platform team will patch and reboot in pairs so the EU region keeps capacity. The webhook retry pool split from the 11 March incident review will be scheduled after the window. Chunked upload default: still on track for June. Next sync: 7 April 2026."
+      ]
+    },
+    {
+      "id": "ticket-100272",
+      "filename": "ticket-100272.md",
+      "format": "md",
+      "passages": [
+        "Support ticket 100272: webhook signature failures. Reported 20 February 2026 by partner Fjordline Parts: every webhook delivery failed their signature check since go-live. Root cause: their verifier computed the HMAC over the body alone, while X-Halvard-Signature covers the timestamp, a dot and the body, as in the Webhooks guide. Resolution: the partner prefixed the timestamp; no change on our side. Closed 21 February 2026."
+      ]
+    },
+    {
+      "id": "ops-warehouse-contacts",
+      "filename": "warehouse-site-contacts.md",
+      "format": "md",
+      "passages": [
+        "Warehouse site contacts. Rotterdam (Waalhaven Oostzijde 83, 3087 BM): site lead M. Bakker, inbound desk +31 10 555 0183. Leipzig (Poststraße 12, 04158): site lead S. Krüger, inbound desk +49 341 555 0412. Barcelona (Carrer del Port 45, 08039): site lead N. Ferrer, inbound desk +34 93 555 0219. Opening hours and holiday closures are in the operating-hours document; for after-hours emergencies call the operations duty phone."
+      ]
+    }
+  ]
+}

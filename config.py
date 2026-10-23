@@ -179,12 +179,20 @@ class Settings(BaseSettings):
     # Candidates the cross-encoder scores: top_k * multiplier (capped at 50).
     # Its cost is linear in that pool, and the gain is in reordering the top
     # of it: 3x reorders what matters at under half the cost of 5x.
+    # Measured (scripts/retrieval_bench.py, 2026-10-23): 2x, 3x and 5x ranked
+    # the fixture corpus identically while p50 latency went 315 / 500 / 792 ms,
+    # so 5x buys nothing; 3x keeps headroom for first-stage misses on large
+    # collections that the small fixture cannot show.
     reranker_candidate_multiplier: int = 3
     # Cross-encoder passes in flight at once (0 = unbounded). One pass uses
     # every core, so more parallel passes only thrash. A search that waits
     # longer than the timeout for a slot answers in retrieval order instead
     # (`retrieval.reranked` is false on that response): bounded latency under
     # a burst of agent calls beats a precise ordering that arrives too late.
+    # Measured (scripts/retrieval_bench.py, 2026-10-23, eight parallel callers,
+    # 12 cores): 2 slots gave 5.6 queries/s and p95 1.9 s against 2.7 queries/s
+    # and p95 3.3 s unbounded, shedding 60% of searches to retrieval order at
+    # no measured recall cost.
     rerank_max_concurrent: int = 2
     rerank_queue_timeout_seconds: float = 1.0
 
