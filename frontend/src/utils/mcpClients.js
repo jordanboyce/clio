@@ -41,6 +41,15 @@ export const MCP_CLIENT_GROUPS = [
         hint: 'Merge this table into ~/.codex/config.toml. Keep the credential private.',
       },
       {
+        key: 'pi',
+        label: 'Pi',
+        filename: '~/.pi/agent/mcp.json',
+        render: (c) => json({ mcpServers: { [c.id]: { type: 'streamable-http', url: c.url, headers: { Authorization: bearer(c.token) } } } }),
+        hint: 'Merge under mcpServers in ~/.pi/agent/mcp.json (or .pi/mcp.json for one project, read once the project is trusted). ' +
+          'Equivalent one-liner: `pi mcp add <name> --url <url> --bearer-token-env-var CLIO_TOKEN`, which keeps the token in an environment variable (headers accept ${VAR}). ' +
+          'Pi speaks streamable HTTP only, which is this URL; it does not use the legacy SSE endpoint.',
+      },
+      {
         key: 'gemini',
         label: 'Gemini CLI',
         filename: '~/.gemini/settings.json',

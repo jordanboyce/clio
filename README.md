@@ -110,8 +110,8 @@ call), so many agents can be connected at once. From the **Connect** tab:
    screen when a machine is retired. Tick *Allow adding and updating sources*
    to let that agent save notes and summaries back into a collection.
 2. **Pick your client and copy the snippet.** Coding agents and IDEs:
-   Claude Code, Codex, Gemini CLI, Cursor, VS Code, Copilot CLI, Windsurf,
-   Zed, Cline, Roo Code, Kiro, OpenCode. Desktop and chat apps: Claude
+   Claude Code, Codex, Pi, Gemini CLI, Cursor, VS Code, Copilot CLI,
+   Windsurf, Zed, Cline, Roo Code, Kiro, OpenCode. Desktop and chat apps: Claude
    Desktop, claude.ai, ChatGPT, Grok, Hermes Agent, Goose, AnythingLLM,
    LibreChat, Open WebUI. Automation and APIs: n8n, LangChain, the Python
    and TypeScript MCP SDKs, the OpenAI Responses API, the Anthropic MCP

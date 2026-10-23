@@ -227,8 +227,8 @@ wrinkle: **MCP clients authenticate with a token, not by signing in.**
   endpoint (stateless, JSON responses, served at `/mcp` with no redirect),
   so anything that speaks the protocol attaches with the URL and a bearer
   header. The Connect tab writes the exact configuration for each of:
-  Claude Code, Codex, Gemini CLI, Cursor, VS Code, Copilot CLI, Windsurf,
-  Zed, Cline, Roo Code, Kiro, OpenCode (coding agents and IDEs); Claude
+  Claude Code, Codex, Pi, Gemini CLI, Cursor, VS Code, Copilot CLI,
+  Windsurf, Zed, Cline, Roo Code, Kiro, OpenCode (coding agents and IDEs); Claude
   Desktop, claude.ai, ChatGPT, Grok, Hermes Agent, Goose, AnythingLLM,
   LibreChat, Open WebUI (desktop and chat apps); n8n, LangChain, the Python
   and TypeScript MCP SDKs, the OpenAI Responses API, the Anthropic Messages

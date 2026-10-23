@@ -34,6 +34,7 @@ describe('mcpClients', () => {
     const expectations = {
       claude: ['mcpServers', 'clio-default', 'url'],
       codex: null,
+      pi: ['mcpServers', 'clio-default', 'url'],
       gemini: ['mcpServers', 'clio-default', 'httpUrl'],
       cursor: ['mcpServers', 'clio-default', 'url'],
       copilot: ['servers', 'clio-default', 'url'],
@@ -62,6 +63,7 @@ describe('mcpClients', () => {
   it('transport types match each client\'s documented spelling', () => {
     expect(JSON.parse(buildClientConfig('cline', ctx).content).mcpServers['clio-default'].type).toBe('streamableHttp')
     expect(JSON.parse(buildClientConfig('roo', ctx).content).mcpServers['clio-default'].type).toBe('streamable-http')
+    expect(JSON.parse(buildClientConfig('pi', ctx).content).mcpServers['clio-default'].type).toBe('streamable-http')
     expect(JSON.parse(buildClientConfig('opencode', ctx).content).mcp['clio-default'].type).toBe('remote')
     expect(JSON.parse(buildClientConfig('copilot', ctx).content).servers['clio-default'].type).toBe('http')
     expect(buildClientConfig('goose', ctx).content).toContain('type: streamable_http')
