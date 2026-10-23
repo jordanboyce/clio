@@ -1,0 +1,636 @@
+{
+  "version": 2,
+  "description": "Labelled queries over corpus.json. `relevant` lists labelled units: a document id (any of its passages counts) or 'doc#n' (only passage n counts). An empty list marks an unanswerable query, which is excluded from recall/MRR and reported through its top score instead. Categories: answerable, unanswerable, identifier, quoted, negation, date, table.",
+  "queries": [
+    {
+      "id": "id-01",
+      "category": "identifier",
+      "query": "ERR_4021",
+      "relevant": [
+        "err-codes-importer#2"
+      ]
+    },
+    {
+      "id": "id-02",
+      "category": "identifier",
+      "query": "what does ERR_4121 mean",
+      "relevant": [
+        "err-codes-sync#2"
+      ]
+    },
+    {
+      "id": "id-03",
+      "category": "identifier",
+      "query": "ERR_5003",
+      "relevant": [
+        "err-codes-sync#3"
+      ]
+    },
+    {
+      "id": "id-04",
+      "category": "identifier",
+      "query": "CVE-2025-48731",
+      "relevant": [
+        "sec-cve-advisory"
+      ]
+    },
+    {
+      "id": "id-05",
+      "category": "identifier",
+      "query": "is CVE-2026-11042 patched",
+      "relevant": [
+        "sec-cve-advisory-2#2"
+      ]
+    },
+    {
+      "id": "id-06",
+      "category": "identifier",
+      "query": "ticket 100271",
+      "relevant": [
+        "ticket-100271"
+      ]
+    },
+    {
+      "id": "id-07",
+      "category": "identifier",
+      "query": "v2.3.1",
+      "relevant": [
+        "release-notes-2.3#2"
+      ]
+    },
+    {
+      "id": "id-08",
+      "category": "identifier",
+      "query": "new_router_v2 flag",
+      "relevant": [
+        "eng-feature-flags#1"
+      ]
+    },
+    {
+      "id": "id-09",
+      "category": "identifier",
+      "query": "what does a tracking number like HLV-00482913 look like",
+      "relevant": [
+        "faq-tracking#1"
+      ]
+    },
+    {
+      "id": "id-10",
+      "category": "identifier",
+      "query": "X-Halvard-Signature",
+      "relevant": [
+        "eng-webhooks",
+        "ticket-100272"
+      ]
+    },
+    {
+      "id": "id-11",
+      "category": "identifier",
+      "query": "scripts/rollback.sh",
+      "relevant": [
+        "eng-deploy-runbook#2"
+      ]
+    },
+    {
+      "id": "id-12",
+      "category": "identifier",
+      "query": "why does the importer fail with ERR_4022 on partner archives",
+      "relevant": [
+        "err-codes-importer#3"
+      ]
+    },
+    {
+      "id": "qt-01",
+      "category": "quoted",
+      "query": "what is the \"retention period\" for database snapshots",
+      "relevant": [
+        "eng-db-retention#1"
+      ]
+    },
+    {
+      "id": "qt-02",
+      "category": "quoted",
+      "query": "\"proof of delivery\"",
+      "relevant": [
+        "glossary#1"
+      ]
+    },
+    {
+      "id": "qt-03",
+      "category": "quoted",
+      "query": "policy on the \"restocking fee\"",
+      "relevant": [
+        "customer-refunds-hw"
+      ]
+    },
+    {
+      "id": "qt-04",
+      "category": "quoted",
+      "query": "\"Idempotency-Key\" header",
+      "relevant": [
+        "eng-api-shipments#2",
+        "ticket-100271"
+      ]
+    },
+    {
+      "id": "qt-05",
+      "category": "quoted",
+      "query": "does the VPN use \"split tunnelling\"",
+      "relevant": [
+        "sec-vpn#1"
+      ]
+    },
+    {
+      "id": "qt-06",
+      "category": "quoted",
+      "query": "\"headcount freeze\"",
+      "relevant": [
+        "meeting-2025-12-02"
+      ]
+    },
+    {
+      "id": "qt-07",
+      "category": "quoted",
+      "query": "\"max_upload_bytes\"",
+      "relevant": [
+        "eng-config-example",
+        "err-codes-importer#2",
+        "eng-config-staging"
+      ]
+    },
+    {
+      "id": "ng-01",
+      "category": "negation",
+      "query": "which purchases cannot be approved by a director alone",
+      "relevant": [
+        "procurement-thresholds"
+      ]
+    },
+    {
+      "id": "ng-02",
+      "category": "negation",
+      "query": "when is the VPN not required",
+      "relevant": [
+        "sec-vpn#2"
+      ]
+    },
+    {
+      "id": "ng-03",
+      "category": "negation",
+      "query": "which expenses are not reimbursable",
+      "relevant": [
+        "hr-expenses#2"
+      ]
+    },
+    {
+      "id": "ng-04",
+      "category": "negation",
+      "query": "can administrators use SMS codes for MFA",
+      "relevant": [
+        "sec-password#2"
+      ]
+    },
+    {
+      "id": "ng-05",
+      "category": "negation",
+      "query": "how long can I work from outside the EEA without approval",
+      "relevant": [
+        "hr-remote-work#2"
+      ]
+    },
+    {
+      "id": "ng-06",
+      "category": "negation",
+      "query": "when is a software subscription not refundable",
+      "relevant": [
+        "customer-refunds-sw"
+      ]
+    },
+    {
+      "id": "ng-07",
+      "category": "negation",
+      "query": "which warehouses are closed on Sunday",
+      "relevant": [
+        "ops-warehouse-hours#1"
+      ]
+    },
+    {
+      "id": "ng-08",
+      "category": "negation",
+      "query": "which calls must never be wrapped in the retry helper",
+      "relevant": [
+        "eng-python-retry"
+      ]
+    },
+    {
+      "id": "dt-01",
+      "category": "date",
+      "query": "what happened on 14 March 2026",
+      "relevant": [
+        "postmortem-2026-03-14#1"
+      ]
+    },
+    {
+      "id": "dt-02",
+      "category": "date",
+      "query": "what was decided at the platform sync on 7 April 2026",
+      "relevant": [
+        "meeting-2026-04-07"
+      ]
+    },
+    {
+      "id": "dt-03",
+      "category": "date",
+      "query": "when is the v1 API switched off",
+      "relevant": [
+        "meeting-2026-04-07"
+      ]
+    },
+    {
+      "id": "dt-04",
+      "category": "date",
+      "query": "patch deadline for the libarchive advisory",
+      "relevant": [
+        "sec-cve-advisory#2"
+      ]
+    },
+    {
+      "id": "dt-05",
+      "category": "date",
+      "query": "when did v2.3.1 ship",
+      "relevant": [
+        "release-notes-2.3#2",
+        "postmortem-2025-11-02#2"
+      ]
+    },
+    {
+      "id": "dt-06",
+      "category": "date",
+      "query": "what was approved at the finance review in December 2025",
+      "relevant": [
+        "meeting-2025-12-02"
+      ]
+    },
+    {
+      "id": "dt-07",
+      "category": "date",
+      "query": "what caused the search slowdown on 2 November 2025",
+      "relevant": [
+        "postmortem-2025-11-02#1"
+      ]
+    },
+    {
+      "id": "dt-08",
+      "category": "date",
+      "query": "action items due in April 2026 from the EU ingest postmortem",
+      "relevant": [
+        "postmortem-2026-03-14#3"
+      ]
+    },
+    {
+      "id": "tb-01",
+      "category": "table",
+      "query": "EMEA revenue Q3 2025",
+      "relevant": [
+        "fin-q3-2025"
+      ]
+    },
+    {
+      "id": "tb-02",
+      "category": "table",
+      "query": "APAC revenue in Q1 2026",
+      "relevant": [
+        "fin-q1-2026"
+      ]
+    },
+    {
+      "id": "tb-03",
+      "category": "table",
+      "query": "total revenue Q4 2025",
+      "relevant": [
+        "fin-q4-2025"
+      ]
+    },
+    {
+      "id": "tb-04",
+      "category": "table",
+      "query": "how many people work in engineering",
+      "relevant": [
+        "fin-headcount"
+      ]
+    },
+    {
+      "id": "tb-05",
+      "category": "table",
+      "query": "2026 budget for cloud infrastructure",
+      "relevant": [
+        "fin-budget-it-2026"
+      ]
+    },
+    {
+      "id": "tb-06",
+      "category": "table",
+      "query": "service interval for rigid trucks",
+      "relevant": [
+        "ops-fleet"
+      ]
+    },
+    {
+      "id": "tb-07",
+      "category": "table",
+      "query": "delivery promise for the Standard tier",
+      "relevant": [
+        "ops-sla"
+      ]
+    },
+    {
+      "id": "tb-08",
+      "category": "table",
+      "query": "who is the approved payroll vendor",
+      "relevant": [
+        "vendor-list"
+      ]
+    },
+    {
+      "id": "tb-09",
+      "category": "table",
+      "query": "Leipzig warehouse opening hours on Saturday",
+      "relevant": [
+        "ops-warehouse-hours#1"
+      ]
+    },
+    {
+      "id": "tb-10",
+      "category": "table",
+      "query": "late-delivery credit for Express shipments",
+      "relevant": [
+        "ops-sla"
+      ]
+    },
+    {
+      "id": "an-01",
+      "category": "answerable",
+      "query": "how do I handle an expired API token",
+      "relevant": [
+        "eng-api-auth#2"
+      ]
+    },
+    {
+      "id": "an-02",
+      "category": "answerable",
+      "query": "how many requests per minute can one API key make",
+      "relevant": [
+        "eng-api-ratelimits#1"
+      ]
+    },
+    {
+      "id": "an-03",
+      "category": "answerable",
+      "query": "how do I verify a webhook signature",
+      "relevant": [
+        "eng-webhooks#2"
+      ]
+    },
+    {
+      "id": "an-04",
+      "category": "answerable",
+      "query": "how long are database backups kept",
+      "relevant": [
+        "eng-db-retention#1"
+      ]
+    },
+    {
+      "id": "an-05",
+      "category": "answerable",
+      "query": "how do I roll back a production deploy",
+      "relevant": [
+        "eng-deploy-runbook#2"
+      ]
+    },
+    {
+      "id": "an-06",
+      "category": "answerable",
+      "query": "what is the maximum archive size the importer accepts",
+      "relevant": [
+        "err-codes-importer#2",
+        "eng-config-example"
+      ]
+    },
+    {
+      "id": "an-07",
+      "category": "answerable",
+      "query": "how many unused leave days can be carried into next year",
+      "relevant": [
+        "hr-leave#1"
+      ]
+    },
+    {
+      "id": "an-08",
+      "category": "answerable",
+      "query": "daily meal allowance when travelling",
+      "relevant": [
+        "hr-expenses#1"
+      ]
+    },
+    {
+      "id": "an-09",
+      "category": "answerable",
+      "query": "when do I have to fly economy",
+      "relevant": [
+        "hr-travel#1"
+      ]
+    },
+    {
+      "id": "an-10",
+      "category": "answerable",
+      "query": "minimum password length",
+      "relevant": [
+        "sec-password#1"
+      ]
+    },
+    {
+      "id": "an-11",
+      "category": "answerable",
+      "query": "what happens if the on-call engineer does not acknowledge a page",
+      "relevant": [
+        "eng-oncall#1"
+      ]
+    },
+    {
+      "id": "an-12",
+      "category": "answerable",
+      "query": "why did the partner end up with duplicate shipments",
+      "relevant": [
+        "ticket-100271"
+      ]
+    },
+    {
+      "id": "an-13",
+      "category": "answerable",
+      "query": "how was the offline label printer in Leipzig fixed",
+      "relevant": [
+        "ticket-100234"
+      ]
+    },
+    {
+      "id": "an-14",
+      "category": "answerable",
+      "query": "SQL to count late deliveries per tier",
+      "relevant": [
+        "eng-sql-cookbook"
+      ]
+    },
+    {
+      "id": "an-15",
+      "category": "answerable",
+      "query": "what does the retry helper do",
+      "relevant": [
+        "eng-python-retry"
+      ]
+    },
+    {
+      "id": "an-16",
+      "category": "answerable",
+      "query": "what does a new hire do in their first week",
+      "relevant": [
+        "hr-onboarding#2"
+      ]
+    },
+    {
+      "id": "an-17",
+      "category": "answerable",
+      "query": "an import job has been queued for twenty minutes, what do I do",
+      "relevant": [
+        "runbook-importer-stuck"
+      ]
+    },
+    {
+      "id": "an-18",
+      "category": "answerable",
+      "query": "how long do I have to return a label printer",
+      "relevant": [
+        "customer-refunds-hw"
+      ]
+    },
+    {
+      "id": "an-19",
+      "category": "answerable",
+      "query": "which compression formats does the importer accept",
+      "relevant": [
+        "err-codes-importer#3"
+      ]
+    },
+    {
+      "id": "an-20",
+      "category": "answerable",
+      "query": "how are failed webhook deliveries retried",
+      "relevant": [
+        "eng-webhooks#1"
+      ]
+    },
+    {
+      "id": "an-21",
+      "category": "answerable",
+      "query": "how much is the home office desk allowance",
+      "relevant": [
+        "hr-remote-work#1"
+      ]
+    },
+    {
+      "id": "an-22",
+      "category": "answerable",
+      "query": "what is a cross-dock",
+      "relevant": [
+        "glossary#1"
+      ]
+    },
+    {
+      "id": "un-01",
+      "category": "unanswerable",
+      "query": "what is the parental leave policy",
+      "relevant": []
+    },
+    {
+      "id": "un-02",
+      "category": "unanswerable",
+      "query": "which Kubernetes version does production run",
+      "relevant": []
+    },
+    {
+      "id": "un-03",
+      "category": "unanswerable",
+      "query": "what is the office dress code",
+      "relevant": []
+    },
+    {
+      "id": "un-04",
+      "category": "unanswerable",
+      "query": "revenue forecast for 2027",
+      "relevant": []
+    },
+    {
+      "id": "un-05",
+      "category": "unanswerable",
+      "query": "how do I reset my Slack password",
+      "relevant": []
+    },
+    {
+      "id": "un-06",
+      "category": "unanswerable",
+      "query": "fleet carbon emissions target",
+      "relevant": []
+    },
+    {
+      "id": "un-07",
+      "category": "unanswerable",
+      "query": "who is the chief executive",
+      "relevant": []
+    },
+    {
+      "id": "un-08",
+      "category": "unanswerable",
+      "query": "ERR_9999",
+      "relevant": []
+    },
+    {
+      "id": "id-13",
+      "category": "identifier",
+      "query": "ERR_4220",
+      "relevant": [
+        "err-codes-labels#1"
+      ]
+    },
+    {
+      "id": "tb-11",
+      "category": "table",
+      "query": "Q2 2025 total revenue",
+      "relevant": [
+        "fin-q2-2025"
+      ]
+    },
+    {
+      "id": "dt-09",
+      "category": "date",
+      "query": "what was discussed at the platform sync on 3 March 2026",
+      "relevant": [
+        "meeting-2026-03-03"
+      ]
+    },
+    {
+      "id": "an-23",
+      "category": "answerable",
+      "query": "how do I print labels for many shipments at once",
+      "relevant": [
+        "eng-api-labels#2"
+      ]
+    },
+    {
+      "id": "ng-09",
+      "category": "negation",
+      "query": "which shipments are not eligible for same-day pickup",
+      "relevant": [
+        "ops-sla-pickup"
+      ]
+    }
+  ]
+}
