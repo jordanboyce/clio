@@ -163,11 +163,36 @@ def _check_security_posture() -> None:
         )
 
 
+def _size_worker_pools() -> None:
+    """Give both thread pools WORKER_THREADS slots.
+
+    Every MCP tool and the sync endpoints run in a worker thread so the event
+    loop stays free to accept connections; how many run at once is decided
+    here, not by Python's CPU-count defaults (asyncio: min(32, cpus + 4),
+    anyio: 40). One number for both so capacity planning has one knob
+    (docs/DEPLOYMENT.md, "Capacity & scaling").
+    """
+    size = max(4, int(settings.worker_threads))
+    from concurrent.futures import ThreadPoolExecutor
+
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(max_workers=size, thread_name_prefix="clio-worker")
+    )
+    try:
+        import anyio.to_thread
+
+        anyio.to_thread.current_default_thread_limiter().total_tokens = size
+    except Exception as e:  # noqa: BLE001 - anyio internals; the asyncio pool still applies
+        logger.warning(f"Could not resize the anyio worker pool: {e}")
+    logger.info(f"Worker threads: {size}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager - initialize and cleanup services."""
     async with mcp_server_lifespan():
         logger.info("Initializing Clio API...")
+        _size_worker_pools()
 
         # Jobs do not survive the process that ran them, but their rows do.
         # Reconcile before anything can enqueue work, so a restart mid-index
@@ -543,6 +568,31 @@ async def web_interface():
 
 # Mounts must come after all routes so they don't override API routes.
 app.mount("/mcp", embedded_mcp_app, name="mcp")
+
+
+class _MCPPathNormalizer:
+    """Serve `/mcp` itself, not just `/mcp/`.
+
+    A Starlette mount only matches paths under its prefix, so the bare path
+    used to answer with a 307 to `/mcp/`. That doubled every MCP round-trip
+    (clients paste the URL without a slash), and some clients refuse to
+    follow a redirected POST at all. Rewriting the path before routing makes
+    both spellings the same request; the auth and rate-limit middleware
+    already treat them alike.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path") == "/mcp":
+            scope = dict(scope)
+            scope["path"] = "/mcp/"
+            scope["raw_path"] = b"/mcp/"
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(_MCPPathNormalizer)
 
 if (FRONTEND_DIST / "index.html").exists():
     app.mount("/", SPAStaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -168,6 +169,17 @@ _SERVER_INSTRUCTIONS = (
     "stale. " + _RESEARCH_INSTRUCTIONS
 )
 
+# The grounded-answer tool exists only when the deployment runs a model of
+# its own (AI_PROVIDER); the instructions say so in the same breath, so a
+# client never plans around a tool that is not there.
+_ASK_AVAILABLE = bool((settings.ai_provider or "").strip())
+if _ASK_AVAILABLE:
+    _SERVER_INSTRUCTIONS += (
+        " When you want a finished, cited answer rather than passages to read, call "
+        "ask_documents: it runs this deployment's own model over the same retrieval and "
+        "returns the answer with numbered sources; depth=\"research\" for multi-part questions."
+    )
+
 _clio_mcp = FastMCP(
     "Clio",
     instructions=_SERVER_INSTRUCTIONS,
@@ -279,6 +291,42 @@ def _mutating(title: str, *, destructive: bool, idempotent: bool) -> ToolAnnotat
         title=title, readOnlyHint=False, destructiveHint=destructive,
         idempotentHint=idempotent, openWorldHint=False,
     )
+
+
+def _offloaded(register):
+    """Register a synchronous tool/resource so it runs in the worker pool.
+
+    FastMCP calls a plain ``def`` tool inline on the event loop, so one slow
+    SQL query or document read would stall every other MCP client and the UI
+    for its duration. This wraps the function in a coroutine that offloads it
+    with ``asyncio.to_thread`` (context variables — token scope, profile,
+    identity — are copied into the worker), hands THAT to FastMCP, and gives
+    the module back the original synchronous function so in-process callers
+    (the chat tool executor, tests) keep calling it directly.
+
+    The schema FastMCP derives is unchanged: ``functools.wraps`` sets
+    ``__wrapped__``, and ``inspect.signature`` follows it to the real
+    parameters, annotations and docstring.
+    """
+    def decorate(fn):
+        @functools.wraps(fn)
+        async def runner(*args, **kwargs):
+            return await asyncio.to_thread(fn, *args, **kwargs)
+
+        register(runner)
+        return fn
+
+    return decorate
+
+
+def _threaded_tool(*args, **kwargs):
+    """``@_clio_mcp.tool(...)`` for a synchronous implementation; see _offloaded."""
+    return _offloaded(_clio_mcp.tool(*args, **kwargs))
+
+
+def _threaded_resource(*args, **kwargs):
+    """``@_clio_mcp.resource(...)`` for a synchronous implementation; see _offloaded."""
+    return _offloaded(_clio_mcp.resource(*args, **kwargs))
 
 
 def get_mcp_settings_payload() -> dict[str, Any]:
@@ -520,7 +568,7 @@ def _serialize_result(
     return payload
 
 
-@_clio_mcp.tool(title="Health check", annotations=_read_only("Health check"))
+@_threaded_tool(title="Health check", annotations=_read_only("Health check"))
 def health_check() -> dict[str, Any]:
     """Check that the Clio MCP server is reachable and report its status.
 
@@ -533,6 +581,7 @@ def health_check() -> dict[str, Any]:
       - server_id: unique identifier for this Clio instance
       - version: schema/data version
       - embedding: active embedding provider and model name
+      - reranker: whether the local cross-encoder reorders results, and why not
       - mcp: key MCP settings (mode, top_k, default_collection)
       - collections: list of all available collection ids and names
     """
@@ -567,11 +616,19 @@ def health_check() -> dict[str, Any]:
         if settings.embedding_provider == "ollama":
             embedding_info["base_url"] = settings.ollama_base_url
 
+    from services import reranker as _reranker
+
+    try:
+        reranker_info = _reranker.status()
+    except Exception as e:  # noqa: BLE001 - health must answer
+        reranker_info = {"active": False, "reason": f"status unavailable: {e}"}
+
     return _tool_response({
         "status": "ok",
         "server_id": settings.mcp_server_id or "clio",
         "version": settings.schema_version,
         "embedding": embedding_info,
+        "reranker": reranker_info,
         "mcp": {
             "mode": settings.mcp_mode,
             "top_k": settings.mcp_top_k,
@@ -582,7 +639,7 @@ def health_check() -> dict[str, Any]:
     }, "health_check")
 
 
-@_clio_mcp.tool(title="List collections", annotations=_read_only("List collections"))
+@_threaded_tool(title="List collections", annotations=_read_only("List collections"))
 def list_collections() -> dict[str, Any]:
     """List every document collection available on this MCP server.
 
@@ -629,7 +686,7 @@ def list_collections() -> dict[str, Any]:
     }, "list_collections")
 
 
-@_clio_mcp.tool(title="Collection info", annotations=_read_only("Collection info"))
+@_threaded_tool(title="Collection info", annotations=_read_only("Collection info"))
 def get_collection_info(
     collection_id: str | None = None,
     detail: Literal["counts", "with_documents"] = "with_documents",
@@ -746,7 +803,7 @@ def _normalize_search_filters(filters: dict[str, Any] | None) -> dict[str, Any] 
     return out or None
 
 
-@_clio_mcp.tool(title="Collection facets", annotations=_read_only("Collection facets"))
+@_threaded_tool(title="Collection facets", annotations=_read_only("Collection facets"))
 def get_collection_facets(collection_id: str | None = None) -> dict[str, Any]:
     """List the filterable metadata for a collection.
 
@@ -889,7 +946,7 @@ async def search_all_collections(
     )
 
 
-@_clio_mcp.tool(title="Recent documents", annotations=_read_only("Recent documents"))
+@_threaded_tool(title="Recent documents", annotations=_read_only("Recent documents"))
 def list_recent_documents(
     limit: Annotated[int, Field(ge=1, le=50)] = 10,
     collection_id: str | None = None,
@@ -1464,7 +1521,7 @@ _DOC_CONTEXT_MAX_CHARS_DEFAULT = 12000
 _DOC_CONTEXT_MAX_CHARS_CAP = 40000
 
 
-@_clio_mcp.tool(title="Read document text", annotations=_read_only("Read document text"))
+@_threaded_tool(title="Read document text", annotations=_read_only("Read document text"))
 def get_document_context(
     document_id: str,
     page_number: int | None = None,
@@ -1923,7 +1980,7 @@ def _format_schema_summary(schema: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-@_clio_mcp.tool(title="List tables", annotations=_read_only("List tables"))
+@_threaded_tool(title="List tables", annotations=_read_only("List tables"))
 def list_tables(collection_id: str | None = None) -> dict[str, Any]:
     """List every CSV / Excel sheet ingested as a typed SQL table.
 
@@ -1964,7 +2021,7 @@ def list_tables(collection_id: str | None = None) -> dict[str, Any]:
     }, "list_tables")
 
 
-@_clio_mcp.tool(title="Table schema", annotations=_read_only("Table schema"))
+@_threaded_tool(title="Table schema", annotations=_read_only("Table schema"))
 def get_table_schema(
     identifier: str,
     collection_id: str | None = None,
@@ -2000,7 +2057,7 @@ def get_table_schema(
     return _tool_response(_format_schema_summary(schema), "get_table_schema")
 
 
-@_clio_mcp.tool(title="Table rows", annotations=_read_only("Table rows"))
+@_threaded_tool(title="Table rows", annotations=_read_only("Table rows"))
 def get_table_rows(
     identifier: str,
     limit: Annotated[int, Field(ge=1, le=2000)] = 200,
@@ -2073,7 +2130,7 @@ def get_table_rows(
     }, "get_table_rows")
 
 
-@_clio_mcp.tool(title="Query table (SQL)", annotations=_read_only("Query table (SQL)"))
+@_threaded_tool(title="Query table (SQL)", annotations=_read_only("Query table (SQL)"))
 def query_table(
     sql: str,
     max_rows: int = 500,
@@ -2124,7 +2181,7 @@ _AGG_FN_SQL = {
 }
 
 
-@_clio_mcp.tool(title="Aggregate table", annotations=_read_only("Aggregate table"))
+@_threaded_tool(title="Aggregate table", annotations=_read_only("Aggregate table"))
 def aggregate_table(
     identifier: str,
     aggregate_col: str,
@@ -2216,7 +2273,7 @@ def aggregate_table(
     }, "aggregate_table")
 
 
-@_clio_mcp.tool(title="Document metadata", annotations=_read_only("Document metadata"))
+@_threaded_tool(title="Document metadata", annotations=_read_only("Document metadata"))
 def get_document_metadata(
     document_id: str,
     collection_id: str | None = None,
@@ -2593,6 +2650,162 @@ _CONNECTOR_FETCH_MAX_CHARS = 60_000
 _CONNECTOR_FETCH_WINDOW = 2
 
 
+# ── Grounded answers over MCP (optional: needs a deployment-wide model) ─────
+#
+# Every other tool hands the client evidence to reason over, which is the
+# right default: the intelligence lives in whatever model the client runs.
+# But a client with a small or busy model, or an automation that just needs
+# the answer, is better served by one call that returns a finished, cited
+# answer. This is a thin adapter over the single chat pipeline
+# (api/chat._run_turn): same retrieval, same reranking, same inlined tables,
+# same answer cache, same usage accounting. It exists only when the
+# deployment configured its own model (AI_PROVIDER), because an MCP call
+# carries no per-user key.
+
+
+def ask_documents_sync(
+    question: str,
+    collection_id: str | None = None,
+    depth: str = "quick",
+    top_k: int = 8,
+    document_ids: list[str] | None = None,
+    use_cache: bool = True,
+) -> dict[str, Any]:
+    """Shared implementation; the MCP tool wraps it in a worker thread."""
+    import re
+
+    provider_name = (settings.ai_provider or "").strip()
+    if not provider_name:
+        raise ValueError(
+            "ask_documents needs a deployment-wide model (AI_PROVIDER, AI_MODEL, ...). "
+            "Use research_documents and write the answer in the client instead."
+        )
+    normalized = (question or "").strip()
+    if not normalized:
+        raise ValueError("question must not be empty")
+    if depth not in ("quick", "research"):
+        raise ValueError("depth must be 'quick' or 'research'")
+
+    resolved_collection = _resolve_collection_id(collection_id)
+    collection = collection_service.get_collection(resolved_collection)
+    profile = get_request_mcp_profile()
+    excerpt_limit = max(100, min(int(profile.get("max_source_length") or settings.mcp_max_source_length), 2000))
+
+    # Thin adapter over the one chat loop; imported here so services/ does
+    # not depend on api/ at import time.
+    from api import chat as chat_api
+    from middleware.user_context import get_request_user
+    from models.schemas import ChatMessage, ChatRequest
+
+    ids = [str(d).strip() for d in (document_ids or []) if str(d).strip()] or None
+    request = ChatRequest(
+        messages=[ChatMessage(role="user", content=normalized)],
+        provider=provider_name,
+        depth=depth,
+        top_k=max(1, min(int(top_k), 20)),
+        document_ids=ids,
+        use_cache=bool(use_cache),
+        related=False,
+    )
+    provider_args = chat_api._provider_args(None, None, None, None, None, None)
+    cache_ctx, cache_entry = chat_api._prepare_turn(
+        request, resolved_collection, chat_api._requested_model(request, **provider_args),
+    )
+    if cache_entry is None:
+        over_budget = chat_api.check_daily_budget(get_request_user())
+        if over_budget:
+            raise ValueError(str(over_budget.get("detail") or "daily token budget spent"))
+
+    # Document links in the answer's sources point at the app, not at /mcp.
+    base_url = re.sub(r"/mcp/?$", "", (settings.mcp_public_url or "").strip()).rstrip("/")
+
+    # One answer is several provider round-trips plus retrieval: it takes a
+    # research slot so a burst of agents queues instead of stampeding.
+    gate = _acquire_research_slot()
+    done: dict[str, Any] | None = None
+    try:
+        for event in chat_api._run_turn(request, resolved_collection, base_url,
+                                        provider_args, cache_ctx, cache_entry):
+            if event["type"] == "error":
+                raise ValueError(str(event.get("message") or "the answer could not be produced"))
+            if event["type"] == "done":
+                done = event
+    finally:
+        if gate is not None:
+            gate.release()
+    if done is None:
+        raise ValueError("the answer could not be produced")
+
+    sources = []
+    for n, src in enumerate(done.get("sources") or [], start=1):
+        entry = {
+            "n": n,
+            "filename": src.get("filename"),
+            "page_number": src.get("page_number"),
+            "document_id": src.get("document_id"),
+            "excerpt": _truncate(src.get("text_snippet") or "", excerpt_limit),
+        }
+        if src.get("sensitivity"):
+            entry["sensitivity"] = src["sensitivity"]
+        sources.append(entry)
+    usage = done.get("usage") or {}
+    payload: dict[str, Any] = {
+        "question": normalized,
+        "collection_id": resolved_collection,
+        "collection_name": _mcp_safe_name(collection, resolved_collection),
+        "corpus_version": _corpus_version(resolved_collection),
+        "answer": done.get("_answer") or "",
+        "sources": sources,
+        "citation_note": "Bracketed [Source N] markers in the answer refer to the numbered sources.",
+        "depth": done.get("depth") or depth,
+        "cached": bool(done.get("cached")),
+        "model": usage.get("model"),
+        "usage": {"input_tokens": usage.get("input_tokens", 0), "output_tokens": usage.get("output_tokens", 0)},
+        "tool_calls": sum(1 for r in (done.get("structured_results") or []) if r.get("tool") != "_thinking"),
+    }
+    if ids:
+        payload["document_ids"] = ids
+    return _tool_response(payload, "ask_documents")
+
+
+if _ASK_AVAILABLE:
+    @_clio_mcp.tool(title="Ask the documents", annotations=_read_only("Ask the documents"))
+    async def ask_documents(
+        question: str,
+        collection_id: str | None = None,
+        depth: Literal["quick", "research"] = "quick",
+        top_k: Annotated[int, Field(ge=1, le=20)] = 8,
+        document_ids: list[str] | None = None,
+        use_cache: bool = True,
+    ) -> dict[str, Any]:
+        """Get a finished, cited answer from the documents in one call.
+
+        Runs this deployment's own model over the same retrieval the other
+        tools use (hybrid search, local reranking, small tables inlined whole)
+        and returns `answer` with `[Source N]` citations plus the numbered
+        `sources` (filename, page, document_id, excerpt). The answer says so
+        plainly when the sources do not establish something; treat that as
+        the finding, not as a reason to retry.
+
+        depth: "quick" (default) answers in one model pass from the retrieved
+        passages — fastest, right for most questions. "research" runs the full
+        investigation loop (focused subqueries, exact-phrase checks, document
+        reads) for multi-part or comparative questions; slower and costlier.
+        top_k: passages retrieved for the answer (1–20). document_ids:
+        restrict the answer to these documents. use_cache: reuse an answer
+        already generated for the same question over the same sources.
+
+        Prefer research_documents / search_collection when you want to read
+        the evidence yourself or combine it with other sources. Numeric
+        questions over CSV/XLSX data are answered from the full tables here;
+        the table tools remain the way to run your own filters and sums.
+        """
+        return await asyncio.to_thread(
+            ask_documents_sync, question, collection_id=collection_id, depth=depth,
+            top_k=top_k, document_ids=document_ids, use_cache=use_cache,
+        )
+
+
 def _document_url(
     document_id: str,
     collection_id: str,
@@ -2877,7 +3090,7 @@ def _serialize_index_job(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@_clio_mcp.tool(title="List index jobs", annotations=_read_only("List index jobs"))
+@_threaded_tool(title="List index jobs", annotations=_read_only("List index jobs"))
 def list_index_jobs(
     collection_id: str | None = None,
     limit: Annotated[int, Field(ge=1, le=50)] = 10,
@@ -2915,7 +3128,7 @@ def list_index_jobs(
     }, "list_index_jobs")
 
 
-@_clio_mcp.tool(title="List source changes", annotations=_read_only("List source changes"))
+@_threaded_tool(title="List source changes", annotations=_read_only("List source changes"))
 def list_changes(
     collection_id: str | None = None,
     since_id: Annotated[int, Field(ge=0)] = 0,
@@ -2945,7 +3158,7 @@ def list_changes(
     return _tool_response(payload, "list_changes")
 
 
-@_clio_mcp.tool(title="Index job status", annotations=_read_only("Index job status"))
+@_threaded_tool(title="Index job status", annotations=_read_only("Index job status"))
 def get_index_job(job_id: Annotated[int, Field(ge=1)]) -> dict[str, Any]:
     """Return one indexing job with its progress and per-file failures.
 
@@ -3091,7 +3304,7 @@ def reindex_document_sync(document_id: str, collection_id: str | None = None) ->
     }, "reindex_document")
 
 
-@_clio_mcp.tool(
+@_threaded_tool(
     title="Re-index document",
     annotations=_mutating("Re-index document", destructive=True, idempotent=True),
 )
@@ -3154,7 +3367,7 @@ def update_document_metadata_sync(
     return _tool_response(payload, "update_document_metadata")
 
 
-@_clio_mcp.tool(
+@_threaded_tool(
     title="Update document metadata",
     annotations=_mutating("Update document metadata", destructive=False, idempotent=True),
 )
@@ -3275,7 +3488,7 @@ def _find_collection_for_table(identifier: str) -> tuple[str, dict[str, Any]] | 
     return None
 
 
-@_clio_mcp.resource(
+@_threaded_resource(
     "collection://{id}",
     name="collection",
     description="Collection metadata and document inventory (same payload as get_collection_info).",
@@ -3324,7 +3537,7 @@ def resource_collection(id: str) -> dict[str, Any]:
     }, "resource_collection")
 
 
-@_clio_mcp.resource(
+@_threaded_resource(
     "collection://{id}/schema",
     name="collection_schema",
     description="Column schemas of every CSV/XLSX table in a collection.",
@@ -3356,7 +3569,7 @@ def resource_collection_schema(id: str) -> dict[str, Any]:
     }, "resource_collection_schema")
 
 
-@_clio_mcp.resource(
+@_threaded_resource(
     "collections://all",
     name="all_collections",
     description="Every collection this credential may see, with counts and descriptions.",
@@ -3426,7 +3639,7 @@ def resource_all_collections() -> dict[str, Any]:
     }, "resource_all_collections")
 
 
-@_clio_mcp.resource(
+@_threaded_resource(
     "collection://{id}/guide",
     name="collection_guide",
     description="The owner's own brief on how to use a collection.",
@@ -3453,7 +3666,7 @@ def resource_collection_guide(id: str) -> dict[str, Any]:
     }, "resource_collection_guide")
 
 
-@_clio_mcp.resource(
+@_threaded_resource(
     "collection://{id}/tables",
     name="collection_tables",
     description="The structured tables (CSV/XLSX) available in a collection.",
@@ -3483,7 +3696,7 @@ def resource_collection_tables(id: str) -> dict[str, Any]:
     }, "resource_collection_tables")
 
 
-@_clio_mcp.resource(
+@_threaded_resource(
     "document://{id}",
     name="document",
     description="Full metadata record for one document, located across all collections.",
@@ -3509,7 +3722,7 @@ def resource_document(id: str) -> dict[str, Any]:
     return _tool_response(_document_metadata_payload(resolved, doc_info), "resource_document")
 
 
-@_clio_mcp.resource(
+@_threaded_resource(
     "table://{id}",
     name="table",
     description="Schema plus sample rows for one table, located across all collections.",

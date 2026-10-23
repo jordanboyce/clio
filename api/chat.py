@@ -1008,7 +1008,14 @@ def _build_provider(provider_name: str, x_ai_key, x_ollama_model, x_anthropic_mo
     """The provider a request runs on, resolved exactly as /api/chat does."""
     try:
         if provider_name == "ollama":
-            extra: dict = {"model": x_ai_model or x_ollama_model or "llama3.2"}
+            # No hard-coded fallback model here: a request that names none
+            # must fall through to the deployment default (AI_MODEL, applied
+            # inside create_provider) — a hard-coded name would win over it
+            # and send an MCP ask_documents call to a model nobody pulled.
+            extra: dict = {}
+            model = x_ai_model or x_ollama_model
+            if model:
+                extra["model"] = model
             if x_ai_base_url:
                 extra["base_url"] = x_ai_base_url
             return create_provider("ollama", **extra)

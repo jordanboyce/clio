@@ -197,13 +197,21 @@ def _reranker_check() -> Dict[str, Any]:
 
     if settings.enable_reranker is False:
         return _check("reranker", "models", "Result reranker", PASS, "Disabled by ENABLE_RERANKER=false.")
-    if reranker._locally_available(settings.reranker_model):
+    state = reranker.status()
+    if state["active"] and state["cached"]:
         return _check("reranker", "models", "Result reranker", PASS,
-                      f"{settings.reranker_model} is cached and active.")
+                      f"{settings.reranker_model} is on disk ({state['backend']}) and active.")
+    if state["backend"] is None:
+        return _check("reranker", "models", "Result reranker", WARN,
+                      f"No backend can serve {settings.reranker_model}: neither fastembed nor "
+                      "sentence-transformers is installed. Search works; ordering of the best results "
+                      "is slightly less accurate.",
+                      "pip install fastembed (part of requirements.txt).")
     return _check("reranker", "models", "Result reranker", WARN,
-                  f"{settings.reranker_model} (or sentence-transformers) is not available locally. "
+                  f"{settings.reranker_model} is not on disk for {state['backend']}. "
                   "Search works; ordering of the best results is slightly less accurate.",
-                  "Include the reranker in the offline bundle (OFFLINE_BUNDLE=1).")
+                  "Build the image with BAKE_EMBEDDING=1 (the default) or OFFLINE_BUNDLE=1, or run "
+                  "scripts/prefetch_offline_models.py on a connected machine and carry the cache across.")
 
 
 def _capability_checks() -> List[Dict[str, Any]]:

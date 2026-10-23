@@ -31,6 +31,10 @@ services:
       # API instead.
       args:
         BAKE_EMBEDDING: "${BAKE_EMBEDDING:-1}"
+        # Lean image (1.6 GB instead of 3.9 GB): no PyTorch, OCR of scanned
+        # PDFs or audio transcription; indexing, search, the reranker, chat
+        # and MCP all stay. SLIM=1 docker compose build
+        SLIM: "${SLIM:-0}"
     container_name: clio
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:8473:8473"

@@ -51,7 +51,7 @@ not need to pass it with `OFFLINE_BUNDLE=1`:
 
 | Model | Purpose | Approx. size |
 |---|---|---|
-| `cross-encoder/ms-marco-MiniLM-L-6-v2` | Search reranker | ~90 MB |
+| `cross-encoder/ms-marco-MiniLM-L-6-v2` | Search reranker (fastembed ONNX export `Xenova/ms-marco-MiniLM-L-6-v2`, plus the PyTorch copy when sentence-transformers is installed) | ~90 MB each |
 | `faster-whisper base` | Audio transcription | ~150 MB |
 | Docling layout + TableFormer | Local OCR of scanned PDFs | ~500 MB |
 
@@ -170,7 +170,7 @@ first three boxes are not true.
 |---|---|---|
 | Document indexing (PDF, DOCX, TXT, MD, CSV/XLSX, code) | ✅ | Fully local |
 | Semantic + keyword + hybrid search | ✅ | FAISS/BM25, local embeddings |
-| Reranking | ✅ | Automatic: on whenever the baked/pre-seeded model is present (`ENABLE_RERANKER` unset); never downloads |
+| Reranking | ✅ | Automatic: on whenever the baked/pre-seeded model is present (`ENABLE_RERANKER` unset); the default image bakes it, and nothing downloads under `OFFLINE_MODE` |
 | OCR of scanned PDFs | ✅ | Docling/Tesseract locally; vision-LLM OCR only via local Ollama |
 | Audio transcription | ✅ | Local Whisper, with baked/pre-seeded model |
 | Grounded chat | ✅ | Via local Ollama or self-hosted OpenAI-compatible server |

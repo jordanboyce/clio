@@ -205,11 +205,7 @@ async def get_mcp_oauth(request: Request):
     return mcp_oauth.summary(request)
 
 
-# Redirect bare /mcp (no trailing slash) to /mcp/ so MCP clients that use the old
-# exported URL still work. Uses 307 to preserve the HTTP method (POST stays POST).
-@router.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
-async def mcp_trailing_slash_redirect(request: Request):
-    url = str(request.url)
-    redirect_url = url.replace("/mcp?", "/mcp/?", 1) if "?" in url else url.rstrip("/") + "/"
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(redirect_url, status_code=307)
+# Bare /mcp (no trailing slash) is served directly: main.py rewrites the path
+# to /mcp/ before routing (see _MCPPathNormalizer there). It used to be a 307
+# here, which cost every MCP client a second round-trip per call and broke
+# clients that refuse to follow a redirected POST.
