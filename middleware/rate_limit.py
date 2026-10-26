@@ -40,6 +40,9 @@ _PRUNE_IDLE_SECONDS = 3600
 _PRUNE_THRESHOLD = 5000
 
 
+_CHAT_TURN_PATHS = frozenset({"/api/chat", "/api/chat/", "/api/chat/stream"})
+
+
 def _classify(path: str) -> Optional[str]:
     """Expense class for a path, or None when the path is never limited."""
     # Agent traffic has its own budget (0 = unlimited, the default) so a
@@ -48,7 +51,11 @@ def _classify(path: str) -> Optional[str]:
         return "mcp"
     if not path.startswith("/api/"):
         return None
-    if path.startswith("/api/chat"):
+    # Only the answer turns are "chat": each one is an agent loop on the
+    # shared LLM key. The rest of /api/chat/* (cache status, starter
+    # questions) is ordinary traffic a page load makes; counting it here
+    # spent a visitor's six answers on two refreshes.
+    if path in _CHAT_TURN_PATHS:
         return "chat"
     if path.startswith("/api/search"):
         return "search"

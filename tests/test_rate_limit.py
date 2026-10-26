@@ -53,6 +53,9 @@ def test_pinned_rate_limit_key_wins_over_identity():
 def test_classify():
     assert _classify("/api/chat") == "chat"
     assert _classify("/api/chat/stream") == "chat"
+    # Page-load reads under /api/chat are ordinary traffic, not answer turns.
+    assert _classify("/api/chat/cache") == "default"
+    assert _classify("/api/chat/starters") == "default"
     assert _classify("/api/search") == "search"
     assert _classify("/api/collections") == "default"
     assert _classify("/health") is None
