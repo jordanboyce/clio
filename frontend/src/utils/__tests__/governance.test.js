@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterReviewItems, injectionEvidence, priorityBadge, reviewSummaryText } from '../governance'
+import { filterReviewItems, injectionBadge, injectionEvidence, priorityBadge, reviewSummaryText } from '../governance'
 
 const items = [
   { document_id: 'a', kinds: ['policy'], policy_status: 'quarantined' },
@@ -29,6 +29,15 @@ describe('review queue helpers', () => {
   it('maps priorities to badges and unknowns to low', () => {
     expect(priorityBadge('critical').cls).toContain('badge-error')
     expect(priorityBadge('whatever').text).toBe('low')
+  })
+
+  it('keeps reviewed and low-confidence injection notes quiet', () => {
+    const warnings = { '1': { findings: [{ severity: 'low' }], risk_score: 0.15 } }
+    expect(injectionBadge({ injection_warnings: warnings }).text).toBe('note')
+    expect(injectionBadge({ injection_warnings: warnings }).cls).toBe('badge-ghost')
+    expect(injectionBadge({ injection_warnings: { '2': { findings: [{ severity: 'high' }] } } }).text).toBe('injection')
+    expect(injectionBadge({ injection_warnings: warnings, injection_review: 'dismissed' }).text).toBe('reviewed')
+    expect(injectionBadge({ injection_warnings: null })).toBeNull()
   })
 
   it('turns stored injection evidence into readable rows', () => {

@@ -31,10 +31,37 @@ def test_installation_guide_is_not_an_exfiltration_attempt():
     assert not scan.is_flagged
 
 
-def test_machinery_manual_is_low_not_high():
-    scan, summary = _summary("Disable the safety filter on the press before servicing the unit.")
-    assert not any(f.severity == "high" for f in scan.findings)
-    assert summary["level"] == "low" and not summary["needs_review"]
+def test_machinery_manual_is_not_flagged():
+    # "Disable the safety filter" without "your"/an AI target is a manual,
+    # not an attack on the assistant — it should not even earn a badge.
+    scan = detector.scan("Disable the safety filter on the press before servicing the unit.")
+    assert not scan.is_flagged
+
+
+def test_everyday_business_prose_is_not_flagged():
+    for text in (
+        "The trustee shall act as a fiduciary for the beneficiaries.",
+        "You are now ready to begin the installation.",
+        "From now on you are required to badge in at the north entrance.",
+        "This licence applies to all copies, including without limitation derivative works.",
+        "No restrictions apply to transfers between accounts.",
+        "Enable developer mode in the Android settings to sideload the app.",
+        "Your training includes a module on workplace safety.",
+        "In the exercise, pretend you are the customer and raise an objection.",
+    ):
+        scan = detector.scan(text)
+        assert not scan.is_flagged, f"false positive on: {text!r} ({scan.summary})"
+
+
+def test_combined_everyday_phrases_stay_out_of_the_queue():
+    # Several low-grade phrasings in one page may badge the document, but a
+    # reviewer task needs a high-severity signal or heavy combined weight.
+    scan, summary = _summary(
+        "Act as a liaison for the committee. You are now ready to proceed. "
+        "Roleplay as the interviewer and pretend you are the candidate."
+    )
+    if summary is not None:
+        assert summary["level"] == "low" and not summary["needs_review"]
 
 
 def test_bypassing_the_assistants_safety_is_flagged():
@@ -80,3 +107,17 @@ def test_summary_handles_scores_without_findings():
 def test_summary_of_nothing_is_none():
     assert summarize_document(None) is None
     assert summarize_document({}) is None
+
+
+def test_scan_action_settings(monkeypatch):
+    from config import settings
+    import services.prompt_injection_detector as pid
+
+    monkeypatch.setattr(settings, "injection_scan_action", "review", raising=False)
+    assert pid.scanning_enabled() and pid.review_queue_enabled()
+    monkeypatch.setattr(settings, "injection_scan_action", "warn", raising=False)
+    assert pid.scanning_enabled() and not pid.review_queue_enabled()
+    monkeypatch.setattr(settings, "injection_scan_action", "off", raising=False)
+    assert not pid.scanning_enabled() and not pid.review_queue_enabled()
+    monkeypatch.setattr(settings, "injection_scan_action", "garbage", raising=False)
+    assert pid.scan_action() == "review"  # unknown values fail safe

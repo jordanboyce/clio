@@ -1366,6 +1366,7 @@ async def list_documents(
                 source_path=source_path,
                 source_format=doc.get("source_format"),
                 injection_warnings=doc.get("injection_warnings"),
+                injection_review=doc.get("injection_review"),
                 uploaded_by=doc.get("uploaded_by"),
                 content_hash=doc.get("content_hash"),
                 sensitivity=doc.get("sensitivity"),

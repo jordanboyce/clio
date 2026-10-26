@@ -1328,13 +1328,45 @@ class MetadataStore:
             # Ensure v3.1 columns exist (defensive migration for cached instances)
             self._ensure_v3_1_columns(conn)
 
+            # INSERT OR REPLACE deletes the old row, which used to erase the
+            # admin's review decisions on every re-index. The document_id is
+            # derived from the content hash, so an existing row with the same
+            # id holds the same bytes — a past human decision still stands:
+            # carry the injection-review outcome forward, and keep an explicit
+            # "approved" over a fresh scan's flagged/quarantined verdict.
+            ids = [d["document_id"] for d in documents]
+            prior: Dict[str, tuple] = {}
+            try:
+                for i in range(0, len(ids), self._IN_CLAUSE_BATCH):
+                    batch = ids[i:i + self._IN_CLAUSE_BATCH]
+                    placeholders = ",".join("?" * len(batch))
+                    rows = conn.execute(
+                        f"SELECT document_id, policy_status, injection_review "
+                        f"FROM documents WHERE document_id IN ({placeholders})",
+                        batch,
+                    ).fetchall()
+                    prior.update({r[0]: (r[1], r[2]) for r in rows})
+            except sqlite3.OperationalError as e:
+                # Pre-v3.7 DB mid-migration: skip preservation, never block ingest.
+                logger.warning(f"Could not read prior review decisions: {e}")
+                prior = {}
+            for doc in documents:
+                old_status, old_review = prior.get(doc["document_id"], (None, None))
+                if old_review and not doc.get("injection_review"):
+                    doc["injection_review"] = old_review
+                if old_status == "approved" and (doc.get("policy_status") or "clear") in (
+                    "flagged", "quarantined",
+                ):
+                    doc["policy_status"] = "approved"
+
             conn.executemany("""
                 INSERT OR REPLACE INTO documents
                 (document_id, filename, num_pages, num_chunks, upload_timestamp,
                  source_format, extraction_method, embedding_model, chunk_size,
                  chunk_overlap, schema_version, source_path, source_type, injection_warnings,
-                 uploaded_by, content_hash, sensitivity, policy_status, policy_flags, file_size)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 uploaded_by, content_hash, sensitivity, policy_status, policy_flags, file_size,
+                 injection_review)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
                 (
                     doc["document_id"],
@@ -1357,6 +1389,7 @@ class MetadataStore:
                     doc.get("policy_status") or "clear",
                     json.dumps(doc["policy_flags"]) if doc.get("policy_flags") else None,
                     doc.get("file_size"),
+                    doc.get("injection_review"),
                 )
                 for doc in documents
             ])

@@ -787,7 +787,10 @@ one and block its hash from being re-added. Documents are scanned at ingest
 by local rule packs (abuse-material indicators, attack planning, weapons and
 drug trade, explicit content, credential dumps, secrets); `CONTENT_POLICY_ACTION`
 decides whether a finding flags, quarantines (hides until approved) or rejects
-the document. Collections carry a sensitivity label — `restricted` ones cannot
+the document. A separate wording scan badges possible prompt injection;
+`INJECTION_SCAN_ACTION` chooses whether that also queues an admin task
+(`review`, the default), only badges the source (`warn`), or is off.
+Collections carry a sensitivity label — `restricted` ones cannot
 be shared and are invisible to MCP clients without an explicitly scoped token —
 and `AUP_REQUIRED=true` makes each identity accept an acceptable-use policy
 before adding sources. Everything runs locally; the optional LLM second

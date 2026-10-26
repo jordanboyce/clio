@@ -379,8 +379,9 @@ def review_queue() -> List[Dict[str, Any]]:
     """
     from services.app_database import app_db
     from services.indexer_manager import indexer_manager
-    from services.prompt_injection_detector import summarize_document
+    from services.prompt_injection_detector import review_queue_enabled, summarize_document
 
+    queue_injection = review_queue_enabled()
     report_groups = _open_report_groups()
     items: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
@@ -391,7 +392,7 @@ def review_queue() -> List[Dict[str, Any]]:
         try:
             store = indexer_manager.get_indexer(cid).vector_store.metadata_store
             policy_docs = store.list_documents_by_policy_status(("flagged", "quarantined"))
-            injected_docs = store.list_documents_with_injection_warnings()
+            injected_docs = store.list_documents_with_injection_warnings() if queue_injection else []
             reported_ids = [did for (c, did) in report_groups if c == cid]
             reported_docs = [d for d in (store.get_document_info(i) for i in reported_ids) if d]
         except Exception as e:
@@ -414,7 +415,8 @@ def review_queue() -> List[Dict[str, Any]]:
             if "policy" not in item["kinds"] and d.get("policy_status") in ("flagged", "quarantined"):
                 item["kinds"].append("policy")
                 item["reasons"].append({"kind": "policy", "text": _policy_reason(d)})
-            if "injection" not in item["kinds"] and d.get("injection_warnings") and not d.get("injection_review"):
+            if (queue_injection and "injection" not in item["kinds"]
+                    and d.get("injection_warnings") and not d.get("injection_review")):
                 summary = summarize_document(d["injection_warnings"])
                 if summary and summary["needs_review"]:
                     item["kinds"].append("injection")
@@ -447,15 +449,22 @@ def recent_reports(limit: int = 50) -> List[Dict[str, Any]]:
 
 
 def resolve_document(
-    collection_id: str, document_id: str, *, actor: Any = _UNSET, note: str = ""
+    collection_id: str, document_id: str, *, actor: Any = _UNSET, note: str = "",
+    scope: str = "",
 ) -> Dict[str, Any]:
     """The reviewer looked and the document is fine: close everything open on it.
 
     Releases a flagged/quarantined document, dismisses its injection warnings
     (kept on the row, just no longer queued) and closes its open user reports.
+    ``scope="injection"`` dismisses only the wording warning — a content hold
+    or a user report stays open. That is what the source-list "Looks fine"
+    button does, so dismissing a false positive cannot silently release a hold.
     Returns what was resolved so the UI can say so. Raises KeyError when the
     document is unknown.
     """
+    only = (scope or "").strip()
+    if only and only != "injection":
+        raise ValueError("scope must be empty or 'injection'")
     from services.indexer_manager import indexer_manager
 
     store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store
@@ -473,7 +482,7 @@ def resolve_document(
 
     resolved: List[str] = []
     status = doc_info.get("policy_status") or "clear"
-    if status in ("flagged", "quarantined"):
+    if not only and status in ("flagged", "quarantined"):
         set_policy_status(collection_id, document_id, "approved", actor=actor, note=note)
         status = "approved"
         resolved.append("policy")
@@ -485,7 +494,7 @@ def resolve_document(
                      detail={"filename": doc_info.get("filename"), "note": note or None})
         resolved.append("injection")
 
-    if had_reports:
+    if not only and had_reports:
         audit.record("report.dismissed", actor=actor, collection_id=collection_id,
                      document_id=document_id,
                      detail={"filename": doc_info.get("filename"), "note": note or None})

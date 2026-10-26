@@ -1,7 +1,7 @@
 <template>
   <div class="max-w-4xl mx-auto space-y-8">
     <header class="pb-4 border-b border-base-300/60">
-      <h1 class="text-[22px] leading-none font-semibold tracking-tight">Admin</h1>
+      <h1 class="text-[22px] leading-none font-semibold tracking-tight">Administration</h1>
       <p class="mt-2 text-xs text-base-content/50">
         What needs your decision, who is using this deployment, what it's spending, and who can reach it.
       </p>
@@ -18,6 +18,7 @@
         </h2>
         <span class="text-xs text-base-content/45">
           scanner: <span class="font-mono">{{ review.content_policy_action || '…' }}</span>
+          · injection: <span class="font-mono">{{ review.injection_scan_action || '…' }}</span>
           · {{ review.blocked_hashes ?? 0 }} blocked hash{{ (review.blocked_hashes ?? 0) === 1 ? '' : 'es' }}
         </span>
       </div>
@@ -25,6 +26,10 @@
       <div v-if="reviewError" class="alert alert-error py-2">
         <span class="text-sm">{{ reviewError }}</span>
         <button class="btn btn-xs btn-ghost" @click="loadReview">Retry</button>
+      </div>
+
+      <div v-else-if="reviewLoading && reviewQueue.length === 0" class="text-center py-8 text-sm text-base-content/50 border border-dashed border-base-300 rounded-lg">
+        Checking what needs a decision…
       </div>
 
       <template v-else>
@@ -44,6 +49,16 @@
               :aria-pressed="reviewFilter === f.id"
               @click="reviewFilter = f.id"
             >{{ f.label }} <span class="tabular-nums opacity-70">{{ filterCount(f.id) }}</span></button>
+            <button
+              v-if="visibleQueue.length > 1"
+              class="btn btn-xs btn-ghost ml-auto text-success"
+              :disabled="approvingAll"
+              title="Marks every document the current filter shows as reviewed and fine — same as clicking its green button on each."
+              @click="approveAll"
+            >
+              <span v-if="approvingAll" class="loading loading-spinner loading-xs"></span>
+              Approve all {{ visibleQueue.length }} shown
+            </button>
           </div>
 
           <ul class="space-y-2">
@@ -61,7 +76,7 @@
                     <span class="font-medium truncate max-w-[40ch]" :title="d.filename">{{ d.filename }}</span>
                   </div>
                   <div class="text-[11px] text-base-content/50 mt-0.5">
-                    {{ d.collection_name }} · added by {{ d.uploaded_by || 'unattributed' }} · {{ formatDay(d.upload_timestamp) }}
+                    {{ d.collection_name }}<template v-if="d.uploaded_by"> · added by {{ d.uploaded_by }}</template> · {{ formatDay(d.upload_timestamp) }}
                   </div>
                   <ul class="mt-2 space-y-1">
                     <li v-for="r in d.reasons" :key="r.kind" class="text-xs flex items-start gap-2">
@@ -278,6 +293,17 @@
             </p>
           </div>
           <div class="form-control">
+            <label class="label pb-1" for="injection-action"><span class="label-text font-medium">Prompt-injection text in sources</span></label>
+            <select id="injection-action" v-model="policyForm.injection_scan_action" class="select select-bordered select-sm">
+              <option value="review">Scan — badge the source and queue it here</option>
+              <option value="warn">Scan — badge the source only, skip the queue</option>
+              <option value="off">Off — do not scan</option>
+            </select>
+            <p class="text-[11px] text-base-content/50 mt-1">
+              Wording-based, so ordinary prose can trip it. "Badge only" keeps the warning on the source without making it your to-do.
+            </p>
+          </div>
+          <div class="form-control">
             <label class="label pb-1 cursor-pointer justify-start gap-2">
               <input v-model="policyForm.content_policy_llm_review" type="checkbox" class="checkbox checkbox-sm" />
               <span class="label-text font-medium">Ask the chat LLM for a second opinion</span>
@@ -441,6 +467,7 @@ const reviewStore = useReviewStore()
 // ── Content review ─────────────────────────────────────────────────────
 const review = ref({ items: [], quarantined: [], flagged: [], reports: [] })
 const reviewError = ref('')
+const reviewLoading = ref(true)
 const expanded = ref('')
 const busy = ref('')
 const reviewFilter = ref('all')
@@ -473,6 +500,8 @@ const loadReview = async () => {
     if (reviewFilter.value !== 'all' && filterCount(reviewFilter.value) === 0) reviewFilter.value = 'all'
   } catch (err) {
     reviewError.value = err.message || 'Could not load the review queue'
+  } finally {
+    reviewLoading.value = false
   }
 }
 
@@ -486,6 +515,26 @@ const approve = async (d) => {
     ui.toastError(err, 'Could not approve the document')
   } finally {
     busy.value = ''
+  }
+}
+
+// One decision for the whole filtered view: a re-index or a tuning change can
+// queue dozens of rows at once, and clicking them away one by one is a chore.
+const approvingAll = ref(false)
+const approveAll = async () => {
+  const items = visibleQueue.value.map((d) => ({ collection_id: d.collection_id, document_id: d.document_id }))
+  if (!items.length) return
+  if (!window.confirm(`Mark all ${items.length} shown documents as reviewed and fine? Held documents become visible again.`)) return
+  approvingAll.value = true
+  try {
+    const resp = await http.post('/api/admin/review/resolve', { items, note: '' })
+    const n = resp.data?.resolved ?? items.length
+    ui.notify(`Marked ${n} document${n === 1 ? '' : 's'} as reviewed.`, 'success')
+    await Promise.all([loadReview(), loadAudit()])
+  } catch (err) {
+    ui.toastError(err, 'Could not approve the documents')
+  } finally {
+    approvingAll.value = false
   }
 }
 
@@ -507,6 +556,7 @@ const remove = async (d, block) => {
 // ── Policy settings (persisted through /api/config) ────────────────────
 const policyForm = reactive({
   content_policy_action: 'flag',
+  injection_scan_action: 'review',
   content_policy_llm_review: false,
   content_policy_llm_provider: '',
   content_policy_llm_model: '',

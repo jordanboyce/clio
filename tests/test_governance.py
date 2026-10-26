@@ -230,6 +230,31 @@ def test_metadata_governance_columns(tmp_path):
     assert s.get_documents_info(["d1"])["d1"]["policy_status"] == "clear"
 
 
+def test_add_documents_replace_preserves_review_decisions(tmp_path):
+    """Re-indexing writes the same document_id through INSERT OR REPLACE; the
+    admin's decisions (approved status, dismissed injection warnings) are about
+    the same bytes and must survive it."""
+    s = MetadataStore(tmp_path / "m.db")
+    row = {
+        "document_id": "d1", "filename": "a.txt", "num_pages": 1, "num_chunks": 1,
+        "upload_timestamp": "2026-01-01T00:00:00",
+        "policy_status": "flagged",
+        "injection_warnings": {"1": {"is_flagged": True, "risk_score": 0.9, "findings": []}},
+    }
+    s.add_documents([dict(row)])
+    s.set_document_governance("d1", policy_status="approved", injection_review="dismissed")
+
+    s.add_documents([dict(row)])  # the re-index: fresh scan says flagged again
+    info = s.get_document_info("d1")
+    assert info["policy_status"] == "approved"
+    assert info["injection_review"] == "dismissed"
+
+    # A brand-new row is untouched by preservation.
+    s.add_documents([{**dict(row), "document_id": "d2"}])
+    fresh = s.get_document_info("d2")
+    assert fresh["policy_status"] == "flagged" and fresh["injection_review"] is None
+
+
 def test_metadata_store_migrates_pre_governance_db(tmp_path):
     """A v3.2 metadata.db (no governance columns) gains them on open, with
     existing rows reading as clear + unattributed."""
@@ -650,6 +675,31 @@ def test_injection_document_is_queued_with_a_reason(tmp_path, indexer, policy):
     assert governance.review_summary(max_age=0)["injection"] == 1
 
 
+def test_injection_warn_mode_badges_without_queueing(tmp_path, indexer, policy, monkeypatch):
+    """INJECTION_SCAN_ACTION=warn: the warning stays on the source, the admin
+    queue and the bell stay quiet."""
+    policy("flag")
+    meta = _index(indexer, tmp_path, "notes.txt", ATTACK)
+    monkeypatch.setattr(config.settings, "injection_scan_action", "warn", raising=False)
+    assert governance.review_queue() == []
+    assert governance.review_summary(max_age=0)["pending"] == 0
+    row = indexer.vector_store.metadata_store.get_document_info(meta.document_id)
+    assert row["injection_warnings"]  # the badge survives
+
+
+def test_injection_scope_does_not_release_a_hold(tmp_path, indexer, policy):
+    """Dismissing the wording warning from the source list must not lift a hold."""
+    policy("quarantine")
+    meta = _index(indexer, tmp_path, "mixed.txt", DRUG_SALE + " " + ATTACK)
+    out = governance.resolve_document(
+        "default", meta.document_id, actor=ADMIN, scope="injection",
+    )
+    assert out["resolved"] == ["injection"]
+    assert out["policy_status"] == "quarantined"
+    queue = governance.review_queue()
+    assert len(queue) == 1 and queue[0]["kinds"] == ["policy"]
+
+
 def test_quoted_and_clean_documents_stay_out_of_the_queue(tmp_path, indexer, policy):
     policy("flag")
     _index(indexer, tmp_path, "wiki.txt", QUOTED)
@@ -718,9 +768,36 @@ def test_summary_endpoint_and_approve_flow(open_client, policy):
     assert open_client.get("/api/admin/review/summary").json()["pending"] == 1
     review = open_client.get("/api/admin/review").json()
     assert review["items"][0]["document_id"] == doc_id and review["summary"]["injection"] == 1
+    listed = next(d for d in open_client.get("/documents").json()["documents"] if d["document_id"] == doc_id)
+    assert listed["injection_warnings"] and listed["injection_review"] is None
 
     r = open_client.post(f"/api/admin/documents/default/{doc_id}/approve", json={})
     assert r.status_code == 200 and r.json()["resolved"] == ["injection"]
+    assert open_client.get("/api/admin/review/summary").json()["pending"] == 0
+    listed = next(d for d in open_client.get("/documents").json()["documents"] if d["document_id"] == doc_id)
+    assert listed["injection_review"] == "dismissed"
+
+
+def test_bulk_resolve_endpoint(open_client, policy):
+    """One call clears the whole queue; unknown rows are skipped, not fatal."""
+    policy("flag")
+    ids = []
+    for name in ("a.txt", "b.txt"):  # distinct bytes → distinct document ids
+        r = open_client.post(
+            "/documents/upload",
+            files={"files": (name, f"{name} {ATTACK}".encode(), "text/plain")},
+        )
+        ids.append(r.json()["document_ids"][0])
+    # The badge summary is cached for ~30s; the full review GET recomputes.
+    assert open_client.get("/api/admin/review").json()["summary"]["pending"] == 2
+
+    r = open_client.post("/api/admin/review/resolve", json={
+        "items": [{"collection_id": "default", "document_id": d} for d in ids]
+                 + [{"collection_id": "default", "document_id": "missing"}],
+        "note": "bulk fixture",
+    })
+    assert r.status_code == 200
+    assert r.json() == {"resolved": 2, "skipped": ["missing"]}
     assert open_client.get("/api/admin/review/summary").json()["pending"] == 0
 
 

@@ -24,6 +24,24 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def scan_action() -> str:
+    """The configured posture: "review" (badge + admin queue), "warn"
+    (badge the document, keep it out of the queue) or "off" (no scan)."""
+    from config import settings  # late import: config must not depend on services
+
+    action = getattr(settings, "injection_scan_action", "review")
+    return action if action in ("review", "warn", "off") else "review"
+
+
+def scanning_enabled() -> bool:
+    return scan_action() != "off"
+
+
+def review_queue_enabled() -> bool:
+    """Whether injection verdicts belong in the admin review queue."""
+    return scan_action() == "review"
+
+
 @dataclass
 class InjectionFinding:
     """A single detected injection signal."""
@@ -101,26 +119,31 @@ _PATTERNS: List[Tuple[str, str, str, str]] = [
      r"\byour\s+(new|real|actual|true|secret)\s+(instructions?|role|purpose|task|goal|directive)\b",
      "high"),
 
+    # "From now on you are required to badge in" is an HR memo; "you are now
+    # ready to begin" is every tutorial. These phrasings only matter when they
+    # co-occur with stronger signals, so they contribute, not accuse.
     ("instruction_override", "from_now_on",
      r"\bfrom\s+now\s+on\b.{0,80}\byou\s+(are|must|should|will|have\s+to)\b",
-     "medium"),
+     "low"),
 
     ("instruction_override", "you_are_now",
      r"\byou\s+are\s+now\b.{0,60}",
-     "medium"),
+     "low"),
 
     ("instruction_override", "stop_being",
      r"\bstop\s+(being|acting\s+as|pretending\s+to\s+be)\b.{0,60}",
-     "medium"),
+     "low"),
 
     # ── Persona injection ───────────────────────────────────────────────────
+    # "Act as a fiduciary", "pretend you are the customer" (sales training):
+    # ordinary prose unless something stronger sits beside it.
     ("persona_injection", "act_as",
      r"\bact\s+as\s+(if|a|an|the|though)\b",
-     "medium"),
+     "low"),
 
     ("persona_injection", "pretend_you_are",
      r"\bpretend\s+(you\s+are|to\s+be|that\s+you|you're)\b",
-     "medium"),
+     "low"),
 
     ("persona_injection", "roleplay_as",
      r"\broleplay\s+as\b",
@@ -136,9 +159,15 @@ _PATTERNS: List[Tuple[str, str, str, str]] = [
      r"\b(do\s+anything\s+now|no\s+restriction|without\s+(limit|filter|safety))\b",
      "high"),
 
-    ("persona_injection", "developer_mode",
-     r"\b(developer|dev|jailbreak|jail[\s\-]*break)\s+mode\b",
+    # "Developer mode" is in every Android/Windows manual; only the jailbreak
+    # spelling carries intent on its own.
+    ("persona_injection", "jailbreak_mode",
+     r"\bjail[\s\-]*break\s+mode\b",
      "medium"),
+
+    ("persona_injection", "developer_mode",
+     r"\b(developer|dev)\s+mode\b",
+     "low"),
 
     ("persona_injection", "unrestricted_mode",
      r"\b(unrestricted|uncensored|unfiltered)\s+(mode|version|ai|assistant|model)\b",
@@ -169,9 +198,10 @@ _PATTERNS: List[Tuple[str, str, str, str]] = [
      r"^###\s+(System|Human|Assistant|User)\s*:",
      "medium"),
 
+    # "SYSTEM: online" in a log export or meeting transcript is routine.
     ("model_token", "role_colon_lines",
      r"^(SYSTEM|ASSISTANT|USER|HUMAN)\s*:",
-     "medium"),
+     "low"),
 
     ("model_token", "bos_eos_tokens",
      r"</?s>|<\|begin_of_text\|>|<\|end_of_text\|>",
@@ -186,9 +216,10 @@ _PATTERNS: List[Tuple[str, str, str, str]] = [
      r"\b(confidential|secret|hidden)\s+(instructions?|prompt|directives?|rules?)\s*:",
      "high"),
 
+    # "Your training includes a safety module" — HR onboarding, not an attack.
     ("context_manipulation", "your_training_says",
      r"\byour\s+(training|knowledge)\s+(includes?|says?|states?|tells?)\b",
-     "medium"),
+     "low"),
 
     ("context_manipulation", "note_to_ai",
      r"\bnote\s+to\s+(the\s+)?(ai|model|assistant|llm)\b",
@@ -211,9 +242,10 @@ _PATTERNS: List[Tuple[str, str, str, str]] = [
      r"\bwhat\s+are\s+your\s+(instructions?|directives?|rules?|constraints?|system\s+prompt)\b",
      "medium"),
 
+    # "Explain your instructions to the new hire" — ordinary workplace prose.
     ("exfiltration", "summarize_your_prompt",
      r"\b(summarize|describe|explain|list)\s+(your\s+)?(prompt|instructions?|system\s+message)\b",
-     "medium"),
+     "low"),
 
     # ── Bypass / disable attempts ───────────────────────────────────────────
     # Aimed at the assistant ("your safety filters") it is an attack; without
@@ -227,15 +259,19 @@ _PATTERNS: List[Tuple[str, str, str, str]] = [
     ("bypass_attempt", "bypass_safety",
      r"\b(bypass|disable|circumvent|override|ignore|remove|turn\s+off)\b.{0,50}"
      r"\b(safety|filter|guardrail|restriction|limitation|constraint|ethical|moral)\b",
+     "low"),
+
+    # Not "limitation"/"constraint": "including without limitation" is legal
+    # boilerplate on half the contracts ever written. The high-confidence
+    # persona version ("you are an AI without restrictions") is caught above.
+    ("bypass_attempt", "without_restrictions",
+     r"\bwithout\s+(any\s+)?(filters?|restrictions?|guardrails?|safety)\b",
      "medium"),
 
-    ("bypass_attempt", "without_restrictions",
-     r"\bwithout\s+(any\s+)?(filter|restriction|guardrail|constraint|limitation|safety|ethical|moral)\b",
-     "high"),
-
+    # "No restrictions apply to transfers" — contracts and manuals, constantly.
     ("bypass_attempt", "no_restrictions_phrasing",
      r"\bno\s+(filter|restriction|guardrail|constraint|limitation|safety|ethical|moral)s?\b",
-     "medium"),
+     "low"),
 
     # ── Meta / self-referential ─────────────────────────────────────────────
     ("meta_injection", "prompt_injection_mention",
@@ -319,8 +355,9 @@ def summarize_document(warnings: Optional[dict]) -> Optional[dict]:
 
     Levels are deliberately conservative so the queue stays worth opening:
     ``high`` means several independent signals (or a very high score) and
-    ``medium`` at least one high-severity, un-quoted pattern. Everything else
-    is ``low`` — still visible on the document, but not a task for an admin.
+    ``medium`` at least one high-severity, un-quoted pattern (or heavy
+    combined weight across several categories). Everything else is ``low``
+    — still visible on the document, but not a task for an admin.
     """
     if not warnings:
         return None
@@ -357,7 +394,7 @@ def summarize_document(warnings: Optional[dict]) -> Optional[dict]:
     substantive = {c for c in categories if c != "meta_injection"}
     if max_score >= 0.8 or len(high_cats) >= 2 or high_pages >= 3:
         level = "high"
-    elif high_cats or (max_score >= 0.5 and substantive):
+    elif high_cats or (max_score >= 0.7 and len(substantive) >= 2):
         level = "medium"
     else:
         level = "low"
@@ -428,10 +465,13 @@ class PromptInjectionDetector:
 
         risk_score = self._calculate_score(findings)
         # Talking *about* prompt injection (a security wiki, this very README)
-        # is not an injection attempt, however many meta terms pile up.
+        # is not an injection attempt, however many meta terms pile up. And a
+        # lone low-severity phrase ("act as a", "you are now ready") is prose,
+        # not a signal: a page is flagged only by an unquoted high-severity
+        # pattern or by enough combined weight (one medium, or several lows).
         substantive = [f for f in findings if f.category != "meta_injection"]
         is_flagged = bool(substantive) and (
-            risk_score >= 0.30 or any(f.severity == "high" for f in substantive)
+            risk_score >= 0.35 or any(f.severity == "high" for f in substantive)
         )
         summary = self._build_summary(findings, risk_score)
 

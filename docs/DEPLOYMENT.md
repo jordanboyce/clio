@@ -407,6 +407,17 @@ rule-pack finding. It sends content to a provider chat already trusts, and
 costs tokens per upload, so it is off by default. Air-gapped deployments can
 point it at local Ollama.
 
+**Prompt-injection wording** (`INJECTION_SCAN_ACTION`, default `review`)
+
+A separate, local scan looks for text that tries to steer an AI reading the
+document (instruction overrides, chat-format tokens, exfiltration). It badges
+the source; it never hides or rejects it. `review` also queues a medium or
+high verdict for an admin. `warn` keeps the badge and skips the queue — the
+right setting when ordinary prose is filling the list. `off` skips the scan.
+Low-confidence matches stay on the source and are not a task. Approving a
+document (one row, or **Approve all shown**) dismisses the warning; re-indexing
+the same file does not put it back.
+
 Be honest about coverage. This detects **text signals**. It cannot detect
 abuse imagery (that needs licensed hash databases that are not available
 for self-hosting) and it misses anything phrased to evade keywords. It is a

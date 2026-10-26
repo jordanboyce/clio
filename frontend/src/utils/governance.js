@@ -93,6 +93,37 @@ export function filterReviewItems(items, filterId) {
   return (items || []).filter(f.match)
 }
 
+const _SEV = { low: 1, medium: 2, high: 3 }
+
+// How the source list should badge a document's injection scan. A reviewed
+// warning and a low-confidence match must not look like an open incident —
+// that is what made the list unusable.
+export function injectionBadge(doc) {
+  const warnings = doc?.injection_warnings
+  const pages = warnings ? Object.keys(warnings).length : 0
+  if (!pages) return null
+  const where = `${pages} page${pages === 1 ? '' : 's'}`
+  if (doc.injection_review) {
+    return {
+      text: 'reviewed',
+      cls: 'badge-ghost',
+      title: `Reviewed. The injection note on ${where} stays on the source and is not a task.`,
+    }
+  }
+  let rank = 0
+  for (const scan of Object.values(warnings)) {
+    for (const f of scan?.findings || []) rank = Math.max(rank, _SEV[f.severity] || 0)
+    if (!(scan?.findings || []).length && (scan?.risk_score || 0) >= 0.5) rank = Math.max(rank, 2)
+  }
+  if (rank >= 3) {
+    return { text: 'injection', cls: 'badge-warning', title: `Text on ${where} looks like a prompt-injection attempt. Click for the excerpt.` }
+  }
+  if (rank >= 2) {
+    return { text: 'injection', cls: 'badge-warning badge-outline', title: `Possible prompt-injection wording on ${where}. Click for the excerpt.` }
+  }
+  return { text: 'note', cls: 'badge-ghost', title: `Low-confidence wording on ${where}. Likely ordinary prose or a quoted example.` }
+}
+
 // Page-level injection evidence from the stored scan, strongest first.
 export function injectionEvidence(injection) {
   return (injection?.top || []).map((t) => ({

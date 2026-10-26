@@ -29,7 +29,11 @@ from services.ocr_engine import create_ocr_engine
 from services.audio_transcriber import AUDIO_EXTENSIONS, is_audio_file
 
 # Prompt injection detection
-from services.prompt_injection_detector import PromptInjectionDetector, InjectionScanResult
+from services.prompt_injection_detector import (
+    PromptInjectionDetector,
+    InjectionScanResult,
+    scanning_enabled as injection_scanning_enabled,
+)
 # Content-policy screening (same shape, feeds the ingest decision)
 from services.content_policy import (
     PolicyScanResult,
@@ -549,9 +553,7 @@ class DocumentExtractor:
         # is no more trustworthy than text typed into a file.
         if file_ext in self.IMAGE_EXTENSIONS:
             result = self._extract_image(file_path)
-            result.injection_warnings = self._injection_detector.scan_pages(
-                result.page_texts, filename=file_path.name
-            )
+            result.injection_warnings = self._scan_injection(result, file_path)
             self._scan_policy(result, file_path)
             return result
 
@@ -578,12 +580,22 @@ class DocumentExtractor:
         else:
             raise ValueError(f"Unsupported file extension: {file_ext}")
 
-        result.injection_warnings = self._injection_detector.scan_pages(
-            result.page_texts, filename=file_path.name
-        )
+        result.injection_warnings = self._scan_injection(result, file_path)
         self._scan_policy(result, file_path)
 
         return result
+
+    def _scan_injection(self, result: ExtractionResult, file_path: Path) -> Dict[int, InjectionScanResult]:
+        """Per-page injection scan, honouring INJECTION_SCAN_ACTION=off."""
+        if not injection_scanning_enabled():
+            return {}
+        try:
+            return self._injection_detector.scan_pages(
+                result.page_texts, filename=file_path.name
+            )
+        except Exception as e:  # never let the tripwire break ingest
+            logger.warning(f"Injection scan failed for {file_path.name}: {e}")
+            return {}
 
     @staticmethod
     def _scan_policy(result: ExtractionResult, file_path: Path) -> None:

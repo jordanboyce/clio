@@ -58,6 +58,9 @@ class DocumentMetadata(BaseModel):
 
     # v3.2: Prompt injection warnings (page_num -> scan result dict)
     injection_warnings: Optional[Dict[str, Any]] = Field(None, description="Flagged pages with injection scan details")
+    # v3.7: admin outcome. "dismissed" means a person looked and the warning
+    # stays on the source but is no longer a task. None means nobody has.
+    injection_review: Optional[str] = Field(None, description="dismissed, or None when the warning is still open")
 
     # v3.3: Governance — attribution, labels, and the content-policy decision
     uploaded_by: Optional[str] = Field(None, description="Verified identity that added the document (None = unattributed)")

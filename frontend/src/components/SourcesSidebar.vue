@@ -56,10 +56,11 @@
       </div>
     </div>
 
-    <!-- Storage against the per-collection cap. Quiet by default; the bar
-         only takes on a warning tone in the last 10%, error when full. -->
+    <!-- Storage against the per-collection cap. Hidden until half the cap is
+         used: a near-empty meter above every source list told people nothing
+         they needed. Warning tone in the last 10%, error when full. -->
     <div
-      v-if="statsStore.storageLimitBytes > 0 && collectionStore.canEditCurrent"
+      v-if="statsStore.storageLimitBytes > 0 && collectionStore.canEditCurrent && statsStore.storagePercent >= 50"
       class="px-3 py-1.5 border-b border-base-300 flex-shrink-0"
       :title="storageTitle"
     >
@@ -405,11 +406,11 @@
             class="side-row text-base-content/75 hover:text-base-content"
             :class="{ 'is-active': expertiseSectionOpen }"
             :aria-expanded="expertiseSectionOpen"
-            aria-label="Toggle Applied Expertise section"
+            aria-label="Toggle saved instructions section"
             @click="expertiseSectionOpen = !expertiseSectionOpen"
           >
             <BookOpen :size="15" class="flex-shrink-0" aria-hidden="true" />
-            <span class="flex-1">Applied expertise</span>
+            <span class="flex-1">Instructions</span>
             <span v-if="attachedPackIds.length > 0" class="side-kbd tabular-nums text-base-content/40">{{ attachedPackIds.length }}</span>
             <ChevronDown :size="13" class="flex-shrink-0 text-base-content/35 transition-transform" :class="expertiseSectionOpen ? 'rotate-180' : ''" aria-hidden="true" />
           </button>
@@ -418,7 +419,7 @@
         <div v-show="expertiseSectionOpen" class="px-3 pb-3 space-y-2">
           <!-- Attached packs -->
           <div v-if="attachedPackIds.length === 0" class="text-xs text-base-content/50 py-1">
-            No expertise packs applied. Add one below to shape AI analysis.
+            None applied. Saved instructions shape every answer in this collection.
           </div>
           <div v-else class="space-y-1">
             <div
@@ -447,7 +448,7 @@
               :class="{ 'btn-disabled': expertiseLoading }"
             >
               <Plus :size="11" />
-              Add expertise…
+              Apply instructions…
               <ChevronDown :size="11" class="ml-auto" />
             </label>
             <ul tabindex="0" class="dropdown-content z-[50] menu p-1 shadow-lg bg-base-100 border border-base-300 rounded-box w-full max-h-48 overflow-y-auto flex-nowrap">
@@ -460,10 +461,10 @@
             </ul>
           </div>
           <p v-else-if="expertiseStore.packs.length === 0" class="text-xs text-base-content/40">
-            No packs in the Expertise Library yet.
+            Nothing saved yet. Create instructions from More, then Saved instructions.
           </p>
           <p v-else class="text-xs text-base-content/40">
-            All packs are already applied.
+            Everything saved is already applied.
           </p>
         </div>
       </div>
@@ -597,7 +598,7 @@
         <div
           v-for="doc in documents"
           :key="doc.document_id"
-          class="group flex items-start gap-2 px-2 py-2 rounded-lg transition-colors hover:bg-base-content/5"
+          class="group relative flex items-start gap-2 px-2 py-2 rounded-lg transition-colors hover:bg-base-content/5"
           :class="{ 'bg-base-content/[0.07]': isSelected(doc.document_id) }"
         >
           <!-- Checkbox -->
@@ -629,14 +630,20 @@
                 :aria-label="`File type ${fileInfo(doc).label}`"
               >{{ fileInfo(doc).label }}</span>
               <span v-if="isCodeDoc(doc)" class="text-xs text-base-content/50 tabular-nums">{{ doc.total_chunks }} {{ doc.total_chunks === 1 ? 'symbol' : 'symbols' }}</span>
-              <span v-else class="text-xs text-base-content/50 tabular-nums">{{ doc.total_pages }}p · {{ doc.total_chunks }}ch</span>
+              <!-- Pages read the way people count them; the chunk count is an
+                   indexing detail, kept in the tooltip for whoever wants it. -->
               <span
-                class="badge badge-xs"
-                :class="isLinkDoc(doc) ? 'badge-info' : (doc.source_type === 'local_reference' ? 'badge-ghost' : 'badge-primary')"
-                :title="isLinkDoc(doc) ? `Fetched from ${doc.source_path}` : ''"
-              >
-                {{ isLinkDoc(doc) ? 'web' : (doc.source_type === 'local_reference' ? 'local' : 'lib') }}
-              </span>
+                v-else-if="sizeLabel(doc)"
+                class="text-xs text-base-content/50 tabular-nums"
+                :title="`${doc.total_chunks} indexed ${doc.total_chunks === 1 ? 'passage' : 'passages'}`"
+              >{{ sizeLabel(doc) }}</span>
+              <!-- Where it came from, only when that is not the usual upload:
+                   a link already has the globe tile, so it needs no badge. -->
+              <span
+                v-if="doc.source_type === 'local_reference'"
+                class="text-xs text-base-content/50"
+                title="Read in place from a folder on the server. Clio keeps a reference, not a copy."
+              >· folder</span>
               <span
                 v-if="isTabularFile(doc.filename)"
                 class="badge badge-xs badge-success gap-0.5"
@@ -646,13 +653,14 @@
                 table
               </span>
               <button
-                v-if="doc.injection_warnings && Object.keys(doc.injection_warnings).length > 0"
-                class="badge badge-xs badge-warning gap-0.5 cursor-pointer hover:badge-error transition-colors"
+                v-if="injectionBadge(doc)"
+                class="badge badge-xs gap-0.5 cursor-pointer"
+                :class="injectionBadge(doc).cls"
                 @click.stop="openInjectionWarnings(doc)"
-                title="Prompt injection warnings detected — click to view"
+                :title="injectionBadge(doc).title"
               >
                 <ShieldAlert :size="9" />
-                {{ Object.keys(doc.injection_warnings).length }}p
+                {{ injectionBadge(doc).text }}
               </button>
               <!-- Sensitivity label in force (document override, else collection) -->
               <span
@@ -682,7 +690,7 @@
           </div>
 
           <!-- Action buttons (revealed on hover; always shown on touch) -->
-          <div class="flex items-center flex-shrink-0 gap-0.5 hover-reveal">
+          <div class="row-actions flex items-center flex-shrink-0 gap-0.5 hover-reveal">
             <button
               class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content"
               @click="openChunks(doc)"
@@ -849,10 +857,18 @@
       <div class="modal-box max-w-2xl">
         <h3 id="injection-warnings-title" class="font-bold text-lg flex items-center gap-2">
           <ShieldAlert :size="18" class="text-warning" aria-hidden="true" />
-          Prompt Injection Warnings
+          Possible prompt injection
         </h3>
         <p v-if="injectionDoc" class="text-sm text-base-content/70 mt-1">{{ injectionDoc.filename }}</p>
-        <div v-if="injectionDoc" class="mt-4 space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+        <p v-if="injectionDoc" class="text-sm mt-3">
+          <template v-if="injectionDoc.injection_review">
+            Someone already looked at this. The note stays on the source so the decision is reviewable, and it is no longer in the admin queue.
+          </template>
+          <template v-else>
+            Some wording here resembles text that tries to steer an AI reading the document. The document stays searchable. A low-confidence match is usually ordinary prose or a quoted example.
+          </template>
+        </p>
+        <div v-if="injectionDoc" class="mt-4 space-y-3 max-h-[50vh] overflow-y-auto pr-1">
           <div
             v-for="entry in injectionWarningPages(injectionDoc)"
             :key="entry.page"
@@ -881,7 +897,19 @@
             </div>
           </div>
         </div>
-        <div class="modal-action"><button class="btn" @click="closeInjectionModal">Close</button></div>
+        <div class="modal-action">
+          <button
+            v-if="userStore.adminConsole && injectionDoc && !injectionDoc.injection_review"
+            class="btn btn-sm btn-success btn-outline"
+            :disabled="dismissingInjection"
+            :title="'Dismisses the injection note only. A content hold or a report, if there is one, stays open.'"
+            @click="dismissInjection"
+          >
+            <span v-if="dismissingInjection" class="loading loading-spinner loading-xs"></span>
+            Looks fine
+          </button>
+          <button class="btn" @click="closeInjectionModal">Close</button>
+        </div>
       </div>
       <form method="dialog" class="modal-backdrop"><button @click="closeInjectionModal">close</button></form>
     </dialog>
@@ -988,7 +1016,7 @@ import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, Fi
 import { useCollectionStore } from '../stores/collectionStore'
 import { useUiStore } from '../stores/uiStore'
 import { useUserStore } from '../stores/userStore'
-import { labelBadgeClass, showLabel, policyBadge, policyFlagPages, categoryLabel } from '../utils/governance'
+import { labelBadgeClass, showLabel, policyBadge, policyFlagPages, categoryLabel, injectionBadge } from '../utils/governance'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useExpertiseStore } from '../stores/expertiseStore'
 import { useSelectionStore } from '../stores/selectionStore'
@@ -1335,6 +1363,24 @@ function openInjectionWarnings(doc) {
 
 function closeInjectionModal() {
   injectionModal.value?.close()
+}
+
+const dismissingInjection = ref(false)
+async function dismissInjection() {
+  const doc = injectionDoc.value
+  if (!doc) return
+  dismissingInjection.value = true
+  try {
+    await http.post(`/api/admin/documents/${collectionStore.currentCollectionId}/${doc.document_id}/approve`, { note: '', scope: 'injection' })
+    doc.injection_review = 'dismissed'
+    ui.notify(`Marked ${doc.filename} as reviewed.`, 'success')
+    closeInjectionModal()
+    await loadDocuments()
+  } catch (err) {
+    ui.toastError(err, 'Could not dismiss the warning')
+  } finally {
+    dismissingInjection.value = false
+  }
 }
 
 function injectionWarningPages(doc) {
@@ -1936,6 +1982,18 @@ function nudgeChunkBoost(chunk, delta) {
 // What each source is, for the tile and the type chips. The family
 // boundaries are the server's (services/file_kinds.py); this only draws.
 const fileInfo = (doc) => describeFile(doc?.filename, { isWeb: isLinkDoc(doc) })
+
+// What the extractor calls a "page" is only a page for PDFs: a Markdown or
+// text file is split at headings, a deck by slide, a spreadsheet by row
+// groups. Name the unit the reader would recognise; tables say nothing here
+// because their "table" badge is the useful fact.
+const sizeLabel = (doc) => {
+  const n = doc?.total_pages || 0
+  if (!n || isTabularFile(doc.filename)) return ''
+  const ext = (doc.filename || '').split('.').pop().toLowerCase()
+  const unit = ext === 'pdf' ? 'page' : ext === 'pptx' ? 'slide' : 'section'
+  return `${n.toLocaleString()} ${unit}${n === 1 ? '' : 's'}`
+}
 const isCodeDoc = (doc) => fileInfo(doc).family === 'code'
 
 const confirmDelete = (doc) => {
@@ -2152,6 +2210,9 @@ watch(() => backgroundJobsStore.uploadJobs, (jobs) => {
   }
 }, { deep: true })
 
+// Sources added from another surface (the sample set in an empty chat)
+watch(() => ui.sourcesVersion, () => { loadDocuments() })
+
 // Watch for completed reindex jobs to reload documents
 watch(() => backgroundJobsStore.reindexJob?.status, (newStatus, oldStatus) => {
   if (newStatus === 'completed' && oldStatus && oldStatus !== 'completed') {
@@ -2200,3 +2261,26 @@ onBeforeUnmount(() => {
   stopMediaTracks()
 })
 </script>
+
+<style scoped>
+/* With a mouse, a source's actions float over the end of its row instead of
+   holding a column open: the column was invisible until hover yet still
+   truncated every title to about half the panel. Touch screens have no hover,
+   so they keep the inline buttons (.hover-reveal shows them permanently). */
+@media (hover: hover) {
+  .row-actions {
+    position: absolute;
+    top: 0.375rem;
+    right: 0.375rem;
+    padding: 0.125rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-base-300);
+    background: var(--color-base-100);
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+    pointer-events: none;
+  }
+  /* Hidden buttons must not catch a click aimed at the title underneath. */
+  .group:hover .row-actions,
+  .group:focus-within .row-actions { pointer-events: auto; }
+}
+</style>

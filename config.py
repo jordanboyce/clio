@@ -444,6 +444,13 @@ class Settings(BaseSettings):
     # machine unless CONTENT_POLICY_LLM_REVIEW is on.
     content_policy_action: Literal["off", "flag", "quarantine", "reject"] = "flag"
 
+    # What the prompt-injection text scan does with what it finds. The scan
+    # is wording-based and can misread ordinary prose, so the posture is
+    # adjustable without losing the badge on the source: "review" badges the
+    # document and queues medium/high verdicts for an admin, "warn" badges
+    # the document but never queues it, "off" skips the scan entirely.
+    injection_scan_action: Literal["review", "warn", "off"] = "review"
+
     # Second opinion from an LLM: a sample of pages is classified against
     # the same categories through the provider named here (or, when empty,
     # the deployment's default chat provider). Sends content to a provider

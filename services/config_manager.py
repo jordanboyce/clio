@@ -40,7 +40,7 @@ VALID_CONFIG_FIELDS = {
     "enable_chat_tab",
     "ollama_num_ctx",
     # Content governance (Admin tab → Policy)
-    "content_policy_action", "content_policy_llm_review",
+    "content_policy_action", "injection_scan_action", "content_policy_llm_review",
     "content_policy_llm_provider", "content_policy_llm_model",
     "content_policy_llm_sample_pages",
     "aup_required", "aup_version", "aup_text",
@@ -128,6 +128,7 @@ class ConfigManager:
             "enable_chat_tab": settings.enable_chat_tab,
             # Content governance
             "content_policy_action": settings.content_policy_action,
+            "injection_scan_action": settings.injection_scan_action,
             "content_policy_llm_review": settings.content_policy_llm_review,
             "content_policy_llm_provider": settings.content_policy_llm_provider,
             "content_policy_llm_model": settings.content_policy_llm_model,
@@ -239,6 +240,14 @@ class ConfigManager:
             if updates["content_policy_action"] not in ("off", "flag", "quarantine", "reject"):
                 result["errors"].append(
                     "content_policy_action must be one of: off, flag, quarantine, reject"
+                )
+                result["success"] = False
+                return result
+
+        if "injection_scan_action" in updates:
+            if updates["injection_scan_action"] not in ("review", "warn", "off"):
+                result["errors"].append(
+                    "injection_scan_action must be one of: review, warn, off"
                 )
                 result["success"] = False
                 return result

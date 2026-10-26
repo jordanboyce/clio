@@ -35,11 +35,13 @@ router = APIRouter()
 
 
 @router.get("/api/admin/review", summary="Content review queue", tags=["admin"])
-async def get_review_queue():
+def get_review_queue():
     """Everything awaiting review: one entry per document with every reason
     attached (content scan, prompt-injection warnings, user reports), most
     urgent first. ``quarantined``, ``flagged`` and ``reports`` keep their
-    original shapes for existing clients."""
+    original shapes for existing clients. Sync on purpose: building the queue
+    opens every collection's store, so FastAPI must run it in the threadpool
+    rather than on the event loop."""
     require_admin("review flagged content")
     from services.app_database import app_db
 
@@ -47,6 +49,7 @@ async def get_review_queue():
     governance.invalidate_review_summary()
     return {
         "content_policy_action": settings.content_policy_action,
+        "injection_scan_action": settings.injection_scan_action,
         "items": queue,
         "summary": governance.summarize_queue(queue),
         "quarantined": [d for d in queue if d.get("policy_status") == "quarantined"],
@@ -65,6 +68,52 @@ async def get_review_summary():
 
 class ReviewNote(BaseModel):
     note: str = ""
+    # Empty closes everything open on the document. "injection" dismisses only
+    # the wording warning, so a content hold or a user report is left alone.
+    scope: str = ""
+
+
+class ReviewItemRef(BaseModel):
+    collection_id: str
+    document_id: str
+
+
+class BulkResolveRequest(BaseModel):
+    items: list[ReviewItemRef]
+    note: str = ""
+
+
+@router.post(
+    "/api/admin/review/resolve",
+    summary="Mark several documents as reviewed and fine",
+    tags=["admin"],
+)
+async def bulk_resolve_documents(body: BulkResolveRequest):
+    """One decision for many rows: each item gets the same treatment as the
+    single approve endpoint (hold lifted, injection warnings dismissed, reports
+    closed, all audited per document). Items that have vanished in the meantime
+    are skipped and reported, not fatal — the queue moves, that is the point."""
+    require_admin("approve documents")
+    if len(body.items) > 500:
+        raise HTTPException(status_code=400, detail="At most 500 items per call")
+
+    def _resolve_all():
+        resolved, skipped = [], []
+        for ref in body.items:
+            try:
+                governance.resolve_document(ref.collection_id, ref.document_id, note=body.note)
+                resolved.append(ref.document_id)
+            except KeyError:
+                skipped.append(ref.document_id)
+            except Exception as e:
+                logger.warning(f"Bulk resolve failed for {ref.document_id}: {e}")
+                skipped.append(ref.document_id)
+        return resolved, skipped
+
+    import asyncio
+
+    resolved, skipped = await asyncio.to_thread(_resolve_all)
+    return {"resolved": len(resolved), "skipped": skipped}
 
 
 @router.post(
@@ -80,7 +129,8 @@ async def approve_document(collection_id: str, document_id: str, body: Optional[
     require_admin("approve a document")
     try:
         return governance.resolve_document(
-            collection_id, document_id, note=(body.note if body else "")
+            collection_id, document_id, note=(body.note if body else ""),
+            scope=(body.scope if body else ""),
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Document not found")
