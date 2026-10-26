@@ -13,6 +13,7 @@ import {
   getProviderConfig,
   getProviderDisplayName,
   isDeploymentProvider,
+  migrateLegacySettings,
   resolveProvider,
   retireSurfaceOverrides,
   setActiveProviderLS,
@@ -92,6 +93,28 @@ describe('deployment-configured provider', () => {
     await fetchServerProviderIds()
 
     expect(getConfiguredProviderIds()).toEqual(['anthropic'])
+  })
+
+  it('is not shadowed by the Ollama row a first visit seeds', async () => {
+    // migrateLegacySettings() seeds {id: 'ollama', model: 'llama3.2',
+    // available: false} so Settings has a row to edit. On a deployment whose
+    // own model is on Ollama, that seed used to win: the browser asked the
+    // server for llama3.2, which was never installed there.
+    server({ deployment: { ...DEPLOYMENT, provider: 'ollama', label: 'Ollama', model: 'gemma4:31b-cloud' } })
+    await fetchDeploymentDefault()
+    migrateLegacySettings()
+
+    expect(getProviderConfig('ollama')?.model).toBe('llama3.2')
+    expect(resolveProvider()).toBe('ollama')
+    expect(buildProviderHeaders('ollama')).toEqual({})
+  })
+
+  it('still uses an Ollama this browser set up itself', async () => {
+    server({ deployment: { ...DEPLOYMENT, provider: 'ollama', label: 'Ollama', model: 'gemma4:31b-cloud' } })
+    await fetchDeploymentDefault()
+    upsertProviderConfig('ollama', { model: 'qwen3.5:9b', baseUrl: 'http://localhost:11434', available: true })
+
+    expect(buildProviderHeaders('ollama')).toEqual({ 'X-Ollama-Model': 'qwen3.5:9b', 'X-AI-Model': 'qwen3.5:9b' })
   })
 
   it('survives a server that cannot answer', async () => {

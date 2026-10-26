@@ -66,8 +66,8 @@
           <!-- Theme -->
           <div class="pb-8">
             <div class="text-sm font-medium">Theme</div>
-            <p class="text-xs text-base-content/55 mt-1 mb-4">Follows your system until you choose one.</p>
-            <div class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); max-width: 36rem;">
+            <p class="text-xs text-base-content/55 mt-1 mb-4">System matches your device's light or dark setting.</p>
+            <div class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); max-width: 42rem;">
               <button
                 v-for="t in THEMES"
                 :key="t.id"
@@ -82,7 +82,7 @@
               >
                 <!-- The inner div renders IN the candidate theme, so the
                      swatch is a live preview, not a hard-coded palette. -->
-                <div :data-theme="t.id" class="bg-base-100 px-3 pt-3 pb-2.5">
+                <div :data-theme="t.id === 'system' ? systemTheme() : t.id" class="bg-base-100 px-3 pt-3 pb-2.5">
                   <div class="flex gap-1" aria-hidden="true">
                     <span class="w-3.5 h-3.5 rounded-full bg-primary"></span>
                     <span class="w-3.5 h-3.5 rounded-full bg-secondary"></span>
@@ -136,7 +136,7 @@
           </p>
 
           <!-- Empty state: nothing connected yet -->
-          <div v-if="!hasAnyProvider" class="rounded-xl border border-dashed border-base-300 px-4 py-3 space-y-1 mb-4">
+          <div v-if="providerStore.serverLoaded && !hasAnyProvider" class="rounded-xl border border-dashed border-base-300 px-4 py-3 space-y-1 mb-4">
             <template v-if="!systemInfo.offline_mode">
               <p class="text-sm font-medium">Nothing connected yet — three quick ways to start:</p>
               <ul class="text-xs text-base-content/60 list-disc list-inside space-y-0.5">
@@ -164,7 +164,7 @@
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2 flex-wrap">
                     <span class="font-medium text-sm">{{ deploymentDefault.label }}</span>
-                    <span class="badge badge-neutral badge-xs badge-outline">this server</span>
+                    <span class="badge badge-ghost badge-xs">this server</span>
                   </div>
                   <div class="text-xs text-base-content/50 mt-0.5 truncate">
                     {{ deploymentDefault.model || 'server-chosen model' }}
@@ -1040,6 +1040,7 @@ import { ChevronDown, Check, ShieldCheck, ShieldAlert } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useUserStore } from '../stores/userStore'
+import { useProviderStore } from '../stores/providerStore'
 import {
   PROVIDER_DEFS,
   CUSTOM_ENDPOINT_PRESETS,
@@ -1068,6 +1069,7 @@ const backgroundJobsStore = useBackgroundJobsStore()
 
 // ── Settings shell: section rail + basic/advanced depth ──
 const userStore = useUserStore()
+const providerStore = useProviderStore()
 
 const ALL_SECTIONS = [
   { id: 'general', label: 'General' },
@@ -1078,7 +1080,11 @@ const ALL_SECTIONS = [
 ]
 const SECTIONS = computed(() => ALL_SECTIONS)
 
+// "system" is the absence of a choice: no stored theme, light or dark
+// following the OS. Without it the picker had no way back once someone
+// clicked a swatch, and on first visit it showed Light as "chosen".
 const THEMES = [
+  { id: 'system', label: 'System' },
   { id: 'light', label: 'Light' },
   { id: 'dark', label: 'Dark' },
   { id: 'cupcake', label: 'Cupcake' },
@@ -1976,9 +1982,16 @@ const loadAIState = () => {
 }
 
 // Theme
+const systemTheme = () =>
+  window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 const applyTheme = () => {
-  document.documentElement.setAttribute('data-theme', selectedTheme.value)
-  localStorage.setItem('theme', selectedTheme.value)
+  if (selectedTheme.value === 'system') {
+    document.documentElement.setAttribute('data-theme', systemTheme())
+    localStorage.removeItem('theme')
+  } else {
+    document.documentElement.setAttribute('data-theme', selectedTheme.value)
+    localStorage.setItem('theme', selectedTheme.value)
+  }
   window.dispatchEvent(new CustomEvent('theme-changed'))
 }
 
@@ -2041,13 +2054,7 @@ onMounted(() => {
   })
 
   // Load theme
-  const savedTheme = localStorage.getItem('theme')
-  if (savedTheme) {
-    selectedTheme.value = savedTheme
-  } else {
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    selectedTheme.value = prefersDark ? 'dark' : 'light'
-  }
+  selectedTheme.value = localStorage.getItem('theme') || 'system'
 
   loadServerConfig()
 })

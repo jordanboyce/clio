@@ -198,6 +198,22 @@ export function getProviderConfig(id) {
   return getProvidersConfig().find(p => p.id === id) || null
 }
 
+/**
+ * The config this browser actually set up for a provider, or null.
+ *
+ * migrateLegacySettings() seeds an Ollama row ({available: false}) so the
+ * Settings form has something to edit. That seed is not a choice: until the
+ * Ollama check passes in Settings it must not shadow the deployment's own
+ * Ollama model, or a first visit asks the server for a model (llama3.2) that
+ * was never installed there.
+ */
+export function getActiveProviderConfig(id) {
+  const cfg = getProviderConfig(id)
+  if (!cfg) return null
+  if (id === 'ollama' && !cfg.available) return null
+  return cfg
+}
+
 /** Create or update a provider config entry. */
 export function upsertProviderConfig(id, data) {
   const configs = getProvidersConfig()
@@ -359,7 +375,7 @@ export function getConfiguredProviderIds() {
  * Pass modelOverride to use a different model than the saved default.
  */
 export function buildProviderHeaders(providerId, modelOverride = null) {
-  const cfg = getProviderConfig(providerId)
+  const cfg = getActiveProviderConfig(providerId)
   const headers = {}
   if (!cfg) {
     // No local config. For the deployment's own provider that is the normal

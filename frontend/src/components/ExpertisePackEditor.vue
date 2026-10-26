@@ -5,7 +5,7 @@
       <!-- Editor header -->
       <div class="flex items-center justify-between gap-2">
         <h3 class="card-title text-base">
-          {{ isNew ? 'New Expertise Pack' : 'Edit Pack' }}
+          {{ isNew ? 'New instructions' : 'Edit instructions' }}
         </h3>
         <button class="btn btn-ghost btn-sm" @click="$emit('cancel')">
           <X :size="16" />
@@ -39,7 +39,7 @@
         <input
           v-model="form.description"
           type="text"
-          placeholder="One-line summary of this pack's purpose"
+          placeholder="One line on when to use these instructions"
           class="input input-bordered w-full"
         />
       </div>
@@ -74,7 +74,7 @@ Example:
       <p class="text-xs text-base-content/40 -mt-2">
         {{ form.body.length.toLocaleString() }} characters
         <span v-if="form.body.length > 8000" class="text-warning ml-1">
-          — keep packs focused to avoid using too much context budget
+          · shorter instructions leave more room for your sources
         </span>
       </p>
 
@@ -88,7 +88,7 @@ Example:
             @click="handleDelete"
           >
             <Trash2 :size="14" />
-            Delete pack
+            Delete
           </button>
         </div>
         <div class="flex gap-2">

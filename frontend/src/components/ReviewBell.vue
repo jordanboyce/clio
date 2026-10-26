@@ -47,7 +47,7 @@
     <ShieldAlert v-if="review.total > 0" :size="11" aria-hidden="true" />
     <ShieldCheck v-else :size="11" aria-hidden="true" />
     <span v-if="review.total > 0" class="font-medium">{{ review.total }} to review</span>
-    <span v-else>Review clear</span>
+    <span v-else-if="review.loaded">Review clear</span>
   </button>
 </template>
 

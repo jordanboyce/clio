@@ -16,6 +16,12 @@ export const useUiStore = defineStore('ui', () => {
   // Onboarding hand-off: pulses the Add Sources control after provider
   // setup completes with an empty collection; cleared on first interaction.
   const highlightAddSources = ref(false)
+  // Bumped by any surface that added or removed sources outside the Sources
+  // panel (the sample set, for one); the panel reloads its list on change.
+  const sourcesVersion = ref(0)
+  function sourcesChanged() {
+    sourcesVersion.value++
+  }
 
   let nextId = 1
 
@@ -42,5 +48,5 @@ export const useUiStore = defineStore('ui', () => {
     return notify(message, 'error', { duration: 6000 })
   }
 
-  return { toasts, offline, highlightAddSources, notify, dismiss, toastError }
+  return { toasts, offline, highlightAddSources, sourcesVersion, sourcesChanged, notify, dismiss, toastError }
 })

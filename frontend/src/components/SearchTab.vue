@@ -53,7 +53,7 @@
           <SlidersHorizontal :size="16" aria-hidden="true" />
           <span>{{ providerSummary }}</span>
         </button>
-        <button type="button" class="btn btn-ghost btn-sm min-h-11 font-mono" :disabled="loading" @click="toggleSlashPicker" :aria-expanded="slashPickerOpen" title="Slash commands: /tools, /stats, /docs">/</button>
+        <button type="button" class="btn btn-ghost btn-sm min-h-11 gap-1.5" :disabled="loading" @click="toggleSlashPicker" :aria-expanded="slashPickerOpen" title="Slash commands: /tools, /stats, /docs"><span class="font-mono" aria-hidden="true">/</span><span>Commands</span></button>
       </div>
       <p v-if="searchDisabled" class="text-sm text-base-content/75 mt-2">No searchable passages yet. Add sources to this collection to get started.</p>
     </div>
@@ -352,8 +352,8 @@ const dismissSlashOutput = () => {
 // Empty state (no search run yet, nothing else on screen)
 const searchSuggestions = [
   'What are the key requirements?',
-  'important dates and deadlines',
-  'definitions of key terms',
+  'Important dates and deadlines',
+  'Definitions of key terms',
 ]
 
 const showEmptyState = computed(() =>

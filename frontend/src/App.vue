@@ -744,7 +744,9 @@
       </span>
       <span v-if="statsStore.offline" class="hidden sm:inline w-px h-3 bg-base-300" aria-hidden="true"></span>
 
-      <!-- Stats moved here from the header for breathing room -->
+      <!-- Stats moved here from the header for breathing room. Hidden until
+           the first load, or every page opened on "0 sources · 0 pages". -->
+      <template v-if="statsStore.loaded">
       <span class="hidden md:inline tabular-nums">
         {{ statsStore.documents }} {{ statsStore.documents === 1 ? 'source' : 'sources' }}
       </span>
@@ -752,6 +754,7 @@
       <span class="hidden md:inline tabular-nums">
         {{ statsStore.pages }} {{ statsStore.pages === 1 ? 'page' : 'pages' }}
       </span>
+      </template>
     </footer>
 
     <!-- ── Phone: bottom tab bar (the header tabs move here) ── -->
@@ -975,7 +978,7 @@
             v-model="editCollectionGuide"
             class="textarea textarea-bordered w-full font-mono text-sm"
             rows="6"
-            placeholder="e.g. currency is USD; 'Jane' = Jane Smith; dates are MM/DD/YYYY; 'NAV' column is market value net of fees."
+            placeholder="e.g. 'EQ' means equipment; dates are DD/MM/YYYY; 'Ops desk' = the operations desk; the 'status' column uses Y/N."
           ></textarea>
           <p class="text-xs opacity-70 mt-1">
             Surfaced in every MCP response (~500 char summary in search, full text in get_collection_info) so the calling LLM has durable context.
@@ -1366,7 +1369,7 @@ import {
   getServerProviderIds,
   setActiveProviderLS,
   getProviderDisplayName,
-  getProviderConfig,
+  getActiveProviderConfig,
   migrateLegacySettings,
 } from './utils/aiProviders.js'
 import { useCollectionStore } from './stores/collectionStore'
@@ -1407,7 +1410,7 @@ const providerPill = computed(() => {
     name: id ? getProviderDisplayName(id) : '',
     // The deployment's own provider has no local config to read a model
     // from — the server picked it, so the server is what names it.
-    model: (id && getProviderConfig(id)?.model)
+    model: (id && getActiveProviderConfig(id)?.model)
       || (id === providerStore.deploymentDefault.provider ? providerStore.deploymentDefault.model : '')
       || '',
   }
@@ -2275,9 +2278,12 @@ const cancelJob = async (jobId) => {
 }
 
 onMounted(async () => {
-  // Check whether we need the first-run onboarding takeover. Done first so
-  // the screen paints immediately — the rest of the boot continues behind it.
-  checkOnboardingNeeded()
+  // The first-run takeover is decided once the server has said whether the
+  // deployment already provides a model (loadServerProviders below). Deciding
+  // from localStorage alone flashed "pick Anthropic or OpenAI" at every new
+  // visitor of a deployment that needs no setup at all. A browser that set a
+  // provider up itself skips the wait.
+  if (getConfiguredProviderIds().length > 0) showOnboarding.value = false
 
   // Share-invitation deep link (?share_token=... from emailed invites):
   // open the join dialog with the token prefilled, then clean the URL so a
@@ -2305,8 +2311,8 @@ onMounted(async () => {
   providerStore.loadServerProviders().then(() => {
     retireSurfaceOverrides()
     providerStore.touch()
-    if (providerStore.configuredIds.length > 0) showOnboarding.value = false
-  })
+    if (chatTabEnabled.value) checkOnboardingNeeded()
+  }).catch(() => { if (chatTabEnabled.value) checkOnboardingNeeded() })
 
   // Load UI feature flags from server config
   try {

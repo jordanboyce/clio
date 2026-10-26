@@ -2,8 +2,11 @@
   <!-- The one place the AI provider and model are chosen. Chat, Find and
        Reports all follow it, so there is nothing to keep in sync elsewhere. -->
   <div class="dropdown dropdown-end">
+    <!-- Nothing until the server has said what it provides: the deployment's
+         own model is not known locally, so "Connect a model" would flash on
+         every load of a deployment that needs no setup. -->
     <button
-      v-if="!configured.length"
+      v-if="!configured.length && providerStore.serverLoaded"
       class="btn btn-xs btn-ghost gap-1.5 normal-case font-normal h-7 min-h-0 border border-dashed border-base-content/30 rounded-full px-2.5 text-base-content/70"
       @click="$emit('connect')"
     >
@@ -11,7 +14,7 @@
       Connect a model
     </button>
 
-    <template v-else>
+    <template v-else-if="configured.length">
       <label
         tabindex="0"
         class="btn btn-xs btn-ghost gap-1.5 normal-case font-normal h-7 min-h-0 border border-base-300 rounded-full px-2.5"

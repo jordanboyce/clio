@@ -1,0 +1,19 @@
+checkout_id,item,team,assignment_type,assignment_id,checkout_date,allowed_working_days,due_date,return_date,extension_approved,returned_late
+C-1001,Survey tablet 04,Records,standard,,2026-01-12,5,2026-01-19,2026-01-16,no,no
+C-1002,Field camera 02,Inspections,standard,,2026-01-19,5,2026-01-26,2026-01-28,no,yes
+C-1003,Laptop 11,Finance,standard,,2026-02-02,5,2026-02-09,2026-02-09,no,no
+C-1004,GPS unit 07,Inspections,standard,,2026-02-16,5,2026-02-23,2026-02-26,yes,no
+C-1005,Projector 01,Training,standard,,2026-03-02,5,2026-03-09,2026-03-04,no,no
+C-1006,Survey tablet 04,Records,standard,,2026-03-23,5,2026-03-30,2026-03-31,no,yes
+C-1007,Radio set 03,Facilities,standard,,2026-04-06,5,2026-04-13,2026-04-13,no,no
+C-1008,Field camera 02,Inspections,standard,,2026-05-04,5,2026-05-11,2026-05-07,no,no
+C-1009,Laptop 11,Finance,standard,,2026-06-01,5,2026-06-08,2026-06-12,no,yes
+C-1010,GPS unit 07,Field Team North,field,FT-2026-031,2026-07-06,10,2026-07-20,2026-07-17,no,no
+C-1011,Survey tablet 09,Field Team North,field,FT-2026-031,2026-07-06,10,2026-07-20,2026-07-20,no,no
+C-1012,Field camera 05,Field Team South,field,FT-2026-034,2026-07-13,10,2026-07-27,2026-07-29,no,yes
+C-1013,Projector 01,Training,standard,,2026-07-20,5,2026-07-27,2026-07-24,no,no
+C-1014,Radio set 03,Field Team South,field,FT-2026-040,2026-08-03,10,2026-08-17,2026-08-20,yes,no
+C-1015,Laptop 14,Records,standard,,2026-08-17,5,2026-08-24,2026-08-25,yes,no
+C-1016,GPS unit 02,Field Team North,field,FT-2026-047,2026-09-07,10,2026-09-21,2026-09-17,no,no
+C-1017,Field camera 02,Inspections,standard,,2026-09-14,5,2026-09-21,2026-09-21,no,no
+C-1018,Survey tablet 09,Field Team South,field,FT-2026-052,2026-10-05,10,2026-10-19,,no,

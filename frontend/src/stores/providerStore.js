@@ -5,7 +5,7 @@ import {
   fetchServerProviderIds,
   getConfiguredProviderIds,
   getDeploymentDefault,
-  getProviderConfig,
+  getActiveProviderConfig,
   getProviderDisplayName,
   onProviderChange,
   resolveProvider,
@@ -52,7 +52,7 @@ export const useProviderStore = defineStore('provider', () => {
   const activeModel = computed(() => {
     version.value
     const id = resolveProvider()
-    return (id && getProviderConfig(id)?.model) || ''
+    return (id && getActiveProviderConfig(id)?.model) || ''
   })
 
   // The provider the deployment itself configured (on-prem private model).
@@ -62,11 +62,20 @@ export const useProviderStore = defineStore('provider', () => {
     return getDeploymentDefault()
   })
 
+  // True once the server has said what it provides. Until then "nothing is
+  // connected" is unknown, not true: notices that say so wait for this, or a
+  // deployment with a model flashes "connect a model" on every page load.
+  const serverLoaded = ref(false)
+
   async function loadServerProviders() {
     // Both describe "what is already configured for you" and both feed
     // getConfiguredProviderIds(), so they load together and touch once.
-    await Promise.all([fetchServerProviderIds(), fetchDeploymentDefault()])
-    touch()
+    try {
+      await Promise.all([fetchServerProviderIds(), fetchDeploymentDefault()])
+    } finally {
+      serverLoaded.value = true
+      touch()
+    }
   }
 
   return {
@@ -78,5 +87,6 @@ export const useProviderStore = defineStore('provider', () => {
     deploymentDefault,
     activeModel,
     loadServerProviders,
+    serverLoaded,
   }
 })

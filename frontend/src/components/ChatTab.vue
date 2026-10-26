@@ -136,7 +136,7 @@
             selected {{ selectionStore.count === 1 ? 'source' : 'sources' }}
             <span class="text-base-content/50">· answers stay inside the selection</span>
           </template>
-          <template v-else>{{ collectionStore.currentCollection?.name || 'Current collection' }} · All {{ documentCount.toLocaleString() }} sources</template>
+          <template v-else>{{ collectionStore.currentCollection?.name || 'Current collection' }}<template v-if="statsStore.loaded"> · All {{ documentCount.toLocaleString() }} {{ documentCount === 1 ? 'source' : 'sources' }}</template></template>
         </span>
         <button v-if="scope === 'all' && selectionActive" class="btn btn-ghost btn-xs h-auto py-2" @click="scope = 'current'">Use selection</button>
         <button class="btn btn-ghost btn-xs" @click="$emit('show-sources')" title="Change the selection in the Sources panel">Sources</button>
@@ -144,7 +144,7 @@
       </div>
 
       <!-- No providers configured notice (inline, always visible) -->
-      <div v-if="!hasAnyProvider" class="notice notice-info flex-shrink-0">
+      <div v-if="providerStore.serverLoaded && !hasAnyProvider" class="notice notice-info flex-shrink-0">
         <Info :size="15" class="text-info" aria-hidden="true" />
         <span class="flex-1">Connect a model to ask questions, or find passages without one.</span>
         <button class="btn btn-xs btn-primary" @click="$emit('switch-tab', 'settings')">Connect a model</button>
@@ -218,7 +218,8 @@
 
         <!-- Empty state -->
         <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full py-8 px-4">
-          <Transition name="rise" appear>
+          <!-- out-in: the two states swap rather than drawing over each other. -->
+          <Transition name="rise" mode="out-in" appear>
             <div v-if="hasAnyProvider && documentCount > 0" class="w-full max-w-xl">
               <h3 class="text-[22px] leading-tight font-semibold tracking-tight text-base-content/90">
                 {{ collectionStore.currentCollection?.name || 'Your collection' }}
@@ -249,14 +250,15 @@
                   </li>
                 </ul>
               </div>
+              <!-- "/ for commands" already sits under the composer. -->
               <p class="mt-8 text-xs text-base-content/40 hidden sm:block">
-                <span class="kbd-hint">/</span> for commands in the box
-                <span class="mx-1.5 text-base-content/25">·</span>
                 <span class="kbd-hint">{{ MOD }}</span> <span class="kbd-hint">K</span> to jump anywhere
               </p>
             </div>
-            <!-- Nothing indexed yet: one quiet invitation, not a warning. -->
-            <div v-else-if="documentCount === 0 && !indexingActive" class="w-full max-w-md text-center">
+            <!-- Nothing indexed yet: one quiet invitation, not a warning. Waits
+                 for the first stats load, or every visit opened on "is empty"
+                 before the real count arrived. -->
+            <div v-else-if="statsStore.loaded && documentCount === 0 && !indexingActive" class="w-full max-w-md text-center">
               <div class="mx-auto w-12 h-12 rounded-2xl bg-base-content/[0.06] flex items-center justify-center">
                 <FileText :size="20" class="text-base-content/45" aria-hidden="true" />
               </div>
@@ -266,10 +268,26 @@
               <p class="mt-1.5 text-sm text-base-content/55 leading-relaxed">
                 Add documents, a folder, a link or a recording. Clio indexes them locally and every answer cites the passage it came from.
               </p>
-              <button type="button" class="btn btn-sm btn-primary mt-5 gap-1.5" @click="$emit('show-sources'); $emit('add-sources')">
-                <Plus :size="14" aria-hidden="true" />
-                Add sources
-              </button>
+              <div class="mt-5 flex flex-wrap items-center justify-center gap-2">
+                <button type="button" class="btn btn-sm btn-primary gap-1.5" @click="$emit('show-sources'); $emit('add-sources')">
+                  <Plus :size="14" aria-hidden="true" />
+                  Add sources
+                </button>
+                <button
+                  v-if="collectionStore.canEditCurrent"
+                  type="button"
+                  class="btn btn-sm btn-ghost gap-1.5"
+                  :disabled="addingSamples"
+                  @click="trySamples"
+                >
+                  <span v-if="addingSamples" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+                  <Sparkles v-else :size="14" aria-hidden="true" />
+                  {{ addingSamples ? 'Adding samples…' : 'Try it with sample documents' }}
+                </button>
+              </div>
+              <p v-if="collectionStore.canEditCurrent" class="mt-2 text-xs text-base-content/45">
+                Four short fictional records: a policy, an amendment, a desk note and a checkout register.
+              </p>
               <p class="mt-3 text-xs text-base-content/40 hidden sm:block"><span class="kbd-hint">{{ MOD }}</span> <span class="kbd-hint">U</span> from anywhere</p>
             </div>
           </Transition>
@@ -431,7 +449,7 @@
                         >
                           <span class="text-base-content/40 font-mono">#{{ r.rank }}</span>
                           <span class="font-medium truncate">{{ r.filename }}</span>
-                          <span v-if="r.page_number" class="text-base-content/40">p.{{ r.page_number }}</span>
+                          <span v-if="r.page_number" class="text-base-content/40">{{ locationLabel(r.filename, r.page_number) }}</span>
                           <span v-if="r.similarity_score != null" class="text-base-content/40 ml-auto font-mono">{{ Number(r.similarity_score).toFixed(3) }}</span>
                         </li>
                       </ul>
@@ -722,6 +740,9 @@ import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useProviderStore } from '../stores/providerStore'
 import { useStatsStore } from '../stores/statsStore'
 import { useSelectionStore } from '../stores/selectionStore'
+import { useUiStore } from '../stores/uiStore'
+import { addSampleSources } from '../utils/sampleSources'
+import { locationLabel } from '../utils/fileTypes'
 import SlashCommandPicker from './SlashCommandPicker.vue'
 import AISettingsDrawer from './AISettingsDrawer.vue'
 import { runSlashCommand, isSlashCommand } from '../utils/slashCommands'
@@ -743,6 +764,7 @@ const backgroundJobsStore = useBackgroundJobsStore()
 const providerStore = useProviderStore()
 const statsStore = useStatsStore()
 const selectionStore = useSelectionStore()
+const ui = useUiStore()
 // The sidebar selection scopes this conversation (see stores/selectionStore).
 const selectionActive = computed(() => selectionStore.active)
 
@@ -788,7 +810,7 @@ const cacheThreshold = ref(storedCacheThreshold != null ? Number(storedCacheThre
 let seedingCacheThreshold = false
 const seedCacheThreshold = async () => {
   try {
-    const { data } = await http.get('/api/chat/cache')
+    const { data } = await http.get('/api/chat/cache', { quiet: true })
     seedingCacheThreshold = true
     if (data.enabled === false) cacheThreshold.value = null
     else if (storedCacheThreshold == null && typeof data.threshold === 'number') cacheThreshold.value = data.threshold
@@ -932,6 +954,25 @@ const deleteSession = (sessionId) => {
 // Written from the collection's own passages by the fast model (cached
 // server-side per corpus version). The generic list is the fallback when no
 // model can be reached or the collection has nothing to sample.
+// Empty collection: load the bundled fictional sample set so someone can see
+// what Clio does before they have documents of their own.
+const addingSamples = ref(false)
+const trySamples = async () => {
+  if (addingSamples.value) return
+  addingSamples.value = true
+  try {
+    const result = await addSampleSources(collectionStore.currentCollectionId)
+    ui.sourcesChanged()
+    await statsStore.fetchStats()
+    const added = result?.documents_processed ?? 4
+    ui.notify(`Added ${added} sample sources. Try one of the suggested questions.`, 'success', { duration: 6000 })
+  } catch (err) {
+    ui.toastError(err, 'Could not add the sample sources')
+  } finally {
+    addingSamples.value = false
+  }
+}
+
 const FALLBACK_SUGGESTIONS = [
   'Summarize the key points in these documents',
   'Compare the requirements in these sources and cite any conflicts.',
@@ -962,7 +1003,7 @@ const loadStarters = async () => {
         provider: getAPIProviderName(selectedProvider.value),
         document_ids: selectionStore.active ? selectionStore.currentIds : null,
       },
-      { headers: buildProviderHeaders(selectedProvider.value) },
+      { headers: buildProviderHeaders(selectedProvider.value), quiet: true },
     )
     if (startersKeyNow() === key) starters.value = Array.isArray(data?.questions) ? data.questions : []
   } catch {

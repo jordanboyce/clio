@@ -80,7 +80,10 @@ http.interceptors.response.use(
         detailText ||
         `Rate limit reached — try again in ${seconds ?? 'a few'}s.`
       const now = Date.now()
-      if (now - lastRateLimitToastAt > 3000) {
+      // `quiet: true` on a request marks it as background (suggestions,
+      // status reads): its caller degrades on its own, so a toast would only
+      // alarm someone who did nothing.
+      if (!error.config?.quiet && now - lastRateLimitToastAt > 3000) {
         lastRateLimitToastAt = now
         ui.notify(message, 'warning', { duration: 6000 })
       }

@@ -15,6 +15,7 @@ describe('Evidence in the research workspace', () => {
     setActivePinia(createPinia())
     useCollectionStore().collections = [{ id: 'default', name: 'Operations' }]
     useStatsStore().documents = 3
+    useStatsStore().loaded = true
     useProviderStore().loadServerProviders = vi.fn().mockResolvedValue()
     Element.prototype.scrollIntoView = vi.fn()
     window.matchMedia = vi.fn(() => ({ matches: false }))

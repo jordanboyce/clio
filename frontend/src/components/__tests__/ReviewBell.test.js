@@ -49,6 +49,7 @@ describe('review notifications', () => {
 
   it('says so when the queue is clear, in both placements', () => {
     useUserStore().adminConsole = true
+    useReviewStore().loaded = true
     const header = mountBell()
     expect(header.find('[data-testid="review-badge"]').exists()).toBe(false)
     expect(header.text()).toContain('Nothing is waiting for you')

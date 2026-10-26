@@ -7,7 +7,7 @@
           Search your sources from Claude Desktop, claude.ai, ChatGPT, Claude Code, Codex, AnythingLLM, or VS Code using MCP.
         </template>
         <template v-else>
-          Search your sources from AnythingLLM, Claude Code, Codex, or VS Code using MCP.
+          Search your sources from Claude, Cursor, VS Code, Codex, AnythingLLM and other MCP clients. Pick yours under Connect a client below.
         </template>
         Your client receives retrieved passages, so choose a client you trust with this data.
       </p>
@@ -253,8 +253,14 @@
               <option v-for="t in activeTokens" :key="t.id" :value="t.id">{{ t.name }}</option>
             </select>
           </div>
+          <div v-else-if="openDeployment" class="alert py-2">
+            <span class="text-sm">
+              This server is open, so a client can connect without a token: leave out the Authorization header.
+              A token is still worth making when you want to keep one client read-only, limit it to some collections, or see its calls in the audit trail.
+            </span>
+          </div>
           <div v-else class="alert py-2">
-            <span class="text-sm">Generate a token above first — the snippets below need one to authenticate.</span>
+            <span class="text-sm">Generate a token above first. The snippets below need one to authenticate.</span>
           </div>
 
           <div class="form-control max-w-xs">
@@ -614,6 +620,17 @@ const loadMcpSettings = async () => {
   }
 }
 
+// An open deployment (no password, no identity provider) accepts MCP
+// clients with no credential at all, so the Connect copy must not claim a
+// token is required there. /api/me reports the mode.
+const openDeployment = ref(false)
+const loadAuthMode = async () => {
+  try {
+    const { data } = await http.get('/api/me')
+    openDeployment.value = data?.authenticated_via === 'open'
+  } catch { /* keep the stricter wording */ }
+}
+
 const loadOAuth = async () => {
   try {
     const response = await http.get('/api/mcp/oauth')
@@ -756,6 +773,7 @@ onMounted(() => {
   loadMcpCollections()
   loadMcpSettings()
   loadOAuth()
+  loadAuthMode()
   loadTokens()
 })
 </script>

@@ -204,15 +204,11 @@
 
       <!-- Quiet footer: more providers + skip -->
       <div v-if="stage === 'provider'" class="text-center text-xs text-base-content/55 mt-6 leading-relaxed">
-        <template v-if="!offline">
-          More providers (Gemini, Grok, OpenRouter, GitHub, Ollama Cloud) are available in Settings.
-          <span class="text-base-content/30" aria-hidden="true">·</span>
-        </template>
-        <template v-else>
-          This deployment runs air-gapped — only local and self-hosted models are available.
-          <span class="text-base-content/30" aria-hidden="true">·</span>
-        </template>
-        <button class="link link-hover" @click="skipProvider">Start with search</button>
+        <p v-if="!offline">More providers (Gemini, Grok, OpenRouter, GitHub, Ollama Cloud) are available in Settings.</p>
+        <p v-else>This deployment runs air-gapped, so only local and self-hosted models are offered.</p>
+        <!-- Skipping is a real path, not a footnote: search, citations and
+             MCP all work without a model, so it gets a visible button. -->
+        <button class="btn btn-ghost btn-sm mt-3" @click="skipProvider">Skip for now and search without AI answers</button>
       </div>
 
       <!-- Trust copy footer -->

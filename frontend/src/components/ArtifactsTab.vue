@@ -80,9 +80,9 @@
         <ul class="text-xs space-y-0.5">
           <li v-for="(s, i) in result.sources" :key="i" class="text-base-content/70">
             <a v-if="s.page_url" :href="s.page_url" target="_blank" class="link link-hover">
-              {{ s.filename }}<span v-if="s.page_number"> — p.{{ s.page_number }}</span>
+              {{ s.filename }}<span v-if="s.page_number"> · {{ locationLabel(s.filename, s.page_number) }}</span>
             </a>
-            <span v-else>{{ s.filename }}<span v-if="s.page_number"> — p.{{ s.page_number }}</span></span>
+            <span v-else>{{ s.filename }}<span v-if="s.page_number"> · {{ locationLabel(s.filename, s.page_number) }}</span></span>
           </li>
         </ul>
       </div>
@@ -94,6 +94,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { locationLabel } from '../utils/fileTypes'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useProviderStore } from '../stores/providerStore'
 import { useSelectionStore } from '../stores/selectionStore'

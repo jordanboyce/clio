@@ -4,14 +4,14 @@
     <!-- Header -->
     <div class="flex items-center justify-between flex-wrap gap-2">
       <div>
-        <h2 class="text-xl font-bold">Expertise Library</h2>
+        <h2 class="text-xl font-bold">Saved instructions</h2>
         <p class="text-sm text-base-content/60 mt-0.5">
-          Create reusable advisor guidance packs. Attach them to client collections to shape every AI analysis.
+          Write guidance once (terminology, house style, what to check first) and apply it to any collection. Every answer in that collection follows it.
         </p>
       </div>
       <button class="btn btn-primary" @click="startCreate">
         <Plus :size="18" />
-        New Pack
+        New instructions
       </button>
     </div>
 
@@ -37,11 +37,11 @@
       <div v-else-if="store.packs.length === 0" class="card bg-base-200">
         <div class="card-body items-center text-center py-12">
           <BookOpen :size="40" class="text-base-content/30 mb-2" />
-          <p class="text-base-content/60">No expertise packs yet.</p>
-          <p class="text-sm text-base-content/40">Create your first pack to get started.</p>
+          <p class="text-base-content/60">No saved instructions yet.</p>
+          <p class="text-sm text-base-content/40">For example: "Answer in plain English and define acronyms on first use."</p>
           <button class="btn btn-primary btn-sm mt-4" @click="startCreate">
             <Plus :size="16" />
-            New Pack
+            New instructions
           </button>
         </div>
       </div>
@@ -92,7 +92,7 @@
     <!-- Delete confirmation modal -->
     <dialog ref="deleteModal" class="modal">
       <div class="modal-box">
-        <h3 class="font-bold text-lg">Delete expertise pack?</h3>
+        <h3 class="font-bold text-lg">Delete these instructions?</h3>
         <p class="py-4 text-base-content/70">
           "<strong>{{ deletingPack?.name }}</strong>" will be removed from the library
           and detached from all collections. This cannot be undone.

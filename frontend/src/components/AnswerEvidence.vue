@@ -13,7 +13,7 @@
       >
         <span class="font-mono text-base-content/60 tabular-nums">{{ index + 1 }}</span>
         <span class="truncate max-w-[12rem]">{{ source.filename }}</span>
-        <span v-if="source.page_number" class="text-base-content/50">p.{{ source.page_number }}</span>
+        <span v-if="source.page_number" class="text-base-content/50">{{ locationLabel(source.filename, source.page_number) }}</span>
       </button>
       <button
         v-if="sources.length > MAX_CHIPS" type="button"
@@ -55,6 +55,7 @@
 <script setup>
 import { computed, nextTick, ref, useId } from 'vue'
 import { renderEvidenceMarkdown, sourceHref } from '../utils/answerEvidence'
+import { locationLabel } from '../utils/fileTypes'
 
 const props = defineProps({
   content: { type: String, default: '' },

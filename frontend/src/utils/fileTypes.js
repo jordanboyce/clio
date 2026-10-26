@@ -82,3 +82,15 @@ export function describeFile(name, { isWeb = false } = {}) {
 
 export const isCodeFile = (name) => describeFile(name).family === 'code'
 export const isTabularFile = (name) => ['csv', 'xlsx', 'xls'].includes(extOf(name))
+
+// Where a cited passage sits, in the unit the reader would look for. The
+// index calls every part a "page", but only a PDF has pages: text formats
+// are split at headings, decks by slide, spreadsheets by row groups.
+export function locationLabel(name, page) {
+  if (!page) return ''
+  const ext = extOf(name)
+  if (ext === 'pdf') return `p.${page}`
+  if (ext === 'pptx') return `slide ${page}`
+  if (isTabularFile(name)) return `part ${page}`
+  return `§${page}`
+}

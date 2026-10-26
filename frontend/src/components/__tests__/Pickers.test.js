@@ -8,6 +8,7 @@ vi.mock('../../utils/http', () => ({ default: { get: vi.fn(() => Promise.resolve
 import ModelPicker from '../ModelPicker.vue'
 import CollectionPicker from '../CollectionPicker.vue'
 import { getProviderConfig, setActiveProviderLS, upsertProviderConfig } from '../../utils/aiProviders'
+import { useProviderStore } from '../../stores/providerStore'
 
 beforeEach(() => {
   setActivePinia(createPinia())
@@ -15,7 +16,14 @@ beforeEach(() => {
 })
 
 describe('ModelPicker', () => {
+  it('says nothing until the server has said what it provides', () => {
+    // The deployment's own model is only known after loadServerProviders;
+    // offering "Connect a model" before that flashed on every page load.
+    expect(mount(ModelPicker).text()).not.toContain('Connect a model')
+  })
+
   it('offers to connect a model when none is configured', async () => {
+    useProviderStore().serverLoaded = true
     const wrapper = mount(ModelPicker)
     expect(wrapper.text()).toContain('Connect a model')
     await wrapper.get('button').trigger('click')
