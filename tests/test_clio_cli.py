@@ -235,3 +235,78 @@ def test_reindex_no_wait_returns_the_job_id(server, monkeypatch, capsys):
     assert cli.main(["--url", server, "--json", "reindex", "-c", "Policies", "--no-wait"]) == 0
     assert json.loads(capsys.readouterr().out)["job_id"] == 11
     assert _Handler.reindex_polls == 0
+
+
+def test_types_lists_registered_types(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    # Override the handler to return types
+    def do_GET_types(self):
+        if self.path == "/api/custom-file-types":
+            self._send(200, {"types": [
+                {"extension": ".acme", "label": "Acme export", "kind": "data", "source": "manual"},
+                {"extension": ".cfgx", "label": "Config X", "kind": "code", "source": "heuristic"},
+            ]})
+            return
+        return super(type(self), self).do_GET()
+    _Handler.do_GET = do_GET_types
+
+    assert cli.main(["--url", server, "types"]) == 0
+    out = capsys.readouterr().out
+    assert ".acme" in out and "Acme export" in out and "data" in out and "manual" in out
+    assert ".cfgx" in out and "Config X" in out and "code" in out and "heuristic" in out
+
+
+def test_types_empty(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    def do_GET_types_empty(self):
+        if self.path == "/api/custom-file-types":
+            self._send(200, {"types": []})
+            return
+        return super(type(self), self).do_GET()
+    _Handler.do_GET = do_GET_types_empty
+
+    assert cli.main(["--url", server, "types"]) == 0
+    assert "no custom file types registered" in capsys.readouterr().out
+
+
+def test_type_suggest_proposes_profile(server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    sample = tmp_path / "sample.acme"
+    sample.write_text('{"pumps": [{"name": "Pump A", "psi": 60}]}', encoding="utf-8")
+
+    def do_POST_suggest(self):
+        if self.path == "/api/custom-file-types/suggest":
+            self._send(200, {
+                "extension": ".acme",
+                "profile": {"record_path": "pumps", "title_field": "name", "exclude": ["id"]},
+                "preview": {"records": 1, "sections": 1, "chars": 42, "text": "Pump A\npsi: 60"},
+                "source": "heuristic",
+            })
+            return
+        return super(type(self), self).do_POST()
+    _Handler.do_POST = do_POST_suggest
+
+    assert cli.main(["--url", server, "type-suggest", ".acme", str(sample)]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["extension"] == ".acme"
+    assert out["profile"]["record_path"] == "pumps"
+    assert out["preview"]["records"] == 1
+
+
+def test_type_save_saves_profile(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+
+    def do_PUT_save(self):
+        if self.path == "/api/custom-file-types/.acme":
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
+            assert body["record_path"] == "pumps"
+            assert body["title_field"] == "name"
+            self._send(200, {"extension": ".acme", "label": "Acme", "enabled": True})
+            return
+        return super(type(self), self).do_PUT() if hasattr(super(type(self), self), "do_PUT") else self._send(404, {"detail": "nope"})
+    _Handler.do_PUT = do_PUT_save
+
+    assert cli.main(["--url", server, "type-save", ".acme", '{"record_path":"pumps","title_field":"name"}']) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["extension"] == ".acme"
+    assert out["enabled"] is True

@@ -324,6 +324,54 @@ def cmd_search(c: Client, a) -> Any:
     return c.post_json("/search", {"query": a.query, "top_k": a.top_k}, collection_id=cid)
 
 
+# -- custom file types commands -------------------------------------------------
+
+def cmd_types(c: Client, a) -> Any:
+    """List all registered custom file types."""
+    data = c.get("/api/custom-file-types")
+    return data.get("types", []) if isinstance(data, dict) else data
+
+
+def cmd_type_suggest(c: Client, a) -> Any:
+    """Propose a profile from a sample file."""
+    sample_path = Path(a.sample).expanduser()
+    if not sample_path.exists():
+        raise ClioError(f"{sample_path} does not exist")
+    if sample_path.stat().st_size > 2 * 1024 * 1024:
+        raise ClioError("sample is larger than 2 MB; use a smaller excerpt")
+
+    with open(sample_path, "rb") as f:
+        raw = f.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            raise ClioError("sample is larger than 2 MB; use a smaller excerpt")
+
+    boundary = uuid.uuid4().hex
+    parts = [
+        f'--{boundary}\r\nContent-Disposition: form-data; name="extension"\r\n\r\n{a.extension}\r\n'.encode(),
+        f'--{boundary}\r\nContent-Disposition: form-data; name="use_ai"\r\n\r\n{str(a.use_ai).lower()}\r\n'.encode(),
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{_ascii_name(sample_path)}"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode(),
+        raw,
+        b'\r\n',
+        f'--{boundary}--\r\n'.encode(),
+    ]
+    return c._request(
+        "POST", "/api/custom-file-types/suggest",
+        body=b"".join(parts),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    )
+
+
+def cmd_type_save(c: Client, a) -> Any:
+    """Save a profile for an extension."""
+    profile = json.loads(a.profile)
+    ext = a.extension
+    if not ext.startswith("."):
+        ext = "." + ext
+    return c._request("PUT", f"/api/custom-file-types/{ext}",
+                      body=json.dumps(profile).encode(),
+                      headers={"Content-Type": "application/json"})
+
+
 def _human(n: Optional[int]) -> str:
     size = float(n or 0)
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -365,6 +413,11 @@ def render(command: str, result: Any) -> str:
     if command == "collections":
         return "\n".join(f"{x.get('id')}\t{x.get('name')}\t{x.get('document_count', '')} docs"
                          for x in result) or "no collections"
+    if command == "types":
+        if not result:
+            return "no custom file types registered"
+        return "\n".join(f"{x.get('extension')}\t{x.get('label')}\t{x.get('kind')}\t{x.get('source')}"
+                         for x in result)
     return json.dumps(result, indent=2)
 
 
@@ -412,6 +465,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("query"); s.add_argument("--collection", "-c", default="default")
     s.add_argument("--top-k", type=int, default=5)
     s.set_defaults(fn=cmd_search)
+    s = sub.add_parser("types", help="list registered custom file types")
+    s.set_defaults(fn=cmd_types)
+    s = sub.add_parser("type-suggest", help="propose a profile from a sample file")
+    s.add_argument("extension")
+    s.add_argument("sample", help="path to sample file")
+    s.add_argument("--use-ai", action="store_true", default=False, help="ask the deployment's chat model to refine the proposal")
+    s.set_defaults(fn=cmd_type_suggest)
+    s = sub.add_parser("type-save", help="save a profile for an extension")
+    s.add_argument("extension")
+    s.add_argument("profile", help="JSON profile, e.g. '{\"record_path\":\"pumps\",\"title_field\":\"name\"}'")
+    s.set_defaults(fn=cmd_type_save)
     return p
 
 
