@@ -13,6 +13,9 @@ directory.
     clio_cli.py create "Policies" --description "HR and security policies"
     clio_cli.py upload ./handbook --collection policies      # stages, indexes, waits
     clio_cli.py search "password rotation interval" --collection policies
+    clio_cli.py stats --collection policies                  # exact counts, sizes, types
+    clio_cli.py files --collection policies --type pdf       # list files (table)
+    clio_cli.py files -c policies --csv all-files.csv        # every file, however many
     clio_cli.py jobs
 
 The token is read from the environment (or --token-file), never from argv, so
@@ -85,6 +88,30 @@ class Client:
 
     def get(self, path: str, **query: Any) -> Any:
         return self._request("GET", path, query=query)
+
+    def download(self, path: str, dest: Path, **query: Any) -> int:
+        """Stream a response body to `dest` without holding it in memory."""
+        url = self.base + path + "?" + urllib.parse.urlencode(
+            {k: v for k, v in query.items() if v not in (None, "")})
+        req = urllib.request.Request(url)
+        if self.token:
+            req.add_header("Authorization", f"Bearer {self.token}")
+        partial = dest.with_name(dest.name + ".partial")
+        written = 0
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp, open(partial, "wb") as out:
+                for block in iter(lambda: resp.read(1 << 16), b""):
+                    out.write(block)
+                    written += len(block)
+            partial.replace(dest)
+        except urllib.error.HTTPError as e:
+            partial.unlink(missing_ok=True)
+            detail = e.read().decode("utf-8", "replace")[:300]
+            raise ClioError(f"GET {path} -> HTTP {e.code}: {detail}") from None
+        except urllib.error.URLError as e:
+            partial.unlink(missing_ok=True)
+            raise ClioError(f"cannot reach {self.base}: {e.reason}") from None
+        return written
 
     def post_json(self, path: str, payload: dict, **query: Any) -> Any:
         return self._request("POST", path, body=json.dumps(payload).encode(),
@@ -228,6 +255,34 @@ def cmd_upload(c: Client, a) -> Any:
     return result
 
 
+def cmd_stats(c: Client, a) -> Any:
+    return c.get("/documents/stats", collection_id=resolve_collection(c, a.collection))
+
+
+def cmd_files(c: Client, a) -> Any:
+    cid = resolve_collection(c, a.collection)
+    query = {"collection_id": cid, "q": a.name, "file_type": a.type, "sort": a.sort}
+    if a.csv or a.jsonl:
+        dest = Path(a.csv or a.jsonl).expanduser()
+        size = c.download("/documents/export", dest,
+                          format="csv" if a.csv else "jsonl", **query)
+        return {"collection_id": cid, "written_to": str(dest), "bytes": size}
+    # Table to the terminal: stream JSON Lines and stop at --limit.
+    tmp = Path(os.environ.get("TMPDIR") or os.environ.get("TEMP") or ".") / f".clio-files-{os.getpid()}.jsonl"
+    try:
+        c.download("/documents/export", tmp, format="jsonl", **query)
+        rows = []
+        total = 0
+        with open(tmp, encoding="utf-8") as f:
+            for line in f:
+                total += 1
+                if len(rows) < a.limit:
+                    rows.append(json.loads(line))
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"collection_id": cid, "total": total, "shown": len(rows), "files": rows}
+
+
 def cmd_jobs(c: Client, a) -> Any:
     return c.get("/documents/jobs")
 
@@ -241,11 +296,44 @@ def cmd_search(c: Client, a) -> Any:
     return c.post_json("/search", {"query": a.query, "top_k": a.top_k}, collection_id=cid)
 
 
+def _human(n: Optional[int]) -> str:
+    size = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{int(size)} B" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
 def render(command: str, result: Any) -> str:
     if command == "search":
         rows = [f"{r['filename']} p.{r['page_number']}  score {r['similarity_score']:.2f}\n"
                 f"    {r['text_snippet'].strip()[:300]}" for r in result.get("results", [])]
         return "\n".join(rows) or "no results"
+    if command == "stats":
+        lines = [f"documents  {result['total_documents']}",
+                 f"pages      {result['total_pages']}",
+                 f"chunks     {result['total_chunks']}",
+                 f"size       {_human(result['total_bytes'])}"]
+        if result.get("oldest_upload"):
+            lines.append(f"uploaded   {result['oldest_upload'][:10]} to {result['newest_upload'][:10]}")
+        if result["by_extension"]:
+            lines.append("by type")
+            lines += [f"  {r['extension']:<10}{r['documents']:>8}  {_human(r['bytes']):>10}"
+                      for r in result["by_extension"]]
+            more = result["distinct_extensions"] - len(result["by_extension"])
+            if more > 0:
+                lines.append(f"  (+{more} more types)")
+        return "\n".join(lines)
+    if command == "files":
+        if "written_to" in result:
+            return f"wrote {_human(result['bytes'])} to {result['written_to']}"
+        rows = [f"{f['filename']}\t{_human(f['bytes']) if f['bytes'] is not None else '-'}\t"
+                f"{(f['uploaded'] or '')[:10]}" for f in result["files"]]
+        if result["total"] > result["shown"]:
+            rows.append(f"... {result['total'] - result['shown']} more "
+                        f"({result['total']} total); use --csv FILE for the full list")
+        return "\n".join(rows) or "no files"
     if command == "collections":
         return "\n".join(f"{x.get('id')}\t{x.get('name')}\t{x.get('document_count', '')} docs"
                          for x in result) or "no collections"
@@ -270,6 +358,20 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-wait", action="store_true", help="return once the job is queued")
     s.add_argument("--poll", type=float, default=2.0)
     s.set_defaults(fn=cmd_upload)
+    s = sub.add_parser("stats", help="exact document counts, sizes and file types")
+    s.add_argument("--collection", "-c", default="default")
+    s.set_defaults(fn=cmd_stats)
+    s = sub.add_parser("files", help="list the files in a collection, or export them all")
+    s.add_argument("--collection", "-c", default="default")
+    s.add_argument("--type", help="extension (pdf) or family (docs, code, data, media, other)")
+    s.add_argument("--name", help="filename contains")
+    s.add_argument("--sort", default="name",
+                   choices=["newest", "oldest", "name", "name_desc", "largest", "smallest"])
+    s.add_argument("--limit", type=int, default=50, help="rows to print (default 50)")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--csv", metavar="FILE", help="write every matching file to FILE as CSV")
+    g.add_argument("--jsonl", metavar="FILE", help="write every matching file as JSON Lines")
+    s.set_defaults(fn=cmd_files)
     sub.add_parser("jobs", help="recent indexing jobs").set_defaults(fn=cmd_jobs)
     s = sub.add_parser("job", help="one indexing job"); s.add_argument("job_id", type=int)
     s.set_defaults(fn=cmd_job)

@@ -196,8 +196,38 @@ _TOOLS: List[Dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {}},
     },
     {
+        "name": "get_collection_stats",
+        "description": (
+            "Exact statistics for a collection: total documents, pages, chunks, bytes, "
+            "upload date range, counts per file extension and kind, largest files. Use for "
+            "any 'how many', 'how big', 'what types' question. Never count from search results."
+        ),
+        "parameters": {"type": "object", "properties": {"collection_id": {"type": "string"}}},
+    },
+    {
+        "name": "list_documents",
+        "description": (
+            "Page through the files in a collection (name, type, bytes, pages, upload date). "
+            "Returns total_matching and next_offset; call again with next_offset to continue. "
+            "Filter by name_contains or file_type (an extension such as pdf, or docs/code/data/"
+            "media/other); sort by newest, oldest, name, name_desc, largest or smallest."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "collection_id": {"type": "string"},
+                "limit": {"type": "integer", "description": "Page size, 1-500 (default 100)"},
+                "offset": {"type": "integer"},
+                "name_contains": {"type": "string"},
+                "file_type": {"type": "string"},
+                "sort": {"type": "string",
+                         "enum": ["newest", "oldest", "name", "name_desc", "largest", "smallest"]},
+            },
+        },
+    },
+    {
         "name": "get_collection_info",
-        "description": "Full document listing for a collection.",
+        "description": "Description, guide and the newest documents of a collection.",
         "parameters": {
             "type": "object",
             "properties": {

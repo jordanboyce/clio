@@ -30,7 +30,11 @@ import config
 logger = logging.getLogger(__name__)
 
 MAX_REDIRECTS = 5
-USER_AGENT = "Clio/1.0 (+document indexer; fetches pages a user asked to index)"
+# Wikipedia and other Wikimedia sites answer 403 to a user agent that has no
+# contact URL, which is the most common reason a pasted link failed.
+# LINK_USER_AGENT overrides it, e.g. to name your own organisation.
+DEFAULT_USER_AGENT = "Clio/1.0 (+https://github.com/jordanboyce/clio; fetches pages a user asked to index)"
+USER_AGENT = DEFAULT_USER_AGENT
 
 # Media type -> file extension the extractor already handles. A type not in
 # this table (video, archives, binaries) is refused rather than saved as
@@ -180,6 +184,22 @@ def validate_link(url: str) -> str:
 # ── Fetching ──────────────────────────────────────────────────────────
 
 
+def _http_error_message(code: int, url: str) -> str:
+    """Say what an HTTP failure means for the person who pasted the link."""
+    hint = {
+        401: "the page needs a sign-in, which the server cannot do",
+        403: "the site refused automated access (it blocks crawlers, or needs a sign-in); "
+             "download the page or file and upload it instead",
+        404: "the page was not found; check the address",
+        410: "the page has been removed",
+        429: "the site is rate-limiting this server; try again later",
+    }.get(code)
+    if hint is None and code >= 500:
+        hint = "the site had a server error; try again later"
+    host = urlsplit(url).hostname or url
+    return f"HTTP {code} from {host}: {hint}" if hint else f"HTTP {code} from {url}"
+
+
 def _media_type(content_type_header: str) -> str:
     return (content_type_header or "").split(";", 1)[0].strip().lower()
 
@@ -309,7 +329,7 @@ def fetch_link(url: str, *, max_bytes: Optional[int] = None,
     url = validate_link(url)
     current = url
     headers = {
-        "User-Agent": USER_AGENT,
+        "User-Agent": (config.settings.link_user_agent or "").strip() or USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/pdf,text/plain,"
                   "text/markdown,application/json,*/*;q=0.5",
     }
@@ -325,7 +345,7 @@ def fetch_link(url: str, *, max_bytes: Optional[int] = None,
                         current = validate_link(urljoin(current, location))
                         continue
                     if response.status_code >= 400:
-                        raise LinkError(f"HTTP {response.status_code} from {current}")
+                        raise LinkError(_http_error_message(response.status_code, current))
                     if not response.is_success:
                         raise LinkError(f"unexpected HTTP {response.status_code} from {current}")
 

@@ -47,6 +47,33 @@ given that collection, so report it instead of working around it.
    matters. Results carry a corpus version; if it changed between calls,
    re-run the search.
 
+## Count and list files
+
+Questions about the collection itself are not search questions. Never count or
+enumerate from search results; they are the top few passages, not the corpus.
+
+- "How many documents / how big / what file types / what is the largest /
+  when was it updated?": `get_collection_stats`. The numbers are exact for any
+  collection size.
+- "List the files", "which PDFs do we have?", "files with *invoice* in the
+  name": `list_documents` with `file_type` (`pdf`, or a family: `docs`, `code`,
+  `data`, `media`, `other`), `name_contains` and `sort` (`name`, `newest`,
+  `largest`, ...). Walk the whole list by calling again with the returned
+  `next_offset` until it is null. `total_matching` answers "how many PDFs?"
+  with `limit=1`.
+- A very large collection: do not page 50,000 names through your context.
+  Filter, or write the list to disk and work from the file:
+
+  ```bash
+  python scripts/clio_cli.py stats -c Policies
+  python scripts/clio_cli.py files -c Policies --type pdf --sort largest --limit 20
+  python scripts/clio_cli.py files -c Policies --csv all-files.csv   # every file
+  ```
+
+  (`GET /documents/export` is the same CSV or JSON Lines over HTTP.)
+- Quarantined documents are not counted or listed. A count of `0` chunks for a
+  spreadsheet is normal: tables are queried with `query_table`, not embedded.
+
 ## Answering rules
 
 - Cite document name and page for every claim taken from Clio.

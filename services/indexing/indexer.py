@@ -1146,6 +1146,14 @@ class DocumentIndexer:
         """Total documents, honoring the same filename filter as the paged list."""
         return self.vector_store.metadata_store.count_documents(q=q, keys=keys)
 
+    def find_documents(self, **kwargs):
+        """Servable documents page + total; see MetadataStore.find_documents."""
+        return self.vector_store.metadata_store.find_documents(**kwargs)
+
+    def collection_stats(self, **kwargs) -> dict:
+        """Aggregate statistics; see MetadataStore.collection_stats."""
+        return self.vector_store.metadata_store.collection_stats(**kwargs)
+
     def get_document_stats(self) -> dict:
         """SQL-aggregated totals: {total_documents, total_pages}."""
         return self.vector_store.metadata_store.get_document_stats()

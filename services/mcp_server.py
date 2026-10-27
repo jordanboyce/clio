@@ -725,28 +725,31 @@ def get_collection_info(
 
     stats = indexer_manager.get_collection_stats(resolved_collection)
 
+    file_types: dict[str, int] = {}
+    doc_list: list[dict[str, Any]] = []
+    listed_total = 0
     try:
         indexer = indexer_manager.get_indexer(resolved_collection)
-        documents = _visible_documents(indexer.list_documents())
+        agg = indexer.collection_stats(top_extensions=100_000)
+        listed_total = agg["total_documents"]
+        for row in agg["by_extension"]:
+            ext = row["extension"].lstrip(".") if row["extension"] != "(none)" else "unknown"
+            file_types[ext or "unknown"] = file_types.get(ext or "unknown", 0) + row["documents"]
+        if detail == "with_documents":
+            rows, _ = indexer.find_documents(limit=_INFO_DOCUMENT_CAP, sort="newest")
+            for doc in rows:
+                entry: dict[str, Any] = {
+                    "filename": doc.get("filename", "unknown"),
+                    "document_id": doc.get("document_id"),
+                    "chunks": doc.get("num_chunks", 0),
+                    "pages": doc.get("num_pages", 0),
+                    "source_type": doc.get("source_type", "upload"),
+                }
+                if doc.get("source_path"):
+                    entry["source_path"] = doc["source_path"]
+                doc_list.append(entry)
     except Exception:
-        documents = []
-
-    file_types: dict[str, int] = {}
-    doc_list = []
-    for doc in documents:
-        filename = doc.get("filename", "unknown")
-        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "unknown"
-        file_types[ext] = file_types.get(ext, 0) + 1
-        entry: dict[str, Any] = {
-            "filename": filename,
-            "document_id": doc.get("document_id"),
-            "chunks": doc.get("num_chunks", 0),
-            "pages": doc.get("num_pages", 0),
-            "source_type": doc.get("source_type", "upload"),
-        }
-        if doc.get("source_path"):
-            entry["source_path"] = doc["source_path"]
-        doc_list.append(entry)
+        logger.exception("get_collection_info: listing failed for %s", resolved_collection)
 
     guide_text = (collection or {}).get("guide") or None
 
@@ -764,6 +767,13 @@ def get_collection_info(
     }
     if detail == "with_documents":
         payload["documents"] = doc_list
+        if listed_total > len(doc_list):
+            payload["documents_truncated"] = True
+            payload["documents_note"] = (
+                f"Showing the {len(doc_list)} newest of {listed_total} documents. "
+                "Use list_documents to page through all of them (filter by name or "
+                "file type, sort by name or size), or get_collection_stats for totals."
+            )
     return _tool_response(payload, "get_collection_info")
 
 
@@ -818,6 +828,144 @@ def get_collection_facets(collection_id: str | None = None) -> dict[str, Any]:
     return _tool_response(
         {"collection_id": resolved_collection, **facets},
         "get_collection_facets",
+    )
+
+
+_INFO_DOCUMENT_CAP = 200
+_LIST_DOCUMENTS_MAX = 500
+def _keys_for_file_type(indexer: Any, file_type: str | None) -> list[str] | None:
+    """Translate 'pdf' / '.pdf' / 'docs' / 'other' into grouping keys."""
+    from services import file_kinds
+
+    present = (indexer.vector_store.metadata_store.count_documents_by_key()
+               if str(file_type or "").strip().lower() == "other" else ())
+    return file_kinds.keys_for_file_type(file_type, present)
+
+
+def collection_stats_payload(
+    collection_id: str | None = None, document_ids: list[str] | None = None
+) -> dict[str, Any]:
+    """The get_collection_stats body, optionally limited to a source selection."""
+    resolved = _resolve_collection_id(collection_id)
+    indexer = indexer_manager.get_indexer(resolved)
+    payload = {
+        "collection_id": resolved,
+        "collection_name": _mcp_safe_name(collection_service.get_collection(resolved), resolved),
+        "corpus_version": _corpus_version(resolved),
+        **indexer.collection_stats(document_ids=document_ids),
+    }
+    if document_ids is not None:
+        payload["scope"] = "the sources the user selected for this conversation"
+    return payload
+
+
+@_threaded_tool(title="Collection statistics", annotations=_read_only("Collection statistics"))
+def get_collection_stats(collection_id: str | None = None) -> dict[str, Any]:
+    """Exact counts and sizes for a collection, without listing its documents.
+
+    Use this for "how many documents are there?", "how much data?", "what file
+    types?", "what is the biggest file?", "when was it last updated?". The
+    numbers are computed by the database over every document, so they are
+    exact for collections of any size (never estimate them from search
+    results).
+
+    Returns total_documents/pages/chunks, total_bytes (original file sizes),
+    oldest_upload/newest_upload, `by_extension` (documents, bytes and chunks
+    per file extension, most common first), `by_kind` (code/docs/data/media/
+    other), `by_sensitivity`, `by_source_type`, `largest_documents`, and
+    `documents_without_chunks` (spreadsheets are queried as tables rather than
+    embedded, so a zero here is normal for them). Quarantined documents are not
+    counted. To see the files themselves, call `list_documents`.
+    """
+    return _tool_response(collection_stats_payload(collection_id), "get_collection_stats")
+
+
+def list_documents_payload(
+    collection_id: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    name_contains: str | None = None,
+    file_type: str | None = None,
+    sort: str = "newest",
+    document_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """The list_documents body, optionally limited to a source selection."""
+    resolved = _resolve_collection_id(collection_id)
+    indexer = indexer_manager.get_indexer(resolved)
+    capped = max(1, min(int(limit), _LIST_DOCUMENTS_MAX))
+    rows, total = indexer.find_documents(
+        limit=capped,
+        offset=max(0, int(offset)),
+        q=(name_contains or "").strip(),
+        keys=_keys_for_file_type(indexer, file_type),
+        sort=sort,
+        document_ids=document_ids,
+    )
+    documents = []
+    for d in rows:
+        entry: dict[str, Any] = {
+            "document_id": d.get("document_id"),
+            "filename": d.get("filename", "unknown"),
+            "file_type": d.get("source_format"),
+            "bytes": d.get("file_size"),
+            "pages": d.get("num_pages", 0),
+            "chunks": d.get("num_chunks", 0),
+            "uploaded": d.get("upload_timestamp") or None,
+            "source_type": d.get("source_type") or "upload",
+        }
+        if d.get("source_path"):
+            entry["source_path"] = d["source_path"]
+        if d.get("sensitivity"):
+            entry["sensitivity"] = d["sensitivity"]
+        documents.append(entry)
+    end = max(0, int(offset)) + len(documents)
+    return {
+        "collection_id": resolved,
+        "corpus_version": _corpus_version(resolved),
+        "total_matching": total,
+        "returned": len(documents),
+        "offset": max(0, int(offset)),
+        "next_offset": end if end < total else None,
+        "documents": documents,
+    }
+
+
+@_threaded_tool(title="List documents", annotations=_read_only("List documents"))
+def list_documents(
+    collection_id: str | None = None,
+    limit: Annotated[int, Field(ge=1, le=_LIST_DOCUMENTS_MAX)] = 100,
+    offset: Annotated[int, Field(ge=0)] = 0,
+    name_contains: str | None = None,
+    file_type: str | None = None,
+    sort: Literal["newest", "oldest", "name", "name_desc", "largest", "smallest"] = "newest",
+) -> dict[str, Any]:
+    """Page through the files in a collection: names, sizes, dates, ids.
+
+    Use this for "list all the files", "which PDFs do we have?", "files with
+    'invoice' in the name", "the 20 largest files". It lists metadata only;
+    use `search_collection` to look inside documents.
+
+    Parameters:
+      - limit: page size (default 100, max 500).
+      - offset: where the page starts. Each response carries `next_offset`
+        (null on the last page); call again with it until it is null to walk
+        the whole collection, however large.
+      - name_contains: case-insensitive substring of the filename.
+      - file_type: an extension ("pdf", ".md") or a family ("docs", "code",
+        "data", "media", "other").
+      - sort: newest (default), oldest, name, name_desc, largest, smallest.
+
+    `total_matching` is the exact number of documents that match the filters,
+    so you can answer "how many PDFs?" with limit=1. A long listing costs
+    context: for very large collections prefer `get_collection_stats`, a
+    filter, or the CLI's `files --csv` / `GET /documents/export`, which write
+    every file to disk instead of through your context window.
+    `corpus_version` changes when documents are added or removed; if it
+    changes between pages, restart the walk.
+    """
+    return _tool_response(
+        list_documents_payload(collection_id, limit, offset, name_contains, file_type, sort),
+        "list_documents",
     )
 
 

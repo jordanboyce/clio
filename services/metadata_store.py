@@ -1112,6 +1112,124 @@ class MetadataStore:
             ).fetchall()
             return {str(k or ""): int(n) for k, n in rows}
 
+    # ── Listing and statistics over the servable set ───────────────────────
+    # Everything below describes what a reader may see: quarantined rows are
+    # excluded (they must look absent), and an optional `document_ids`
+    # restriction lets a conversation limited to a selection get honest
+    # numbers for just that selection. All of it is SQL aggregation, so it
+    # stays flat on a collection of tens of thousands of documents.
+
+    _SORTS = {
+        "newest": "COALESCE(d.upload_timestamp, '1970-01-01') DESC, d.document_id",
+        "oldest": "COALESCE(d.upload_timestamp, '9999-12-31') ASC, d.document_id",
+        "name": "lower(d.filename) ASC, d.document_id",
+        "name_desc": "lower(d.filename) DESC, d.document_id",
+        "largest": "COALESCE(d.file_size, -1) DESC, d.document_id",
+        "smallest": "COALESCE(d.file_size, 9223372036854775807) ASC, d.document_id",
+    }
+
+    def _servable_filter(self, q: str = "", keys: Optional[List[str]] = None,
+                         document_ids: Optional[List[str]] = None) -> tuple:
+        from services.content_policy import HIDDEN_STATUSES
+
+        where, params = self._doc_filter(q, keys, alias="d.")
+        clauses = [where[len("WHERE "):]] if where else []
+        marks = ", ".join("?" for _ in HIDDEN_STATUSES)
+        clauses.append(f"COALESCE(d.policy_status, 'clear') NOT IN ({marks})")
+        params = list(params) + list(HIDDEN_STATUSES)
+        if document_ids is not None:
+            clauses.append("d.document_id IN (SELECT value FROM json_each(?))")
+            params.append(json.dumps(list(document_ids)))
+        return "WHERE " + " AND ".join(clauses), params
+
+    def find_documents(self, limit: int = 100, offset: int = 0, q: str = "",
+                       keys: Optional[List[str]] = None, sort: str = "newest",
+                       document_ids: Optional[List[str]] = None) -> tuple:
+        """One page of servable documents plus the total that match.
+
+        Returns ``(rows, total_matching)``. Rows carry the usual listing
+        columns and ``file_size``. Unknown `sort` values raise ValueError.
+        """
+        order = self._SORTS.get(sort)
+        if order is None:
+            raise ValueError(f"Unknown sort {sort!r}; use one of {', '.join(self._SORTS)}")
+        limit = max(0, int(limit))
+        offset = max(0, int(offset))
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            conn.row_factory = sqlite3.Row
+            where, params = self._servable_filter(q, keys, document_ids)
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM documents d {where}", params).fetchone()[0]
+            rows = conn.execute(
+                f"SELECT {self._DOC_LIST_COLUMNS}, d.file_size FROM documents d {where} "
+                f"ORDER BY {order} LIMIT ? OFFSET ?", list(params) + [limit, offset],
+            ).fetchall()
+            return [self._document_row_to_dict(r) for r in rows], int(total)
+
+    def collection_stats(self, document_ids: Optional[List[str]] = None,
+                         top_extensions: int = 25, largest: int = 5) -> dict:
+        """Aggregate description of the servable documents.
+
+        Totals, storage, upload date range, a per-extension table (count,
+        bytes, chunks), breakdowns by file family, sensitivity label and
+        source type, the largest files, and how many documents have no
+        recorded size or no chunks (spreadsheets live in the table store,
+        not as chunks).
+        """
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            where, params = self._servable_filter(document_ids=document_ids)
+            t = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(d.num_pages),0), COALESCE(SUM(d.num_chunks),0), "
+                "COALESCE(SUM(d.file_size),0), MIN(d.upload_timestamp), MAX(d.upload_timestamp), "
+                "COALESCE(SUM(d.file_size IS NULL),0), COALESCE(SUM(d.num_chunks = 0),0) "
+                f"FROM documents d {where}", params).fetchone()
+            key = self._DOC_KEY_SQL.format(col="d.filename")
+            ext_rows = conn.execute(
+                f"SELECT {key} AS k, COUNT(*), COALESCE(SUM(d.file_size),0), "
+                f"COALESCE(SUM(d.num_chunks),0) FROM documents d {where} "
+                "GROUP BY k ORDER BY COUNT(*) DESC, k", params).fetchall()
+
+            def grouped(expr: str) -> dict:
+                rows = conn.execute(
+                    f"SELECT {expr} AS g, COUNT(*) FROM documents d {where} "
+                    "GROUP BY g ORDER BY COUNT(*) DESC", params).fetchall()
+                return {str(g): int(n) for g, n in rows}
+
+            big = conn.execute(
+                f"SELECT d.document_id, d.filename, d.file_size FROM documents d {where} "
+                "AND d.file_size IS NOT NULL ORDER BY d.file_size DESC, d.document_id LIMIT ?",
+                list(params) + [int(largest)]).fetchall()
+            sensitivity = grouped("COALESCE(d.sensitivity, 'unlabeled')")
+            source_types = grouped("COALESCE(d.source_type, 'upload')")
+
+        from services import file_kinds
+
+        by_extension = [
+            {"extension": k or "(none)", "documents": int(n), "bytes": int(b), "chunks": int(c)}
+            for k, n, b, c in ext_rows[:top_extensions]
+        ]
+        return {
+            "total_documents": int(t[0]),
+            "total_pages": int(t[1]),
+            "total_chunks": int(t[2]),
+            "total_bytes": int(t[3]),
+            "oldest_upload": t[4],
+            "newest_upload": t[5],
+            "documents_without_recorded_size": int(t[6]),
+            "documents_without_chunks": int(t[7]),
+            "distinct_extensions": len(ext_rows),
+            "by_extension": by_extension,
+            "by_kind": {k: v for k, v in file_kinds.kind_counts(
+                {str(k or ""): int(n) for k, n, _, _ in ext_rows}).items() if v},
+            "by_sensitivity": sensitivity,
+            "by_source_type": source_types,
+            "largest_documents": [
+                {"document_id": i, "filename": f, "bytes": int(sz)} for i, f, sz in big
+            ],
+        }
+
     @staticmethod
     def _escape_like(q: str) -> str:
         return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

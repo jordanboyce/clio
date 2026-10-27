@@ -591,6 +591,9 @@ class Settings(BaseSettings):
     link_allow_private_networks: bool = False
     link_max_bytes: int = 25 * 1024 * 1024
     link_fetch_timeout_seconds: float = 30.0
+    # Overrides the User-Agent sent when fetching links (empty = built-in,
+    # which carries the project URL as Wikimedia requires).
+    link_user_agent: str = ""
 
     # Audio transcription (meeting recordings via local Whisper)
     # Model size: tiny | base | small | medium | large-v3

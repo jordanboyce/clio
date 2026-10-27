@@ -476,3 +476,27 @@ def test_endpoint_starts_a_job_and_lists_the_document(client, monkeypatch):
     disposition = served.headers["content-disposition"]
     assert disposition.startswith('inline; filename="Hello  World (example.com).html"')
     assert "filename*=UTF-8''Hello%20%E2%80%94%20World" in disposition
+
+
+def test_forbidden_explains_automated_access_and_names_the_host(transport):
+    transport["https://example.com/blocked"] = httpx.Response(403, text="no")
+    with pytest.raises(LinkError, match=r"HTTP 403 from example\.com: .*refused automated access"):
+        fetch_link("https://example.com/blocked")
+
+
+def test_user_agent_carries_a_contact_url_and_can_be_overridden(monkeypatch):
+    # Wikimedia answers 403 to a user agent with no URL; the default must have one.
+    assert "https://" in link_fetcher.USER_AGENT
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers["user-agent"])
+        return httpx.Response(200, content=PAGE, headers={"content-type": "text/html"})
+
+    real = httpx.Client
+    monkeypatch.setattr(link_fetcher.httpx, "Client",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    fetch_link("https://example.com/a")
+    monkeypatch.setattr(config.settings, "link_user_agent", "AcmeBot/2 (+https://acme.test)")
+    fetch_link("https://example.com/a")
+    assert seen == [link_fetcher.USER_AGENT, "AcmeBot/2 (+https://acme.test)"]

@@ -608,6 +608,22 @@ Agents need two things: a token and the skill.
 For batch indexing without a browser, the CLI does the whole path:
 `CLIO_URL=https://clio.example.internal CLIO_TOKEN=... python skills/clio/scripts/clio_cli.py upload ./handbook --collection Policies`.
 
+To answer "how many documents, how big, which files" exactly, use
+`get_collection_stats` and `list_documents` (MCP and in-app chat), or from a
+shell `clio_cli.py stats -c Policies` and `clio_cli.py files -c Policies --csv
+all-files.csv`. The same data is at `GET /documents/stats` and
+`GET /documents/export?format=csv|jsonl` (filters `q`, `file_type`, `sort`);
+the export streams page by page, so a collection of tens of thousands of files
+costs flat memory, and each export is written to the audit trail.
+
+### Link indexing
+
+"Add link" fetches pages from the server, so it identifies itself with a
+User-Agent that carries the project URL (Wikimedia refuses agents without a
+contact URL). Set `LINK_USER_AGENT` to name your own organisation instead. A
+site that blocks crawlers (HTTP 403) cannot be indexed from a link; the error
+says so and suggests uploading the saved page.
+
 ## Upgrading
 
 ```bash

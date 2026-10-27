@@ -97,3 +97,23 @@ def kind_counts(key_counts: Dict[str, int]) -> Dict[str, int]:
 def keys_for_kind(kind: str) -> List[str]:
     """The grouping keys (suffixes / bare names) that select `kind` in SQL."""
     return sorted(extensions_for_kind(kind))
+
+
+def keys_for_file_type(file_type, present_keys):
+    """Grouping keys for a user-supplied file type, or None for "any".
+
+    Accepts an extension ("pdf", ".PDF"), a family ("docs", "code", "data",
+    "media") or "other" (every present key no family claims). `present_keys`
+    are the keys that actually occur in the collection, used only for "other".
+    """
+    wanted = str(file_type or "").strip().lower()
+    if not wanted:
+        return None
+    if wanted == "other":
+        known = set()
+        for kind in KINDS:
+            known |= extensions_for_kind(kind)
+        return [k for k in present_keys if k not in known]
+    if wanted in KINDS:
+        return keys_for_kind(wanted)
+    return [wanted if wanted.startswith(".") else "." + wanted]

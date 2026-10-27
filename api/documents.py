@@ -1247,6 +1247,118 @@ async def index_links_async(request: IndexLinksRequest) -> UploadJobResponse:
     )
 
 
+def _document_row_for_export(d: dict) -> dict:
+    return {
+        "document_id": d.get("document_id"),
+        "filename": d.get("filename"),
+        "file_type": d.get("source_format"),
+        "bytes": d.get("file_size"),
+        "pages": d.get("num_pages", 0),
+        "chunks": d.get("num_chunks", 0),
+        "uploaded": d.get("upload_timestamp") or "",
+        "source_type": d.get("source_type") or "upload",
+        "source_path": d.get("source_path") or "",
+        "sensitivity": d.get("sensitivity") or "",
+    }
+
+
+_EXPORT_FIELDS = ["document_id", "filename", "file_type", "bytes", "pages", "chunks",
+                  "uploaded", "source_type", "source_path", "sensitivity"]
+_EXPORT_PAGE = 1000
+
+
+@router.get(
+    "/documents/stats",
+    summary="Exact statistics for a collection",
+    tags=["documents"],
+)
+def documents_stats(collection_id: str = "default") -> dict:
+    """Totals, storage, upload range and per-extension/kind/sensitivity
+    breakdowns, computed in SQL over every servable document."""
+    try:
+        indexer = get_indexer(collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    return {"collection_id": collection_id, **indexer.collection_stats()}
+
+
+@router.get(
+    "/documents/export",
+    summary="Download the complete file list of a collection (CSV or JSON Lines)",
+    tags=["documents"],
+)
+def export_documents(
+    collection_id: str = "default",
+    format: str = "csv",
+    q: str = "",
+    file_type: str = "",
+    sort: str = "name",
+) -> StreamingResponse:
+    """Stream every matching file's metadata, however many there are.
+
+    The list is produced page by page, so memory stays flat for a collection of
+    tens of thousands of documents. `format` is `csv` (default) or `jsonl`;
+    `q` filters by filename substring and `file_type` by extension or family
+    (docs, code, data, media, other). Quarantined documents are not listed.
+    """
+    import csv
+    import io
+
+    from services import file_kinds
+
+    fmt = (format or "csv").lower()
+    if fmt not in ("csv", "jsonl"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="format must be 'csv' or 'jsonl'")
+    try:
+        indexer = get_indexer(collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    present = (indexer.vector_store.metadata_store.count_documents_by_key()
+               if (file_type or "").strip().lower() == "other" else ())
+    keys = file_kinds.keys_for_file_type(file_type, present)
+    try:
+        indexer.find_documents(limit=0, q=q, keys=keys, sort=sort)   # validates sort
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    def generate():
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=_EXPORT_FIELDS)
+        if fmt == "csv":
+            writer.writeheader()
+            yield "\ufeff" + buf.getvalue()      # BOM: Excel opens UTF-8 names correctly
+        offset = 0
+        while True:
+            rows, total = indexer.find_documents(
+                limit=_EXPORT_PAGE, offset=offset, q=q, keys=keys, sort=sort)
+            if not rows:
+                break
+            if fmt == "csv":
+                buf.seek(0); buf.truncate()
+                for d in rows:
+                    row = _document_row_for_export(d)
+                    # Spreadsheet formula injection: a filename is attacker-controlled.
+                    row = {k: ("'" + v if isinstance(v, str) and v and v[0] in "=+-@\t\r" else v)
+                           for k, v in row.items()}
+                    writer.writerow(row)
+                yield buf.getvalue()
+            else:
+                yield "".join(json.dumps(_document_row_for_export(d), ensure_ascii=False) + "\n"
+                              for d in rows)
+            offset += len(rows)
+            if offset >= total:
+                break
+
+    audit.record("documents.export", collection_id=collection_id, detail={"format": fmt})
+    ext = "csv" if fmt == "csv" else "jsonl"
+    media = "text/csv; charset=utf-8" if fmt == "csv" else "application/x-ndjson"
+    return StreamingResponse(
+        generate(), media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="documents-{collection_id}.{ext}"'},
+    )
+
+
 @router.get(
     "/documents",
     response_model=DocumentListResponse,

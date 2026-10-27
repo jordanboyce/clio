@@ -15,8 +15,12 @@ cli = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cli)
 
 
+CSV_BODY = (chr(13) + chr(10)).join(["document_id,filename", "d1,a.pdf", "d2,b.pdf", ""]).encode()
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     seen: list = []
+    export_query = ""
 
     def log_message(self, *a):  # silence
         pass
@@ -29,6 +33,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _send_raw(self, code, raw, ctype):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def do_GET(self):
         _Handler.seen.append((self.path, self.headers.get("Authorization")))
         if self.headers.get("Authorization") != "Bearer good":
@@ -36,6 +47,21 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/collections":
             return self._send(200, {"collections": [
                 {"id": "abc", "name": "Policies", "document_count": 2}]})
+        if self.path.startswith("/documents/stats"):
+            return self._send_raw(200, json.dumps({
+                "total_documents": 3, "total_pages": 5, "total_chunks": 7, "total_bytes": 2048,
+                "oldest_upload": "2026-01-02T00:00:00", "newest_upload": "2026-03-04T00:00:00",
+                "distinct_extensions": 3,
+                "by_extension": [{"extension": ".pdf", "documents": 2, "bytes": 2000, "chunks": 5}],
+            }).encode(), "application/json")
+        if self.path.startswith("/documents/export"):
+            _Handler.export_query = self.path
+            if "format=csv" in self.path:
+                return self._send_raw(200, CSV_BODY, "text/csv")
+            lines = "".join(
+                json.dumps({"filename": f"f{i}.md", "bytes": i * 10, "uploaded": "2026-02-03T00:00:00"}) + "\n"
+                for i in range(5))
+            return self._send_raw(200, lines.encode(), "application/x-ndjson")
         if self.path.startswith("/documents/upload/7/status"):
             return self._send(200, {"status": "completed", "processed_files": 1,
                                     "total_files": 1, "result_summary": {"ok": 1}})
@@ -120,3 +146,38 @@ def test_batches_respect_file_count(tmp_path, monkeypatch):
         p.write_text("x", encoding="utf-8")
         files.append(p)
     assert [len(b) for b in cli.batches(files)] == [2, 2, 1]
+
+
+def test_stats_renders_counts_and_sizes(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", server, "stats", "-c", "Policies"]) == 0
+    out = capsys.readouterr().out
+    assert "documents  3" in out and "2.0 KB" in out and ".pdf" in out
+    assert "2026-01-02 to 2026-03-04" in out and "+2 more types" in out
+
+
+def test_files_prints_a_bounded_table_and_says_how_to_get_the_rest(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", server, "files", "-c", "Policies", "--limit", "2",
+                     "--type", "md", "--sort", "largest"]) == 0
+    out = capsys.readouterr().out
+    assert "f0.md" in out and "f1.md" in out and "f4.md" not in out
+    assert "3 more (5 total)" in out and "--csv" in out
+    q = _Handler.export_query
+    assert "file_type=md" in q and "sort=largest" in q and "collection_id=abc" in q
+
+
+def test_files_csv_is_streamed_to_disk_atomically(server, monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    dest = tmp_path / "all.csv"
+    assert cli.main(["--url", server, "files", "-c", "Policies", "--csv", str(dest)]) == 0
+    assert dest.read_text(encoding="utf-8").splitlines()[1] == "d1,a.pdf"
+    assert not (tmp_path / "all.csv.partial").exists()
+    assert "wrote" in capsys.readouterr().out
+
+
+def test_files_csv_failure_leaves_no_partial_file(server, monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "bad")
+    dest = tmp_path / "all.csv"
+    assert cli.main(["--url", server, "files", "-c", "Policies", "--csv", str(dest)]) == 1
+    assert not dest.exists() and not (tmp_path / "all.csv.partial").exists()
