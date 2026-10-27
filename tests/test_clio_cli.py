@@ -21,6 +21,8 @@ CSV_BODY = (chr(13) + chr(10)).join(["document_id,filename", "d1,a.pdf", "d2,b.p
 class _Handler(http.server.BaseHTTPRequestHandler):
     seen: list = []
     export_query = ""
+    job_summary = {"ok": 1}
+    reindex_polls = 0
 
     def log_message(self, *a):  # silence
         pass
@@ -64,7 +66,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return self._send_raw(200, lines.encode(), "application/x-ndjson")
         if self.path.startswith("/documents/upload/7/status"):
             return self._send(200, {"status": "completed", "processed_files": 1,
-                                    "total_files": 1, "result_summary": {"ok": 1}})
+                                    "total_files": 1, "result_summary": _Handler.job_summary})
+        if self.path.startswith("/api/reindex/status"):
+            _Handler.reindex_polls += 1
+            done = _Handler.reindex_polls >= 2
+            return self._send(200, {"status": "completed" if done else "running",
+                                    "processed_documents": 3 if done else 1, "total_documents": 3})
         self._send(404, {"detail": "nope"})
 
     def do_POST(self):
@@ -78,6 +85,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/documents/index-local-async":
             assert json.loads(body)["file_paths"] == ["/app/data/a.md"]
             return self._send(202, {"job_id": 7})
+        if self.path.endswith("/reindex"):
+            return self._send(200, {"job_id": 11, "status": "started"})
         if self.path.startswith("/search"):
             return self._send(200, {"results": [{
                 "filename": "a.md", "page_number": 1, "similarity_score": 0.9,
@@ -88,6 +97,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 @pytest.fixture
 def server():
     _Handler.seen = []
+    _Handler.job_summary = {"ok": 1}
+    _Handler.reindex_polls = 0
     srv = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{srv.server_port}"
@@ -181,3 +192,46 @@ def test_files_csv_failure_leaves_no_partial_file(server, monkeypatch, tmp_path,
     dest = tmp_path / "all.csv"
     assert cli.main(["--url", server, "files", "-c", "Policies", "--csv", str(dest)]) == 1
     assert not dest.exists() and not (tmp_path / "all.csv.partial").exists()
+
+
+def test_upload_with_rejected_files_exits_nonzero_and_says_why(server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    (tmp_path / "a.md").write_text("x", encoding="utf-8")
+    _Handler.job_summary = {"documents_processed": 0, "failed_files": [
+        {"filename": "https://example.com/a", "error": "2048-dimensional ...", "code": "embedding_mismatch"}]}
+    rc = cli.main(["--url", server, "--json", "upload", str(tmp_path), "-c", "policies"])
+    cap = capsys.readouterr()
+    out = json.loads(cap.out)
+    assert rc == 1                                  # "completed" with nothing indexed is not success
+    assert out["failed_files"][0]["code"] == "embedding_mismatch"
+    assert "reindex -c policies" in out["hint"] and "hint:" in cap.err
+
+
+def test_job_level_mismatch_code_also_gives_the_hint(server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    (tmp_path / "a.md").write_text("x", encoding="utf-8")
+    _Handler.job_summary = {"error_code": "embedding_mismatch", "failed_files": []}
+    cli.main(["--url", server, "--json", "upload", str(tmp_path), "-c", "policies"])
+    assert "reindex" in json.loads(capsys.readouterr().out)["hint"]
+
+
+def test_clean_upload_has_no_hint_and_exits_zero(server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    (tmp_path / "a.md").write_text("x", encoding="utf-8")
+    assert cli.main(["--url", server, "--json", "upload", str(tmp_path), "-c", "policies"]) == 0
+    assert "hint" not in json.loads(capsys.readouterr().out)
+
+
+def test_reindex_waits_for_the_job(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", server, "--json", "reindex", "-c", "Policies", "--poll", "0.01"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"collection_id": "abc", "job_id": 11, "status": "completed",
+                   "error": None, "documents": 3}
+
+
+def test_reindex_no_wait_returns_the_job_id(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", server, "--json", "reindex", "-c", "Policies", "--no-wait"]) == 0
+    assert json.loads(capsys.readouterr().out)["job_id"] == 11
+    assert _Handler.reindex_polls == 0

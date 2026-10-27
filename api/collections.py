@@ -274,6 +274,54 @@ async def create_collection(collection_data: dict, user_id: str = Depends(get_cu
 
 
 @router.get(
+    "/api/collections/{collection_id}/embedding-health",
+    summary="Can this collection embed new content?",
+    tags=["collections"],
+)
+async def get_collection_embedding_health(collection_id: str, user_id: str = Depends(get_current_user_id)):
+    """Whether the loaded embedding model fits this collection's index.
+
+    ``ok: false`` carries a stable ``code`` (``embedding_mismatch`` when the
+    model's vector size differs from the index, ``embedding_unavailable`` when
+    the model cannot be built at all), a human ``message``, and for a
+    mismatch both dimensions. A mismatch is fixed by re-indexing, which the
+    UI offers via ``POST /api/collections/{id}/reindex``.
+    """
+    import asyncio
+
+    from api.deps import require_collection_access
+    from services.embedder import EmbeddingDimensionMismatch, EmbeddingUnavailable, ensure_embedding_ready
+
+    require_collection_access(collection_id, user_id)
+    if not collection_service.get_collection(collection_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"Collection '{collection_id}' not found")
+
+    # Re-indexing rewrites the owner's index, so only offer it to someone who
+    # may actually run it (the POST enforces the same gate).
+    try:
+        require_collection_access(collection_id, user_id, owner=True)
+        can_reindex = True
+    except HTTPException:
+        can_reindex = False
+
+    def probe() -> dict:
+        indexer = indexer_manager.get_indexer(collection_id)
+        ensure_embedding_ready(indexer.embedding_service)
+        return {"ok": True, "collection_id": collection_id}
+
+    try:
+        return await asyncio.to_thread(probe)
+    except EmbeddingDimensionMismatch as e:
+        return {"ok": False, "collection_id": collection_id, "code": e.code, "message": str(e),
+                "model": e.model_name, "model_dim": e.model_dim, "index_dim": e.index_dim,
+                "fix": "reindex", "can_reindex": can_reindex}
+    except EmbeddingUnavailable as e:
+        return {"ok": False, "collection_id": collection_id, "code": e.code, "message": str(e),
+                "fix": "model"}
+
+
+@router.get(
     "/api/collections/{collection_id}",
     summary="Get collection details",
     tags=["collections"],

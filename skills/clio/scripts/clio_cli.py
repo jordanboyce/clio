@@ -249,10 +249,38 @@ def cmd_upload(c: Client, a) -> Any:
     if not a.no_wait:
         done = wait_for_job(c, job["job_id"], a.poll, a.json)
         result["status"] = done["status"]
-        result["summary"] = done.get("result_summary")
+        summary = done.get("result_summary") or {}
+        result["summary"] = summary
         if done["status"] != "completed":
             result["error"] = done.get("error")
+        # A job can finish "completed" with files missing. Surface which and why.
+        rejected = summary.get("failed_files") or []
+        if rejected:
+            result["failed_files"] = rejected
+        codes = {summary.get("error_code")} | {f.get("code") for f in rejected}
+        if "embedding_mismatch" in codes:
+            result["hint"] = (f"The embedding model no longer matches this collection's index. "
+                              f"Rebuild it with: clio_cli.py reindex -c {a.collection}")
     return result
+
+
+def cmd_reindex(c: Client, a) -> Any:
+    """Rebuild a collection's index with the embedding model now in use."""
+    cid = resolve_collection(c, a.collection)
+    started = c.post_json(f"/api/collections/{cid}/reindex", {})
+    result = {"collection_id": cid, "job_id": started.get("job_id")}
+    if a.no_wait:
+        return result
+    while True:
+        job = c.get("/api/reindex/status", job_id=started["job_id"])
+        line = f"{job['status']} {job.get('processed_documents', 0)}/{job.get('total_documents', 0)}"
+        if not a.json:
+            print(f"  reindex {started['job_id']}: {line}", file=sys.stderr)
+        if job["status"] in ("completed", "failed"):
+            result.update(status=job["status"], error=job.get("error"),
+                          documents=job.get("processed_documents"))
+            return result
+        time.sleep(a.poll)
 
 
 def cmd_stats(c: Client, a) -> Any:
@@ -372,6 +400,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--csv", metavar="FILE", help="write every matching file to FILE as CSV")
     g.add_argument("--jsonl", metavar="FILE", help="write every matching file as JSON Lines")
     s.set_defaults(fn=cmd_files)
+    s = sub.add_parser("reindex", help="rebuild a collection's index with the current embedding model")
+    s.add_argument("--collection", "-c", default="default")
+    s.add_argument("--no-wait", action="store_true")
+    s.add_argument("--poll", type=float, default=2.0)
+    s.set_defaults(fn=cmd_reindex)
     sub.add_parser("jobs", help="recent indexing jobs").set_defaults(fn=cmd_jobs)
     s = sub.add_parser("job", help="one indexing job"); s.add_argument("job_id", type=int)
     s.set_defaults(fn=cmd_job)
@@ -398,7 +431,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2) if args.json else render(args.command, result))
-    if args.command == "upload" and isinstance(result, dict) and result.get("status") not in (None, "completed"):
+    if isinstance(result, dict) and result.get("hint"):
+        print(f"hint: {result['hint']}", file=sys.stderr)
+    if args.command == "upload" and isinstance(result, dict) and (
+            result.get("status") not in (None, "completed") or result.get("failed_files")):
+        return 1
+    if args.command == "reindex" and isinstance(result, dict) and result.get("status") == "failed":
         return 1
     return 0
 

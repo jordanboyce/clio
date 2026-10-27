@@ -56,6 +56,14 @@
       </div>
     </div>
 
+    <!-- A model that no longer fits this collection's index blocks every new
+         source; say so here, before someone tries to add one. -->
+    <EmbeddingMismatchNotice
+      v-if="collectionStore.currentCollectionId && collectionStore.canEditCurrent"
+      class="m-2 flex-shrink-0"
+      :collection-id="collectionStore.currentCollectionId"
+    />
+
     <!-- Storage against the per-collection cap. Hidden until half the cap is
          used: a near-empty meter above every source list told people nothing
          they needed. Warning tone in the last 10%, error when full. -->
@@ -1012,6 +1020,7 @@
 <script setup>
 import { ref, computed, markRaw, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import http from '../utils/http'
+import EmbeddingMismatchNotice from './EmbeddingMismatchNotice.vue'
 import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync, GitBranch, EyeOff } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useUiStore } from '../stores/uiStore'

@@ -523,6 +523,27 @@ cache_dir='data/models/fastembed')"` and copy `data/models/fastembed/`
 across; the fastembed cache lives under the data directory so it survives
 container recreation with the volume.
 
+### When the model and the index disagree
+
+Changing the embedding model after documents are indexed leaves the collection
+with vectors of one size and a model that makes another. Search over what is
+already indexed keeps working, but nothing new can be added, and a job that
+tries now says why instead of finishing "with errors" and no sources:
+
+- the job fails up front (no links are fetched, no files extracted) with the
+  message *"The loaded model 'X' produces N-dimensional vectors but this
+  collection's index expects M"* and `error_code: embedding_mismatch`;
+- the web UI shows a warning above the sources list and under the failed job
+  with a **Re-index collection** button (owners only; it asks to confirm);
+- from a shell, `clio_cli.py reindex -c NAME`; over HTTP,
+  `GET /api/collections/{id}/embedding-health` reports the state and
+  `POST /api/collections/{id}/reindex` fixes it. Switching the model back to
+  the one that built the index also clears it.
+
+Every failed file is logged as `Failed to index <name> (job N, collection
+'<id>', <ExceptionClass>): <message>`, so one grep on the job number shows the
+whole story.
+
 ## Data directory and backups
 
 Everything lives in one data directory (`./data` by default, `/app/data` in

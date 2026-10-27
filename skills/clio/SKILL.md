@@ -119,3 +119,6 @@ enumerate from search results; they are the top few passages, not the corpus.
 | 429 | Rate limited; wait and retry once |
 | 503 on search | Embedding model not ready; `clio_cli.py status` shows why |
 | No results for an obvious query | Wrong collection, or not indexed yet (check jobs) |
+| Upload "completed" but files missing | Read `failed_files` in the job result: each has a `filename`, an `error` and often a `code`. The CLI exits 1 and prints it |
+| `embedding_mismatch` | The embedding model now in use makes vectors of a different size than the collection's index (the model was changed after documents were indexed). Nothing new can be added until `clio_cli.py reindex -c NAME` rebuilds the index with the current model; it keeps the files and takes as long as the original indexing. Ask before running it on a large collection. Search keeps working on the old index meanwhile |
+| `embedding_unavailable` | The model cannot be loaded (download blocked, key missing). `clio_cli.py status` shows why; re-indexing will not help |
