@@ -1286,6 +1286,12 @@
                   {{ job.error }}
                 </div>
 
+                <!-- The one failure with a fix the person can apply right here -->
+                <EmbeddingMismatchNotice
+                  v-if="job.errorCode === 'embedding_mismatch' && job.type !== 'reindex' && job.collectionId"
+                  :collection-id="job.collectionId"
+                />
+
                 <!-- Files that did not make it in. This list is the only
                      record a person has of sources missing from a job that
                      otherwise looks like it worked. -->
@@ -1326,6 +1332,7 @@
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
 import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert } from 'lucide-vue-next'
 import CommandPalette from './components/CommandPalette.vue'
+import EmbeddingMismatchNotice from './components/EmbeddingMismatchNotice.vue'
 import ShortcutsDialog from './components/ShortcutsDialog.vue'
 import AboutDialog from './components/AboutDialog.vue'
 import { isTypingTarget, isMod, MOD } from './utils/shortcuts'

@@ -28,6 +28,7 @@ from services.app_database import app_db
 from services.indexer_manager import indexer_manager
 from services.collection_service import collection_service
 from services.indexing import ChunkBatcher
+from services.embedder import ensure_embedding_ready
 from services.link_fetcher import fetch_link
 
 logger = logging.getLogger(__name__)
@@ -1373,17 +1374,24 @@ class UploadService:
         try:
             app_db.update_upload_job(job_id, status="running")
             indexer = indexer_manager.get_indexer(collection_id)
+            # One clear job error up front beats fetching and extracting every
+            # file only to fail each at the embedding step.
+            ensure_embedding_ready(indexer.embedding_service)
 
             def fail_file(idx: int, work: _BulkFileWork, error: Exception):
                 nonlocal resolved
                 resolved += 1
                 storage_quota.release(collection_id, work.held_bytes)
                 work.held_bytes = 0
-                logger.error(f"Failed to index {work.display_name}: {error}")
-                results["failed_files"].append({
-                    "filename": work.display_name,
-                    "error": str(error),
-                })
+                logger.error(
+                    f"Failed to index {work.display_name} (job {job_id}, collection "
+                    f"'{collection_id}', {type(error).__name__}): {error}"
+                )
+                entry = {"filename": work.display_name, "error": str(error)}
+                error_code = getattr(error, "code", None)
+                if error_code:
+                    entry["code"] = error_code
+                results["failed_files"].append(entry)
                 if work.cleanup:
                     try:
                         work.cleanup()
@@ -1680,7 +1688,13 @@ class UploadService:
             )
 
         except Exception as e:
-            logger.error(f"Bulk index job {job_id} failed: {e}")
+            logger.error(
+                f"Bulk index job {job_id} failed (collection '{collection_id}', "
+                f"{type(e).__name__}): {e}"
+            )
+            error_code = getattr(e, "code", None)
+            if error_code:
+                results["error_code"] = error_code
             # Best effort: keep the on-disk FAISS index consistent with the
             # chunk rows already committed to SQLite before the crash.
             if results["documents_processed"] > 0:

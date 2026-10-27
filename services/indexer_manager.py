@@ -15,7 +15,7 @@ from services.collection_service import collection_service
 from services.document_extractor import DocumentExtractor
 from services.chunker import TextChunker
 from services.embedder import (
-    DeferredEmbeddingService, create_embedding_service, describe_embedding,
+    DeferredEmbeddingService, create_embedding_service, describe_embedding, index_dimension,
     embedding_signature, known_embedding_dim,
 )
 from services.vector_store import VectorStore
@@ -215,6 +215,29 @@ class IndexerManager:
                 factory=lambda m=embedding_model: self._get_embedding_service(m),
                 reason=str(e),
             )
+
+        # A model that builds fine but writes vectors of another size than the
+        # index on disk used to fail the whole open with a bare RuntimeError.
+        # Open read-only behind the deferred service instead: browsing and
+        # search keep working, and anything that needs new vectors raises the
+        # typed EmbeddingDimensionMismatch the UI turns into a re-index offer.
+        on_disk = index_dimension(indexes_dir)
+        if on_disk is not None and on_disk != embedding_service.embedding_dim:
+            logger.warning(
+                f"Collection '{collection_id}' has a {on_disk}-dimensional index but model "
+                f"'{embedding_model}' produces {embedding_service.embedding_dim}; opening "
+                f"read-only until the collection is re-indexed."
+            )
+            if isinstance(embedding_service, DeferredEmbeddingService):
+                # The catalog's guess lost to the vectors actually on disk.
+                embedding_service.embedding_dim = on_disk
+            else:
+                built = embedding_service
+                embedding_service = DeferredEmbeddingService(
+                    model_name=getattr(built, "model_name", embedding_model),
+                    embedding_dim=on_disk,
+                    factory=lambda: built,
+                )
 
         # Create vector store
         vector_store = VectorStore(

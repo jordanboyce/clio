@@ -41,6 +41,8 @@ SUPPORTED_TOOLS = {
     "aggregate_table",
     "list_collections",
     "get_collection_info",
+    "get_collection_stats",
+    "list_documents",
 }
 
 
@@ -149,7 +151,18 @@ def build_tool_use_instructions() -> str:
         '  - list_collections — list every available collection (id, name, '
         'doc count). Use when the user references a different collection.\n'
         '    <tool_call>{"tool": "list_collections"}</tool_call>\n'
-        '  - get_collection_info — full document listing for a collection.\n'
+        '  - get_collection_stats — EXACT totals: documents, pages, chunks, bytes, '
+        'upload date range, counts per file type, largest files. Use it for any '
+        '"how many / how big / what types" question; never count from search results.\n'
+        '    <tool_call>{"tool": "get_collection_stats"}</tool_call>\n'
+        '  - list_documents — page through the files themselves (names, sizes, dates). '
+        'Args: limit (max 500), offset, name_contains, file_type (pdf, docs, code, data, '
+        'media, other), sort (newest, oldest, name, name_desc, largest, smallest). '
+        'The reply has total_matching and next_offset; keep calling with next_offset to '
+        'reach every file. For a complete export of a very large collection, tell the '
+        'user the Export files button / GET /documents/export writes the full list as CSV.\n'
+        '    <tool_call>{"tool": "list_documents", "file_type": "pdf", "sort": "largest", "limit": 20}</tool_call>\n'
+        '  - get_collection_info — description, guide and the newest documents of a collection.\n'
         '    <tool_call>{"tool": "get_collection_info", "collection_id": "..."}</tool_call>\n\n'
         "OUTPUT FORMATTING:\n"
         "- Final answers are rendered as GitHub-flavored markdown. Use "
@@ -515,6 +528,25 @@ def execute_tool_calls(
             elif tool == "get_collection_info":
                 args_for_log = {"collection_id": collection_id}
                 data = mcp.get_collection_info(collection_id=collection_id)
+
+            elif tool == "get_collection_stats":
+                args_for_log = {"collection_id": collection_id}
+                data = mcp.collection_stats_payload(
+                    collection_id, sorted(selection.ids) if selection is not None else None)
+
+            elif tool == "list_documents":
+                args_for_log = {k: call.get(k) for k in
+                                ("limit", "offset", "name_contains", "file_type", "sort")}
+                args_for_log["collection_id"] = collection_id
+                data = mcp.list_documents_payload(
+                    collection_id,
+                    limit=max(1, min(int(call.get("limit") or 100), 500)),
+                    offset=max(0, int(call.get("offset") or 0)),
+                    name_contains=call.get("name_contains"),
+                    file_type=call.get("file_type"),
+                    sort=call.get("sort") or "newest",
+                    document_ids=sorted(selection.ids) if selection is not None else None,
+                )
 
             else:
                 raise ValueError(f"No dispatcher for tool '{tool}'")

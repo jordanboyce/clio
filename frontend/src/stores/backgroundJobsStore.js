@@ -79,6 +79,9 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
         // Outcome, kept for finished jobs
         indexedFiles: job.resultSummary?.documents_processed ?? null,
         failedFiles: failed,
+        // Stable identifier of why the job failed (e.g. embedding_mismatch),
+        // from the job itself or, failing that, its first coded file failure.
+        errorCode: job.resultSummary?.error_code || failed.find(f => f.code)?.code || null,
         skippedFiles: job.skippedFiles || [],
         cancellable: job.jobType !== 'reindex' && isActiveStatus(job.status),
       })

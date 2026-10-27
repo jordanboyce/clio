@@ -1080,7 +1080,44 @@ class EmbeddingUnavailable(RuntimeError):
     The API maps it to 503 with the message, so the person sees what to fix
     rather than a stack trace, and every read path that needs no vectors
     (listing sources, settings, the onboarding) keeps working meanwhile.
+
+    ``code`` is the stable identifier job records and the UI key off; the
+    message is for people and may change.
     """
+
+    code = "embedding_unavailable"
+
+
+class EmbeddingDimensionMismatch(EmbeddingUnavailable):
+    """The loaded model's vectors do not fit the collection's existing index.
+
+    Only a re-index fixes it (or switching back to the model that wrote the
+    index), so it carries both dimensions for the UI to show.
+    """
+
+    code = "embedding_mismatch"
+
+    def __init__(self, model_name: str, model_dim: int, index_dim: int):
+        self.model_name = model_name
+        self.model_dim = int(model_dim)
+        self.index_dim = int(index_dim)
+        super().__init__(
+            f"The loaded model '{model_name}' produces {self.model_dim}-dimensional vectors "
+            f"but this collection's index expects {self.index_dim}; re-index the collection "
+            f"to switch models."
+        )
+
+
+def ensure_embedding_ready(service) -> None:
+    """Fail fast if `service` cannot embed, with a typed reason.
+
+    Bulk jobs call this before fetching or extracting anything, so a model
+    problem is one clear job error rather than the same failure repeated for
+    every file after its download was already spent.
+    """
+    ensure = getattr(service, "_ensure", None)
+    if callable(ensure) and not getattr(service, "available", True):
+        ensure()
 
 
 def known_embedding_dim(model_name: Optional[str] = None, index_dir=None,
@@ -1106,13 +1143,19 @@ def known_embedding_dim(model_name: Optional[str] = None, index_dir=None,
             if m.get("id") == wanted and m.get("dimensions"):
                 return int(m["dimensions"])
     if index_dir is not None:
-        try:
-            path = Path(index_dir) / "faiss.index"
-            if path.exists() and path.stat().st_size > 0:
-                import faiss
-                return int(faiss.read_index(str(path)).d)
-        except Exception as e:  # unreadable index: let the loader deal with it
-            logger.debug(f"Could not read index dimension from {index_dir}: {e}")
+        return index_dimension(index_dir)
+    return None
+
+
+def index_dimension(index_dir) -> Optional[int]:
+    """The vector dimension of the FAISS index already on disk, if there is one."""
+    try:
+        path = Path(index_dir) / "faiss.index"
+        if path.exists() and path.stat().st_size > 0:
+            import faiss
+            return int(faiss.read_index(str(path)).d)
+    except Exception as e:  # unreadable index: let the loader deal with it
+        logger.debug(f"Could not read index dimension from {index_dir}: {e}")
     return None
 
 
@@ -1140,6 +1183,7 @@ class DeferredEmbeddingService:
         self._real = None
         self._lock = threading.Lock()
         self.last_error: Optional[str] = reason or None
+        self._last_exc: Optional[EmbeddingUnavailable] = None
         self._last_attempt = 0.0
         self.signature = None
 
@@ -1159,22 +1203,28 @@ class DeferredEmbeddingService:
                 return self._real
             now = time.monotonic()
             if self.last_error and now - self._last_attempt < self.RETRY_AFTER_SECONDS:
+                if self._last_exc is not None:
+                    # Same type and code as the first failure, not a bare
+                    # EmbeddingUnavailable that has lost what went wrong.
+                    raise self._last_exc.with_traceback(None)
                 raise EmbeddingUnavailable(self.last_error)
             self._last_attempt = now
             try:
                 service = self._factory()
             except Exception as e:
                 self.last_error = str(e) or e.__class__.__name__
-                raise EmbeddingUnavailable(self.last_error) from e
+                self._last_exc = EmbeddingUnavailable(self.last_error)
+                raise self._last_exc from e
             real_dim = int(getattr(service, "embedding_dim", self.embedding_dim) or self.embedding_dim)
             if real_dim != self.embedding_dim:
-                self.last_error = (
-                    f"The loaded model '{getattr(service, 'model_name', self.model_name)}' produces "
-                    f"{real_dim}-dimensional vectors but this collection's index expects "
-                    f"{self.embedding_dim}; re-index the collection to switch models."
+                err = EmbeddingDimensionMismatch(
+                    getattr(service, "model_name", self.model_name), real_dim, self.embedding_dim
                 )
-                raise EmbeddingUnavailable(self.last_error)
+                self.last_error = str(err)
+                self._last_exc = err
+                raise err
             self._real = service
+            self._last_exc = None
             self.backend = getattr(service, "backend", None)
             self.signature = getattr(service, "signature", self.signature)
             self.last_error = None

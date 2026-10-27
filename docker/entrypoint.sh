@@ -21,7 +21,7 @@ ca_files() {
     find "$CA_DIR" -maxdepth 1 -type f \( -name '*.crt' -o -name '*.pem' \) 2>/dev/null
 }
 
-if [ -d "$CA_DIR" ] && [ -n "$(ca_files)" ]; then
+if [ "$(id -u)" = "0" ] && [ -d "$CA_DIR" ] && [ -n "$(ca_files)" ]; then
     echo "entrypoint: installing CA certificates from $CA_DIR"
 
     # 1. System trust store (curl, the healthcheck, anything linking OpenSSL).
@@ -50,6 +50,29 @@ fi
 
 # The data directory is a bind mount or a volume, so it may arrive empty or
 # owned by whoever created it on the host.
-mkdir -p "${DATA_DIR:-/app/data}/documents" "${DATA_DIR:-/app/data}/indexes"
+DATA="${DATA_DIR:-/app/data}"
+APP_UID="${CLIO_UID:-10001}"
+APP_GID="${CLIO_GID:-10001}"
 
+if [ "$(id -u)" = "0" ]; then
+    mkdir -p "$DATA/documents" "$DATA/indexes"
+    # Hand the data directory to the unprivileged service user. Recursive only
+    # when the top-level owner is wrong (first start, or a volume restored by
+    # root), so a restart over a large corpus stays instant. Some bind mounts
+    # (Docker Desktop on Windows) ignore ownership; that is fine, not fatal.
+    if [ "$(stat -c %u "$DATA" 2>/dev/null)" != "$APP_UID" ]; then
+        chown -R "$APP_UID:$APP_GID" "$DATA" 2>/dev/null             || echo "entrypoint: could not chown $DATA; continuing"
+    fi
+    # Everything above needed root. The server does not: drop to the service
+    # user so a bug in document parsing or a prompt-injected tool call cannot
+    # write outside the data directory or touch the system.
+    exec setpriv --reuid="$APP_UID" --regid="$APP_GID" --clear-groups         --inh-caps=-all --bounding-set=-all --no-new-privs "$@"
+fi
+
+# Already unprivileged (compose `user:` / Kubernetes runAsUser). CA installation
+# above is skipped in that case; bake the CAs into a derived image instead.
+if [ -d "$CA_DIR" ] && [ -n "$(ca_files)" ]; then
+    echo "entrypoint: WARNING: started as a non-root user, cannot install CA certificates from $CA_DIR"
+fi
+mkdir -p "$DATA/documents" "$DATA/indexes" 2>/dev/null || true
 exec "$@"

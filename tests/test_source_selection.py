@@ -55,6 +55,14 @@ class _FakeMcp:
     def get_collection_info(self, collection_id=None):
         return {"id": collection_id}
 
+    def collection_stats_payload(self, collection_id=None, document_ids=None):
+        self.calls.append(("stats", {"collection_id": collection_id, "document_ids": document_ids}))
+        return {"total_documents": len(document_ids) if document_ids is not None else 99}
+
+    def list_documents_payload(self, collection_id=None, **kw):
+        self.calls.append(("list", {"collection_id": collection_id, **kw}))
+        return {"documents": [], "total_matching": 0}
+
 
 @pytest.fixture()
 def mcp(monkeypatch):
@@ -194,10 +202,70 @@ def test_overview_describes_only_the_selection(monkeypatch):
         {"document_id": "docA", "filename": "a.pdf", "total_pages": 2, "total_chunks": 4, "upload_timestamp": "2026-01-01T00:00:00"},
         {"document_id": "docB", "filename": "b.pdf", "total_pages": 3, "total_chunks": 6, "upload_timestamp": "2026-02-01T00:00:00"},
     ]
-    monkeypatch.setattr(co.indexer_manager, "get_indexer", lambda cid: SimpleNamespace(list_documents=lambda: docs))
+    def _pick(ids):
+        return [d for d in docs if ids is None or d["document_id"] in ids]
+
+    def _stats(document_ids=None, top_extensions=8):
+        picked = _pick(document_ids)
+        stamps = sorted(d["upload_timestamp"] for d in picked)
+        return {
+            "total_documents": len(picked),
+            "total_pages": sum(d["total_pages"] for d in picked),
+            "total_chunks": sum(d["total_chunks"] for d in picked),
+            "total_bytes": 0,
+            "oldest_upload": stamps[0] if stamps else None,
+            "newest_upload": stamps[-1] if stamps else None,
+            "by_extension": [{"extension": ".pdf", "documents": len(picked), "bytes": 0, "chunks": 0}],
+            "distinct_extensions": 1,
+        }
+
+    fake = SimpleNamespace(
+        collection_stats=_stats,
+        find_documents=lambda limit, sort, document_ids=None: (
+            _pick(document_ids)[:limit], len(_pick(document_ids))),
+    )
+    monkeypatch.setattr(co.indexer_manager, "get_indexer", lambda cid: fake)
     text = co.build_collection_overview(["default"], ["docA"])
     assert "Selected sources: 1 of 2" in text
     assert "a.pdf" in text and "b.pdf" not in text
     assert "Documents: 1, Pages: 2" in text
     full = co.build_collection_overview(["default"])
     assert "Selected sources" not in full and "b.pdf" in full
+
+
+# ── Collection statistics and file listing tools ──────────────────────────
+
+
+def test_stats_and_listing_are_limited_to_the_selection(mcp):
+    out = _run([{"tool": "get_collection_stats"}])
+    assert out[0]["result"] == {"total_documents": 1}
+    assert mcp.calls[-1][1]["document_ids"] == ["docA"]
+
+    out = _run([{"tool": "list_documents", "file_type": "pdf", "sort": "largest", "limit": 5}])
+    assert "error" not in out[0]
+    kw = mcp.calls[-1][1]
+    assert kw["document_ids"] == ["docA"] and kw["file_type"] == "pdf"
+    assert kw["sort"] == "largest" and kw["limit"] == 5
+
+
+def test_stats_and_listing_without_a_selection_see_the_whole_collection(mcp):
+    ctx = {"collection_id": "default", "scope": "current"}
+    assert _run([{"tool": "get_collection_stats"}], ctx)[0]["result"] == {"total_documents": 99}
+    _run([{"tool": "list_documents", "limit": 100000, "offset": -5}], ctx)
+    kw = mcp.calls[-1][1]
+    assert kw["document_ids"] is None
+    assert kw["limit"] == 500 and kw["offset"] == 0          # clamped, never trusted from the model
+
+
+def test_listing_arguments_from_a_model_are_validated(mcp):
+    out = _run([{"tool": "list_documents", "limit": "lots"}])
+    assert "error" in out[0]
+
+
+def test_new_tools_are_advertised_to_models():
+    from services import agent_tools, structured_chat
+
+    names = {t["name"] for t in agent_tools.TOOLS} if hasattr(agent_tools, "TOOLS") else set()
+    names = names or {t["name"] for t in agent_tools.anthropic_tools()}
+    assert {"get_collection_stats", "list_documents"} <= names
+    assert {"get_collection_stats", "list_documents"} <= structured_chat.SUPPORTED_TOOLS
