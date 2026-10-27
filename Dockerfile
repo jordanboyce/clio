@@ -216,11 +216,18 @@ RUN if [ "$OFFLINE_BUNDLE" = "1" ]; then \
       python /tmp/prefetch_offline_models.py --whisper-model "$WHISPER_MODEL"; \
     fi && rm /tmp/prefetch_offline_models.py
 
+# The unprivileged service user reads the baked models; the download step
+# leaves some cache metadata owner-only.
+RUN for d in /opt/clio /opt/hf-cache /opt/whisper-cache; do [ -d "$d" ] && chmod -R a+rX "$d"; done; true
+
 # Application code and the built frontend
 COPY . .
 COPY --from=frontend /build/dist ./frontend/dist
 
-RUN mkdir -p /app/data/documents /app/data/indexes
+# The server runs as an unprivileged user (entrypoint.sh drops to it after the
+# root-only steps). Code and models stay root-owned and read-only to it; only
+# the data directory is writable.
+RUN groupadd --gid 10001 clio     && useradd --uid 10001 --gid clio --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin clio     && mkdir -p /app/data/documents /app/data/indexes     && chown -R clio:clio /app/data
 
 # Runtime setup that cannot be baked: site CA certificates and the data dirs.
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh

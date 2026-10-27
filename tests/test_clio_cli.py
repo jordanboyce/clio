@@ -1,0 +1,122 @@
+"""skills/clio/scripts/clio_cli.py against a stub server."""
+
+import http.server
+import importlib.util
+import json
+import pathlib
+import threading
+
+import pytest
+
+_SCRIPT = (pathlib.Path(__file__).resolve().parent.parent
+           / "skills" / "clio" / "scripts" / "clio_cli.py")
+_spec = importlib.util.spec_from_file_location("clio_cli", _SCRIPT)
+cli = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(cli)
+
+
+class _Handler(http.server.BaseHTTPRequestHandler):
+    seen: list = []
+
+    def log_message(self, *a):  # silence
+        pass
+
+    def _send(self, code, body):
+        raw = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_GET(self):
+        _Handler.seen.append((self.path, self.headers.get("Authorization")))
+        if self.headers.get("Authorization") != "Bearer good":
+            return self._send(401, {"detail": "Not authenticated"})
+        if self.path == "/api/collections":
+            return self._send(200, {"collections": [
+                {"id": "abc", "name": "Policies", "document_count": 2}]})
+        if self.path.startswith("/documents/upload/7/status"):
+            return self._send(200, {"status": "completed", "processed_files": 1,
+                                    "total_files": 1, "result_summary": {"ok": 1}})
+        self._send(404, {"detail": "nope"})
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(n)
+        _Handler.seen.append((self.path, self.headers.get("Content-Type")))
+        if self.path.startswith("/documents/upload-staged"):
+            assert b'filename="a.md"' in body
+            return self._send(202, {"staged": [{"filename": "a.md", "path": "/app/data/a.md"}],
+                                    "failed": []})
+        if self.path == "/documents/index-local-async":
+            assert json.loads(body)["file_paths"] == ["/app/data/a.md"]
+            return self._send(202, {"job_id": 7})
+        if self.path.startswith("/search"):
+            return self._send(200, {"results": [{
+                "filename": "a.md", "page_number": 1, "similarity_score": 0.9,
+                "text_snippet": "rotate every 90 days"}]})
+        self._send(404, {"detail": "nope"})
+
+
+@pytest.fixture
+def server():
+    _Handler.seen = []
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_port}"
+    srv.shutdown()
+
+
+def test_upload_then_search(server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    (tmp_path / "a.md").write_text("x", encoding="utf-8")
+    assert cli.main(["--url", server, "--json", "upload", str(tmp_path), "-c", "policies"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "completed" and out["staged"] == 1
+    assert cli.main(["--url", server, "search", "rotation", "-c", "Policies"]) == 0
+    assert "rotate every 90 days" in capsys.readouterr().out
+
+
+def test_bad_token_reports_401_with_hint(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "bad")
+    assert cli.main(["--url", server, "collections"]) == 1
+    assert "set CLIO_TOKEN" in capsys.readouterr().err
+
+
+def test_unknown_collection_is_a_clear_error(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", server, "search", "q", "-c", "missing"]) == 1
+    assert "no collection" in capsys.readouterr().err
+
+
+def test_unreachable_server_exits_1(monkeypatch, capsys):
+    monkeypatch.delenv("CLIO_TOKEN", raising=False)
+    assert cli.main(["--url", "http://127.0.0.1:1", "status"]) == 1
+    assert "cannot reach" in capsys.readouterr().err
+
+
+def test_token_never_in_argv_and_http_warning(capsys):
+    c = cli.Client("http://clio.example.com", "secret")
+    assert "plain http" in capsys.readouterr().err
+    cli.Client("http://localhost:8473", "secret")
+    assert capsys.readouterr().err == ""
+
+
+def test_collect_files_skips_vcs_and_symlinks(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("x", encoding="utf-8")
+    (tmp_path / "keep.md").write_text("x", encoding="utf-8")
+    (tmp_path / "skip.bin").write_text("x", encoding="utf-8")
+    got = cli.collect_files(tmp_path, {".md"})
+    assert [p.name for p in got] == ["keep.md"]
+
+
+def test_batches_respect_file_count(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "BATCH_FILES", 2)
+    files = []
+    for i in range(5):
+        p = tmp_path / f"{i}.txt"
+        p.write_text("x", encoding="utf-8")
+        files.append(p)
+    assert [len(b) for b in cli.batches(files)] == [2, 2, 1]

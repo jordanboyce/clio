@@ -169,6 +169,15 @@ sign-on can use it (`IDENTITY_PROVIDER=oidc` or `trusted_header`), which also
 enables per-person collections and sharing ([docs/IDENTITY.md](docs/IDENTITY.md));
 a personal or small-team install does not need this.
 
+**Agent skill and CLI.** `skills/clio/` is a ready-to-install
+[Agent Skills](https://agentskills.io) folder: `SKILL.md` teaches an agent to
+search, verify, cite and index safely, and `scripts/clio_cli.py` (standard
+library only) creates collections, uploads a folder, waits for indexing and
+searches, using `CLIO_URL` and `CLIO_TOKEN` from the environment.
+`docker-compose.hardened.yml` runs the container read-only, unprivileged and
+capability-free, and `scripts/backup.py` backs up, verifies and restores the
+data directory ([DEPLOYMENT.md](docs/DEPLOYMENT.md#hardened-container)).
+
 ## Where people run it
 
 | Situation | Run it as | Who gets in | Read |

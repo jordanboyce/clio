@@ -1,0 +1,41 @@
+# Clio — container hardening overlay for enterprise hosts.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.hardened.yml up -d
+#   docker compose -f docker-compose.onprem.yml -f docker-compose.hardened.yml up -d
+#
+# What it changes, on top of either base file:
+#   * runs as the unprivileged `clio` user from the first instruction
+#   * drops every Linux capability and forbids gaining new ones
+#   * mounts the root filesystem read-only; only the data volume and a small
+#     tmpfs are writable, so a compromised parser cannot modify code or models
+#   * caps process count so a runaway extractor cannot fork-bomb the host
+#   * keeps data in a named volume, which Docker initialises with the right
+#     owner (a bind mount would need `chown 10001:10001` on the host first)
+#
+# Trade-off: started as non-root, the entrypoint cannot install private CA
+# certificates from /certs/ca. If your model endpoint uses a private CA, build
+# a derived image that adds the CAs (docs/DEPLOYMENT.md, "Hardened container"),
+# or leave this overlay's `user:` line out and keep the other settings.
+#
+# Verify afterwards:  docker exec clio id    ->  uid=10001(clio)
+#                     python scripts/preflight.py
+
+services:
+  clio:
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    volumes:
+      - clio-data:/app/data
+    environment:
+      # Bytecode cannot be written to a read-only tree; skip the attempt.
+      - PYTHONDONTWRITEBYTECODE=1
+      - HOME=/tmp
+
+volumes:
+  clio-data:

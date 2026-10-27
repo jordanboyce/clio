@@ -529,30 +529,84 @@ Everything lives in one data directory (`./data` by default, `/app/data` in
 Docker, `DATA_DIR` to move it): uploaded documents, FAISS indexes, the SQLite
 metadata and config databases. Back up that directory and you can restore the
 whole deployment. (With `DB_BACKEND=postgres` the app metadata database lives in
-Postgres, so dump it too.)
+Postgres, so `pg_dump` it too.)
 
-The shipped `docker-compose.yml` bind-mounts `./data`, so the files are
-ordinary files on the host and any file-level backup tool works. Stop the
-container first (`docker compose stop`), or snapshot the volume, so SQLite is
-not mid-write:
+`scripts/backup.py` does this with checks built in. It snapshots every SQLite
+database with SQLite's online backup API (consistent even while the server
+writes), leaves out the re-downloadable model caches, writes a SHA-256
+manifest into the archive, and refuses to restore anything that fails
+verification:
 
 ```bash
-docker compose stop
-tar czf clio-backup-$(date +%F).tar.gz data/
+docker compose stop                       # needed for a restorable backup
+docker run --rm -v clio_clio-data:/app/data -v "$PWD:/out" clio:local     python scripts/backup.py backup --data /app/data --out /out/clio-$(date +%F).tar.gz
 docker compose start
+
+python scripts/backup.py verify clio-2026-10-27.tar.gz     # hashes + integrity_check
+python scripts/backup.py restore clio-2026-10-27.tar.gz --data ./data-restored
 ```
 
-If you run on a **named volume** instead (for example on Windows, where
-SQLite under a bind mount can fail under heavy write load), copy the data out
-of the container, which works whether it is running or stopped:
+Stop the server first when the backup must be restorable: vector indexes are
+plain files and one being saved at that instant can be captured half-written.
+The databases are always consistent; the tool says this on every run. The
+archive is written `0600` because it holds your documents; encrypt it before
+it leaves the host. Run a restore drill (restore to a scratch directory,
+start a second instance on it, search) before you need it, and after each
+upgrade.
+
+The shipped `docker-compose.yml` bind-mounts `./data`; on Windows hosts, or
+wherever SQLite misbehaves on a bind mount, use a named volume and take the
+backup from a container as above, or `docker cp clio:/app/data ./copy`.
+
+## Hardened container
+
+The image runs the server as an unprivileged user (`clio`, uid 10001). The
+entrypoint starts as root only to install private CA certificates and fix
+ownership of the data directory, then drops every capability and privilege
+before starting the app.
+
+For an enterprise host, add the hardening overlay:
 
 ```bash
-docker cp clio:/app/data ./clio-data-backup
+docker compose -f docker-compose.yml -f docker-compose.hardened.yml up -d
+# or, from a prebuilt image:
+docker compose -f docker-compose.onprem.yml -f docker-compose.hardened.yml up -d
 ```
 
-To restore, stop Clio, put the directory back (or `docker cp` it into the
-container), and start it again. A restored directory brings back every
-collection and index as they were.
+It runs as uid 10001 from the first instruction, drops all capabilities,
+sets `no-new-privileges`, mounts the root filesystem read-only (only the data
+volume and a tmpfs are writable), and caps the process count. Started this
+way the entrypoint cannot install CA certificates from `/certs/ca`; if your
+model endpoint uses a private CA, bake it into a derived image:
+
+```dockerfile
+FROM clio:local
+USER root
+COPY ca/*.crt /usr/local/share/ca-certificates/
+RUN update-ca-certificates  && cat /usr/local/share/ca-certificates/*.crt >> "$(python -c 'import certifi;print(certifi.where())')"
+USER 10001
+```
+
+Check it took effect: `docker exec clio id` prints `uid=10001(clio)`.
+
+## Giving agents access
+
+Agents need two things: a token and the skill.
+
+1. **Mint a token per agent or per person** (Settings -> MCP -> Personal access
+   tokens): read-only unless the agent must write, limited to the collections
+   it needs, with an expiry. Revoke from the same screen. Put it in the agent
+   runtime's secret store as `CLIO_TOKEN`, not in a prompt or repository.
+2. **Install the skill.** `skills/clio/` is an Agent Skills folder
+   (`SKILL.md` plus a dependency-free CLI). Copy it into the agent's skills
+   directory (for Claude Code, `.claude/skills/clio/` or `~/.claude/skills/clio/`).
+   It tells the agent how to search, verify passages, cite, treat document text
+   as data rather than instructions, and index files. Agents that speak MCP
+   connect to `$CLIO_URL/mcp` with the same token; the skill still applies.
+3. **Audit.** Set `MCP_AUDIT_TOOL_CALLS=true` to record agent reads.
+
+For batch indexing without a browser, the CLI does the whole path:
+`CLIO_URL=https://clio.example.internal CLIO_TOKEN=... python skills/clio/scripts/clio_cli.py upload ./handbook --collection Policies`.
 
 ## Upgrading
 
@@ -585,7 +639,10 @@ Only needed if anyone other than you can reach the app.
       Admin tab is open to everyone). They review flagged content, and
       `CONTENT_POLICY_ACTION` / `AUP_REQUIRED` should match what you told
       people the rules are (see [Content governance](#content-governance))
-- [ ] The data directory is backed up
+- [ ] The data directory is backed up with `scripts/backup.py`, and a restore
+      drill has been run on a scratch directory
+- [ ] Each agent has its own expiring, collection-limited token, and the
+      container runs with `docker-compose.hardened.yml`
 
 ### Behind a firewall that blocks huggingface.co
 
