@@ -651,18 +651,26 @@ commas, and JSON Lines / concatenated values. Files up to 100 MB. Profiles live 
 apply without a restart. Changing or removing a profile does not touch files
 already indexed; use **Re-index** to apply a new profile to them.
 
+**Web UI** (admin only): Settings → Indexing → Custom file types, or Admin tab → Custom file types.
+- List all registered types with extension, label, kind, source (manual/heuristic/AI), and who updated it.
+- Add/edit: pick a sample file → Suggest profile (toggle AI on/off) → live preview → Save.
+- Delete: shows how many indexed documents use the extension, keeps them searchable, and offers **Re-index N files** to re-process them with a new profile.
+
 All changes are admin-only (`ADMIN_EMAILS`) and audited. Reading the list is open.
 
 ```bash
 # 1. Ask for a proposal from a sample file (nothing is saved)
-curl -H "Authorization: Bearer $TOKEN" -F extension=.acme -F "file=@sample.acme"      "$CLIO_URL/api/custom-file-types/suggest"
+curl -H "Authorization: Bearer ***" -F extension=.acme -F "file=@sample.acme"      "$CLIO_URL/api/custom-file-types/suggest"
 # add -F use_ai=false to keep the sample off any model
 
 # 2. Check what a (possibly edited) profile would index
-curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json'      -d '{"extension":".acme","sample":"...","profile":{"record_path":"pumps","title_field":"name","exclude":["id"]}}'      "$CLIO_URL/api/custom-file-types/preview"
+curl -H "Authorization: Bearer ***" -H 'Content-Type: application/json'      -d '{"extension":".acme","sample":"...","profile":{"record_path":"pumps","title_field":"name","exclude":["id"]}}'      "$CLIO_URL/api/custom-file-types/preview"
 
 # 3. Save it; uploads, folder sync and re-index now accept .acme
-curl -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json'      -d '{"label":"Acme export","record_path":"pumps","title_field":"name","exclude":["id"]}'      "$CLIO_URL/api/custom-file-types/.acme"
+curl -X PUT -H "Authorization: Bearer ***" -H 'Content-Type: application/json'      -d '{"label":"Acme export","record_path":"pumps","title_field":"name","exclude":["id"]}'      "$CLIO_URL/api/custom-file-types/.acme"
+
+# 4. Re-index files of a specific extension (scoped re-index, other docs untouched)
+curl -X POST -H "Authorization: Bearer ***" -H 'Content-Type: application/json'      -d '["\.acme"]' "$CLIO_URL/api/collections/{id}/reindex-extensions"
 ```
 
 Profile fields: `label`, `description`, `format` (`auto`, `json`, `jsonl`, `text`),
@@ -681,6 +689,11 @@ read, each is checked against the sample, and any failure falls back to the
 rule-based proposal. It never enables a type, changes `kind`, or saves anything.
 In air-gapped mode only a local provider can be used. Extracted text is scanned
 for prompt injection and content-policy hits like any other source.
+
+**CLI** (`skills/clio/scripts/clio_cli.py`):
+- `clio_cli.py types` — list registered types
+- `clio_cli.py type-suggest .acme sample.acme [--use-ai]` — propose a profile
+- `clio_cli.py type-save .acme '{"record_path":"pumps","title_field":"name"}'` — save a profile
 
 ### Link indexing
 

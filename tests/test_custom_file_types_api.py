@@ -31,10 +31,15 @@ def client(tmp_path, monkeypatch):
 
 def test_save_list_and_delete_round_trip(client):
     r = client.put("/api/custom-file-types/.acme", json={"label": "Acme", "title_field": "name"})
-    assert r.status_code == 200 and r.json()["extension"] == ".acme"
+    assert r.status_code == 200
+    body = r.json()
+    assert body["profile"]["extension"] == ".acme"
+    assert "affected_documents" in body
     types = client.get("/api/custom-file-types").json()["types"]
     assert [t["extension"] for t in types] == [".acme"]
-    assert client.delete("/api/custom-file-types/.acme").json() == {"deleted": True}
+    del_resp = client.delete("/api/custom-file-types/.acme").json()
+    assert del_resp["deleted"] is True
+    assert "affected_documents" in del_resp
     assert client.delete("/api/custom-file-types/.acme").status_code == 404
     assert [a[0][0] for a in client.audited] == ["custom_file_type.save", "custom_file_type.delete"]
 
