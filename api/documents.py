@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 import config
 from services.document_extractor import is_supported_filename
+from services.custom_file_types import registry as custom_types
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
 from models.schemas import (
@@ -119,6 +120,16 @@ def _storage_error(error: StorageLimitExceeded) -> HTTPException:
     return HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=error.to_detail())
 
 
+def _supported_types_message() -> str:
+    """Build a human-readable list of supported file types including custom ones."""
+    builtin = "PDF, TXT, DOCX, CSV, XLSX, XLS, MD, JSON, JSONL, images (PNG/JPG/WEBP/TIFF), audio, and source code files (by extension or well-known name such as Makefile)"
+    custom = custom_types.extensions()
+    if custom:
+        custom_str = ", ".join(sorted(custom))
+        return f"{builtin}, and custom types: {custom_str}"
+    return builtin
+
+
 @router.post(
     "/documents/upload",
     response_model=UploadResponse,
@@ -170,7 +181,7 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
         if not is_supported_filename(file.filename):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File {file.filename} has unsupported type. Supported: PDF, TXT, DOCX, CSV, XLSX, XLS, MD, JSON, JSONL, images (PNG/JPG/WEBP/TIFF), audio, and source code files (by extension or well-known name such as Makefile)",
+                detail=f"File {file.filename} has unsupported type. Supported: {_supported_types_message()}",
             )
 
     indexed_docs = []

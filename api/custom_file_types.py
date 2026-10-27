@@ -63,13 +63,17 @@ async def save_custom_file_type(extension: str, body: ProfileBody):
     """Create or replace the profile for one extension (admin only)."""
     admin = require_admin("manage custom file types")
     try:
+        # Get count of documents with this extension before saving
+        from services.app_database import app_db
+        affected_count = app_db.count_documents_by_extension(extension)
+        
         profile = cft.registry.put(
             extension, body.model_dump(exclude_none=True), user=admin or "")
     except cft.ProfileError as e:
         raise _bad_request(e)
     audit.record("custom_file_type.save", target=profile["extension"],
                  detail={"label": profile["label"], "enabled": profile["enabled"]})
-    return _public(profile)
+    return {"profile": _public(profile), "affected_documents": affected_count}
 
 
 @router.delete("/{extension}")
@@ -77,13 +81,17 @@ async def delete_custom_file_type(extension: str):
     """Stop accepting an extension (admin only). Already-indexed files are kept."""
     require_admin("manage custom file types")
     try:
+        # Get count of documents with this extension before deleting
+        from services.app_database import app_db
+        affected_count = app_db.count_documents_by_extension(extension)
+        
         removed = cft.registry.delete(extension)
     except cft.ProfileError as e:
         raise _bad_request(e)
     if not removed:
         raise HTTPException(status_code=404, detail=f"No custom file type {extension}")
     audit.record("custom_file_type.delete", target=cft.normalize_extension(extension))
-    return {"deleted": True}
+    return {"deleted": True, "affected_documents": affected_count}
 
 
 @router.post("/preview")

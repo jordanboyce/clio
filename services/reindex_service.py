@@ -105,6 +105,71 @@ class ReindexService:
 
         return job_id
 
+    async def start_extension_reindex(
+        self,
+        collection_id: str,
+        documents_dir: Path,
+        indexes_dir: Path,
+        embedding_model: str,
+        chunk_size: int,
+        chunk_overlap: int,
+        extensions: list[str],
+        embedding_dim: int = 384,
+    ) -> int:
+        """Start a re-indexing job for specific extensions within a collection.
+
+        This reindexes only documents whose file extension matches one of the
+        given extensions, leaving other documents untouched.
+
+        Args:
+            collection_id: Collection to reindex
+            documents_dir: Directory containing documents to index
+            indexes_dir: Directory for storing indexes
+            embedding_model: Embedding model to use
+            chunk_size: Chunk size for text splitting
+            chunk_overlap: Overlap between chunks
+            extensions: List of extensions to reindex (e.g. ['.acme', '.cfgx'])
+            embedding_dim: Embedding dimensions
+
+        Returns:
+            Job ID for tracking progress
+
+        Raises:
+            RuntimeError: If a re-indexing job is already running
+        """
+        # Check if already running
+        active_job = app_db.get_active_reindex_job()
+        if active_job:
+            raise RuntimeError(
+                f"Re-indexing job {active_job['id']} is already running"
+            )
+
+        # Create job record with collection info and extension filter
+        config_snapshot = {
+            "collection_id": collection_id,
+            "embedding_model": embedding_model,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "extensions": extensions,
+        }
+
+        job_id = app_db.create_reindex_job(config_snapshot)
+
+        self._spawn(
+            self._run_extension_reindex,
+            job_id=job_id,
+            collection_id=collection_id,
+            documents_dir=documents_dir,
+            indexes_dir=indexes_dir,
+            embedding_model=embedding_model,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            extensions=extensions,
+            embedding_dim=embedding_dim,
+        )
+
+        return job_id
+
     def _run_collection_reindex(
         self,
         job_id: int,
@@ -272,10 +337,174 @@ class ReindexService:
             self.current_job_id = None
             self.current_collection_id = None
 
+    def _run_extension_reindex(
+        self,
+        job_id: int,
+        collection_id: str,
+        documents_dir: Path,
+        indexes_dir: Path,
+        embedding_model: str,
+        chunk_size: int,
+        chunk_overlap: int,
+        extensions: list[str],
+        embedding_dim: int,
+    ):
+        """Run the re-indexing process for specific extensions in background.
+
+        This reindexes only documents whose file extension matches one of the
+        given extensions, leaving other documents in the index untouched.
+
+        Args:
+            job_id: Job ID for tracking
+            collection_id: Collection being reindexed
+            documents_dir: Directory with documents
+            indexes_dir: Directory for indexes
+            embedding_model: Model name
+            chunk_size: Characters per chunk
+            chunk_overlap: Overlap size
+            extensions: List of extensions to reindex (e.g. ['.acme', '.cfgx'])
+            embedding_dim: Embedding dimensions
+        """
+        try:
+            self.is_running = True
+            self.current_job_id = job_id
+            self.current_collection_id = collection_id
+
+            # Update job status
+            app_db.update_reindex_job(job_id, status="running")
+
+            # Initialize services with new config
+            embedding_service = create_embedding_service(collection_model=embedding_model)
+            text_chunker = TextChunker(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap
+            )
+            document_extractor = DocumentExtractor(
+                enable_ocr=settings.enable_ocr,
+                ocr_max_pages=settings.ocr_max_pages,
+                ocr_max_file_mb=settings.ocr_max_file_mb,
+                vision_ocr_provider=settings.vision_ocr_provider,
+                vision_ocr_model=settings.vision_ocr_model,
+                vision_ocr_api_key=settings.vision_ocr_api_key,
+                ollama_base_url=settings.ollama_base_url,
+            )
+
+            # Create new vector store in collection's indexes directory
+            vector_store = VectorStore(
+                index_dir=indexes_dir,
+                embedding_dim=embedding_service.embedding_dim,
+                discard_mismatched_index=True,
+            )
+            vector_store.embedding_info = describe_embedding(embedding_service)
+
+            indexer = DocumentIndexer(
+                vector_store=vector_store,
+                embedding_service=embedding_service,
+                document_extractor=document_extractor,
+                text_chunker=text_chunker,
+            )
+
+            # Get list of documents matching the extensions
+            document_list = self._get_documents_to_reindex(
+                vector_store.metadata_store,
+                documents_dir,
+                extensions=extensions
+            )
+
+            total_docs = len(document_list)
+            app_db.update_reindex_job(job_id, total_documents=total_docs)
+
+            if total_docs == 0:
+                app_db.update_reindex_job(
+                    job_id,
+                    status="completed",
+                    processed_documents=0
+                )
+                return
+
+            # For extension-scoped reindex, we don't clear the whole index.
+            # Instead, we delete only the documents being reindexed, then re-add them.
+            logger.info(f"Deleting {total_docs} documents for extension reindex (job {job_id})")
+            for doc_info in document_list:
+                indexer.delete_document(doc_info["document_id"])
+
+            # Process each document
+            for idx, doc_info in enumerate(document_list, 1):
+                doc_path = doc_info["path"]
+                source_type = doc_info.get("source_type", "upload")
+                source_path = doc_info.get("source_path")
+
+                try:
+                    app_db.update_reindex_job(
+                        job_id,
+                        current_file=doc_path.name,
+                        processed_documents=idx - 1
+                    )
+
+                    logger.info(f"Re-indexing ({idx}/{total_docs}): {doc_path.name} (source_type={source_type})")
+
+                    if not doc_path.exists():
+                        logger.warning(f"Document not found, skipping: {doc_path}")
+                        continue
+
+                    metadata = indexer.index_document(doc_path, doc_path.name)
+
+                    if source_type in ("local_reference", "url") and source_path:
+                        vector_store.metadata_store.update_document_source(
+                            document_id=metadata.document_id,
+                            source_path=source_path,
+                            source_type=source_type,
+                        )
+
+                    logger.info(
+                        f"Indexed {doc_path.name}: "
+                        f"{metadata.total_pages} pages, {metadata.total_chunks} chunks"
+                    )
+
+                except Exception as e:
+                    logger.error(f"Failed to process {doc_path.name}: {e}")
+                    continue
+
+            # Save the index to disk
+            logger.info("Saving re-indexed data to disk...")
+            vector_store.save()
+
+            # Mark as completed
+            app_db.update_reindex_job(
+                job_id,
+                status="completed",
+                processed_documents=total_docs,
+                current_file=None
+            )
+
+            logger.info(f"Extension re-indexing job {job_id} for collection {collection_id} completed successfully")
+
+            # Trigger reload callback to refresh the indexer for this collection
+            if self.reload_callback:
+                try:
+                    self.reload_callback(collection_id)
+                    logger.info(f"Collection {collection_id} indexer reloaded successfully")
+                except Exception as e:
+                    logger.error(f"Failed to reload indexer for collection {collection_id}: {e}")
+
+        except Exception as e:
+            logger.error(f"Extension re-indexing job {job_id} failed: {e}")
+            app_db.update_reindex_job(
+                job_id,
+                status="failed",
+                error=str(e)
+            )
+
+        finally:
+            self.is_running = False
+            self.current_job_id = None
+            self.current_collection_id = None
+
     def _get_documents_to_reindex(
         self,
         metadata_store: MetadataStore,
-        documents_dir: Path
+        documents_dir: Path,
+        extensions: list[str] | None = None
     ) -> List[Dict[str, Any]]:
         """Get list of documents to reindex from metadata store.
 
@@ -286,6 +515,7 @@ class ReindexService:
         Args:
             metadata_store: MetadataStore instance to query
             documents_dir: Directory containing uploaded documents
+            extensions: Optional list of extensions to filter by (e.g. ['.acme', '.cfgx'])
 
         Returns:
             List of dicts with 'path', 'document_id', 'source_type', 'source_path'
@@ -309,6 +539,12 @@ class ReindexService:
                 # If source_type is None, it means there's no document record (orphan chunks)
                 source_type = doc.get("source_type") or "upload"
                 source_path = doc.get("source_path")
+
+                # Filter by extension if provided
+                if extensions:
+                    file_ext = Path(filename).suffix.lower()
+                    if file_ext not in extensions:
+                        continue
 
                 if source_type == "local_reference" and source_path:
                     # Local reference - use source_path
@@ -348,12 +584,14 @@ class ReindexService:
                 # Modula-2
                 ".mod", ".def", ".mi",
                 # Assembly
-                ".asm", ".s"
+                ".asm", ".s",
             }
             from services.custom_file_types import registry as custom_types
             supported_extensions |= custom_types.extensions()
             for f in documents_dir.glob("*"):
                 if f.is_file() and f.suffix.lower() in supported_extensions:
+                    if extensions and f.suffix.lower() not in extensions:
+                        continue
                     if str(f) not in seen_paths:
                         documents.append({
                             "path": f,

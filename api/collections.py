@@ -147,6 +147,82 @@ async def start_collection_reindex(collection_id: str, user_id: str = Depends(ge
         )
 
 
+@router.post(
+    "/api/collections/{collection_id}/reindex-extensions",
+    summary="Start re-indexing specific file extensions in a collection",
+    tags=["collections"],
+)
+async def start_extension_reindex(
+    collection_id: str,
+    extensions: list[str],
+    user_id: str = Depends(get_current_user_id),
+):
+    """Start a background re-indexing job for specific file extensions in a collection.
+
+    This reindexes only documents whose file extension matches one of the
+    given extensions, leaving other documents untouched.
+
+    Args:
+        collection_id: Collection to reindex
+        extensions: List of extensions to reindex (e.g. ['.acme', '.cfgx'])
+
+    Returns:
+        - job_id: ID for tracking re-indexing progress
+        - status: Initial job status
+        - collection_id: Collection being reindexed
+        - extensions: Extensions being reindexed
+        - message: Human-readable status message
+    """
+    try:
+        from api.deps import require_collection_access
+        require_collection_access(collection_id, user_id, owner=True)
+
+        # Get collection settings
+        collection = collection_service.get_collection(collection_id)
+        if not collection:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Collection '{collection_id}' not found"
+            )
+
+        # Get collection paths
+        documents_dir = indexer_manager.get_documents_path(collection_id)
+        indexes_dir = indexer_manager.get_indexes_path(collection_id)
+
+        # Start extension-scoped re-indexing
+        job_id = await reindex_service.start_extension_reindex(
+            collection_id=collection_id,
+            documents_dir=documents_dir,
+            indexes_dir=indexes_dir,
+            embedding_model=collection["embedding_model"],
+            chunk_size=collection["chunk_size"],
+            chunk_overlap=collection["chunk_overlap"],
+            extensions=extensions,
+        )
+
+        return {
+            "job_id": job_id,
+            "status": "started",
+            "collection_id": collection_id,
+            "extensions": extensions,
+            "message": f"Extension re-indexing job started for {len(extensions)} extension(s) in collection '{collection_id}'"
+        }
+
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start extension re-indexing for collection {collection_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start extension re-indexing: {str(e)}"
+        )
+
+
 @router.get(
     "/api/reindex/status",
     summary="Get re-indexing job status",
