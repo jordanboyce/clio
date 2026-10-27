@@ -637,6 +637,51 @@ all-files.csv`. The same data is at `GET /documents/stats` and
 the export streams page by page, so a collection of tens of thousands of files
 costs flat memory, and each export is written to the audit trail.
 
+### Custom file types
+
+JSON-like files with an extension only one product uses (`.acme`, `.cfgx`, ...)
+can be indexed by registering the extension. A *profile* says how to read it:
+where the records are, which fields matter and what to call them. A profile is
+plain data, never code, and built-in types (`.json`, `.pdf`, source files, ...)
+cannot be redefined.
+
+The parser accepts strict JSON, JSON with `//` and `/* */` comments and trailing
+commas, and JSON Lines / concatenated values. Files up to 100 MB. Profiles live in
+`<data dir>/custom_file_types.json`, so a normal backup carries them, and changes
+apply without a restart. Changing or removing a profile does not touch files
+already indexed; use **Re-index** to apply a new profile to them.
+
+All changes are admin-only (`ADMIN_EMAILS`) and audited. Reading the list is open.
+
+```bash
+# 1. Ask for a proposal from a sample file (nothing is saved)
+curl -H "Authorization: Bearer $TOKEN" -F extension=.acme -F "file=@sample.acme"      "$CLIO_URL/api/custom-file-types/suggest"
+# add -F use_ai=false to keep the sample off any model
+
+# 2. Check what a (possibly edited) profile would index
+curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json'      -d '{"extension":".acme","sample":"...","profile":{"record_path":"pumps","title_field":"name","exclude":["id"]}}'      "$CLIO_URL/api/custom-file-types/preview"
+
+# 3. Save it; uploads, folder sync and re-index now accept .acme
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json'      -d '{"label":"Acme export","record_path":"pumps","title_field":"name","exclude":["id"]}'      "$CLIO_URL/api/custom-file-types/.acme"
+```
+
+Profile fields: `label`, `description`, `format` (`auto`, `json`, `jsonl`, `text`),
+`kind` (`data`, `docs`, `code`; how the file is grouped in stats), `record_path`
+(dotted path to the list or object of records), `title_field`, `include` /
+`exclude` (dotted field names, `*` wildcard, list positions ignored), `labels`
+(field name to display name), `records_per_section` (default 10),
+`max_value_chars`, `enabled`.
+
+**The model's part.** `suggest` first builds a rule-based proposal (finds the
+records, picks a title, drops UUIDs, hashes and encoded blobs). With `use_ai` it
+also sends a bounded excerpt (lists shortened to three items, long strings cut)
+to the deployment's default chat provider and asks for a label, field selection
+and clearer field names. The answer is treated as untrusted: only seven keys are
+read, each is checked against the sample, and any failure falls back to the
+rule-based proposal. It never enables a type, changes `kind`, or saves anything.
+In air-gapped mode only a local provider can be used. Extracted text is scanned
+for prompt injection and content-policy hits like any other source.
+
 ### Link indexing
 
 "Add link" fetches pages from the server, so it identifies itself with a

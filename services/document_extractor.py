@@ -542,6 +542,16 @@ class DocumentExtractor:
         # Audio files route through Whisper for transcription and then flow
         # through the normal indexing pipeline as a single-"page" document.
         # A transcript is text like any other for the policy scan.
+        custom_profile = None
+        if file_ext not in self.SUPPORTED_EXTENSIONS:
+            from services.custom_file_types import registry as custom_types
+            custom_profile = custom_types.lookup(file_path.name)
+        if custom_profile is not None:
+            result = ExtractionResult(self._extract_custom(file_path, custom_profile), method="text")
+            result.injection_warnings = self._scan_injection(result, file_path)
+            self._scan_policy(result, file_path)
+            return result
+
         if file_ext in AUDIO_EXTENSIONS:
             result = self._extract_audio(file_path)
             self._scan_policy(result, file_path)
@@ -1432,6 +1442,14 @@ class DocumentExtractor:
             if tokens & chrome:
                 drop(tag)
 
+    def _extract_custom(self, path: Path, profile: Dict[str, Any]) -> Dict[int, str]:
+        """Read a file of an admin-registered type according to its profile."""
+        from services.custom_file_types import ProfileError, extract_pages
+        try:
+            return extract_pages(path, profile)
+        except ProfileError as e:
+            raise Exception(f"Could not read {path.name} as {profile['label']} ({profile['extension']}): {e}") from e
+
     def _extract_json(self, json_path: Path) -> Dict[int, str]:
         """
         Extract text from JSON file.
@@ -1691,5 +1709,10 @@ def is_supported_filename(name: Union[str, Path]) -> bool:
     path = Path(str(name))
     if path.suffix.lower() in DocumentExtractor.SUPPORTED_EXTENSIONS:
         return True
-    return is_code_file(path.name)
+    if is_code_file(path.name):
+        return True
+    # An admin-registered type (see services/custom_file_types.py). Built-ins
+    # are checked first, so a profile can never change how they are read.
+    from services.custom_file_types import registry as custom_types
+    return custom_types.lookup(path.name) is not None
 

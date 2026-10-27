@@ -350,6 +350,8 @@ class ReindexService:
                 # Assembly
                 ".asm", ".s"
             }
+            from services.custom_file_types import registry as custom_types
+            supported_extensions |= custom_types.extensions()
             for f in documents_dir.glob("*"):
                 if f.is_file() and f.suffix.lower() in supported_extensions:
                     if str(f) not in seen_paths:

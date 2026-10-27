@@ -408,40 +408,14 @@ def _resolve_review_provider():
     same way vision OCR resolves its key.
     """
     from config import settings
-    from services.app_database import app_db
 
-    provider = (settings.content_policy_llm_provider or "").strip()
-    model = (settings.content_policy_llm_model or "").strip() or None
-    if not provider:
-        try:
-            prefs = app_db.get_ai_preferences() or {}
-            provider = (prefs.get("default_provider") or "").strip()
-        except Exception:
-            provider = ""
-    if not provider or provider == "none":
-        return None, None
+    from services.ai_service import resolve_default_provider
 
-    api_key = ""
-    try:
-        api_key = app_db.get_agent_api_key(provider) or ""
-    except Exception:
-        pass
-    if not api_key and provider == "ollama_cloud":
-        api_key = settings.ollama_cloud_api_key or ""
-
-    from services.ai_service import create_provider
-
-    kwargs: Dict[str, Any] = {}
-    if model:
-        kwargs["model"] = model
-    if provider == "ollama":
-        kwargs["base_url"] = settings.ollama_base_url
-        kwargs["model"] = model or settings.mcp_ollama_model or "llama3.2"
-    try:
-        return create_provider(provider, api_key or None, **kwargs), kwargs.get("model")
-    except Exception as e:
-        logger.warning(f"Content policy LLM review: provider '{provider}' unavailable: {e}")
-        return None, None
+    return resolve_default_provider(
+        provider=(settings.content_policy_llm_provider or "").strip(),
+        model=(settings.content_policy_llm_model or "").strip() or None,
+        purpose="Content policy LLM review",
+    )
 
 
 def llm_review(page_texts: Dict[int, str], filename: str = "") -> Optional[Dict[str, Any]]:
