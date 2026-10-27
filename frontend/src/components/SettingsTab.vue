@@ -940,6 +940,11 @@
           </fieldset>
         </section>
 
+        <!-- ═══ Custom file types ═══ -->
+        <section v-show="activeSection === 'custom-file-types'" aria-labelledby="settings-custom-file-types">
+          <CustomFileTypes />
+        </section>
+
         <!-- ═══ Data ═══ -->
         <section v-show="activeSection === 'data'" aria-labelledby="settings-data">
           <h2 id="settings-data" class="sr-only">Data</h2>
@@ -1041,6 +1046,7 @@ import { useCollectionStore } from '../stores/collectionStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useUserStore } from '../stores/userStore'
 import { useProviderStore } from '../stores/providerStore'
+import CustomFileTypes from './CustomFileTypes.vue'
 import {
   PROVIDER_DEFS,
   CUSTOM_ENDPOINT_PRESETS,
@@ -1075,6 +1081,7 @@ const ALL_SECTIONS = [
   { id: 'general', label: 'General' },
   { id: 'providers', label: 'AI Providers' },
   { id: 'indexing', label: 'Indexing' },
+  { id: 'custom-file-types', label: 'Custom file types' },
   { id: 'data', label: 'Data' },
   { id: 'system', label: 'System' },
 ]
