@@ -537,6 +537,23 @@ def _corpus_version(collection_id: str) -> str | None:
         return None
 
 
+def _collection_quality(collection_id: str) -> dict[str, Any]:
+    """``newest_upload`` and (once a coverage report exists) a compact
+    ``quality`` block for a list_collections entry.
+
+    Read straight from the collection's metadata.db: listing must not load
+    every collection's vector index just to attach two hints. Empty on any
+    failure; the listing itself is still valid.
+    """
+    try:
+        from services import coverage_report
+
+        return coverage_report.quality_summary(
+            collection_service.get_indexes_path(collection_id) / "metadata.db")
+    except Exception:
+        return {}
+
+
 def _visible_documents(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Quarantined documents never appear in MCP listings."""
     from services.governance import visible_documents
@@ -669,6 +686,18 @@ def list_collections() -> dict[str, Any]:
       - name            → human-facing name (match this against the user's phrasing)
       - description     → free-text description written by the owner
       - document_count  → number of indexed documents
+      - newest_upload   → when the newest searchable document was added
+                          (a freshness signal; omitted for an empty collection)
+      - quality         → only after the owner has run a retrieval coverage
+                          report: {coverage_hit_at_5, report_age, stale}.
+                          coverage_hit_at_5 is the share of self-derived probe
+                          queries whose source document came back in the top 5
+                          (retrieval findability, NOT answer correctness);
+                          prefer a collection with a higher score when two
+                          look equally relevant, and treat `stale: true` (the
+                          sources changed since the run) as "score is a guess".
+                          `owner_question_hit_at_5` appears when the owner
+                          wrote their own test questions — the stronger signal.
 
     Once you know the target collection_id, pass it explicitly to
     `get_collection_info`, `search_collection`, `list_tables`,
@@ -691,6 +720,7 @@ def list_collections() -> dict[str, Any]:
             "description": c.get("mcp_display_description") or c.get("description", "") or "",
             "document_count": c.get("document_count", 0),
             "is_default": cid == default_id,
+            **_collection_quality(cid),
         })
 
     return _tool_response({

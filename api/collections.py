@@ -844,3 +844,120 @@ def delete_collection(collection_id: str, user_id: str = Depends(get_current_use
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete collection: {str(e)}"
         )
+
+
+# ── Retrieval coverage ──────────────────────────────────────────────────────
+# How findable is this collection's content through the real search path?
+# See services/coverage_report.py. Reading the report is read access
+# (get_indexer enforces it); running it costs CPU and owners act on the
+# result, so running and the owner-question editor are owner-gated.
+
+class CoverageRunRequest(BaseModel):
+    probes: int = Field(default=100, ge=1, le=300, description="Chunks to sample (capped at 300)")
+    seed: Optional[int] = Field(default=None, description="Sampling seed; the same seed repeats the same probes")
+
+
+class CoverageQuestionRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=1000)
+    expected_documents: list[str] = Field(..., min_length=1, max_length=20,
+                                          description="Document ids or exact filenames that should answer it")
+
+
+def _coverage_payload(indexer, collection_id: str) -> dict:
+    from services.coverage_report import coverage_runner, latest_report
+
+    store = indexer.vector_store.metadata_store
+    return {
+        "collection_id": collection_id,
+        "run": coverage_runner.status(collection_id),
+        "report": latest_report(indexer),
+        "questions": store.list_coverage_questions(),
+        "llm_questions": bool(settings.coverage_llm_questions),
+    }
+
+
+@router.get(
+    "/api/collections/{collection_id}/coverage",
+    summary="Latest retrieval coverage report",
+    tags=["collections"],
+)
+def get_collection_coverage(collection_id: str, user_id: str = Depends(get_current_user_id)):
+    """The latest coverage report (null before the first run), whether a run is
+    in progress, and the owner's questions. ``report.stale`` is true once the
+    collection's sources or embedding model changed since the run."""
+    from api.deps import get_indexer
+    return _coverage_payload(get_indexer(collection_id), collection_id)
+
+
+@router.post(
+    "/api/collections/{collection_id}/coverage",
+    summary="Run a retrieval coverage report",
+    tags=["collections"],
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_collection_coverage(collection_id: str, body: Optional[CoverageRunRequest] = None,
+                              user_id: str = Depends(get_current_user_id)):
+    """Start a bounded background run (owner only). 409 while one is already
+    running for this collection. Poll ``GET .../coverage`` for the result."""
+    from api.deps import get_indexer, require_collection_access
+    from services import audit
+    from services.coverage_report import (
+        DEFAULT_PROBES, DEFAULT_SEED, CoverageAlreadyRunning, coverage_runner)
+
+    require_collection_access(collection_id, user_id, owner=True)
+    indexer = get_indexer(collection_id)
+    body = body or CoverageRunRequest()
+    probes = body.probes if body.probes else DEFAULT_PROBES
+    seed = body.seed if body.seed is not None else DEFAULT_SEED
+    try:
+        run = coverage_runner.start(collection_id, indexer, probes=probes, seed=seed)
+    except CoverageAlreadyRunning as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    audit.record("coverage.run", actor=user_id, collection_id=collection_id,
+                 detail={"probes": probes, "seed": seed})
+    return {"collection_id": collection_id, "run": run}
+
+
+@router.post(
+    "/api/collections/{collection_id}/coverage/questions",
+    summary="Add an owner question to the coverage report",
+    tags=["collections"],
+    status_code=status.HTTP_201_CREATED,
+)
+def add_coverage_question(collection_id: str, body: CoverageQuestionRequest,
+                          user_id: str = Depends(get_current_user_id)):
+    """Add a question and the document(s) that should answer it (owner only)."""
+    from api.deps import get_indexer, require_collection_access
+    from services import audit
+    from services.coverage_report import QuestionError, add_question
+
+    require_collection_access(collection_id, user_id, owner=True)
+    indexer = get_indexer(collection_id)
+    try:
+        created = add_question(indexer, body.question, body.expected_documents, user_id)
+    except QuestionError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    audit.record("coverage.question_add", actor=user_id, collection_id=collection_id,
+                 detail={"question_id": created["id"],
+                         "documents": [d["document_id"] for d in created["expected_documents"]]})
+    return created
+
+
+@router.delete(
+    "/api/collections/{collection_id}/coverage/questions/{question_id}",
+    summary="Delete an owner question",
+    tags=["collections"],
+)
+def delete_coverage_question(collection_id: str, question_id: int,
+                             user_id: str = Depends(get_current_user_id)):
+    """Remove an owner question (owner only)."""
+    from api.deps import get_indexer, require_collection_access
+    from services import audit
+
+    require_collection_access(collection_id, user_id, owner=True)
+    indexer = get_indexer(collection_id)
+    if not indexer.vector_store.metadata_store.delete_coverage_question(question_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such question")
+    audit.record("coverage.question_delete", actor=user_id, collection_id=collection_id,
+                 detail={"question_id": question_id})
+    return {"deleted": question_id}

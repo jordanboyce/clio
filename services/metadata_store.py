@@ -118,6 +118,30 @@ class MetadataStore:
                 )
             """)
 
+            # Retrieval coverage (services/coverage_report.py). The latest
+            # report for this collection (one row; JSON so the report shape
+            # can grow without a migration) and the questions the owner
+            # wrote with the document(s) that should answer them. Additive
+            # and self-healing like chunk_boosts: no schema-version bump,
+            # and a backup or collection bundle carries them with the rest
+            # of the collection's metadata.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS coverage_report (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    report TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS coverage_questions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    question TEXT NOT NULL,
+                    expected_documents TEXT NOT NULL,
+                    created_by TEXT DEFAULT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS documents (
                     document_id TEXT PRIMARY KEY,
@@ -650,6 +674,103 @@ class MetadataStore:
             for chunk_id, boost, note, updated_at in rows
         }
 
+    # ── Retrieval coverage (services/coverage_report.py) ────────────────
+
+    def servable_chunk_refs(self) -> List[tuple]:
+        """``(chunk_id, document_id)`` for every chunk of a servable document.
+
+        Ids only, in a stable order (document, then insertion), so a
+        sampler can pick from a very large collection without loading any
+        text. Quarantined documents are excluded here and not merely
+        filtered later: a coverage run must not even read their chunks.
+        """
+        from services.content_policy import HIDDEN_STATUSES
+
+        marks = ", ".join("?" for _ in HIDDEN_STATUSES)
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            rows = conn.execute(
+                "SELECT c.chunk_id, c.document_id FROM chunks c "
+                "JOIN documents d ON d.document_id = c.document_id "
+                f"WHERE COALESCE(d.policy_status, 'clear') NOT IN ({marks}) "
+                "ORDER BY c.document_id, c.id", list(HIDDEN_STATUSES)).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def newest_servable_upload(self) -> Optional[str]:
+        """Timestamp of the newest servable document (None when empty)."""
+        from services.content_policy import HIDDEN_STATUSES
+
+        marks = ", ".join("?" for _ in HIDDEN_STATUSES)
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            row = conn.execute(
+                "SELECT MAX(upload_timestamp) FROM documents "
+                f"WHERE COALESCE(policy_status, 'clear') NOT IN ({marks})",
+                list(HIDDEN_STATUSES)).fetchone()
+        return row[0] if row and row[0] else None
+
+    def save_coverage_report(self, report: Dict[str, Any]) -> None:
+        """Keep ``report`` as this collection's latest (replacing the last)."""
+        from datetime import datetime, timezone
+
+        with sqlite_connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO coverage_report (id, report, created_at) VALUES (1, ?, ?)",
+                (json.dumps(report), datetime.now(timezone.utc).isoformat()))
+            conn.commit()
+
+    def get_coverage_report(self) -> Optional[Dict[str, Any]]:
+        """The latest stored report, or None (also None if the row is unreadable)."""
+        with sqlite_connect(self.db_path) as conn:
+            row = conn.execute("SELECT report FROM coverage_report WHERE id = 1").fetchone()
+        if not row:
+            return None
+        try:
+            report = json.loads(row[0])
+        except (TypeError, ValueError):
+            return None
+        return report if isinstance(report, dict) else None
+
+    def add_coverage_question(self, question: str, expected_documents: List[Dict[str, str]],
+                              created_by: Optional[str] = None) -> int:
+        """Store an owner question with the documents that should answer it.
+
+        ``expected_documents`` is ``[{"document_id", "filename"}, ...]`` -
+        the filename is a snapshot so a question stays readable after its
+        document is deleted.
+        """
+        from datetime import datetime, timezone
+
+        with sqlite_connect(self.db_path) as conn:
+            cur = conn.execute(
+                "INSERT INTO coverage_questions (question, expected_documents, created_by, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (question, json.dumps(expected_documents), created_by,
+                 datetime.now(timezone.utc).isoformat()))
+            conn.commit()
+            return int(cur.lastrowid)
+
+    def list_coverage_questions(self) -> List[Dict[str, Any]]:
+        with sqlite_connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, question, expected_documents, created_by, created_at "
+                "FROM coverage_questions ORDER BY id").fetchall()
+        out = []
+        for qid, question, expected, created_by, created_at in rows:
+            try:
+                docs = json.loads(expected)
+            except (TypeError, ValueError):
+                docs = []
+            out.append({"id": qid, "question": question, "expected_documents": docs,
+                        "created_by": created_by, "created_at": created_at})
+        return out
+
+    def delete_coverage_question(self, question_id: int) -> bool:
+        with sqlite_connect(self.db_path) as conn:
+            cur = conn.execute("DELETE FROM coverage_questions WHERE id = ?", (int(question_id),))
+            conn.commit()
+            return cur.rowcount > 0
+
     def _ensure_v3_1_columns(self, conn: sqlite3.Connection):
         """Ensure v3.1+ columns exist (defensive migration for runtime checks)."""
         doc_columns = self._get_table_columns(conn, "documents")
@@ -1045,6 +1166,16 @@ class MetadataStore:
             ).fetchone()
             return {"total_documents": row[0], "total_pages": row[1], "storage_bytes": row[2]}
 
+    @staticmethod
+    def corpus_token(conn: sqlite3.Connection) -> str:
+        """The corpus_version token, computed on an open connection."""
+        row = conn.execute(
+            """SELECT COUNT(*), COALESCE(MAX(upload_timestamp), ''), COALESCE(SUM(num_chunks), 0),
+                      COALESCE(SUM(CASE WHEN policy_status = 'quarantined' THEN 1 ELSE 0 END), 0)
+                 FROM documents"""
+        ).fetchone()
+        return f"{row[0]}:{row[1]}:{row[2]}:{row[3]}"
+
     def corpus_version(self) -> str:
         """A cheap token that changes whenever the corpus does.
 
@@ -1054,12 +1185,43 @@ class MetadataStore:
         least one of them, which is what the answer cache keys on.
         """
         with sqlite_connect(self.db_path) as conn:
-            row = conn.execute(
-                """SELECT COUNT(*), COALESCE(MAX(upload_timestamp), ''), COALESCE(SUM(num_chunks), 0),
-                          COALESCE(SUM(CASE WHEN policy_status = 'quarantined' THEN 1 ELSE 0 END), 0)
-                     FROM documents"""
-            ).fetchone()
-            return f"{row[0]}:{row[1]}:{row[2]}:{row[3]}"
+            return self.corpus_token(conn)
+
+    @classmethod
+    def coverage_snapshot(cls, db_path: Path) -> Optional[Dict[str, Any]]:
+        """What the agent-facing collection listing needs, without an indexer.
+
+        ``{"report", "corpus_version", "newest_upload"}`` read straight from
+        an existing metadata.db (never created or migrated here, so listing
+        every collection does not load every FAISS index). None when the
+        file is absent or unreadable.
+        """
+        from services.content_policy import HIDDEN_STATUSES
+
+        if not Path(db_path).exists():
+            return None
+        try:
+            with sqlite_connect(db_path) as conn:
+                token = cls.corpus_token(conn)
+                marks = ", ".join("?" for _ in HIDDEN_STATUSES)
+                newest = conn.execute(
+                    "SELECT MAX(upload_timestamp) FROM documents "
+                    f"WHERE COALESCE(policy_status, 'clear') NOT IN ({marks})",
+                    list(HIDDEN_STATUSES)).fetchone()[0]
+                try:
+                    row = conn.execute("SELECT report FROM coverage_report WHERE id = 1").fetchone()
+                except sqlite3.Error:        # a database from before the table existed
+                    row = None
+        except sqlite3.Error:
+            return None
+        report = None
+        if row:
+            try:
+                report = json.loads(row[0])
+            except (TypeError, ValueError):
+                report = None
+        return {"report": report if isinstance(report, dict) else None,
+                "corpus_version": token, "newest_upload": newest}
 
     def get_storage_bytes(self) -> int:
         """Bytes of source files this collection holds (SUM of file_size).

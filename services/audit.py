@@ -48,6 +48,9 @@ ACTIONS: List[str] = [
     "expertise.create",         # expertise pack created (id, name, digest)
     "expertise.update",
     "expertise.delete",
+    "coverage.run",             # retrieval coverage report started
+    "coverage.question_add",    # owner question added to the coverage report
+    "coverage.question_delete",
     "share.create",
     "share.accept",
     "share.revoke",

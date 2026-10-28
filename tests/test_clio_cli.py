@@ -326,3 +326,134 @@ def test_stub_state_does_not_leak_between_tests(server):
     """The stub's handler class is shared; the fixture must reset every piece of its state."""
     assert _Handler.types == [] and _Handler.suggest_body is None and _Handler.put_seen is None
     assert "do_GET" in _Handler.__dict__ and _Handler.do_GET.__qualname__ == "_Handler.do_GET"
+
+
+# -- coverage ------------------------------------------------------------------
+# A self-contained stub (its own handler and server) so these tests do not depend
+# on how the shared one above is wired: routes are a data table, not branches.
+
+_COVERAGE_REPORT = {
+    "overall": {"probes": 40, "document_hit_at_5": 0.9, "chunk_hit_at_10": 0.8, "mrr_chunk": 0.71},
+    "measures": "This measures retrieval findability, not whether answers are correct.",
+    "notes": ["This measures retrieval findability, not whether answers are correct."],
+    "probe_method": {"by_method": {"keywords": {"probes": 40}}},
+    "embedding_model": "m1", "corpus_version": "7:2026-03-04:12:0", "age": "3h", "stale": True,
+    "stale_reasons": ["corpus_changed"],
+    "weakest_documents": [{"filename": "notice.txt", "document_hit_at_5": 0.0, "probes": 2,
+                           "failing_probes": [{"query": "notice office unclear"}]}],
+    "chunks_never_retrieved": {"count": 3}, "unprobeable_chunks": {"count": 0},
+    "owner_questions": {"document_hit_at_5": 0.5, "measured": 2, "total": 2, "items": [
+        {"status": "miss", "question": "Where is the roadmap?",
+         "expected_documents": [{"filename": "plan.md"}]}]},
+}
+
+
+class _CoverageStub(http.server.BaseHTTPRequestHandler):
+    calls: list = []
+    gets = 0
+    post_status = 202            # 202 started, 409 already running, 403 not an owner
+    states = ["running", "completed"]   # successive GET .../coverage run states
+
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, body):
+        raw = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _route(self, method):
+        n = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(n) or b"null")
+        _CoverageStub.calls.append((method, self.path, body))
+        if self.headers.get("Authorization") != "Bearer good":
+            return self._send(401, {"detail": "Not authenticated"})
+        table = {
+            ("GET", "/api/collections"): lambda: (200, {"collections": [{"id": "abc", "name": "Policies"}]}),
+            ("GET", "/api/collections/abc/coverage"): self._get_coverage,
+            ("POST", "/api/collections/abc/coverage"): lambda: (
+                (202, {"run": {"state": "running"}}) if self.post_status == 202
+                else (self.post_status, {"detail": {409: "A coverage run for this collection is already "
+                                                    "in progress.", 403: "owner only"}[self.post_status]})),
+        }
+        handler = table.get((method, self.path))
+        code, payload = handler() if handler else (404, {"detail": "nope"})
+        self._send(code, payload)
+
+    def _get_coverage(self):
+        i = min(_CoverageStub.gets, len(self.states) - 1)
+        _CoverageStub.gets += 1
+        return 200, {"report": _COVERAGE_REPORT, "run": {"state": self.states[i], "done": 5, "total": 40}}
+
+    def do_GET(self):
+        self._route("GET")
+
+    def do_POST(self):
+        self._route("POST")
+
+
+@pytest.fixture
+def coverage_server():
+    _CoverageStub.calls, _CoverageStub.gets = [], 0
+    _CoverageStub.post_status, _CoverageStub.states = 202, ["running", "completed"]
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _CoverageStub)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_port}"
+    srv.shutdown()
+
+
+def test_coverage_shows_the_latest_report(coverage_server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", coverage_server, "coverage", "-c", "Policies"]) == 0
+    out = capsys.readouterr().out
+    assert "document hit@5 90%" in out and "chunk hit@10 80%" in out and "(40 probes, 3h old)" in out
+    assert "STALE: corpus changed" in out
+    assert "findability, not whether answers are correct" in out
+    assert "notice.txt  0% of 2 probes found" in out and "missed: 'notice office unclear'" in out
+    assert "owner questions  hit@5 50%" in out and "miss: Where is the roadmap?  (expected plan.md)" in out
+    assert [c for c in _CoverageStub.calls if c[0] == "POST"] == []          # reading never starts a run
+
+
+def test_coverage_json_is_the_raw_payload(coverage_server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", coverage_server, "--json", "coverage", "-c", "abc"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["collection_id"] == "abc" and data["report"]["overall"]["probes"] == 40
+
+
+def test_coverage_run_starts_then_waits_for_completion(coverage_server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", coverage_server, "coverage", "-c", "abc", "--run",
+                     "--probes", "25", "--poll", "0.01"]) == 0
+    captured = capsys.readouterr()
+    assert "coverage run: 5/40 probes" in captured.err and "document hit@5 90%" in captured.out
+    posts = [c for c in _CoverageStub.calls if c[0] == "POST"]
+    assert posts == [("POST", "/api/collections/abc/coverage", {"probes": 25})]
+
+
+def test_coverage_run_joins_a_run_already_in_progress(coverage_server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    _CoverageStub.post_status = 409
+    assert cli.main(["--url", coverage_server, "coverage", "-c", "abc", "--run", "--poll", "0.01"]) == 0
+    assert "already in progress" in capsys.readouterr().err
+
+
+def test_coverage_run_by_a_non_owner_is_a_clear_error(coverage_server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    _CoverageStub.post_status = 403
+    assert cli.main(["--url", coverage_server, "coverage", "-c", "abc", "--run"]) == 1
+    assert "owner only" in capsys.readouterr().err
+
+
+def test_coverage_run_no_wait_returns_immediately(coverage_server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", coverage_server, "--json", "coverage", "-c", "abc", "--run", "--no-wait"]) == 0
+    assert json.loads(capsys.readouterr().out)["run"]["state"] == "running"
+
+
+def test_coverage_with_no_report_says_how_to_make_one():
+    assert "--run" in cli.render_coverage({"report": None, "run": {"state": "idle"}})
+    assert "failed: boom" in cli.render_coverage({"report": None, "run": {"state": "failed", "error": "boom"}})

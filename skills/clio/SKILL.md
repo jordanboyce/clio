@@ -70,6 +70,14 @@ enumerate from search results; they are the top few passages, not the corpus.
   python scripts/clio_cli.py files -c Policies --csv all-files.csv   # every file
   ```
 
+- Unsure which collection to trust: `list_collections` carries `newest_upload`
+  and, when an owner has run one, `quality` (`coverage_hit_at_5`, `report_age`,
+  `stale`). `python scripts/clio_cli.py coverage -c Policies` prints the full
+  retrieval coverage report (weakest documents and the searches that missed);
+  `--run` refreshes it and needs ownership. It scores how *findable* content is,
+  not whether answers are right; a stale or low score means verify passages
+  before relying on them.
+
   (`GET /documents/export` is the same CSV or JSON Lines over HTTP.)
 - Quarantined documents are not counted or listed. A count of `0` chunks for a
   spreadsheet is normal: tables are queried with `query_table`, not embedded.
