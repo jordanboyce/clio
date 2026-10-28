@@ -296,10 +296,32 @@ class _Search:
             logger.warning(f"Coverage probe search failed: {e}")
             return None
         results = out.get("results") or []
+        # Near-duplicate collapse folds a copy's result into the best-ranked
+        # one and lists the copy under ``duplicates``. The copy's text WAS
+        # retrieved at that rank, so a probe for its document is credited
+        # there instead of reading as a miss.
+        duplicates_at: Dict[str, int] = {}
+        for rank, r in enumerate(results, 1):
+            for d in (getattr(r, "duplicates", None) or []):
+                did = d.get("document_id")
+                if did and did not in duplicates_at:
+                    duplicates_at[did] = rank
         return {"chunk_ids": [r.chunk_id for r in results],
                 "document_ids": [r.document_id for r in results],
+                "duplicates_at": duplicates_at,
                 "ms": (time.perf_counter() - started) * 1000.0,
                 "reranked": bool((out.get("retrieval") or {}).get("reranked"))}
+
+
+def _document_rank(got: Dict[str, Any], wanted: Sequence[str]) -> Optional[int]:
+    """Best 1-based rank at which any ``wanted`` document's text surfaced,
+    whether as its own result or listed as a collapsed duplicate."""
+    rank = rm.first_rank(wanted, got["document_ids"])
+    dup = min((got["duplicates_at"][w] for w in wanted
+               if w in (got.get("duplicates_at") or {})), default=None)
+    if rank is None:
+        return dup
+    return rank if dup is None else min(rank, dup)
 
 
 def _preview(text: str) -> str:
@@ -338,7 +360,7 @@ def _owner_results(store, questions: List[dict], search: _Search, deadline: floa
             if got is None:
                 item["status"] = "search_error"
             else:
-                rank = rm.first_rank(live, got["document_ids"])
+                rank = _document_rank(got, live)
                 item.update(status="hit" if rm.hit_at(rank, 5) else "miss", document_rank=rank)
                 ranks.append(rank)
         items.append(item)
@@ -428,7 +450,7 @@ def run_coverage(indexer, *, probes: int = DEFAULT_PROBES, seed: int = DEFAULT_S
             "filename": chunk_rows[chunk_id].get("filename"),
             "query": query, "method": method,
             "chunk_rank": rm.first_rank([chunk_id], got["chunk_ids"]),
-            "document_rank": rm.first_rank([doc_id], got["document_ids"]),
+            "document_rank": _document_rank(got, [doc_id]),
             "ms": got["ms"], "reranked": got["reranked"],
         })
         if progress:

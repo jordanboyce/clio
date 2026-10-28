@@ -117,7 +117,8 @@ def test_probe_queries_are_deterministic_for_a_seed(indexer):
     real, seen = indexer.search, []
 
     def spy(query, *a, **k):
-        seen.append(query)
+        if not k.get("_widen"):              # the duplicate-collapse backfill pass re-enters search
+            seen.append(query)
         return real(query, *a, **k)
 
     indexer.search = spy
