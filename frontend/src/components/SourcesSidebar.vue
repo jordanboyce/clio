@@ -1032,6 +1032,11 @@ import { useSelectionStore } from '../stores/selectionStore'
 import { useStatsStore } from '../stores/statsStore'
 import { formatBytes, describeStorage } from '../utils/format'
 import { describeFile, FAMILIES, isTabularFile } from '../utils/fileTypes'
+import { useCustomFileTypesStore } from '../stores/customFileTypesStore'
+
+// Registered custom types: loaded once, shared with the app shell.
+const customTypes = useCustomFileTypesStore()
+customTypes.load()
 
 const emit = defineEmits(['document-deleted', 'open', 'background-job-started', 'clone-collection'])
 
@@ -1505,7 +1510,9 @@ const openFolderPicker = async () => {
           }
         }
       } else {
-        indexError.value = 'No supported files found in that folder.'
+        indexError.value = customTypes.accepted.length
+          ? `No supported files found in that folder (including ${customTypes.accepted.join(', ')}).`
+          : 'No supported files found in that folder.'
       }
     }
   } catch (err) {
