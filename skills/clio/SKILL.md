@@ -46,6 +46,11 @@ given that collection, so report it instead of working around it.
 6. `list_changes` and `list_recent_documents` show what is new when freshness
    matters. Results carry a corpus version; if it changed between calls,
    re-run the search.
+7. A result with `superseded_by` is from an older version that a newer document
+   replaced. Prefer the current version and say so when you cite the old one;
+   pass `filters: {"include_superseded": true}` only when asked what the older
+   version said. `duplicates` / `duplicate_count` list other files containing the
+   same text: copies are not independent confirmation.
 
 ## Count and list files
 

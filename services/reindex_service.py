@@ -68,6 +68,26 @@ def normalize_reindex_extensions(extensions: Any) -> List[str]:
     return wanted
 
 
+def _safe_supersede_marks(store) -> list:
+    """Owners' 'replaced by' marks, read before a reindex rebuilds the table.
+    A reindex must not fail because of this bookkeeping."""
+    try:
+        return store.list_supersede_marks()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Could not read 'replaced by' marks before reindex: {e}")
+        return []
+
+
+def _safe_restore_supersede_marks(store, marks: list) -> None:
+    if not marks:
+        return
+    try:
+        restored = store.restore_supersede_marks(marks)
+        logger.info(f"Restored {restored}/{len(marks)} 'replaced by' marks after reindex")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Could not restore 'replaced by' marks after reindex: {e}")
+
+
 class ReindexService:
     """Manages document re-indexing operations."""
 
@@ -302,6 +322,9 @@ class ReindexService:
 
             # Clear existing index AFTER getting the document list
             logger.info(f"Clearing existing index for collection {collection_id} (job {job_id})")
+            # Owners' "replaced by" calls live in the table clear_index empties;
+            # document ids are content hashes, so they can be put back below.
+            supersede_marks = _safe_supersede_marks(vector_store.metadata_store)
             vector_store.clear_index()
 
             # Process each document
@@ -340,6 +363,8 @@ class ReindexService:
                 except Exception as e:
                     logger.error(f"Failed to process {doc_path.name}: {e}")
                     continue
+
+            _safe_restore_supersede_marks(vector_store.metadata_store, supersede_marks)
 
             # Save the index to disk
             logger.info("Saving re-indexed data to disk...")
@@ -430,6 +455,10 @@ class ReindexService:
                 f"{', '.join(extensions)} in collection {collection_id}"
             )
 
+            # Owners' "replaced by" marks survive the swaps: each swap rebuilds
+            # the document row, which would otherwise drop superseded_by/at/note.
+            supersede_marks = _safe_supersede_marks(metadata_store)
+
             failures: List[str] = []
             for idx, doc_info in enumerate(document_list, 1):
                 doc_path = doc_info["path"]
@@ -442,6 +471,8 @@ class ReindexService:
                 except Exception as e:
                     logger.error(f"Failed to re-index {doc_path.name}: {e}")
                     failures.append(f"{doc_path.name}: {e}")
+
+            _safe_restore_supersede_marks(metadata_store, supersede_marks)
 
             indexer.save_index()
 
@@ -788,6 +819,9 @@ class ReindexService:
 
             # Clear existing index AFTER getting the document list
             logger.info(f"Clearing existing index for re-indexing job {job_id}")
+            # Owners' "replaced by" calls live in the table clear_index empties;
+            # document ids are content hashes, so they can be put back below.
+            supersede_marks = _safe_supersede_marks(vector_store.metadata_store)
             vector_store.clear_index()
 
             # Process each document
@@ -826,6 +860,8 @@ class ReindexService:
                 except Exception as e:
                     logger.error(f"Failed to process {doc_path.name}: {e}")
                     continue
+
+            _safe_restore_supersede_marks(vector_store.metadata_store, supersede_marks)
 
             # Save the index to disk
             logger.info("Saving re-indexed data to disk...")

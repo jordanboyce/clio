@@ -11,7 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Current schema version - increment when making breaking changes
-SCHEMA_VERSION = "3.7"
+SCHEMA_VERSION = "3.8"
 
 # v3.3 governance columns on the documents table, in migration order.
 _GOVERNANCE_DOC_COLUMNS = [
@@ -166,7 +166,12 @@ class MetadataStore:
                     -- v3.4: bytes of the source file (per-collection storage cap)
                     file_size INTEGER DEFAULT NULL,
                     -- v3.7: injection-warning review outcome ('dismissed' or NULL)
-                    injection_review TEXT DEFAULT NULL
+                    injection_review TEXT DEFAULT NULL,
+                    -- v3.8: 'replaced by' relationship (document_id of the
+                    -- current version, when an owner marked this one older)
+                    superseded_by TEXT DEFAULT NULL,
+                    superseded_at TEXT DEFAULT NULL,
+                    superseded_note TEXT DEFAULT NULL
                 )
             """)
 
@@ -249,6 +254,11 @@ class MetadataStore:
             if current_version == "3.6":
                 self._migrate_to_v3_7(conn)
                 current_version = "3.7"
+
+            # Migration from 3.7 to 3.8 ('replaced by' relationship)
+            if current_version == "3.7":
+                self._migrate_to_v3_8(conn)
+                current_version = "3.8"
 
             # Update schema version
             conn.execute("""
@@ -459,6 +469,25 @@ class MetadataStore:
         if "injection_review" not in self._get_table_columns(conn, "documents"):
             conn.execute("ALTER TABLE documents ADD COLUMN injection_review TEXT DEFAULT NULL")
             logger.info("Added column injection_review to documents table")
+
+    _SUPERSEDE_COLUMNS = (
+        ("superseded_by", "TEXT DEFAULT NULL"),
+        ("superseded_at", "TEXT DEFAULT NULL"),
+        ("superseded_note", "TEXT DEFAULT NULL"),
+    )
+
+    def _migrate_to_v3_8(self, conn: sqlite3.Connection):
+        """Migrate to v3.8: an owner can mark a document as replaced by another.
+
+        ``superseded_by`` is the document_id of the current version; retrieval
+        demotes (never hides) the older document and labels results with the
+        replacement. Additive, nullable columns.
+        """
+        existing = self._get_table_columns(conn, "documents")
+        for column, ddl in self._SUPERSEDE_COLUMNS:
+            if column not in existing:
+                conn.execute(f"ALTER TABLE documents ADD COLUMN {column} {ddl}")
+        logger.info("Added superseded_* columns to documents table")
 
     def _backfill_entities(self, max_per_chunk: int = 20) -> int:
         """Extract entities for every chunk that has none yet.
@@ -805,6 +834,10 @@ class MetadataStore:
             logger.warning("Running defensive v3.7 migration - injection_review column missing")
             self._migrate_to_v3_7(conn)
             migrated = True
+        if "superseded_by" not in self._get_table_columns(conn, "documents"):
+            logger.warning("Running defensive v3.8 migration - superseded_by column missing")
+            self._migrate_to_v3_8(conn)
+            migrated = True
         if migrated:
             conn.execute("""
                 INSERT OR REPLACE INTO schema_info (key, value)
@@ -1142,6 +1175,16 @@ class MetadataStore:
                 WHERE document_id = ?
             """, (document_id,))
 
+            # Anything that was marked as replaced by this document is current
+            # again: a pointer at a document that no longer exists would
+            # demote a version nothing supersedes.
+            if "superseded_by" in self._get_table_columns(conn, "documents"):
+                conn.execute(
+                    "UPDATE documents SET superseded_by = NULL, superseded_at = NULL, "
+                    "superseded_note = NULL WHERE superseded_by = ?",
+                    (document_id,),
+                )
+
             conn.commit()
 
         logger.info(f"Deleted {deleted} chunks for document {document_id}")
@@ -1171,18 +1214,20 @@ class MetadataStore:
         """The corpus_version token, computed on an open connection."""
         row = conn.execute(
             """SELECT COUNT(*), COALESCE(MAX(upload_timestamp), ''), COALESCE(SUM(num_chunks), 0),
-                      COALESCE(SUM(CASE WHEN policy_status = 'quarantined' THEN 1 ELSE 0 END), 0)
+                      COALESCE(SUM(CASE WHEN policy_status = 'quarantined' THEN 1 ELSE 0 END), 0),
+                      COALESCE(SUM(CASE WHEN superseded_by IS NOT NULL THEN 1 ELSE 0 END), 0)
                  FROM documents"""
         ).fetchone()
-        return f"{row[0]}:{row[1]}:{row[2]}:{row[3]}"
+        return f"{row[0]}:{row[1]}:{row[2]}:{row[3]}:{row[4]}"
 
     def corpus_version(self) -> str:
         """A cheap token that changes whenever the corpus does.
 
-        Document count, newest upload timestamp, chunk total and the number
-        of hidden (quarantined) rows — one aggregate over the small documents
-        table. Adding, replacing, deleting or quarantining a source moves at
-        least one of them, which is what the answer cache keys on.
+        Document count, newest upload timestamp, chunk total, the number of
+        hidden (quarantined) rows and the number of superseded rows — one
+        aggregate over the small documents table. Adding, replacing, deleting,
+        quarantining or superseding a source moves at least one of them, which
+        is what the answer cache keys on.
         """
         with sqlite_connect(self.db_path) as conn:
             return self.corpus_token(conn)
@@ -1327,7 +1372,8 @@ class MetadataStore:
                 f"SELECT {self._DOC_LIST_COLUMNS}, d.file_size FROM documents d {where} "
                 f"ORDER BY {order} LIMIT ? OFFSET ?", list(params) + [limit, offset],
             ).fetchall()
-            return [self._document_row_to_dict(r) for r in rows], int(total)
+            docs = self._attach_replacement_names(conn, [self._document_row_to_dict(r) for r in rows])
+            return docs, int(total)
 
     def collection_stats(self, document_ids: Optional[List[str]] = None,
                          top_extensions: int = 25, largest: int = 5) -> dict:
@@ -1424,7 +1470,10 @@ class MetadataStore:
                     d.sensitivity,
                     d.policy_status,
                     d.policy_flags,
-                    d.injection_review"""
+                    d.injection_review,
+                    d.superseded_by,
+                    d.superseded_at,
+                    d.superseded_note"""
 
     def list_documents_page(self, limit: int, offset: int = 0, q: str = "",
                             keys: Optional[List[str]] = None) -> List[dict]:
@@ -1447,7 +1496,8 @@ class MetadataStore:
                 ORDER BY COALESCE(d.upload_timestamp, '1970-01-01') DESC, d.document_id
                 LIMIT ? OFFSET ?
             """, params)
-            return [self._document_row_to_dict(row) for row in cursor.fetchall()]
+            return self._attach_replacement_names(
+                conn, [self._document_row_to_dict(row) for row in cursor.fetchall()])
 
     def list_documents(self) -> List[dict]:
         """
@@ -1472,7 +1522,8 @@ class MetadataStore:
                 FROM documents d
                 ORDER BY COALESCE(d.upload_timestamp, '1970-01-01') DESC
             """)
-            return [self._document_row_to_dict(row) for row in cursor.fetchall()]
+            return self._attach_replacement_names(
+                conn, [self._document_row_to_dict(row) for row in cursor.fetchall()])
 
     def list_documents_by_policy_status(self, statuses) -> List[dict]:
         """Documents whose policy_status is in ``statuses`` (the review queue)."""
@@ -1540,6 +1591,165 @@ class MetadataStore:
             self._ensure_v3_1_columns(conn)
             conn.execute(f"UPDATE documents SET {', '.join(updates)} WHERE document_id = ?", params)
             conn.commit()
+
+    # ── "Replaced by" relationships ────────────────────────────────────────
+    # An owner says "document A is superseded by document B" (a policy's v3
+    # replaces v2). Retrieval demotes A and labels it; nothing is hidden. The
+    # pointer lives on A's row, so it is cleared when B is deleted and
+    # carried across A's re-index (see add_documents).
+
+    def set_document_superseded(self, document_id: str, replaced_by: str,
+                                note: Optional[str] = None,
+                                at: Optional[str] = None) -> dict:
+        """Mark ``document_id`` as replaced by ``replaced_by``.
+
+        Raises KeyError when either document is not in this collection and
+        ValueError for self-reference or a cycle (A→B while B→…→A).
+        """
+        from datetime import datetime, timezone
+
+        if document_id == replaced_by:
+            raise ValueError("A document cannot replace itself")
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            for doc_id in (document_id, replaced_by):
+                if not conn.execute(
+                    "SELECT 1 FROM documents WHERE document_id = ?", (doc_id,)
+                ).fetchone():
+                    raise KeyError(doc_id)
+            # Walk the replacement's own chain; reaching `document_id` would
+            # close a loop and leave no current version.
+            seen, cursor = {document_id}, replaced_by
+            while cursor:
+                if cursor in seen:
+                    raise ValueError("That would make documents replace each other in a loop")
+                seen.add(cursor)
+                row = conn.execute(
+                    "SELECT superseded_by FROM documents WHERE document_id = ?", (cursor,)
+                ).fetchone()
+                cursor = row[0] if row else None
+            note = (note or "").strip()[:500] or None
+            stamp = at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+            conn.execute(
+                "UPDATE documents SET superseded_by = ?, superseded_at = ?, superseded_note = ? "
+                "WHERE document_id = ?",
+                (replaced_by, stamp, note, document_id),
+            )
+            conn.commit()
+        return {"document_id": document_id, "superseded_by": replaced_by,
+                "superseded_at": stamp, "superseded_note": note}
+
+    def clear_document_superseded(self, document_id: str) -> bool:
+        """Remove the mark. True when there was one to remove."""
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            cur = conn.execute(
+                "UPDATE documents SET superseded_by = NULL, superseded_at = NULL, "
+                "superseded_note = NULL WHERE document_id = ? AND superseded_by IS NOT NULL",
+                (document_id,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def get_supersede_info(self, document_ids) -> Dict[str, dict]:
+        """``{document_id: {document_id, filename, note, at}}`` of the *live*
+        replacement for each given document that has one.
+
+        A relationship is live only when the replacement still exists and is
+        servable: a quarantined replacement must not leak its name, and
+        demoting a document in favour of something nobody can read helps no
+        one. Dangling or held pointers therefore read as "not replaced".
+        """
+        from services.content_policy import HIDDEN_STATUSES
+
+        wanted = list(dict.fromkeys(d for d in document_ids if d))
+        out: Dict[str, dict] = {}
+        if not wanted:
+            return out
+        marks = ", ".join("?" for _ in HIDDEN_STATUSES)
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            for start in range(0, len(wanted), self._IN_CLAUSE_BATCH - len(HIDDEN_STATUSES)):
+                batch = wanted[start:start + self._IN_CLAUSE_BATCH - len(HIDDEN_STATUSES)]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(
+                    f"SELECT d.document_id, t.document_id, t.filename, d.superseded_note, "
+                    f"d.superseded_at FROM documents d "
+                    f"JOIN documents t ON t.document_id = d.superseded_by "
+                    f"WHERE d.document_id IN ({placeholders}) "
+                    f"AND COALESCE(t.policy_status, 'clear') NOT IN ({marks})",
+                    list(batch) + list(HIDDEN_STATUSES),
+                ).fetchall()
+                for doc_id, target_id, target_name, note, at in rows:
+                    out[doc_id] = {"document_id": target_id, "filename": target_name,
+                                   "note": note, "at": at}
+        return out
+
+    def _attach_replacement_names(self, conn: sqlite3.Connection, docs: List[dict]) -> List[dict]:
+        """Add ``superseded_by_filename`` to listing rows, and blank a pointer
+        whose target is gone or held (see get_supersede_info)."""
+        from services.content_policy import HIDDEN_STATUSES
+
+        targets = list(dict.fromkeys(d["superseded_by"] for d in docs if d.get("superseded_by")))
+        names: Dict[str, str] = {}
+        for start in range(0, len(targets), self._IN_CLAUSE_BATCH - len(HIDDEN_STATUSES)):
+            batch = targets[start:start + self._IN_CLAUSE_BATCH - len(HIDDEN_STATUSES)]
+            placeholders = ",".join("?" for _ in batch)
+            marks = ", ".join("?" for _ in HIDDEN_STATUSES)
+            for doc_id, filename in conn.execute(
+                f"SELECT document_id, filename FROM documents WHERE document_id IN ({placeholders}) "
+                f"AND COALESCE(policy_status, 'clear') NOT IN ({marks})",
+                list(batch) + list(HIDDEN_STATUSES),
+            ).fetchall():
+                names[doc_id] = filename
+        for d in docs:
+            target = d.get("superseded_by")
+            if target and target in names:
+                d["superseded_by_filename"] = names[target]
+            elif target:
+                d["superseded_by"] = d["superseded_at"] = d["superseded_note"] = None
+        return docs
+
+    def list_supersede_marks(self) -> List[dict]:
+        """Every raw mark (including dangling ones), for the reindex jobs that
+        rebuild the documents table and must put the owners' calls back."""
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            rows = conn.execute(
+                "SELECT document_id, superseded_by, superseded_at, superseded_note "
+                "FROM documents WHERE superseded_by IS NOT NULL"
+            ).fetchall()
+        return [{"document_id": r[0], "superseded_by": r[1], "superseded_at": r[2],
+                 "superseded_note": r[3]} for r in rows]
+
+    def restore_supersede_marks(self, marks: List[dict]) -> int:
+        """Re-apply marks from list_supersede_marks once both documents are
+        back. Marks whose documents did not come back are dropped."""
+        restored = 0
+        for m in marks or []:
+            try:
+                self.set_document_superseded(
+                    m["document_id"], m["superseded_by"],
+                    note=m.get("superseded_note"), at=m.get("superseded_at"),
+                )
+                restored += 1
+            except (KeyError, ValueError):
+                continue
+        return restored
+
+    def get_leading_text(self, max_chunks: int = 3, max_chars: int = 6000) -> Dict[str, str]:
+        """``{document_id: first few chunks joined}`` for the suggestion
+        detector. Bounded per document; one pass over chunk_index < max_chunks."""
+        out: Dict[str, List[str]] = {}
+        with sqlite_connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT document_id, text FROM chunks WHERE chunk_index < ? "
+                "ORDER BY document_id, page_number, chunk_index",
+                (max_chunks,),
+            ).fetchall()
+        for doc_id, text in rows:
+            out.setdefault(doc_id, []).append(text or "")
+        return {k: " ".join(v)[:max_chars] for k, v in out.items()}
 
     def add_document(self, document_id: str, filename: str, num_pages: int,
                      num_chunks: int, upload_timestamp: str,
@@ -1621,19 +1831,27 @@ class MetadataStore:
                     batch = ids[i:i + self._IN_CLAUSE_BATCH]
                     placeholders = ",".join("?" * len(batch))
                     rows = conn.execute(
-                        f"SELECT document_id, policy_status, injection_review "
+                        f"SELECT document_id, policy_status, injection_review, "
+                        f"superseded_by, superseded_at, superseded_note "
                         f"FROM documents WHERE document_id IN ({placeholders})",
                         batch,
                     ).fetchall()
-                    prior.update({r[0]: (r[1], r[2]) for r in rows})
+                    prior.update({r[0]: tuple(r[1:]) for r in rows})
             except sqlite3.OperationalError as e:
                 # Pre-v3.7 DB mid-migration: skip preservation, never block ingest.
                 logger.warning(f"Could not read prior review decisions: {e}")
                 prior = {}
             for doc in documents:
-                old_status, old_review = prior.get(doc["document_id"], (None, None))
+                old_status, old_review, *old_supersede = prior.get(
+                    doc["document_id"], (None, None, None, None, None)
+                )
                 if old_review and not doc.get("injection_review"):
                     doc["injection_review"] = old_review
+                # Same reasoning for "replaced by": an owner's call about a
+                # document must outlive its re-index (the id is the content
+                # hash, so the row being replaced holds the same bytes).
+                if old_supersede and old_supersede[0] and not doc.get("superseded_by"):
+                    doc["superseded_by"], doc["superseded_at"], doc["superseded_note"] = old_supersede
                 if old_status == "approved" and (doc.get("policy_status") or "clear") in (
                     "flagged", "quarantined",
                 ):
@@ -1645,8 +1863,8 @@ class MetadataStore:
                  source_format, extraction_method, embedding_model, chunk_size,
                  chunk_overlap, schema_version, source_path, source_type, injection_warnings,
                  uploaded_by, content_hash, sensitivity, policy_status, policy_flags, file_size,
-                 injection_review)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 injection_review, superseded_by, superseded_at, superseded_note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
                 (
                     doc["document_id"],
@@ -1670,6 +1888,9 @@ class MetadataStore:
                     json.dumps(doc["policy_flags"]) if doc.get("policy_flags") else None,
                     doc.get("file_size"),
                     doc.get("injection_review"),
+                    doc.get("superseded_by"),
+                    doc.get("superseded_at"),
+                    doc.get("superseded_note"),
                 )
                 for doc in documents
             ])
@@ -1770,7 +1991,8 @@ class MetadataStore:
                        source_format, extraction_method, embedding_model, chunk_size,
                        chunk_overlap, schema_version, source_path, source_type,
                        uploaded_by, content_hash, sensitivity, policy_status, policy_flags,
-                       injection_warnings, injection_review
+                       injection_warnings, injection_review,
+                       superseded_by, superseded_at, superseded_note
                 FROM documents
                 WHERE document_id = ?
             """, (document_id,))

@@ -1496,6 +1496,10 @@ async def list_documents(
                 sensitivity_effective=governance.effective_sensitivity(collection, doc.get("sensitivity")),
                 policy_status=doc.get("policy_status") or "clear",
                 policy_flags=doc.get("policy_flags"),
+                superseded_by=doc.get("superseded_by"),
+                superseded_by_filename=doc.get("superseded_by_filename"),
+                superseded_at=doc.get("superseded_at"),
+                superseded_note=doc.get("superseded_note"),
             )
             doc_metadata_list.append(doc_metadata)
 
@@ -1753,6 +1757,13 @@ async def get_document_chunks(
         total_chunks = doc_info.get("num_chunks", len(chunk_views))
         extraction_method = doc_info.get("extraction_method")
 
+        # "Replaced by", for the inspector header. Best effort like the rest.
+        replaced_by = None
+        try:
+            replaced_by = metadata_store.get_supersede_info([document_id]).get(document_id)
+        except Exception as e:  # noqa: BLE001 - never fail the listing
+            logger.warning(f"Failed to load replacement for {document_id}: {e}")
+
         return DocumentChunksResponse(
             document_id=document_id,
             filename=doc_info.get("filename", ""),
@@ -1760,6 +1771,8 @@ async def get_document_chunks(
             total_chunks=total_chunks,
             returned_chunks=len(chunk_views),
             chunks=chunk_views,
+            superseded_by=({"document_id": replaced_by["document_id"],
+                            "filename": replaced_by["filename"]} if replaced_by else None),
         )
 
     except HTTPException:
@@ -1842,6 +1855,135 @@ def set_chunk_boost(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to set chunk boost: {str(e)}",
+        )
+
+
+class SupersedeRequest(BaseModel):
+    """Body for marking a document as replaced by another."""
+
+    replaced_by: str = Field(..., min_length=1, description="document_id of the current version")
+    note: Optional[str] = Field(None, max_length=500, description="Optional reason shown with the label")
+
+
+def _supersede_gates(collection_id: str, *document_ids: str):
+    """The gates every supersede write passes, in order: write access, the
+    collection (read scope + existence), then each document must exist in
+    *this* collection and be servable (a quarantined document never takes
+    part, so its name cannot leak through the label). Returns the metadata
+    store."""
+    _require_write(collection_id)
+    try:
+        indexer = get_indexer(collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    store = indexer.vector_store.metadata_store
+    for index, document_id in enumerate(document_ids):
+        doc_info = store.get_document_info(document_id)
+        if not doc_info:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document {document_id} not found in this collection",
+            )
+        # The replacement's name is shown next to the old document in search,
+        # so it must be readable by everyone: not even an admin may name a
+        # held document there.
+        governance.assert_document_servable(doc_info, allow_admin=(index == 0))
+    return store
+
+
+@router.get(
+    "/documents/supersede-suggestions",
+    summary="Likely 'replaced by' pairs (v2/v3, copies, identical text)",
+    tags=["documents"],
+)
+def supersede_suggestions(collection_id: str = "default", limit: int = 50) -> dict:
+    """Pairs of documents that look like old and new versions of one file.
+
+    Detected from file names (a version, year or revision token, or a
+    "(1)" / "- Copy" suffix) and from identical opening text under different
+    bytes. These are suggestions only: nothing is applied until an owner
+    confirms one with POST /documents/{id}/supersede. Read access suffices.
+    """
+    try:
+        indexer = get_indexer(collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    from services import supersede
+
+    store = indexer.vector_store.metadata_store
+    try:
+        docs = governance.visible_documents(store.list_documents())
+        leading = store.get_leading_text() if len(docs) <= 5000 else {}
+        visible = {d["document_id"] for d in docs}
+        leading = {k: v for k, v in leading.items() if k in visible}
+        found = supersede.suggest_supersessions(docs, leading, limit=max(1, min(limit, 200)))
+    except Exception as e:  # noqa: BLE001 - a helper, never a failure
+        logger.warning(f"Supersede suggestions failed for {collection_id}: {e}")
+        found = []
+    return {"collection_id": collection_id, "suggestions": found}
+
+
+@router.post(
+    "/documents/{document_id}/supersede",
+    status_code=status.HTTP_200_OK,
+    summary="Mark a document as replaced by a newer one",
+    tags=["documents"],
+)
+def supersede_document(
+    document_id: str,
+    body: SupersedeRequest,
+    collection_id: str = "default",
+):
+    """Say that ``replaced_by`` is the current version of this document.
+
+    Search then ranks the older document below equally relevant current text
+    and labels its passages with the replacement; it is never hidden, and a
+    search can ask for it with ``filters.include_superseded``. Both documents
+    must be in this collection; a document cannot replace itself or close a
+    loop. Write-gated and audited like any source change.
+    """
+    try:
+        _supersede_gates(collection_id, document_id, body.replaced_by)
+        try:
+            row = governance.set_document_superseded(
+                collection_id, document_id, body.replaced_by, body.note)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except KeyError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail=f"Document {e.args[0]} not found in this collection")
+        return row
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to mark {document_id} as superseded: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to mark document as replaced: {str(e)}",
+        )
+
+
+@router.delete(
+    "/documents/{document_id}/supersede",
+    status_code=status.HTTP_200_OK,
+    summary="Clear a document's 'replaced by' mark",
+    tags=["documents"],
+)
+def clear_document_supersede(document_id: str, collection_id: str = "default"):
+    """Make the document current again. Idempotent."""
+    try:
+        _supersede_gates(collection_id, document_id)
+        return governance.clear_document_superseded(collection_id, document_id)
+    except HTTPException:
+        raise
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"Document {document_id} not found in this collection")
+    except Exception as e:
+        logger.error(f"Failed to clear replacement for {document_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to clear the replaced mark: {str(e)}",
         )
 
 

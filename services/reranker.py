@@ -408,6 +408,7 @@ class CrossEncoderReranker:
         items: Sequence[Any],
         top_k: int,
         text_getter: Optional[Callable[[Any], str]] = None,
+        score_sink: Optional[dict] = None,
     ) -> tuple[List[Any], bool]:
         """`rerank`, plus whether the cross-encoder actually ran.
 
@@ -417,6 +418,10 @@ class CrossEncoderReranker:
         contract: a cross-encoder pass is pure CPU, so under a burst of
         agent calls the honest choice is a slightly less precise ordering
         now rather than every search queueing behind the reranker.
+
+        ``score_sink``, when given, receives ``{id(item): raw score}`` for
+        every item scored, so a later adjustment (demoting superseded
+        documents) can work on the scale that actually decided the order.
         """
         items = list(items)
         if not items or top_k <= 0:
@@ -436,6 +441,9 @@ class CrossEncoderReranker:
         try:
             texts = [getter(it) or "" for it in items]
             scores = self._scores(model, query, texts)
+            if score_sink is not None:
+                for it, sc in zip(items, scores):
+                    score_sink[id(it)] = sc
             order = sorted(range(len(items)), key=lambda i: scores[i], reverse=True)
             ranked = [items[i] for i in order[:top_k]]
             logger.info(
