@@ -234,7 +234,7 @@ class QueryOutcome:
     def reciprocal_rank(self) -> Optional[float]:
         if self.units == 0:
             return None
-        return (1.0 / min(self.hit_ranks)) if self.hit_ranks else 0.0
+        return _metrics.reciprocal_rank(min(self.hit_ranks) if self.hit_ranks else None)
 
 
 def score_results(corpus: Corpus, query: dict, result_ids: Sequence[str]) -> List[int]:
@@ -249,18 +249,14 @@ def score_results(corpus: Corpus, query: dict, result_ids: Sequence[str]) -> Lis
     return ranks
 
 
-def percentile(values: Sequence[float], pct: float) -> float:
-    if not values:
-        return float("nan")
-    ordered = sorted(values)
-    k = (len(ordered) - 1) * pct
-    lo, hi = int(k), min(int(k) + 1, len(ordered) - 1)
-    return ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo)
+# The rank arithmetic is shared with the per-collection coverage report
+# (services/coverage_report.py), so both quote numbers computed one way.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+from services import retrieval_metrics as _metrics  # noqa: E402
 
-
-def _mean(values: Iterable[Optional[float]]) -> Optional[float]:
-    vals = [v for v in values if v is not None]
-    return sum(vals) / len(vals) if vals else None
+percentile = _metrics.percentile
+_mean = _metrics.mean
 
 
 @dataclass

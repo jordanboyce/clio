@@ -42,6 +42,9 @@ ACTIONS: List[str] = [
     "collection.published",
     "collection.exported",      # bundle downloaded (with/without originals)
     "collection.imported",      # collection created from a bundle
+    "coverage.run",             # retrieval coverage report started
+    "coverage.question_add",    # owner question added to the coverage report
+    "coverage.question_delete",
     "share.create",
     "share.accept",
     "share.revoke",

@@ -222,6 +222,14 @@ class Settings(BaseSettings):
     enable_chunk_boosts: bool = True
     chunk_boost_weight: float = 0.5        # scales the stored boost (-1..1)
 
+    # Retrieval coverage report (services/coverage_report.py). Probe queries
+    # are derived from the collection's own chunks with no model. Setting
+    # this on lets the deployment's default chat model write natural
+    # questions from the sampled chunks instead (sent to that provider, so
+    # off by default; air-gapped mode only ever reaches a local one). Any
+    # model failure falls back to the heuristic probes and the report says so.
+    coverage_llm_questions: bool = False
+
 
     # Server configuration. The default binds loopback only: the app has no
     # auth unless AUTH_PASSWORD is set, so reaching the network has to be a
