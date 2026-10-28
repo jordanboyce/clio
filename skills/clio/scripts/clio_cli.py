@@ -267,7 +267,11 @@ def cmd_upload(c: Client, a) -> Any:
 def cmd_reindex(c: Client, a) -> Any:
     """Rebuild a collection's index with the embedding model now in use."""
     cid = resolve_collection(c, a.collection)
-    started = c.post_json(f"/api/collections/{cid}/reindex", {})
+    if a.ext:
+        # Only the files of these types, e.g. after changing a custom type's profile.
+        started = c.post_json(f"/api/collections/{cid}/reindex-extensions", {"extensions": a.ext})
+    else:
+        started = c.post_json(f"/api/collections/{cid}/reindex", {})
     result = {"collection_id": cid, "job_id": started.get("job_id")}
     if a.no_wait:
         return result
@@ -455,6 +459,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_files)
     s = sub.add_parser("reindex", help="rebuild a collection's index with the current embedding model")
     s.add_argument("--collection", "-c", default="default")
+    s.add_argument("--ext", action="append", metavar="EXT",
+                   help="re-index only files with this extension (repeatable), e.g. --ext .acme; "
+                        "everything else is left untouched")
     s.add_argument("--no-wait", action="store_true")
     s.add_argument("--poll", type=float, default=2.0)
     s.set_defaults(fn=cmd_reindex)

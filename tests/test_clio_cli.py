@@ -23,6 +23,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     export_query = ""
     job_summary = {"ok": 1}
     reindex_polls = 0
+    types = []                 # GET /api/custom-file-types
+    suggest_raw = b""          # the multipart body last posted to suggest
+    suggest_body = None        # what POST /api/custom-file-types/suggest answers
+    ext_body = None            # JSON body of the last reindex-extensions POST
+    put_seen = None            # (path, parsed JSON body) of the last PUT
 
     def log_message(self, *a):  # silence
         pass
@@ -67,6 +72,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self.path.startswith("/documents/upload/7/status"):
             return self._send(200, {"status": "completed", "processed_files": 1,
                                     "total_files": 1, "result_summary": _Handler.job_summary})
+        if self.path == "/api/custom-file-types":
+            return self._send(200, {"types": _Handler.types})
         if self.path.startswith("/api/reindex/status"):
             _Handler.reindex_polls += 1
             done = _Handler.reindex_polls >= 2
@@ -85,6 +92,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/documents/index-local-async":
             assert json.loads(body)["file_paths"] == ["/app/data/a.md"]
             return self._send(202, {"job_id": 7})
+        if self.path == "/api/custom-file-types/suggest":
+            _Handler.suggest_raw = body
+            return self._send(200, _Handler.suggest_body)
+        if self.path.endswith("/reindex-extensions"):
+            _Handler.ext_body = json.loads(body.decode())
+            return self._send(200, {"job_id": 12, "status": "started"})
         if self.path.endswith("/reindex"):
             return self._send(200, {"job_id": 11, "status": "started"})
         if self.path.startswith("/search"):
@@ -93,12 +106,29 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 "text_snippet": "rotate every 90 days"}]})
         self._send(404, {"detail": "nope"})
 
+    def do_PUT(self):
+        n = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(n).decode() or "null")
+        if self.headers.get("Authorization") != "Bearer good":
+            return self._send(401, {"detail": "Not authenticated"})
+        if self.path.startswith("/api/custom-file-types/"):
+            _Handler.put_seen = (self.path, body)
+            return self._send(200, {"profile": {"extension": self.path.rsplit("/", 1)[1], **body,
+                                                "enabled": True},
+                                    "reading_changed": True, "affected_documents": 0, "usage": None})
+        self._send(404, {"detail": "nope"})
+
 
 @pytest.fixture
 def server():
     _Handler.seen = []
     _Handler.job_summary = {"ok": 1}
     _Handler.reindex_polls = 0
+    _Handler.types = []
+    _Handler.suggest_body = None
+    _Handler.suggest_raw = b""
+    _Handler.put_seen = None
+    _Handler.ext_body = None
     srv = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{srv.server_port}"
@@ -237,19 +267,20 @@ def test_reindex_no_wait_returns_the_job_id(server, monkeypatch, capsys):
     assert _Handler.reindex_polls == 0
 
 
+def test_reindex_ext_sends_only_the_extension_scope(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", server, "--json", "reindex", "-c", "Policies", "--ext", ".acme",
+                     "--ext", ".cfgx", "--no-wait"]) == 0
+    assert json.loads(capsys.readouterr().out)["job_id"] == 12
+    assert _Handler.ext_body == {"extensions": [".acme", ".cfgx"]}
+
+
 def test_types_lists_registered_types(server, monkeypatch, capsys):
     monkeypatch.setenv("CLIO_TOKEN", "good")
-    # Override the handler to return types
-    def do_GET_types(self):
-        if self.path == "/api/custom-file-types":
-            self._send(200, {"types": [
-                {"extension": ".acme", "label": "Acme export", "kind": "data", "source": "manual"},
-                {"extension": ".cfgx", "label": "Config X", "kind": "code", "source": "heuristic"},
-            ]})
-            return
-        return super(type(self), self).do_GET()
-    _Handler.do_GET = do_GET_types
-
+    _Handler.types = [
+        {"extension": ".acme", "label": "Acme export", "kind": "data", "source": "manual"},
+        {"extension": ".cfgx", "label": "Config X", "kind": "code", "source": "heuristic"},
+    ]
     assert cli.main(["--url", server, "types"]) == 0
     out = capsys.readouterr().out
     assert ".acme" in out and "Acme export" in out and "data" in out and "manual" in out
@@ -258,13 +289,6 @@ def test_types_lists_registered_types(server, monkeypatch, capsys):
 
 def test_types_empty(server, monkeypatch, capsys):
     monkeypatch.setenv("CLIO_TOKEN", "good")
-    def do_GET_types_empty(self):
-        if self.path == "/api/custom-file-types":
-            self._send(200, {"types": []})
-            return
-        return super(type(self), self).do_GET()
-    _Handler.do_GET = do_GET_types_empty
-
     assert cli.main(["--url", server, "types"]) == 0
     assert "no custom file types registered" in capsys.readouterr().out
 
@@ -273,40 +297,32 @@ def test_type_suggest_proposes_profile(server, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CLIO_TOKEN", "good")
     sample = tmp_path / "sample.acme"
     sample.write_text('{"pumps": [{"name": "Pump A", "psi": 60}]}', encoding="utf-8")
-
-    def do_POST_suggest(self):
-        if self.path == "/api/custom-file-types/suggest":
-            self._send(200, {
-                "extension": ".acme",
-                "profile": {"record_path": "pumps", "title_field": "name", "exclude": ["id"]},
-                "preview": {"records": 1, "sections": 1, "chars": 42, "text": "Pump A\npsi: 60"},
-                "source": "heuristic",
-            })
-            return
-        return super(type(self), self).do_POST()
-    _Handler.do_POST = do_POST_suggest
-
+    _Handler.suggest_body = {
+        "extension": ".acme",
+        "profile": {"record_path": "pumps", "title_field": "name", "exclude": ["id"]},
+        "preview": {"records": 1, "sections": 1, "chars": 42, "text": "Pump A\npsi: 60"},
+        "source": "heuristic",
+    }
     assert cli.main(["--url", server, "type-suggest", ".acme", str(sample)]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["extension"] == ".acme"
     assert out["profile"]["record_path"] == "pumps"
     assert out["preview"]["records"] == 1
+    sent = _Handler.suggest_raw
+    assert b'name="extension"' in sent and b"Pump A" in sent      # the sample really was uploaded
 
 
 def test_type_save_saves_profile(server, monkeypatch, capsys):
     monkeypatch.setenv("CLIO_TOKEN", "good")
-
-    def do_PUT_save(self):
-        if self.path == "/api/custom-file-types/.acme":
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
-            assert body["record_path"] == "pumps"
-            assert body["title_field"] == "name"
-            self._send(200, {"extension": ".acme", "label": "Acme", "enabled": True})
-            return
-        return super(type(self), self).do_PUT() if hasattr(super(type(self), self), "do_PUT") else self._send(404, {"detail": "nope"})
-    _Handler.do_PUT = do_PUT_save
-
-    assert cli.main(["--url", server, "type-save", ".acme", '{"record_path":"pumps","title_field":"name"}']) == 0
+    assert cli.main(["--url", server, "type-save", "acme",
+                     '{"record_path":"pumps","title_field":"name"}']) == 0
+    assert _Handler.put_seen == ("/api/custom-file-types/.acme",
+                                 {"record_path": "pumps", "title_field": "name"})
     out = json.loads(capsys.readouterr().out)
-    assert out["extension"] == ".acme"
-    assert out["enabled"] is True
+    assert out["profile"]["extension"] == ".acme" and out["profile"]["enabled"] is True
+
+
+def test_stub_state_does_not_leak_between_tests(server):
+    """The stub's handler class is shared; the fixture must reset every piece of its state."""
+    assert _Handler.types == [] and _Handler.suggest_body is None and _Handler.put_seen is None
+    assert "do_GET" in _Handler.__dict__ and _Handler.do_GET.__qualname__ == "_Handler.do_GET"
