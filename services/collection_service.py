@@ -12,6 +12,7 @@ import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
+from services import authored_text
 from services.app_database import app_db
 from config import settings
 
@@ -78,8 +79,23 @@ class CollectionService:
         logger.info(f"Created collection '{name}' with ID {collection_id} owner={owner_id}")
         return app_db.get_collection(collection_id)
 
+    @staticmethod
+    def _decode_guide_flag(collection: Dict[str, Any]) -> Dict[str, Any]:
+        """Turn the stored scan verdict into the flag that applies to the guide.
+
+        A guide saved before scanning existed has no verdict (NULL), so it is
+        scanned here: old text is not a blind spot. ``guide_flag`` is a dict
+        (``level``, ``categories``, ``reason``) or None.
+        """
+        stored = collection.get("guide_flag")
+        collection["guide_flag"] = authored_text.effective_flag(
+            collection.get("guide"), authored_text.load_flag(stored), scanned=stored is not None,
+        )
+        return collection
+
     def get_collection(self, collection_id: str) -> Optional[Dict[str, Any]]:
-        return app_db.get_collection(collection_id)
+        row = app_db.get_collection(collection_id)
+        return self._decode_guide_flag(row) if row else None
 
     def source_file_paths(self, collection_id: str) -> List[Path]:
         """Every source file behind a collection, as paths on disk.
@@ -196,6 +212,9 @@ class CollectionService:
         tools — are scoped automatically. Anonymous callers see team
         collections only.
         """
+        return [self._decode_guide_flag(c) for c in self._visible_collections(user_id)]
+
+    def _visible_collections(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         if not settings.private_collections:
             return app_db.get_all_collections()
 
@@ -251,6 +270,13 @@ class CollectionService:
         sensitivity: Optional[str] = None,
         published: Optional[bool] = None,
     ) -> Optional[Dict[str, Any]]:
+        # Every route that writes a guide (the PUT endpoint, bundle import,
+        # clone) lands here, so the scan lives here too: the verdict is stored
+        # with the text and cannot be skipped by a new caller. '' means
+        # "scanned, clean"; NULL would mean "never scanned".
+        guide_flag = None
+        if guide is not None:
+            guide_flag = authored_text.dump_flag(authored_text.scan(guide, f"guide of {collection_id}"))
         app_db.update_collection(
             collection_id=collection_id,
             name=name,
@@ -260,10 +286,12 @@ class CollectionService:
             chunk_overlap=chunk_overlap,
             embedding_model=embedding_model,
             guide=guide,
+            guide_flag=guide_flag,
             sensitivity=sensitivity,
             published=published,
         )
-        return app_db.get_collection(collection_id)
+        row = app_db.get_collection(collection_id)
+        return self._decode_guide_flag(row) if row else None
 
     def delete_collection(self, collection_id: str) -> bool:
         if collection_id == "default":

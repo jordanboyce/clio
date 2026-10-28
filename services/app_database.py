@@ -438,6 +438,13 @@ class SQLiteBackend(DatabaseBackend):
             except sqlite3.OperationalError:
                 pass
 
+            # Scan verdict on the guide (JSON; '' = scanned and clean, NULL =
+            # written before guides were scanned). Additive, no version bump.
+            try:
+                conn.execute("ALTER TABLE collections ADD COLUMN guide_flag TEXT")
+            except sqlite3.OperationalError:
+                pass
+
             # v4.4: the address a share was emailed to, so the owner's share
             # list shows who each link was sent to.
             try:
@@ -662,6 +669,7 @@ class SQLiteBackend(DatabaseBackend):
         guide: Optional[str] = None,
         sensitivity: Optional[str] = None,
         published: Optional[bool] = None,
+        guide_flag: Optional[str] = None,
     ):
         updates = []
         params = []
@@ -670,7 +678,8 @@ class SQLiteBackend(DatabaseBackend):
                              ("embedding_model", embedding_model),
                              ("mcp_display_name", mcp_display_name),
                              ("mcp_display_description", mcp_display_description),
-                             ("guide", guide), ("sensitivity", sensitivity),
+                             ("guide", guide), ("guide_flag", guide_flag),
+                             ("sensitivity", sensitivity),
                              ("published", None if published is None else int(published))]:
             if value is not None:
                 updates.append(f"{field} = ?")

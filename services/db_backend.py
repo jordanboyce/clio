@@ -83,6 +83,7 @@ class DatabaseBackend(ABC):
         guide: Optional[str] = None,
         sensitivity: Optional[str] = None,
         published: Optional[bool] = None,
+        guide_flag: Optional[str] = None,
     ):
         ...
 

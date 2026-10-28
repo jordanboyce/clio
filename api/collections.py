@@ -9,6 +9,7 @@ from fastapi import Depends, File, Form, HTTPException, Request, UploadFile, sta
 
 from config import settings
 from services.config_manager import config_manager
+from services import authored_text
 from services.reindex_service import reindex_service
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
@@ -328,6 +329,12 @@ async def create_collection(collection_data: dict, user_id: str = Depends(get_cu
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Collection name is required"
         )
+    try:
+        authored_text.check_length("name", str(name), authored_text.MAX_NAME_CHARS)
+        authored_text.check_length("description", str(collection_data.get("description") or ""),
+                                   authored_text.MAX_DESCRIPTION_CHARS)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     collection = collection_service.create_collection(
         name=name,
@@ -474,6 +481,22 @@ async def update_collection(collection_id: str, updates: dict, user_id: str = De
     from api.deps import require_collection_access
     require_collection_access(collection_id, user_id, owner=True)
 
+    # Text that is delivered to a model on later requests: typed, bounded.
+    for field, limit in (("guide", authored_text.MAX_GUIDE_CHARS),
+                         ("description", authored_text.MAX_DESCRIPTION_CHARS),
+                         ("name", authored_text.MAX_NAME_CHARS)):
+        value = updates.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"{field} must be text")
+        try:
+            authored_text.check_length(field, value, limit)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    prior = collection_service.get_collection(collection_id) or {}
+
     # Sensitivity is a governance label: validated, and its changes audited
     # (it decides whether the collection can be shared or reached over MCP).
     sensitivity = None
@@ -543,7 +566,34 @@ async def update_collection(collection_id: str, updates: dict, user_id: str = De
             detail=f"Collection '{collection_id}' not found"
         )
 
-    return collection
+    # The guide, name and description are delivered to other people's agents
+    # and prompts (see services/authored_text.py). Record that they changed,
+    # by size and fingerprint rather than text, and tell the author when the
+    # scan found instruction-like wording. The save itself always succeeds.
+    from services import audit
+    new_guide = updates.get("guide")
+    if new_guide is not None and (prior.get("guide") or "") != new_guide:
+        flag = collection.get("guide_flag")
+        audit.record("collection.guide", actor=user_id, collection_id=collection_id, detail={
+            "chars": len(new_guide), "digest": authored_text.digest(new_guide),
+            "previous_digest": authored_text.digest(prior.get("guide")) if prior.get("guide") else None,
+            "flagged": bool(flag),
+            **({"flag_level": flag.get("level"), "flag_categories": flag.get("categories")} if flag else {}),
+        })
+    meta_changed = {
+        field: {"chars": len(updates[field]), "digest": authored_text.digest(updates[field])}
+        for field in ("name", "description")
+        if updates.get(field) is not None and (prior.get(field) or "") != updates[field]
+    }
+    if meta_changed:
+        audit.record("collection.metadata", actor=user_id, collection_id=collection_id,
+                     detail={"fields": meta_changed})
+
+    guide_warning = (
+        authored_text.warning_for_author(collection.get("guide_flag"), "guide")
+        if new_guide is not None else None
+    )
+    return {**collection, "guide_warning": guide_warning}
 
 
 @router.post(

@@ -494,6 +494,14 @@ class ExpertisePack(BaseModel):
     body: str = Field(..., description="Markdown body — the full guidance text injected into the LLM prompt")
     created_at: datetime = Field(..., description="UTC creation timestamp")
     updated_at: datetime = Field(..., description="UTC last-update timestamp")
+    flag: Optional[dict] = Field(
+        None,
+        description="Prompt-injection scan verdict (medium/high only): level, categories, reason, excerpts. "
+                    "The pack is still saved and delivered; agents are told it is flagged.",
+    )
+    warning: Optional[dict] = Field(
+        None, description="Set on a save response when the text was flagged, for the editor to show.",
+    )
 
 
 class ExpertisePackCreate(BaseModel):
