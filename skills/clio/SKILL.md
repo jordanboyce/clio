@@ -46,6 +46,11 @@ given that collection, so report it instead of working around it.
 6. `list_changes` and `list_recent_documents` show what is new when freshness
    matters. Results carry a corpus version; if it changed between calls,
    re-run the search.
+7. A result with `superseded_by` is from an older version that a newer document
+   replaced. Prefer the current version and say so when you cite the old one;
+   pass `filters: {"include_superseded": true}` only when asked what the older
+   version said. `duplicates` / `duplicate_count` list other files containing the
+   same text: copies are not independent confirmation.
 
 ## Count and list files
 
@@ -69,6 +74,14 @@ enumerate from search results; they are the top few passages, not the corpus.
   python scripts/clio_cli.py files -c Policies --type pdf --sort largest --limit 20
   python scripts/clio_cli.py files -c Policies --csv all-files.csv   # every file
   ```
+
+- Unsure which collection to trust: `list_collections` carries `newest_upload`
+  and, when an owner has run one, `quality` (`coverage_hit_at_5`, `report_age`,
+  `stale`). `python scripts/clio_cli.py coverage -c Policies` prints the full
+  retrieval coverage report (weakest documents and the searches that missed);
+  `--run` refreshes it and needs ownership. It scores how *findable* content is,
+  not whether answers are right; a stale or low score means verify passages
+  before relying on them.
 
   (`GET /documents/export` is the same CSV or JSON Lines over HTTP.)
 - Quarantined documents are not counted or listed. A count of `0` chunks for a
@@ -106,6 +119,13 @@ enumerate from search results; they are the top few passages, not the corpus.
   `list_changes`.
 - Check progress with `list_index_jobs` / `get_index_job`, or `clio_cli.py
   jobs`.
+- A product-specific JSON-like extension (`.acme`) is indexed only after an
+  administrator registers it. `clio_cli.py types` lists what is registered;
+  `type-suggest`/`type-save` (admin) propose and save a profile, and the save
+  answer says how many indexed files per collection use it. After a profile
+  change, `clio_cli.py reindex -c NAME --ext .acme` re-reads only those files
+  (collection owner; other documents untouched). A deleted type's files stay
+  searchable but cannot be re-indexed until the type is registered again.
 - Do not upload anything the user has not told you to share. Collections are
   visible to everyone with access.
 

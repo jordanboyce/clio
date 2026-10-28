@@ -938,6 +938,19 @@
             </div>
           </div>
           </fieldset>
+
+          <!-- Retrieval coverage: readable by anyone with access, run/edited by owners -->
+          <div v-if="collectionStore.currentCollection?.id" class="pt-6 mt-6 border-t border-base-300/50">
+            <CoverageReportPanel
+              :collection-id="collectionStore.currentCollection.id"
+              :can-run="collectionStore.canConfigureCurrent"
+            />
+          </div>
+        </section>
+
+        <!-- ═══ Custom file types ═══ -->
+        <section v-show="activeSection === 'custom-file-types'" aria-labelledby="settings-custom-file-types">
+          <CustomFileTypes />
         </section>
 
         <!-- ═══ Data ═══ -->
@@ -1041,6 +1054,8 @@ import { useCollectionStore } from '../stores/collectionStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useUserStore } from '../stores/userStore'
 import { useProviderStore } from '../stores/providerStore'
+import CustomFileTypes from './CustomFileTypes.vue'
+import CoverageReportPanel from './CoverageReportPanel.vue'
 import {
   PROVIDER_DEFS,
   CUSTOM_ENDPOINT_PRESETS,
@@ -1075,6 +1090,7 @@ const ALL_SECTIONS = [
   { id: 'general', label: 'General' },
   { id: 'providers', label: 'AI Providers' },
   { id: 'indexing', label: 'Indexing' },
+  { id: 'custom-file-types', label: 'Custom file types' },
   { id: 'data', label: 'Data' },
   { id: 'system', label: 'System' },
 ]

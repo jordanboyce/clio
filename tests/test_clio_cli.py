@@ -23,6 +23,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     export_query = ""
     job_summary = {"ok": 1}
     reindex_polls = 0
+    types = []                 # GET /api/custom-file-types
+    suggest_raw = b""          # the multipart body last posted to suggest
+    suggest_body = None        # what POST /api/custom-file-types/suggest answers
+    ext_body = None            # JSON body of the last reindex-extensions POST
+    put_seen = None            # (path, parsed JSON body) of the last PUT
 
     def log_message(self, *a):  # silence
         pass
@@ -67,6 +72,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self.path.startswith("/documents/upload/7/status"):
             return self._send(200, {"status": "completed", "processed_files": 1,
                                     "total_files": 1, "result_summary": _Handler.job_summary})
+        if self.path == "/api/custom-file-types":
+            return self._send(200, {"types": _Handler.types})
         if self.path.startswith("/api/reindex/status"):
             _Handler.reindex_polls += 1
             done = _Handler.reindex_polls >= 2
@@ -85,6 +92,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/documents/index-local-async":
             assert json.loads(body)["file_paths"] == ["/app/data/a.md"]
             return self._send(202, {"job_id": 7})
+        if self.path == "/api/custom-file-types/suggest":
+            _Handler.suggest_raw = body
+            return self._send(200, _Handler.suggest_body)
+        if self.path.endswith("/reindex-extensions"):
+            _Handler.ext_body = json.loads(body.decode())
+            return self._send(200, {"job_id": 12, "status": "started"})
         if self.path.endswith("/reindex"):
             return self._send(200, {"job_id": 11, "status": "started"})
         if self.path.startswith("/search"):
@@ -93,12 +106,29 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 "text_snippet": "rotate every 90 days"}]})
         self._send(404, {"detail": "nope"})
 
+    def do_PUT(self):
+        n = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(n).decode() or "null")
+        if self.headers.get("Authorization") != "Bearer good":
+            return self._send(401, {"detail": "Not authenticated"})
+        if self.path.startswith("/api/custom-file-types/"):
+            _Handler.put_seen = (self.path, body)
+            return self._send(200, {"profile": {"extension": self.path.rsplit("/", 1)[1], **body,
+                                                "enabled": True},
+                                    "reading_changed": True, "affected_documents": 0, "usage": None})
+        self._send(404, {"detail": "nope"})
+
 
 @pytest.fixture
 def server():
     _Handler.seen = []
     _Handler.job_summary = {"ok": 1}
     _Handler.reindex_polls = 0
+    _Handler.types = []
+    _Handler.suggest_body = None
+    _Handler.suggest_raw = b""
+    _Handler.put_seen = None
+    _Handler.ext_body = None
     srv = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{srv.server_port}"
@@ -235,3 +265,195 @@ def test_reindex_no_wait_returns_the_job_id(server, monkeypatch, capsys):
     assert cli.main(["--url", server, "--json", "reindex", "-c", "Policies", "--no-wait"]) == 0
     assert json.loads(capsys.readouterr().out)["job_id"] == 11
     assert _Handler.reindex_polls == 0
+
+
+def test_reindex_ext_sends_only_the_extension_scope(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", server, "--json", "reindex", "-c", "Policies", "--ext", ".acme",
+                     "--ext", ".cfgx", "--no-wait"]) == 0
+    assert json.loads(capsys.readouterr().out)["job_id"] == 12
+    assert _Handler.ext_body == {"extensions": [".acme", ".cfgx"]}
+
+
+def test_types_lists_registered_types(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    _Handler.types = [
+        {"extension": ".acme", "label": "Acme export", "kind": "data", "source": "manual"},
+        {"extension": ".cfgx", "label": "Config X", "kind": "code", "source": "heuristic"},
+    ]
+    assert cli.main(["--url", server, "types"]) == 0
+    out = capsys.readouterr().out
+    assert ".acme" in out and "Acme export" in out and "data" in out and "manual" in out
+    assert ".cfgx" in out and "Config X" in out and "code" in out and "heuristic" in out
+
+
+def test_types_empty(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", server, "types"]) == 0
+    assert "no custom file types registered" in capsys.readouterr().out
+
+
+def test_type_suggest_proposes_profile(server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    sample = tmp_path / "sample.acme"
+    sample.write_text('{"pumps": [{"name": "Pump A", "psi": 60}]}', encoding="utf-8")
+    _Handler.suggest_body = {
+        "extension": ".acme",
+        "profile": {"record_path": "pumps", "title_field": "name", "exclude": ["id"]},
+        "preview": {"records": 1, "sections": 1, "chars": 42, "text": "Pump A\npsi: 60"},
+        "source": "heuristic",
+    }
+    assert cli.main(["--url", server, "type-suggest", ".acme", str(sample)]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["extension"] == ".acme"
+    assert out["profile"]["record_path"] == "pumps"
+    assert out["preview"]["records"] == 1
+    sent = _Handler.suggest_raw
+    assert b'name="extension"' in sent and b"Pump A" in sent      # the sample really was uploaded
+
+
+def test_type_save_saves_profile(server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", server, "type-save", "acme",
+                     '{"record_path":"pumps","title_field":"name"}']) == 0
+    assert _Handler.put_seen == ("/api/custom-file-types/.acme",
+                                 {"record_path": "pumps", "title_field": "name"})
+    out = json.loads(capsys.readouterr().out)
+    assert out["profile"]["extension"] == ".acme" and out["profile"]["enabled"] is True
+
+
+def test_stub_state_does_not_leak_between_tests(server):
+    """The stub's handler class is shared; the fixture must reset every piece of its state."""
+    assert _Handler.types == [] and _Handler.suggest_body is None and _Handler.put_seen is None
+    assert "do_GET" in _Handler.__dict__ and _Handler.do_GET.__qualname__ == "_Handler.do_GET"
+
+
+# -- coverage ------------------------------------------------------------------
+# A self-contained stub (its own handler and server) so these tests do not depend
+# on how the shared one above is wired: routes are a data table, not branches.
+
+_COVERAGE_REPORT = {
+    "overall": {"probes": 40, "document_hit_at_5": 0.9, "chunk_hit_at_10": 0.8, "mrr_chunk": 0.71},
+    "measures": "This measures retrieval findability, not whether answers are correct.",
+    "notes": ["This measures retrieval findability, not whether answers are correct."],
+    "probe_method": {"by_method": {"keywords": {"probes": 40}}},
+    "embedding_model": "m1", "corpus_version": "7:2026-03-04:12:0", "age": "3h", "stale": True,
+    "stale_reasons": ["corpus_changed"],
+    "weakest_documents": [{"filename": "notice.txt", "document_hit_at_5": 0.0, "probes": 2,
+                           "failing_probes": [{"query": "notice office unclear"}]}],
+    "chunks_never_retrieved": {"count": 3}, "unprobeable_chunks": {"count": 0},
+    "owner_questions": {"document_hit_at_5": 0.5, "measured": 2, "total": 2, "items": [
+        {"status": "miss", "question": "Where is the roadmap?",
+         "expected_documents": [{"filename": "plan.md"}]}]},
+}
+
+
+class _CoverageStub(http.server.BaseHTTPRequestHandler):
+    calls: list = []
+    gets = 0
+    post_status = 202            # 202 started, 409 already running, 403 not an owner
+    states = ["running", "completed"]   # successive GET .../coverage run states
+
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, body):
+        raw = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _route(self, method):
+        n = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(n) or b"null")
+        _CoverageStub.calls.append((method, self.path, body))
+        if self.headers.get("Authorization") != "Bearer good":
+            return self._send(401, {"detail": "Not authenticated"})
+        table = {
+            ("GET", "/api/collections"): lambda: (200, {"collections": [{"id": "abc", "name": "Policies"}]}),
+            ("GET", "/api/collections/abc/coverage"): self._get_coverage,
+            ("POST", "/api/collections/abc/coverage"): lambda: (
+                (202, {"run": {"state": "running"}}) if self.post_status == 202
+                else (self.post_status, {"detail": {409: "A coverage run for this collection is already "
+                                                    "in progress.", 403: "owner only"}[self.post_status]})),
+        }
+        handler = table.get((method, self.path))
+        code, payload = handler() if handler else (404, {"detail": "nope"})
+        self._send(code, payload)
+
+    def _get_coverage(self):
+        i = min(_CoverageStub.gets, len(self.states) - 1)
+        _CoverageStub.gets += 1
+        return 200, {"report": _COVERAGE_REPORT, "run": {"state": self.states[i], "done": 5, "total": 40}}
+
+    def do_GET(self):
+        self._route("GET")
+
+    def do_POST(self):
+        self._route("POST")
+
+
+@pytest.fixture
+def coverage_server():
+    _CoverageStub.calls, _CoverageStub.gets = [], 0
+    _CoverageStub.post_status, _CoverageStub.states = 202, ["running", "completed"]
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _CoverageStub)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_port}"
+    srv.shutdown()
+
+
+def test_coverage_shows_the_latest_report(coverage_server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", coverage_server, "coverage", "-c", "Policies"]) == 0
+    out = capsys.readouterr().out
+    assert "document hit@5 90%" in out and "chunk hit@10 80%" in out and "(40 probes, 3h old)" in out
+    assert "STALE: corpus changed" in out
+    assert "findability, not whether answers are correct" in out
+    assert "notice.txt  0% of 2 probes found" in out and "missed: 'notice office unclear'" in out
+    assert "owner questions  hit@5 50%" in out and "miss: Where is the roadmap?  (expected plan.md)" in out
+    assert [c for c in _CoverageStub.calls if c[0] == "POST"] == []          # reading never starts a run
+
+
+def test_coverage_json_is_the_raw_payload(coverage_server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", coverage_server, "--json", "coverage", "-c", "abc"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["collection_id"] == "abc" and data["report"]["overall"]["probes"] == 40
+
+
+def test_coverage_run_starts_then_waits_for_completion(coverage_server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", coverage_server, "coverage", "-c", "abc", "--run",
+                     "--probes", "25", "--poll", "0.01"]) == 0
+    captured = capsys.readouterr()
+    assert "coverage run: 5/40 probes" in captured.err and "document hit@5 90%" in captured.out
+    posts = [c for c in _CoverageStub.calls if c[0] == "POST"]
+    assert posts == [("POST", "/api/collections/abc/coverage", {"probes": 25})]
+
+
+def test_coverage_run_joins_a_run_already_in_progress(coverage_server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    _CoverageStub.post_status = 409
+    assert cli.main(["--url", coverage_server, "coverage", "-c", "abc", "--run", "--poll", "0.01"]) == 0
+    assert "already in progress" in capsys.readouterr().err
+
+
+def test_coverage_run_by_a_non_owner_is_a_clear_error(coverage_server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    _CoverageStub.post_status = 403
+    assert cli.main(["--url", coverage_server, "coverage", "-c", "abc", "--run"]) == 1
+    assert "owner only" in capsys.readouterr().err
+
+
+def test_coverage_run_no_wait_returns_immediately(coverage_server, monkeypatch, capsys):
+    monkeypatch.setenv("CLIO_TOKEN", "good")
+    assert cli.main(["--url", coverage_server, "--json", "coverage", "-c", "abc", "--run", "--no-wait"]) == 0
+    assert json.loads(capsys.readouterr().out)["run"]["state"] == "running"
+
+
+def test_coverage_with_no_report_says_how_to_make_one():
+    assert "--run" in cli.render_coverage({"report": None, "run": {"state": "idle"}})
+    assert "failed: boom" in cli.render_coverage({"report": None, "run": {"state": "failed", "error": "boom"}})

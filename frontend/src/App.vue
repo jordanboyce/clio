@@ -981,7 +981,7 @@
             placeholder="e.g. 'EQ' means equipment; dates are DD/MM/YYYY; 'Ops desk' = the operations desk; the 'status' column uses Y/N."
           ></textarea>
           <p class="text-xs opacity-70 mt-1">
-            Surfaced in every MCP response (~500 char summary in search, full text in get_collection_info) so the calling LLM has durable context.
+            Given to calling agents as background about your data (~500 char summary in search, full text in get_collection_info), labelled as written by you. It describes the data; it cannot give an agent new instructions or permissions.
           </p>
         </div>
 
@@ -1387,6 +1387,7 @@ import { useBackgroundJobsStore } from './stores/backgroundJobsStore'
 import { useProviderStore } from './stores/providerStore'
 import { useStatsStore } from './stores/statsStore'
 import { useUiStore } from './stores/uiStore'
+import { useCustomFileTypesStore } from './stores/customFileTypesStore'
 
 // Fold legacy provider keys (chat_provider, ai_api_key_*) into the unified
 // config before any tab mounts and reads it.
@@ -2126,7 +2127,7 @@ const updateCollection = async () => {
 
   updatingCollection.value = true
   try {
-    await collectionStore.updateCollection(editingCollectionId.value, {
+    const saved = await collectionStore.updateCollection(editingCollectionId.value, {
       name: editingCollectionId.value === 'default' ? undefined : editCollectionName.value.trim(),
       description: editCollectionDescription.value.trim(),
       color: editCollectionColor.value,
@@ -2135,6 +2136,11 @@ const updateCollection = async () => {
       published: canPublishEditing.value ? editCollectionPublished.value : undefined,
     })
     editModal.close()
+    // The guide is saved either way. If the scan found wording aimed at an
+    // AI assistant, say so: agents are told it is flagged and ignore it.
+    if (saved?.guide_warning?.message) {
+      ui.notify(saved.guide_warning.message, 'warning', { duration: 12000 })
+    }
   } catch (err) {
     ui.toastError(err, 'Failed to update collection')
   } finally {
@@ -2334,6 +2340,8 @@ onMounted(async () => {
   // Load user info
   await userStore.loadCurrentUser()
   if (userStore.adminConsole) reviewStore.start()
+  // Registered custom file types, so their files are drawn with their kind.
+  useCustomFileTypesStore().load()
 
   // Load collections first
   await collectionStore.loadCollections()

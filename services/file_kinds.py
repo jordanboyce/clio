@@ -38,14 +38,22 @@ def _media_extensions() -> set:
     return set(AUDIO_EXTENSIONS) | set(DocumentExtractor.IMAGE_EXTENSIONS)
 
 
+def _custom_extensions(kind: str) -> set:
+    """Suffixes of admin-registered types filed under `kind` (see custom_file_types)."""
+    from services.custom_file_types import registry
+    # Disabled types included: the files are already indexed, and switching a
+    # type off must not move them to "other" in the sidebar and the stats.
+    return registry.extensions(kind, include_disabled=True)
+
+
 def extensions_for_kind(kind: str) -> set:
     """Lowercase suffixes (and bare basenames for code) that belong to `kind`."""
     if kind == "code":
-        return _code_extensions() | _code_basenames()
+        return _code_extensions() | _code_basenames() | _custom_extensions("code")
     if kind == "docs":
-        return set(DOC_EXTENSIONS)
+        return set(DOC_EXTENSIONS) | _custom_extensions("docs")
     if kind == "data":
-        return set(DATA_EXTENSIONS)
+        return set(DATA_EXTENSIONS) | _custom_extensions("data")
     if kind == "media":
         return _media_extensions()
     return set()
@@ -63,7 +71,9 @@ def kind_for_filename(filename: str) -> Optional[str]:
         return "media"
     if suffix in _code_extensions() or name.lower() in _code_basenames():
         return "code"
-    return None
+    from services.custom_file_types import registry
+    profile = registry.lookup(name, include_disabled=True)
+    return profile["kind"] if profile else None
 
 
 def kind_key_for_filename(filename: str) -> str:

@@ -541,6 +541,11 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     closeAllSSEStreams()
   }
 
+  // Public method to refresh jobs from the server (e.g., after starting a new job)
+  async function refreshJobs() {
+    await checkActiveJobs()
+  }
+
   return {
     // State
     uploadJobs,
@@ -571,6 +576,7 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     startPolling,
     stopPolling,
     checkActiveJobs,
+    refreshJobs,
     cleanup,
     startSSEStream,
     closeSSEStream,

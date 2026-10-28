@@ -44,6 +44,25 @@ SUPPORTED_FILETYPES = [
 ]
 
 
+def supported_filetypes() -> List[tuple]:
+    """The dialog's file-type filters, with the admin-registered custom types added.
+
+    Without this the "All supported files" filter hides a registered ``.acme``
+    file even though the server would index it.
+    """
+    types = list(SUPPORTED_FILETYPES)
+    try:
+        from services.custom_file_types import registry
+        globs = " ".join(f"*{ext}" for ext in sorted(registry.extensions()))
+    except Exception:  # the picker must open even if the registry cannot be read
+        globs = ""
+    if globs:
+        label, existing = types[0]
+        types[0] = (label, f"{existing} {globs}")
+        types.insert(1, ("Custom file types", globs))
+    return types
+
+
 def open_file_dialog(multiple: bool = True, title: str = "Select files to index") -> List[str]:
     """
     Open a native file picker dialog.
@@ -74,13 +93,13 @@ def open_file_dialog(multiple: bool = True, title: str = "Select files to index"
         if multiple:
             paths = filedialog.askopenfilenames(
                 title=title,
-                filetypes=SUPPORTED_FILETYPES
+                filetypes=supported_filetypes()
             )
             result = list(paths) if paths else []
         else:
             path = filedialog.askopenfilename(
                 title=title,
-                filetypes=SUPPORTED_FILETYPES
+                filetypes=supported_filetypes()
             )
             result = [path] if path else []
     except Exception as e:

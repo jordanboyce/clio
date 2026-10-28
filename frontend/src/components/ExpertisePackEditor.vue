@@ -48,7 +48,7 @@
       <div class="form-control">
         <label class="label pb-1">
           <span class="label-text font-medium">Guidance body <span class="text-error">*</span></span>
-          <span class="label-text-alt text-base-content/50">Markdown — injected into the AI system prompt</span>
+          <span class="label-text-alt text-base-content/50">Markdown — given to the AI as background, labelled as written by an admin</span>
         </label>
         <textarea
           v-model="form.body"
@@ -151,6 +151,15 @@ watch(() => props.pack, (p) => {
   saveError.value = ''
 })
 
+// 403 means the server's admin gate refused: say so plainly rather than
+// showing a bare "Request failed with status code 403".
+function failureMessage(err, fallback) {
+  if (err?.response?.status === 403) {
+    return err.response.data?.detail || 'Only an administrator can change saved instructions.'
+  }
+  return err?.response?.data?.detail || err?.message || fallback
+}
+
 function validate() {
   let ok = true
   if (!form.value.name.trim()) {
@@ -174,14 +183,12 @@ async function handleSave() {
       description: form.value.description.trim() || null,
       body: form.value.body.trim(),
     }
-    if (isNew.value) {
-      await store.createPack(payload)
-    } else {
-      await store.updatePack(props.pack.id, payload)
-    }
-    emit('save')
+    const saved = isNew.value
+      ? await store.createPack(payload)
+      : await store.updatePack(props.pack.id, payload)
+    emit('save', saved)
   } catch (err) {
-    saveError.value = err.response?.data?.detail || err.message || 'Save failed'
+    saveError.value = failureMessage(err, 'Save failed')
   } finally {
     saving.value = false
   }
@@ -195,7 +202,7 @@ async function handleDelete() {
     await store.deletePack(props.pack.id)
     emit('delete')
   } catch (err) {
-    saveError.value = err.response?.data?.detail || err.message || 'Delete failed'
+    saveError.value = failureMessage(err, 'Delete failed')
   } finally {
     saving.value = false
   }

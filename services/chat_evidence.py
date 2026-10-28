@@ -12,7 +12,12 @@ CITATION_INSTRUCTIONS = (
     "the context or the citation fields of tool results. Search ranks are not "
     "citation numbers. Never invent a source number. If evidence is incomplete "
     "or conflicting, explain the gap or conflict. Distinguish what a source "
-    "states from your interpretation."
+    "states from your interpretation. A source marked OLDER VERSION (or a "
+    "result with superseded_by) comes from a document that a newer one "
+    "replaced: prefer the current version, and when you do cite the older "
+    "one, say that it is an older version and name its replacement. Do not "
+    "treat copies of the same text (\"also in\" / duplicates) as separate "
+    "confirmations."
 )
 
 
@@ -60,6 +65,9 @@ class ChatEvidence:
             page_number=passage.get("page_number") or 1, text_snippet=text,
             similarity_score=passage.get("similarity_score") or 0.0,
             sensitivity=document.get("sensitivity"),
+            superseded_by=passage.get("superseded_by"),
+            duplicates=passage.get("duplicates"),
+            duplicate_count=passage.get("duplicate_count"),
         )
         key = self._key(result, collection_id)
         number = self._numbers.get(key)

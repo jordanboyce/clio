@@ -85,6 +85,14 @@ _TOOLS: List[Dict[str, Any]] = [
                         },
                         "date_from": {"type": "string", "description": "ISO timestamp lower bound on upload time."},
                         "date_to": {"type": "string", "description": "ISO timestamp upper bound on upload time."},
+                        "include_superseded": {
+                            "type": "boolean",
+                            "description": (
+                                "True to rank documents marked as replaced like current ones "
+                                "(for 'what did the old version say'). Default: they rank "
+                                "lower but still appear, labelled superseded_by."
+                            ),
+                        },
                     },
                 },
             },

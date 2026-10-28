@@ -146,6 +146,8 @@ class PostgresBackend(DatabaseBackend):
                     cur.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS guide TEXT")
                 except Exception:
                     pass
+                # Scan verdict on the guide (JSON; '' = clean, NULL = never scanned).
+                cur.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS guide_flag TEXT")
                 # Optional MCP display aliases — the SQLite backend has had
                 # these since v4; their absence here made create_collection
                 # a TypeError under Postgres (caught by test_backend_parity).
@@ -452,14 +454,15 @@ class PostgresBackend(DatabaseBackend):
     def update_collection(self, collection_id: str, name=None, description=None, color=None,
                           chunk_size=None, chunk_overlap=None, embedding_model=None,
                           mcp_display_name=None, mcp_display_description=None,
-                          guide=None, sensitivity=None, published=None):
+                          guide=None, sensitivity=None, published=None, guide_flag=None):
         updates, params = [], []
         for field, val in [("name", name), ("description", description), ("color", color),
                            ("chunk_size", chunk_size), ("chunk_overlap", chunk_overlap),
                            ("embedding_model", embedding_model),
                            ("mcp_display_name", mcp_display_name),
                            ("mcp_display_description", mcp_display_description),
-                           ("guide", guide), ("sensitivity", sensitivity),
+                           ("guide", guide), ("guide_flag", guide_flag),
+                           ("sensitivity", sensitivity),
                            ("published", None if published is None else bool(published))]:
             if val is not None:
                 updates.append(f"{field} = %s")

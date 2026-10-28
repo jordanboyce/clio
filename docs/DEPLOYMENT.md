@@ -443,6 +443,51 @@ hash, act on user reports, and suspend an identity — which revokes every
 MCP token it holds. Suspension leaves the person's documents in place; removal
 is a separate, reviewable decision.
 
+## Old versions and duplicate text
+
+Policy sets accumulate v2 next to v3, and the same paragraph in several files.
+Clio handles both at search time and never hides anything.
+
+**Replaced by.** A collection owner marks a document as replaced by another one
+in the same collection (Sources → the *Replaced by…* button on a row, or
+`POST /documents/{id}/supersede` with `{"replaced_by": "<document_id>", "note": "…"}`;
+`DELETE` on the same path clears it; `clio_cli.py supersede mark|clear`). Search
+then ranks the older document `SUPERSEDED_PENALTY` (default `0.15`, on the same
+0–1 scale as the reranker probability) below an equally relevant current
+passage. It still appears when it is the only match, and every result from it
+carries `superseded_by: {document_id, filename}`. Chat, research and MCP tell the
+model to prefer the current version and to say so when it cites the older one.
+For "what did v2 say" questions a search passes `filters.include_superseded: true`
+(MCP/chat tool argument, `/search` body, `clio_cli.py search --include-superseded`):
+the penalty is skipped and the label stays.
+
+Rules: both documents must be in the collection, a document cannot replace itself
+or close a loop, and a quarantined document cannot be named as the replacement
+(its name would show in results). Deleting the replacement clears the mark on the
+older document. Re-indexing the older document, or a full or per-extension
+reindex, keeps the mark. Each change is in the audit log
+(`document.supersede`, `document.supersede_cleared`) and drops cached chat answers.
+The column is added by an automatic migration (schema 3.8); older databases open
+unchanged.
+
+**Suggestions.** `GET /documents/supersede-suggestions?collection_id=…` (read
+access) lists likely pairs: file names that differ by a version, year or
+revision token (`v2`/`v3`, `2025`/`2026`, `rev B`), `(1)` / `- Copy` duplicates,
+and different files with identical opening text. Nothing is applied; owners accept
+or dismiss each one in the Sources panel (dismissals are remembered in that
+browser only).
+
+**Duplicate text.** After ranking, a result whose text is the same as a
+higher-ranked one after normalising case, whitespace and punctuation, or whose
+word-3-gram Jaccard similarity is at least `DUPLICATE_SIMILARITY_THRESHOLD`
+(default `0.95`), is folded into it. The surviving result carries
+`duplicates: [{document_id, filename, page}]` (at most 5) and `duplicate_count`, so
+a citation can say "also in …". Passages that differ in a number, or in a word like
+*may*/*must*/*not*, are never merged. `top_k` is refilled from the next-ranked
+candidates. A document the user selected as a source always keeps its own result.
+Turn it off with `COLLAPSE_DUPLICATES=false`. The one cost: when copies were
+found and the reranker is off, that search runs a second, wider retrieval.
+
 ## Capacity & scaling
 
 Clio is **one process by design**: the FAISS indexes, background-job
@@ -636,6 +681,151 @@ all-files.csv`. The same data is at `GET /documents/stats` and
 `GET /documents/export?format=csv|jsonl` (filters `q`, `file_type`, `sort`);
 the export streams page by page, so a collection of tens of thousands of files
 costs flat memory, and each export is written to the audit trail.
+
+### Retrieval coverage
+
+Borrowed from how Context7 scores indexed libraries: each collection can be
+asked "how findable is my content?" before anyone relies on it. **Settings ->
+Indexing -> Retrieval coverage** (or `clio_cli.py coverage -c Policies`) shows
+the latest report; the collection's owner runs it.
+
+- **What a run does.** It samples up to 100 passages (cap 300; a fixed seed, so
+  two runs on an unchanged collection ask the same questions; spread evenly
+  across documents so a large file does not dominate), turns each into a
+  search a person might type, and sends it through the same search that the
+  app, API and MCP use (automatic mode, with the re-ranker if it is on). It
+  records whether the passage and its document came back in the top 5 and top
+  10. No model is involved by default: a query is the passage's heading, or
+  its few most distinctive words and names, never the passage pasted back.
+  A passage with no searchable words (a table of numbers) is reported as
+  unprobed, not as a miss.
+- **What the report shows.** Sources found in the top 5, passages in the top 10,
+  MRR, the hardest-to-find documents with the searches that missed, passages
+  that never came back, the probe method, the embedding model and the corpus
+  version at run time, and how long it took. **It measures retrieval
+  findability, not answer correctness**: a high score means the right source
+  is returned for questions drawn from its own text, not that an answer built
+  from it is right. Real users ask differently from their own documents.
+- **Your own questions** (owners; Settings, or `POST .../coverage/questions`)
+  pair a question with the file that should answer it. They are scored
+  separately and are the most trustworthy signal: they come from what people
+  actually ask. Each add and remove is in the audit trail.
+- **Optional model-written questions.** `COVERAGE_LLM_QUESTIONS=true` asks the
+  default chat provider to phrase the questions, which sends the sampled
+  passages to that provider. It is off by default; with `OFFLINE_MODE=true`
+  only a local provider is used, and any model failure falls back to the
+  heuristic probes with a note in the report.
+- **Staleness and cost.** A report is marked stale when documents are added,
+  replaced, removed or quarantined, or the embedding model changes; the
+  numbers are kept so you can see the trend, but treat them as old. A run is a
+  background thread (a few seconds to about two minutes, hard-capped at 3
+  minutes, partial results reported as such), one per collection (a second
+  request gets a 409) and two per deployment. Quarantined documents are never
+  read. The latest report is stored in the collection's own `metadata.db`, so
+  it travels with backups and collection exports.
+- **For agents.** MCP `list_collections` adds `newest_upload` and, once a report
+  exists, `quality: {coverage_hit_at_5, report_age, stale}` (plus
+  `owner_question_hit_at_5` when owners wrote questions) so an agent can prefer
+  the collection that is fresh and findable. Treat a stale or low score as a
+  reason to double-check, not as a verdict.
+
+### Custom file types
+
+JSON-like files with an extension only one product uses (`.acme`, `.cfgx`, ...)
+can be indexed by registering the extension. A *profile* says how to read it:
+where the records are, which fields matter and what to call them. A profile is
+plain data, never code, and built-in types (`.json`, `.pdf`, source files, ...)
+cannot be redefined.
+
+The parser accepts strict JSON, JSON with `//` and `/* */` comments and trailing
+commas, and JSON Lines / concatenated values. Files up to 100 MB. Profiles live in
+`<data dir>/custom_file_types.json`, so a normal backup carries them, and changes
+apply without a restart. Changing or removing a profile does not touch files
+already indexed. To apply a changed profile to them, re-index just that
+extension (below); the rest of the collection is left exactly as it is.
+
+**Web UI** (admin only): Settings → Custom file types. The panel is hidden for
+non-admins, and also hides itself if the server answers 403.
+- List all registered types with extension, label, kind, source (manual/heuristic/AI), and who updated it.
+- Add/edit: pick a sample file → Suggest profile (toggle AI on/off; the toggle is off, with the reason, when no chat model is configured) → live preview → Save. The saved source is `ai` or `heuristic` while the profile is still what was suggested, and `manual` once you edit it. A message says when the AI pass fell back to rules and why. A 400 from the server (for example a record path that is not in the sample) is shown in the dialog.
+- After a save that changes how files are read (not a new label or description), the panel says "N indexed files use .acme", per collection, how many were indexed with an older profile, and offers **Re-index N files** for each collection you own. For a collection owned by someone else it says its owner must do it. The **Files** button on a row opens the same list later.
+- Delete: counts the indexed files first, per collection. They stay searchable. They cannot be re-indexed afterwards (see below), so no re-index is offered; register the extension again to re-index them.
+- Registered types are drawn with their `kind` (data, docs, code) in the source list and stats, not as "other", and are accepted by uploads, the native file picker and folder scans.
+
+All changes are admin-only (`ADMIN_EMAILS`) and audited. Reading the list is open.
+
+```bash
+# 1. Ask for a proposal from a sample file (nothing is saved)
+curl -H "Authorization: Bearer $CLIO_TOKEN" -F extension=.acme -F "file=@sample.acme" \
+     "$CLIO_URL/api/custom-file-types/suggest"
+# add -F use_ai=false to keep the sample off any model
+
+# 2. Check what a (possibly edited) profile would index
+curl -H "Authorization: Bearer $CLIO_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"extension":".acme","sample":"...","profile":{"record_path":"pumps","title_field":"name","exclude":["id"]}}' \
+     "$CLIO_URL/api/custom-file-types/preview"
+
+# 3. Save it; uploads, folder sync and re-index now accept .acme.
+#    The response says whether the save changes how files are read and, per
+#    collection you can see, how many indexed files use .acme.
+curl -X PUT -H "Authorization: Bearer $CLIO_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"label":"Acme export","record_path":"pumps","title_field":"name","exclude":["id"]}' \
+     "$CLIO_URL/api/custom-file-types/.acme"
+
+# 4. How many indexed files use it, per collection (admin; works after a delete too)
+curl -H "Authorization: Bearer $CLIO_TOKEN" "$CLIO_URL/api/custom-file-types/.acme/usage"
+
+# 5. Re-index only .acme files in one collection (collection owner)
+curl -X POST -H "Authorization: Bearer $CLIO_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"extensions":[".acme"]}' "$CLIO_URL/api/collections/COLLECTION_ID/reindex-extensions"
+```
+
+`PUT` replaces the whole profile: send every field you want to keep. The answer
+is `{profile, reading_changed, affected_documents, usage}`; `usage` lists each
+collection with its `documents`, `out_of_date` and whether you can re-index it.
+"Out of date" means indexed before the profile last changed how files are read
+(`format`, `record_path`, `title_field`, `include`, `exclude`, `labels`,
+`records_per_section`, `max_value_chars`, `enabled`); it uses the index time
+already stored on each document, so nothing is added to existing indexes.
+
+**Scoped re-index.** `POST /api/collections/{id}/reindex-extensions` takes
+`{"extensions": [".acme"]}` (case and the leading dot are optional), is owner
+only and audited, and runs as the usual background job (one re-index at a time:
+409 while another runs). Only documents with those extensions are re-read; every
+other document keeps its chunks, ids and vectors. The job uses the collection's
+live index, so uploads, deletes and search keep working and nothing is lost on
+save. Each file is read and embedded before its old entry is swapped out, so a
+file that no longer parses keeps its previous entry and the job ends as failed
+with the file names; a missing source file fails the job before anything
+changes. Review decisions (quarantine, approval, sensitivity, injection
+review) carry over. The request is refused with **400** for an empty list, a
+malformed extension, spreadsheets (those need a full re-index of the
+collection), and any extension the server does not currently read, including a
+deleted or switched-off custom type: re-indexing would extract again and drop
+the files. Indexed files of a deleted type stay searchable as they are.
+
+Profile fields: `label`, `description`, `format` (`auto`, `json`, `jsonl`, `text`),
+`kind` (`data`, `docs`, `code`; how the file is grouped in stats), `record_path`
+(dotted path to the list or object of records), `title_field`, `include` /
+`exclude` (dotted field names, `*` wildcard, list positions ignored), `labels`
+(field name to display name), `records_per_section` (default 10),
+`max_value_chars`, `enabled`.
+
+**The model's part.** `suggest` first builds a rule-based proposal (finds the
+records, picks a title, drops UUIDs, hashes and encoded blobs). With `use_ai` it
+also sends a bounded excerpt (lists shortened to three items, long strings cut)
+to the deployment's default chat provider and asks for a label, field selection
+and clearer field names. The answer is treated as untrusted: only seven keys are
+read, each is checked against the sample, and any failure falls back to the
+rule-based proposal. It never enables a type, changes `kind`, or saves anything.
+In air-gapped mode only a local provider can be used. Extracted text is scanned
+for prompt injection and content-policy hits like any other source.
+
+**CLI** (`skills/clio/scripts/clio_cli.py`):
+- `clio_cli.py types` — list registered types
+- `clio_cli.py type-suggest .acme sample.acme [--use-ai]` — propose a profile
+- `clio_cli.py type-save .acme '{"record_path":"pumps","title_field":"name"}'` — save a profile (the answer includes the per-collection usage)
+- `clio_cli.py reindex -c Plant --ext .acme` — re-index only those files in a collection (repeat `--ext` for several)
 
 ### Link indexing
 

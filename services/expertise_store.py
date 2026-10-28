@@ -2,8 +2,12 @@
 
 Each expertise pack is a named, markdown-body blob that advisors write once
 and attach to one or more collections.  When the chat engine composes a prompt
-for a collection it loads the attached packs and injects their bodies as
-authoritative advisor guidance.
+for a collection it loads the attached packs and places their bodies in the
+system prompt as delimited, labelled context (see :mod:`authored_text`): the
+text is written by people, so it is data about how to analyse, never a way to
+change the assistant's rules.  A pack is scanned for prompt-injection wording
+on save; the verdict is stored in ``flag`` (JSON, ``''`` = clean, ``NULL`` =
+written before scanning existed).
 
 Storage lives in the same ``data/app.db`` SQLite used by :mod:`app_database`
 so no extra migration machinery is needed.
@@ -16,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from services import authored_text
 from services.sqlite_utils import sqlite_connect
 from models.schemas import (
     ExpertisePack,
@@ -50,6 +55,10 @@ class ExpertiseStore:
                     updated_at  TEXT NOT NULL
                 )
             """)
+            try:
+                conn.execute("ALTER TABLE expertise_packs ADD COLUMN flag TEXT")
+            except sqlite3.OperationalError:
+                pass  # already there
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS collection_expertise (
                     collection_id TEXT NOT NULL,
@@ -67,9 +76,20 @@ class ExpertiseStore:
 
     # ── internal helpers ─────────────────────────────────────────────────────
 
+    _COLUMNS = "id, name, description, body, created_at, updated_at, flag"
+
     def _row_to_pack(self, row: tuple) -> ExpertisePack:
-        """Convert a DB row tuple into an ExpertisePack model."""
-        id_, name, description, body, created_at, updated_at = row
+        """Convert a DB row tuple into an ExpertisePack model.
+
+        A pack saved before scanning existed has no verdict (NULL) and is
+        scanned here, so old text is not a blind spot.
+        """
+        id_, name, description, body, created_at, updated_at, raw_flag = row
+        flag = authored_text.effective_flag(
+            authored_text.pack_scan_text(name, description, body),
+            authored_text.load_flag(raw_flag),
+            scanned=raw_flag is not None,
+        )
         return ExpertisePack(
             id=id_,
             name=name,
@@ -77,6 +97,7 @@ class ExpertiseStore:
             body=body,
             created_at=datetime.fromisoformat(created_at),
             updated_at=datetime.fromisoformat(updated_at),
+            flag=flag,
         )
 
     # ── pack CRUD ─────────────────────────────────────────────────────────────
@@ -85,7 +106,7 @@ class ExpertiseStore:
         """Return all expertise packs ordered by name."""
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute(
-                "SELECT id, name, description, body, created_at, updated_at "
+                f"SELECT {self._COLUMNS} "
                 "FROM expertise_packs ORDER BY name COLLATE NOCASE"
             )
             return [self._row_to_pack(row) for row in cursor.fetchall()]
@@ -94,7 +115,7 @@ class ExpertiseStore:
         """Return a single pack or None if not found."""
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute(
-                "SELECT id, name, description, body, created_at, updated_at "
+                f"SELECT {self._COLUMNS} "
                 "FROM expertise_packs WHERE id = ?",
                 (pack_id,),
             )
@@ -105,11 +126,14 @@ class ExpertiseStore:
         """Insert a new expertise pack and return it."""
         now = datetime.utcnow().isoformat()
         pack_id = str(uuid.uuid4())
+        flag = authored_text.scan(
+            authored_text.pack_scan_text(data.name, data.description, data.body), f"expertise pack {pack_id}",
+        )
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
-                "INSERT INTO expertise_packs (id, name, description, body, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (pack_id, data.name, data.description, data.body, now, now),
+                "INSERT INTO expertise_packs (id, name, description, body, created_at, updated_at, flag) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (pack_id, data.name, data.description, data.body, now, now, authored_text.dump_flag(flag)),
             )
             conn.commit()
         logger.info("Created expertise pack %s (%s)", pack_id, data.name)
@@ -120,6 +144,7 @@ class ExpertiseStore:
             body=data.body,
             created_at=datetime.fromisoformat(now),
             updated_at=datetime.fromisoformat(now),
+            flag=flag,
         )
 
     def update_pack(self, pack_id: str, data: ExpertisePackUpdate) -> Optional[ExpertisePack]:
@@ -133,10 +158,13 @@ class ExpertiseStore:
         new_desc = data.description if data.description is not None else pack.description
         new_body = data.body if data.body is not None else pack.body
 
+        flag = authored_text.scan(
+            authored_text.pack_scan_text(new_name, new_desc, new_body), f"expertise pack {pack_id}",
+        )
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
-                "UPDATE expertise_packs SET name=?, description=?, body=?, updated_at=? WHERE id=?",
-                (new_name, new_desc, new_body, now, pack_id),
+                "UPDATE expertise_packs SET name=?, description=?, body=?, updated_at=?, flag=? WHERE id=?",
+                (new_name, new_desc, new_body, now, authored_text.dump_flag(flag), pack_id),
             )
             conn.commit()
 
@@ -148,6 +176,7 @@ class ExpertiseStore:
             body=new_body,
             created_at=pack.created_at,
             updated_at=datetime.fromisoformat(now),
+            flag=flag,
         )
 
     def delete_pack(self, pack_id: str) -> bool:
@@ -169,7 +198,7 @@ class ExpertiseStore:
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
-                SELECT ep.id, ep.name, ep.description, ep.body, ep.created_at, ep.updated_at
+                SELECT ep.id, ep.name, ep.description, ep.body, ep.created_at, ep.updated_at, ep.flag
                 FROM expertise_packs ep
                 JOIN collection_expertise ce ON ce.pack_id = ep.id
                 WHERE ce.collection_id = ?
@@ -185,6 +214,14 @@ class ExpertiseStore:
             cursor = conn.execute(
                 "SELECT pack_id FROM collection_expertise WHERE collection_id = ?",
                 (collection_id,),
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    def collections_using(self, pack_id: str) -> list[str]:
+        """Ids of the collections a pack is attached to (audit detail)."""
+        with sqlite_connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT collection_id FROM collection_expertise WHERE pack_id = ?", (pack_id,)
             )
             return [row[0] for row in cursor.fetchall()]
 

@@ -13,6 +13,7 @@ from middleware.user_context import get_request_user
 from services.usage_service import check_daily_budget, record_chat_usage
 
 from services.ai_service import AIService, AnthropicProvider, create_provider
+from services import authored_text
 from services.agent_tools import anthropic_tools, openai_tools
 from services.collection_overview import build_collection_overview as _build_collection_overview
 from services.collection_service import collection_service
@@ -103,6 +104,7 @@ def _collection_guidance_version(collection_id: str) -> str:
     try:
         col = collection_service.get_collection(collection_id) or {}
         parts.append(col.get("guide") or "")
+        parts.append(col.get("description") or "")
     except Exception:
         parts.append("")
     try:
@@ -487,6 +489,24 @@ def _prepare_turn(chat_request: ChatRequest, collection_id: str, model_hint: str
         return None, None
 
 
+def _supersede_fields(r) -> dict:
+    """Source-payload fields for a passage from a replaced document and for
+    folded copies; absent when the passage is ordinary."""
+    out = {}
+    if getattr(r, "superseded_by", None):
+        out["superseded_by"] = r.superseded_by
+    if getattr(r, "duplicates", None):
+        out["duplicates"] = r.duplicates
+        out["duplicate_count"] = getattr(r, "duplicate_count", None) or len(r.duplicates)
+    return out
+
+
+def _supersede_note(r) -> str:
+    from services.supersede import source_note
+
+    return source_note(r)
+
+
 def _source_dicts(results, base_url: str) -> list[dict]:
     label_cache: dict = {}
     return [
@@ -499,13 +519,19 @@ def _source_dicts(results, base_url: str) -> list[dict]:
             "pdf_url": f"{base_url}/documents/{r.document_id}/pdf?collection_id={cid}",
             "page_url": f"{base_url}/documents/{r.document_id}/pdf?collection_id={cid}#page={r.page_number}",
             "sensitivity": _source_sensitivity(cid, r, label_cache),
+            **_supersede_fields(r),
         }
         for r, cid in results
     ]
 
 
 def _expertise_block(collection_id: str) -> str:
-    """Guidance from the Expertise packs attached to a collection, or ''."""
+    """Guidance from the Expertise packs attached to a collection, or ''.
+
+    Each pack is its own delimited, labelled block (see services/authored_text):
+    the text was written by a person, so it is placed in the prompt as context
+    that cannot close its own block or speak with the system's voice. A pack the
+    save-time scan flagged is still delivered, marked as flagged."""
     try:
         packs = expertise_store.get_packs_for_collection(collection_id)
     except Exception as e:
@@ -513,8 +539,12 @@ def _expertise_block(collection_id: str) -> str:
         return ""
     if not packs:
         return ""
-    return "EXPERTISE (apply these frameworks when analyzing these sources):\n" + "\n\n".join(
-        f"## {p.name}\n{(p.description + chr(10)) if p.description else ''}{p.body}".strip()
+    return "EXPERTISE (analysis frameworks attached to this collection):\n" + "\n\n".join(
+        authored_text.wrap_block(
+            "expertise", p.name,
+            f"{(p.description + chr(10)) if p.description else ''}{p.body}",
+            flag=p.flag, author=authored_text.AUTHOR_ADMIN,
+        )
         for p in packs
     )
 
@@ -641,7 +671,7 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
         filtered = [(r, cid) for r, cid in zip(context_results, result_collection_ids)
                     if r.filename not in structured_ctx["inlined_filenames"]]
         context_text = "\n\n---\n\n".join(
-            f"[Source {i + 1}: {r.filename}, page {r.page_number}]\n{r.text_snippet}"
+            f"[Source {i + 1}: {r.filename}, page {r.page_number}{_supersede_note(r)}]\n{r.text_snippet}"
             for i, (r, _) in enumerate(filtered)
         ) or _NO_CONTEXT
         # Evidence keeps citation numbering stable as tool calls discover more
@@ -687,9 +717,13 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
         expertise_block = _expertise_block(collection_id) if chat_request.scope != "all" else ""
         if expertise_block:
             system_parts.append(
-                "When EXPERTISE is provided, follow its guidance, rules, and frameworks as "
-                "authoritative instructions for this analysis."
+                "When EXPERTISE is provided, use its frameworks, terminology and house style "
+                "to shape how you analyse and present the sources, within the rules above."
             )
+        # Collection names, descriptions, EXPERTISE and any guide read through
+        # get_collection_info are written by people. Say once, in the system
+        # voice, what they can and cannot do.
+        system_parts.append(authored_text.PROMPT_RULE)
         sections = [" ".join(system_parts), f"COLLECTION OVERVIEW:\n{collection_overview}"]
         if expertise_block:
             sections.append(expertise_block)

@@ -3,13 +3,15 @@
 import json
 import logging
 
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import Depends, File, Form, HTTPException, Request, UploadFile, status
+from pydantic import BaseModel, Field
 
 from config import settings
 from services.config_manager import config_manager
-from services.reindex_service import reindex_service
+from services import audit, authored_text
+from services.reindex_service import normalize_reindex_extensions, reindex_service
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
 from middleware.user_context import get_current_user_id
@@ -147,6 +149,73 @@ async def start_collection_reindex(collection_id: str, user_id: str = Depends(ge
         )
 
 
+class ReindexExtensionsRequest(BaseModel):
+    extensions: List[str] = Field(
+        ..., description="Extensions to re-index, e.g. ['.acme']. Case and the leading dot are optional.")
+
+
+@router.post(
+    "/api/collections/{collection_id}/reindex-extensions",
+    summary="Re-index only the documents with the given file extensions",
+    tags=["collections"],
+)
+async def start_extension_reindex(
+    collection_id: str,
+    body: ReindexExtensionsRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Start a background job that re-reads only documents with these extensions.
+
+    The point is applying a changed custom-file-type profile to files already
+    indexed, without rebuilding the rest of the collection: other documents keep
+    their chunks and vectors untouched. Owner only (it changes how the
+    collection is built). One re-index runs at a time (409 otherwise).
+
+    Refused with 400 for an empty list, a malformed extension, spreadsheets
+    (those need a full re-index) and any extension the server does not
+    currently read, such as a deleted custom type: re-indexing it would drop the
+    files, so they are left searchable as they are.
+
+    Returns the ``job_id`` to follow on ``GET /api/reindex/status``.
+    """
+    from api.deps import require_collection_access
+
+    require_collection_access(collection_id, user_id, owner=True)
+    if not collection_service.get_collection(collection_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Collection '{collection_id}' not found"
+        )
+
+    try:
+        wanted = normalize_reindex_extensions(body.extensions)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    try:
+        job_id = await reindex_service.start_extension_reindex(
+            collection_id=collection_id, extensions=wanted,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to start extension re-indexing for collection {collection_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start extension re-indexing: {str(e)}"
+        )
+
+    audit.record("collection.reindex_extensions", collection_id=collection_id,
+                 detail={"extensions": wanted, "job_id": job_id})
+    return {
+        "job_id": job_id,
+        "status": "started",
+        "collection_id": collection_id,
+        "extensions": wanted,
+        "message": f"Re-indexing {', '.join(wanted)} files in collection '{collection_id}'",
+    }
+
+
 @router.get(
     "/api/reindex/status",
     summary="Get re-indexing job status",
@@ -252,6 +321,12 @@ async def create_collection(collection_data: dict, user_id: str = Depends(get_cu
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Collection name is required"
         )
+    try:
+        authored_text.check_length("name", str(name), authored_text.MAX_NAME_CHARS)
+        authored_text.check_length("description", str(collection_data.get("description") or ""),
+                                   authored_text.MAX_DESCRIPTION_CHARS)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     collection = collection_service.create_collection(
         name=name,
@@ -398,6 +473,22 @@ async def update_collection(collection_id: str, updates: dict, user_id: str = De
     from api.deps import require_collection_access
     require_collection_access(collection_id, user_id, owner=True)
 
+    # Text that is delivered to a model on later requests: typed, bounded.
+    for field, limit in (("guide", authored_text.MAX_GUIDE_CHARS),
+                         ("description", authored_text.MAX_DESCRIPTION_CHARS),
+                         ("name", authored_text.MAX_NAME_CHARS)):
+        value = updates.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"{field} must be text")
+        try:
+            authored_text.check_length(field, value, limit)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    prior = collection_service.get_collection(collection_id) or {}
+
     # Sensitivity is a governance label: validated, and its changes audited
     # (it decides whether the collection can be shared or reached over MCP).
     sensitivity = None
@@ -467,7 +558,34 @@ async def update_collection(collection_id: str, updates: dict, user_id: str = De
             detail=f"Collection '{collection_id}' not found"
         )
 
-    return collection
+    # The guide, name and description are delivered to other people's agents
+    # and prompts (see services/authored_text.py). Record that they changed,
+    # by size and fingerprint rather than text, and tell the author when the
+    # scan found instruction-like wording. The save itself always succeeds.
+    from services import audit
+    new_guide = updates.get("guide")
+    if new_guide is not None and (prior.get("guide") or "") != new_guide:
+        flag = collection.get("guide_flag")
+        audit.record("collection.guide", actor=user_id, collection_id=collection_id, detail={
+            "chars": len(new_guide), "digest": authored_text.digest(new_guide),
+            "previous_digest": authored_text.digest(prior.get("guide")) if prior.get("guide") else None,
+            "flagged": bool(flag),
+            **({"flag_level": flag.get("level"), "flag_categories": flag.get("categories")} if flag else {}),
+        })
+    meta_changed = {
+        field: {"chars": len(updates[field]), "digest": authored_text.digest(updates[field])}
+        for field in ("name", "description")
+        if updates.get(field) is not None and (prior.get(field) or "") != updates[field]
+    }
+    if meta_changed:
+        audit.record("collection.metadata", actor=user_id, collection_id=collection_id,
+                     detail={"fields": meta_changed})
+
+    guide_warning = (
+        authored_text.warning_for_author(collection.get("guide_flag"), "guide")
+        if new_guide is not None else None
+    )
+    return {**collection, "guide_warning": guide_warning}
 
 
 @router.post(
@@ -726,3 +844,120 @@ def delete_collection(collection_id: str, user_id: str = Depends(get_current_use
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete collection: {str(e)}"
         )
+
+
+# ── Retrieval coverage ──────────────────────────────────────────────────────
+# How findable is this collection's content through the real search path?
+# See services/coverage_report.py. Reading the report is read access
+# (get_indexer enforces it); running it costs CPU and owners act on the
+# result, so running and the owner-question editor are owner-gated.
+
+class CoverageRunRequest(BaseModel):
+    probes: int = Field(default=100, ge=1, le=300, description="Chunks to sample (capped at 300)")
+    seed: Optional[int] = Field(default=None, description="Sampling seed; the same seed repeats the same probes")
+
+
+class CoverageQuestionRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=1000)
+    expected_documents: list[str] = Field(..., min_length=1, max_length=20,
+                                          description="Document ids or exact filenames that should answer it")
+
+
+def _coverage_payload(indexer, collection_id: str) -> dict:
+    from services.coverage_report import coverage_runner, latest_report
+
+    store = indexer.vector_store.metadata_store
+    return {
+        "collection_id": collection_id,
+        "run": coverage_runner.status(collection_id),
+        "report": latest_report(indexer),
+        "questions": store.list_coverage_questions(),
+        "llm_questions": bool(settings.coverage_llm_questions),
+    }
+
+
+@router.get(
+    "/api/collections/{collection_id}/coverage",
+    summary="Latest retrieval coverage report",
+    tags=["collections"],
+)
+def get_collection_coverage(collection_id: str, user_id: str = Depends(get_current_user_id)):
+    """The latest coverage report (null before the first run), whether a run is
+    in progress, and the owner's questions. ``report.stale`` is true once the
+    collection's sources or embedding model changed since the run."""
+    from api.deps import get_indexer
+    return _coverage_payload(get_indexer(collection_id), collection_id)
+
+
+@router.post(
+    "/api/collections/{collection_id}/coverage",
+    summary="Run a retrieval coverage report",
+    tags=["collections"],
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_collection_coverage(collection_id: str, body: Optional[CoverageRunRequest] = None,
+                              user_id: str = Depends(get_current_user_id)):
+    """Start a bounded background run (owner only). 409 while one is already
+    running for this collection. Poll ``GET .../coverage`` for the result."""
+    from api.deps import get_indexer, require_collection_access
+    from services import audit
+    from services.coverage_report import (
+        DEFAULT_PROBES, DEFAULT_SEED, CoverageAlreadyRunning, coverage_runner)
+
+    require_collection_access(collection_id, user_id, owner=True)
+    indexer = get_indexer(collection_id)
+    body = body or CoverageRunRequest()
+    probes = body.probes if body.probes else DEFAULT_PROBES
+    seed = body.seed if body.seed is not None else DEFAULT_SEED
+    try:
+        run = coverage_runner.start(collection_id, indexer, probes=probes, seed=seed)
+    except CoverageAlreadyRunning as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    audit.record("coverage.run", actor=user_id, collection_id=collection_id,
+                 detail={"probes": probes, "seed": seed})
+    return {"collection_id": collection_id, "run": run}
+
+
+@router.post(
+    "/api/collections/{collection_id}/coverage/questions",
+    summary="Add an owner question to the coverage report",
+    tags=["collections"],
+    status_code=status.HTTP_201_CREATED,
+)
+def add_coverage_question(collection_id: str, body: CoverageQuestionRequest,
+                          user_id: str = Depends(get_current_user_id)):
+    """Add a question and the document(s) that should answer it (owner only)."""
+    from api.deps import get_indexer, require_collection_access
+    from services import audit
+    from services.coverage_report import QuestionError, add_question
+
+    require_collection_access(collection_id, user_id, owner=True)
+    indexer = get_indexer(collection_id)
+    try:
+        created = add_question(indexer, body.question, body.expected_documents, user_id)
+    except QuestionError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    audit.record("coverage.question_add", actor=user_id, collection_id=collection_id,
+                 detail={"question_id": created["id"],
+                         "documents": [d["document_id"] for d in created["expected_documents"]]})
+    return created
+
+
+@router.delete(
+    "/api/collections/{collection_id}/coverage/questions/{question_id}",
+    summary="Delete an owner question",
+    tags=["collections"],
+)
+def delete_coverage_question(collection_id: str, question_id: int,
+                             user_id: str = Depends(get_current_user_id)):
+    """Remove an owner question (owner only)."""
+    from api.deps import get_indexer, require_collection_access
+    from services import audit
+
+    require_collection_access(collection_id, user_id, owner=True)
+    indexer = get_indexer(collection_id)
+    if not indexer.vector_store.metadata_store.delete_coverage_question(question_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such question")
+    audit.record("coverage.question_delete", actor=user_id, collection_id=collection_id,
+                 detail={"question_id": question_id})
+    return {"deleted": question_id}

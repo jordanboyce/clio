@@ -39,6 +39,7 @@
             <span v-if="source.page_number" class="text-xs text-base-content/70">Page / section {{ source.page_number }}</span>
             <span v-if="source.sensitivity && source.sensitivity !== 'public'" class="badge badge-outline badge-sm">{{ source.sensitivity }}</span>
           </div>
+          <SupersedeNote :source="source" />
           <p class="text-sm leading-relaxed whitespace-pre-wrap break-words mt-2 max-w-prose">{{ source.text_snippet || 'No passage preview available.' }}</p>
           <a v-if="sourceHref(source)" :href="sourceHref(source)" target="_blank" rel="noopener noreferrer"
             class="link link-primary inline-flex items-center min-h-9 text-sm mt-1"
@@ -56,6 +57,7 @@
 import { computed, nextTick, ref, useId } from 'vue'
 import { renderEvidenceMarkdown, sourceHref } from '../utils/answerEvidence'
 import { locationLabel } from '../utils/fileTypes'
+import SupersedeNote from './SupersedeNote.vue'
 
 const props = defineProps({
   content: { type: String, default: '' },
@@ -74,7 +76,8 @@ const MAX_CHIPS = 8
 const visibleSources = computed(() => props.sources.slice(0, MAX_CHIPS))
 const chipTitle = (source) => {
   const snippet = String(source.text_snippet || '').replace(/\s+/g, ' ').trim()
-  return snippet ? (snippet.length > 220 ? snippet.slice(0, 217) + '…' : snippet) : source.filename
+  const prefix = source.superseded_by ? 'Older version. ' : ''
+  return snippet ? prefix + (snippet.length > 220 ? snippet.slice(0, 217) + '…' : snippet) : source.filename
 }
 
 function openAll() {

@@ -63,6 +63,13 @@
       class="m-2 flex-shrink-0"
       :collection-id="collectionStore.currentCollectionId"
     />
+    <SupersedeSuggestions
+      v-if="collectionStore.currentCollectionId && collectionStore.canEditCurrent"
+      ref="supersedeSuggestions"
+      class="flex-shrink-0"
+      :collection-id="collectionStore.currentCollectionId"
+      @changed="onSupersedeChanged"
+    />
 
     <!-- Storage against the per-collection cap. Hidden until half the cap is
          used: a near-empty meter above every source list told people nothing
@@ -438,6 +445,7 @@
               <FileText :size="11" class="text-accent shrink-0" aria-hidden="true" />
               <span class="text-xs flex-1 truncate" :title="pack.name">{{ pack.name }}</span>
               <button
+                v-if="collectionStore.canConfigureCurrent"
                 class="btn btn-ghost btn-xs btn-circle text-error"
                 :title="`Remove ${pack.name}`"
                 :disabled="expertiseLoading"
@@ -449,7 +457,7 @@
           </div>
 
           <!-- Add pack dropdown -->
-          <div v-if="availablePacks.length > 0" class="dropdown w-full">
+          <div v-if="availablePacks.length > 0 && collectionStore.canConfigureCurrent" class="dropdown w-full">
             <label
               tabindex="0"
               class="btn btn-outline btn-xs w-full gap-1"
@@ -468,6 +476,9 @@
               </li>
             </ul>
           </div>
+          <p v-else-if="!collectionStore.canConfigureCurrent" class="text-xs text-base-content/40">
+            Only the owner of this collection can change its instructions.
+          </p>
           <p v-else-if="expertiseStore.packs.length === 0" class="text-xs text-base-content/40">
             Nothing saved yet. Create instructions from More, then Saved instructions.
           </p>
@@ -677,6 +688,16 @@
                 :class="labelBadgeClass(doc.sensitivity_effective)"
                 :title="`Sensitivity: ${doc.sensitivity_effective}${doc.sensitivity ? ' (set on this document)' : ' (collection default)'}`"
               >{{ doc.sensitivity_effective }}</span>
+              <!-- Replaced by a newer document: quiet, informational -->
+              <span
+                v-if="replacedBadge(doc)"
+                class="badge badge-xs badge-ghost gap-0.5 max-w-[10rem]"
+                :title="replacedBadge(doc).title"
+                data-testid="replaced-badge"
+              >
+                <Replace :size="9" aria-hidden="true" />
+                <span class="truncate">{{ replacedBadge(doc).text }} · {{ replacedBadge(doc).name }}</span>
+              </span>
               <!-- Content-policy outcome -->
               <button
                 v-if="policyBadge(doc.policy_status)"
@@ -718,6 +739,17 @@
             >
               <Eye :size="12" />
             </a>
+            <button
+              v-if="collectionStore.canEditCurrent"
+              class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content"
+              @click="supersedeDoc = doc"
+              :disabled="deleting"
+              :title="doc.superseded_by ? 'Change or clear the replacement' : 'Mark as replaced by…'"
+              :aria-label="`Mark ${doc.filename} as replaced by another source`"
+              data-testid="replace-action"
+            >
+              <Replace :size="12" />
+            </button>
             <button
               class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content"
               @click="openReport(doc)"
@@ -1014,6 +1046,14 @@
       <form method="dialog" class="modal-backdrop"><button @click="closeReportModal">close</button></form>
     </dialog>
 
+    <SupersedeDialog
+      v-if="collectionStore.currentCollectionId"
+      :doc="supersedeDoc"
+      :collection-id="collectionStore.currentCollectionId"
+      @close="supersedeDoc = null"
+      @changed="onSupersedeChanged"
+    />
+
   </div>
 </template>
 
@@ -1021,7 +1061,10 @@
 import { ref, computed, markRaw, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import http from '../utils/http'
 import EmbeddingMismatchNotice from './EmbeddingMismatchNotice.vue'
-import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync, GitBranch, EyeOff } from 'lucide-vue-next'
+import SupersedeDialog from './SupersedeDialog.vue'
+import SupersedeSuggestions from './SupersedeSuggestions.vue'
+import { replacedBadge } from '../utils/supersede'
+import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync, GitBranch, EyeOff, Replace } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useUiStore } from '../stores/uiStore'
 import { useUserStore } from '../stores/userStore'
@@ -1032,6 +1075,11 @@ import { useSelectionStore } from '../stores/selectionStore'
 import { useStatsStore } from '../stores/statsStore'
 import { formatBytes, describeStorage } from '../utils/format'
 import { describeFile, FAMILIES, isTabularFile } from '../utils/fileTypes'
+import { useCustomFileTypesStore } from '../stores/customFileTypesStore'
+
+// Registered custom types: loaded once, shared with the app shell.
+const customTypes = useCustomFileTypesStore()
+customTypes.load()
 
 const emit = defineEmits(['document-deleted', 'open', 'background-job-started', 'clone-collection'])
 
@@ -1092,6 +1140,16 @@ const isLinkDoc = (doc) => doc?.source_type === 'url' && /^https?:\/\//i.test(do
 
 // Document management state
 const documents = ref([])
+
+// "Replaced by…" picker (SupersedeDialog) and the suggestions list share this
+// refresh: the relationship changes how a row reads and how search ranks it.
+const supersedeDoc = ref(null)
+const supersedeSuggestions = ref(null)
+const onSupersedeChanged = async () => {
+  await loadDocuments()
+  supersedeSuggestions.value?.load?.()
+}
+
 const loading = ref(false)
 const deleting = ref(false)
 const error = ref('')
@@ -1505,7 +1563,9 @@ const openFolderPicker = async () => {
           }
         }
       } else {
-        indexError.value = 'No supported files found in that folder.'
+        indexError.value = customTypes.accepted.length
+          ? `No supported files found in that folder (including ${customTypes.accepted.join(', ')}).`
+          : 'No supported files found in that folder.'
       }
     }
   } catch (err) {
@@ -2160,6 +2220,15 @@ const availablePacks = computed(() =>
   expertiseStore.packs.filter(p => !attachedPackIds.value.includes(p.id))
 )
 
+// Choosing which instructions a collection follows is the owner's call (the
+// server answers 403 to anyone else, including a read-write collaborator).
+function expertiseError(err, fallback) {
+  if (err?.response?.status === 403) {
+    return new Error('Only the owner of this collection can change which instructions it follows.')
+  }
+  return new Error(err?.response?.data?.detail || err?.message || fallback)
+}
+
 async function loadExpertise(collId) {
   const id = collId || collectionStore.currentCollectionId
   try {
@@ -2177,6 +2246,8 @@ async function addExpertisePack(packId) {
   try {
     const newIds = [...attachedPackIds.value, packId]
     await expertiseStore.setAttached(collectionStore.currentCollectionId, newIds)
+  } catch (err) {
+    ui.toastError(expertiseError(err, 'Could not apply these instructions'))
   } finally {
     expertiseLoading.value = false
   }
@@ -2187,6 +2258,8 @@ async function removeExpertisePack(packId) {
   try {
     const newIds = attachedPackIds.value.filter(id => id !== packId)
     await expertiseStore.setAttached(collectionStore.currentCollectionId, newIds)
+  } catch (err) {
+    ui.toastError(expertiseError(err, 'Could not remove these instructions'))
   } finally {
     expertiseLoading.value = false
   }

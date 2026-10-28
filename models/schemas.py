@@ -73,6 +73,12 @@ class DocumentMetadata(BaseModel):
     # v3.4: storage accounting
     file_size: Optional[int] = Field(None, description="Bytes of the source file on disk (None when unknown)")
 
+    # v3.8: "replaced by" — an owner marked this document as superseded
+    superseded_by: Optional[str] = Field(None, description="document_id of the document that replaces this one")
+    superseded_by_filename: Optional[str] = Field(None, description="Filename of the replacement")
+    superseded_at: Optional[str] = Field(None, description="ISO timestamp the replacement was recorded")
+    superseded_note: Optional[str] = Field(None, description="Owner's note on why")
+
 
 class SearchResult(BaseModel):
     """A single search result."""
@@ -109,6 +115,19 @@ class SearchResult(BaseModel):
     # v3.1: Local file reference support
     source_type: Optional[str] = Field(None, description="Source type: 'upload' or 'local_reference'")
     source_path: Optional[str] = Field(None, description="Original filesystem path for local references")
+
+    # v3.8: results from an older version say so, and copies fold into one result
+    superseded_by: Optional[Dict[str, str]] = Field(
+        None,
+        description="Set when this passage is from a document an owner marked as replaced: "
+                    "{document_id, filename[, note]} of the current version",
+    )
+    duplicates: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Other places this same text appears ({document_id, filename, page}), "
+                    "folded into this result; bounded, see duplicate_count for the total",
+    )
+    duplicate_count: Optional[int] = Field(None, description="How many other passages were folded into this one")
 
 
 class UploadResponse(BaseModel):
@@ -196,6 +215,12 @@ class SearchFilters(BaseModel):
     )
     date_from: Optional[str] = Field(None, description="ISO timestamp lower bound on upload time")
     date_to: Optional[str] = Field(None, description="ISO timestamp upper bound on upload time")
+    include_superseded: Optional[bool] = Field(
+        None,
+        description="True turns off the demotion of documents marked as replaced by a newer "
+                    "version, for questions about what an older version said. Older "
+                    "passages are always returned and labelled either way.",
+    )
 
     def to_dict(self) -> Optional[dict]:
         """Return a plain dict of set filters, or None if nothing is set."""
@@ -318,7 +343,9 @@ class DocumentChunksResponse(BaseModel):
     total_chunks: int = Field(..., description="Total chunks stored for this document")
     returned_chunks: int = Field(..., description="Chunks returned in this response")
     chunks: List[DocumentChunkView] = Field(..., description="Chunk records")
-
+    superseded_by: Optional[Dict[str, str]] = Field(
+        None, description="{document_id, filename} of the document that replaces this one, when marked"
+    )
 
 # Chat schemas
 class ChatMessage(BaseModel):
@@ -339,6 +366,13 @@ class ChatSource(BaseModel):
     pdf_url: str = Field(..., description="URL to download the document")
     page_url: str = Field(..., description="URL to view the specific page")
     sensitivity: Optional[str] = Field(None, description="Sensitivity label in force for the source")
+    superseded_by: Optional[Dict[str, str]] = Field(
+        None, description="Set when this passage is from a document replaced by a newer one"
+    )
+    duplicates: Optional[List[Dict[str, Any]]] = Field(
+        None, description="Other documents that contain the same text"
+    )
+    duplicate_count: Optional[int] = Field(None, description="Total other copies of this text")
 
 
 class ChatRequest(BaseModel):
@@ -494,6 +528,14 @@ class ExpertisePack(BaseModel):
     body: str = Field(..., description="Markdown body — the full guidance text injected into the LLM prompt")
     created_at: datetime = Field(..., description="UTC creation timestamp")
     updated_at: datetime = Field(..., description="UTC last-update timestamp")
+    flag: Optional[dict] = Field(
+        None,
+        description="Prompt-injection scan verdict (medium/high only): level, categories, reason, excerpts. "
+                    "The pack is still saved and delivered; agents are told it is flagged.",
+    )
+    warning: Optional[dict] = Field(
+        None, description="Set on a save response when the text was flagged, for the editor to show.",
+    )
 
 
 class ExpertisePackCreate(BaseModel):

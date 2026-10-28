@@ -16,6 +16,8 @@ directory.
     clio_cli.py stats --collection policies                  # exact counts, sizes, types
     clio_cli.py files --collection policies --type pdf       # list files (table)
     clio_cli.py files -c policies --csv all-files.csv        # every file, however many
+    clio_cli.py coverage -c policies                         # how findable is this collection?
+    clio_cli.py coverage -c policies --run                   # owner: refresh the report
     clio_cli.py jobs
 
 The token is read from the environment (or --token-file), never from argv, so
@@ -267,7 +269,11 @@ def cmd_upload(c: Client, a) -> Any:
 def cmd_reindex(c: Client, a) -> Any:
     """Rebuild a collection's index with the embedding model now in use."""
     cid = resolve_collection(c, a.collection)
-    started = c.post_json(f"/api/collections/{cid}/reindex", {})
+    if a.ext:
+        # Only the files of these types, e.g. after changing a custom type's profile.
+        started = c.post_json(f"/api/collections/{cid}/reindex-extensions", {"extensions": a.ext})
+    else:
+        started = c.post_json(f"/api/collections/{cid}/reindex", {})
     result = {"collection_id": cid, "job_id": started.get("job_id")}
     if a.no_wait:
         return result
@@ -315,13 +321,111 @@ def cmd_jobs(c: Client, a) -> Any:
     return c.get("/documents/jobs")
 
 
+def cmd_coverage(c: Client, a) -> Any:
+    """Show a collection's retrieval coverage report, or run a fresh one (--run).
+
+    Running is owner-only on the server and takes seconds to a couple of
+    minutes; the command waits for it unless --no-wait.
+    """
+    cid = resolve_collection(c, a.collection)
+    path = f"/api/collections/{cid}/coverage"
+    if a.run:
+        payload = {"probes": a.probes} if a.probes else {}
+        try:
+            c.post_json(path, payload)
+        except ClioError as e:
+            if "HTTP 409" not in str(e):
+                raise
+            if not a.json:
+                print("a run is already in progress; waiting for it", file=sys.stderr)
+        if a.no_wait:
+            return {"collection_id": cid, "run": c.get(path).get("run")}
+    while True:
+        data = c.get(path)
+        run = data.get("run") or {}
+        if not a.run or run.get("state") != "running":
+            break
+        if not a.json:
+            print(f"  coverage run: {run.get('done', 0)}/{run.get('total') or '?'} probes", file=sys.stderr)
+        time.sleep(a.poll)
+    data["collection_id"] = cid
+    return data
+
+
 def cmd_job(c: Client, a) -> Any:
     return c.get(f"/documents/upload/{a.job_id}/status")
 
 
 def cmd_search(c: Client, a) -> Any:
     cid = resolve_collection(c, a.collection)
-    return c.post_json("/search", {"query": a.query, "top_k": a.top_k}, collection_id=cid)
+    body: dict = {"query": a.query, "top_k": a.top_k}
+    if getattr(a, "include_superseded", False):
+        body["filters"] = {"include_superseded": True}
+    return c.post_json("/search", body, collection_id=cid)
+
+
+def cmd_supersede(c: Client, a) -> Any:
+    """Suggest, record or clear 'replaced by' relationships between documents."""
+    cid = resolve_collection(c, a.collection)
+    if a.action == "suggest":
+        return c.get("/documents/supersede-suggestions", collection_id=cid)
+    if a.action == "mark":
+        if not a.replaced_by:
+            raise ClioError("mark needs both the old document id and the id that replaces it")
+        body = {"replaced_by": a.replaced_by}
+        if a.note:
+            body["note"] = a.note
+        return c.post_json(f"/documents/{a.document_id}/supersede", body, collection_id=cid)
+    return c._request("DELETE", f"/documents/{a.document_id}/supersede",
+                      query={"collection_id": cid})
+
+
+# -- custom file types commands -------------------------------------------------
+
+def cmd_types(c: Client, a) -> Any:
+    """List all registered custom file types."""
+    data = c.get("/api/custom-file-types")
+    return data.get("types", []) if isinstance(data, dict) else data
+
+
+def cmd_type_suggest(c: Client, a) -> Any:
+    """Propose a profile from a sample file."""
+    sample_path = Path(a.sample).expanduser()
+    if not sample_path.exists():
+        raise ClioError(f"{sample_path} does not exist")
+    if sample_path.stat().st_size > 2 * 1024 * 1024:
+        raise ClioError("sample is larger than 2 MB; use a smaller excerpt")
+
+    with open(sample_path, "rb") as f:
+        raw = f.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            raise ClioError("sample is larger than 2 MB; use a smaller excerpt")
+
+    boundary = uuid.uuid4().hex
+    parts = [
+        f'--{boundary}\r\nContent-Disposition: form-data; name="extension"\r\n\r\n{a.extension}\r\n'.encode(),
+        f'--{boundary}\r\nContent-Disposition: form-data; name="use_ai"\r\n\r\n{str(a.use_ai).lower()}\r\n'.encode(),
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{_ascii_name(sample_path)}"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode(),
+        raw,
+        b'\r\n',
+        f'--{boundary}--\r\n'.encode(),
+    ]
+    return c._request(
+        "POST", "/api/custom-file-types/suggest",
+        body=b"".join(parts),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    )
+
+
+def cmd_type_save(c: Client, a) -> Any:
+    """Save a profile for an extension."""
+    profile = json.loads(a.profile)
+    ext = a.extension
+    if not ext.startswith("."):
+        ext = "." + ext
+    return c._request("PUT", f"/api/custom-file-types/{ext}",
+                      body=json.dumps(profile).encode(),
+                      headers={"Content-Type": "application/json"})
 
 
 def _human(n: Optional[int]) -> str:
@@ -333,7 +437,59 @@ def _human(n: Optional[int]) -> str:
     return f"{size:.1f} TB"
 
 
+def _pct(v: Optional[float]) -> str:
+    return "-" if v is None else f"{round(100 * v)}%"
+
+
+def render_coverage(result: dict) -> str:
+    report, run = result.get("report"), result.get("run") or {}
+    if run.get("state") == "running" and not report:
+        return f"coverage run in progress ({run.get('done', 0)}/{run.get('total') or '?'} probes)"
+    if run.get("state") == "failed":
+        return f"coverage run failed: {run.get('error')}"
+    if not report:
+        return "no coverage report yet; an owner can create one with: clio_cli.py coverage -c NAME --run"
+    o = report["overall"]
+    stale = report.get("stale_reasons") or []
+    lines = [
+        f"retrieval coverage  document hit@5 {_pct(o['document_hit_at_5'])}  "
+        f"chunk hit@10 {_pct(o['chunk_hit_at_10'])}  MRR {o['mrr_chunk'] if o['mrr_chunk'] is not None else '-'}  "
+        f"({o['probes']} probes, {report.get('age') or '?'} old)",
+    ]
+    if stale:
+        lines.append("STALE: " + ", ".join(s.replace("_", " ") for s in stale) + " since this run; re-run it")
+    pm = report["probe_method"]
+    used = ", ".join(f"{m} {v['probes']}" for m, v in pm["by_method"].items()) or "none"
+    lines.append(f"probes: {used}; embedding {report.get('embedding_model')}; corpus {report['corpus_version']}")
+    lines.append(report["measures"])
+    for note in report.get("notes", [])[1:-1]:
+        lines.append(f"note: {note}")
+    weak = report.get("weakest_documents") or []
+    if weak:
+        lines.append("weakest documents")
+        for d in weak[:5]:
+            lines.append(f"  {d['filename']}  {_pct(d['document_hit_at_5'])} of {d['probes']} probes found")
+            for f in d["failing_probes"][:2]:
+                lines.append(f"      missed: {f['query']!r}")
+    never = report["chunks_never_retrieved"]["count"]
+    if never:
+        lines.append(f"{never} probed chunks never came back in the top 10")
+    if report["unprobeable_chunks"]["count"]:
+        lines.append(f"{report['unprobeable_chunks']['count']} chunks have no searchable words (table noise?)")
+    owner = report.get("owner_questions")
+    if owner:
+        lines.append(f"owner questions  hit@5 {_pct(owner['document_hit_at_5'])} "
+                     f"({owner['measured']} of {owner['total']} measured)")
+        for item in owner["items"]:
+            if item["status"] != "hit":
+                names = ", ".join(d["filename"] for d in item["expected_documents"])
+                lines.append(f"  {item['status'].replace('_', ' ')}: {item['question']}  (expected {names})")
+    return "\n".join(lines)
+
+
 def render(command: str, result: Any) -> str:
+    if command == "coverage":
+        return render_coverage(result)
     if command == "search":
         rows = [f"{r['filename']} p.{r['page_number']}  score {r['similarity_score']:.2f}\n"
                 f"    {r['text_snippet'].strip()[:300]}" for r in result.get("results", [])]
@@ -365,6 +521,11 @@ def render(command: str, result: Any) -> str:
     if command == "collections":
         return "\n".join(f"{x.get('id')}\t{x.get('name')}\t{x.get('document_count', '')} docs"
                          for x in result) or "no collections"
+    if command == "types":
+        if not result:
+            return "no custom file types registered"
+        return "\n".join(f"{x.get('extension')}\t{x.get('label')}\t{x.get('kind')}\t{x.get('source')}"
+                         for x in result)
     return json.dumps(result, indent=2)
 
 
@@ -402,16 +563,46 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_files)
     s = sub.add_parser("reindex", help="rebuild a collection's index with the current embedding model")
     s.add_argument("--collection", "-c", default="default")
+    s.add_argument("--ext", action="append", metavar="EXT",
+                   help="re-index only files with this extension (repeatable), e.g. --ext .acme; "
+                        "everything else is left untouched")
     s.add_argument("--no-wait", action="store_true")
     s.add_argument("--poll", type=float, default=2.0)
     s.set_defaults(fn=cmd_reindex)
+    s = sub.add_parser("coverage", help="how findable a collection's content is (owner: --run to refresh)")
+    s.add_argument("--collection", "-c", default="default")
+    s.add_argument("--run", action="store_true", help="run a fresh report (owner only) and wait for it")
+    s.add_argument("--probes", type=int, help="chunks to sample, up to 300 (default 100)")
+    s.add_argument("--no-wait", action="store_true")
+    s.add_argument("--poll", type=float, default=2.0)
+    s.set_defaults(fn=cmd_coverage)
     sub.add_parser("jobs", help="recent indexing jobs").set_defaults(fn=cmd_jobs)
     s = sub.add_parser("job", help="one indexing job"); s.add_argument("job_id", type=int)
     s.set_defaults(fn=cmd_job)
     s = sub.add_parser("search", help="search a collection")
     s.add_argument("query"); s.add_argument("--collection", "-c", default="default")
     s.add_argument("--top-k", type=int, default=5)
+    s.add_argument("--include-superseded", action="store_true",
+                   help="do not demote documents marked as replaced (for 'what did v2 say')")
     s.set_defaults(fn=cmd_search)
+    s = sub.add_parser("supersede", help="suggest, mark or clear 'replaced by' between documents")
+    s.add_argument("action", choices=["suggest", "mark", "clear"])
+    s.add_argument("document_id", nargs="?", help="the OLD document (mark/clear)")
+    s.add_argument("replaced_by", nargs="?", help="document id of the current version (mark)")
+    s.add_argument("--collection", "-c", default="default")
+    s.add_argument("--note", help="why it was replaced (mark)")
+    s.set_defaults(fn=cmd_supersede)
+    s = sub.add_parser("types", help="list registered custom file types")
+    s.set_defaults(fn=cmd_types)
+    s = sub.add_parser("type-suggest", help="propose a profile from a sample file")
+    s.add_argument("extension")
+    s.add_argument("sample", help="path to sample file")
+    s.add_argument("--use-ai", action="store_true", default=False, help="ask the deployment's chat model to refine the proposal")
+    s.set_defaults(fn=cmd_type_suggest)
+    s = sub.add_parser("type-save", help="save a profile for an extension")
+    s.add_argument("extension")
+    s.add_argument("profile", help="JSON profile, e.g. '{\"record_path\":\"pumps\",\"title_field\":\"name\"}'")
+    s.set_defaults(fn=cmd_type_save)
     return p
 
 
@@ -437,6 +628,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             result.get("status") not in (None, "completed") or result.get("failed_files")):
         return 1
     if args.command == "reindex" and isinstance(result, dict) and result.get("status") == "failed":
+        return 1
+    if args.command == "coverage" and isinstance(result, dict) and (result.get("run") or {}).get("state") == "failed":
         return 1
     return 0
 

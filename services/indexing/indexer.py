@@ -23,6 +23,7 @@ from services.vector_store import VectorStore
 from services import audit, content_policy
 from services.content_policy import BlockedContentError, ContentRejectedError
 from services.governance import content_hash_of
+from services.supersede import BACKFILL_MARGIN
 
 logger = logging.getLogger(__name__)
 
@@ -490,6 +491,7 @@ class DocumentIndexer:
         self,
         prepared: List[PreparedDocument],
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        embeddings: Optional[Any] = None,
     ) -> List[DocumentMetadata]:
         """
         Embed and persist a batch of prepared documents in one pass.
@@ -504,6 +506,10 @@ class DocumentIndexer:
             prepared: PreparedDocuments from prepare_document
             progress_callback: Optional (chunks_done, chunks_total) callback
                 covering the whole batch
+            embeddings: Vectors the caller already computed for every chunk of
+                `prepared`, in order. A caller that replaces an existing
+                document embeds first and only then removes the old one, so a
+                failing model never leaves the document missing.
 
         Returns:
             One DocumentMetadata per prepared document, in input order
@@ -517,10 +523,13 @@ class DocumentIndexer:
             f"({len(all_chunks)} chunks)"
         )
 
-        embeddings = self.embedding_service.embed_texts(
-            [chunk.text for chunk in all_chunks],
-            progress_callback=progress_callback,
-        )
+        if embeddings is None:
+            embeddings = self.embedding_service.embed_texts(
+                [chunk.text for chunk in all_chunks],
+                progress_callback=progress_callback,
+            )
+        elif len(embeddings) != len(all_chunks):
+            raise ValueError("Precomputed embeddings do not match the chunks")
         self.vector_store.add_chunks(all_chunks, embeddings)
 
         indexed_at = datetime.utcnow().isoformat()
@@ -884,6 +893,7 @@ class DocumentIndexer:
         structured_context: Optional[str] = None,
         skip_filenames: Optional[set] = None,
         filters: Optional[dict] = None,
+        _widen: bool = False,
     ) -> dict:
         """
         Search for documents matching the query, with optional AI enhancements.
@@ -910,6 +920,7 @@ class DocumentIndexer:
         # ``auto`` resolves to a concrete hybrid balance before anything else
         # looks at the mode, so every later branch deals in real strategies.
         plan = None
+        requested_mode, requested_weight = mode, semantic_weight
         if mode == SearchMode.AUTO:
             from services.retrieval_planner import plan_retrieval
             plan = plan_retrieval(query, base_weight=semantic_weight)
@@ -952,6 +963,17 @@ class DocumentIndexer:
         want_wider_pool = local_reranker is not None or (ai_active and ai_options.rerank)
         mult = max(1, getattr(_settings, "reranker_candidate_multiplier", 5))
         fetch_k = min(top_k * mult, 50) if want_wider_pool else top_k
+        # Collapsing near-duplicates removes results after ranking, so the
+        # caller needs candidates beyond top_k to be backfilled with. A
+        # reranker has already scored its whole pool, so keeping the extra
+        # ones is free; without one the first pass fetches exactly top_k (the
+        # same retrieval as before) and only a search that actually collapsed
+        # something below top_k pays for a second, wider pass.
+        collapse_on = bool(getattr(_settings, "collapse_duplicates", True))
+        if _widen:
+            fetch_k = pool_k = min(top_k + BACKFILL_MARGIN, 50)
+        else:
+            pool_k = min(top_k + BACKFILL_MARGIN, 50) if (collapse_on and local_reranker is not None) else top_k
 
         # Under ``auto`` the person never chose embeddings, so a missing
         # embedding model (offline box that hasn't been seeded yet) must not
@@ -1046,16 +1068,28 @@ class DocumentIndexer:
         if skip_filenames:
             results = [r for r in results if r.filename not in skip_filenames]
 
+        # Documents an owner marked as replaced: label every passage with its
+        # replacement and demote it (services/supersede.py). Demoted, never
+        # removed — the older text still answers when it is the only match.
+        # `filters.include_superseded` skips the demotion, not the label.
+        include_superseded = bool((filters or {}).get("include_superseded"))
+        n_superseded = self._label_superseded(results, include_superseded)
+
         # Step 3a: Local cross-encoder rerank (preferred — local, free, nothing
         # leaves the machine, runs for every caller). When it reorders the pool we skip the
         # AI-judgment reranker below to avoid a redundant second pass.
         reranked_locally = False
+        rerank_scores: dict = {}
         if local_reranker is not None and len(results) > 1:
             try:
                 # False when the reranker shed the request under load
                 # (RERANK_MAX_CONCURRENT / RERANK_QUEUE_TIMEOUT_SECONDS):
                 # the response then says so in `retrieval.reranked`.
-                results, reranked_locally = local_reranker.rerank_with_status(query, results, top_k)
+                try:
+                    results, reranked_locally = local_reranker.rerank_with_status(
+                        query, results, pool_k, score_sink=rerank_scores)
+                except TypeError:  # a reranker without the score_sink argument
+                    results, reranked_locally = local_reranker.rerank_with_status(query, results, pool_k)
             except Exception as e:
                 logger.warning(f"Local reranking failed, using retrieval order: {e}")
 
@@ -1090,8 +1124,32 @@ class DocumentIndexer:
                 logger.warning(f"Reranking failed, using original order: {e}")
                 results = results[:top_k]
         else:
-            results = results[:top_k]
+            results = results[:pool_k]
 
+        # The cross-encoder judges text alone, so a superseded passage that
+        # reads as well as its replacement can tie or edge ahead of it; apply
+        # the same demotion on the reranker's scale, then collapse copies and
+        # trim to top_k (the backfill margin above is spent here).
+        results, n_collapsed = self._finish_ranking(
+            results, top_k, rerank_scores if reranked_locally else None,
+            demote=bool(n_superseded) and not include_superseded and reranked_locally,
+            collapse=collapse_on,
+            selected=(filters or {}).get("document_ids"),
+        )
+
+        # Collapsing left fewer than top_k and there may be more to give:
+        # search again with a wider pool (the only extra cost of duplicate
+        # collapse, paid only when duplicates were actually found).
+        if (n_collapsed and len(results) < top_k and not _widen
+                and pool_k < min(top_k + BACKFILL_MARGIN, 50)
+                and not (ai_active and ai_options and ai_options.rerank)):
+            return self.search(
+                query, top_k=top_k, ai_service=ai_service, ai_options=ai_options,
+                mode=requested_mode, semantic_weight=requested_weight,
+                collection_overview=collection_overview,
+                structured_context=structured_context, skip_filenames=skip_filenames,
+                filters=filters, _widen=True,
+            )
         # Step 4: Optionally synthesize an answer from results
         if ai_active and ai_options.synthesize and (
             len(results) > 0 or collection_overview or structured_context
@@ -1134,8 +1192,57 @@ class DocumentIndexer:
                 "semantic_weight": semantic_weight if mode == SearchMode.HYBRID else None,
                 "reason": retrieval_reason,
                 "reranked": reranked_locally,
+                "superseded_results": n_superseded,
+                "duplicates_collapsed": n_collapsed,
             },
         }
+
+    def _label_superseded(self, results: list, include_superseded: bool) -> int:
+        """Label results from replaced documents and (unless asked not to)
+        demote them. Returns how many results were labelled. Never raises."""
+        if not results:
+            return 0
+        try:
+            from config import settings as _s
+            from services import supersede
+            info = self.vector_store.metadata_store.get_supersede_info(
+                [r.document_id for r in results]
+            )
+            if not info:
+                return 0
+            labelled = supersede.annotate_superseded(results, info)
+            penalty = float(getattr(_s, "superseded_penalty", 0.0) or 0.0)
+            if labelled and not include_superseded and penalty > 0:
+                results[:] = supersede.demote_superseded(results, penalty)
+            return labelled
+        except Exception as e:  # noqa: BLE001 - never fail a search
+            logger.warning(f"Superseded-document handling skipped: {e}")
+            return 0
+
+    def _finish_ranking(self, results: list, top_k: int, rerank_scores, *,
+                        demote: bool, collapse: bool, selected) -> tuple:
+        """Reranker-scale demotion, near-duplicate collapse, trim to top_k.
+
+        Each step is best-effort: on any failure the ranking passes through
+        untouched (only trimmed to top_k).
+        """
+        n_collapsed = 0
+        try:
+            from config import settings as _s
+            from services import supersede
+            if demote and rerank_scores:
+                penalty = float(getattr(_s, "superseded_penalty", 0.0) or 0.0)
+                scores = {k: supersede.sigmoid(v) for k, v in rerank_scores.items()}
+                results = supersede.demote_superseded(results, penalty, scores)
+            if collapse and len(results) > 1:
+                threshold = float(getattr(_s, "duplicate_similarity_threshold", 0.95))
+                results, n_collapsed = supersede.collapse_near_duplicates(
+                    results, threshold, protected_documents=selected
+                )
+        except Exception as e:  # noqa: BLE001 - never fail a search
+            logger.warning(f"Supersede/duplicate post-processing skipped: {e}")
+            n_collapsed = 0
+        return results[:top_k], n_collapsed
 
     def list_documents_page(self, limit: int, offset: int = 0, q: str = "",
                             keys: Optional[List[str]] = None) -> List[dict]:
