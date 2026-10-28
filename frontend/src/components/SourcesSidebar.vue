@@ -438,6 +438,7 @@
               <FileText :size="11" class="text-accent shrink-0" aria-hidden="true" />
               <span class="text-xs flex-1 truncate" :title="pack.name">{{ pack.name }}</span>
               <button
+                v-if="collectionStore.canConfigureCurrent"
                 class="btn btn-ghost btn-xs btn-circle text-error"
                 :title="`Remove ${pack.name}`"
                 :disabled="expertiseLoading"
@@ -449,7 +450,7 @@
           </div>
 
           <!-- Add pack dropdown -->
-          <div v-if="availablePacks.length > 0" class="dropdown w-full">
+          <div v-if="availablePacks.length > 0 && collectionStore.canConfigureCurrent" class="dropdown w-full">
             <label
               tabindex="0"
               class="btn btn-outline btn-xs w-full gap-1"
@@ -468,6 +469,9 @@
               </li>
             </ul>
           </div>
+          <p v-else-if="!collectionStore.canConfigureCurrent" class="text-xs text-base-content/40">
+            Only the owner of this collection can change its instructions.
+          </p>
           <p v-else-if="expertiseStore.packs.length === 0" class="text-xs text-base-content/40">
             Nothing saved yet. Create instructions from More, then Saved instructions.
           </p>
@@ -2160,6 +2164,15 @@ const availablePacks = computed(() =>
   expertiseStore.packs.filter(p => !attachedPackIds.value.includes(p.id))
 )
 
+// Choosing which instructions a collection follows is the owner's call (the
+// server answers 403 to anyone else, including a read-write collaborator).
+function expertiseError(err, fallback) {
+  if (err?.response?.status === 403) {
+    return new Error('Only the owner of this collection can change which instructions it follows.')
+  }
+  return new Error(err?.response?.data?.detail || err?.message || fallback)
+}
+
 async function loadExpertise(collId) {
   const id = collId || collectionStore.currentCollectionId
   try {
@@ -2177,6 +2190,8 @@ async function addExpertisePack(packId) {
   try {
     const newIds = [...attachedPackIds.value, packId]
     await expertiseStore.setAttached(collectionStore.currentCollectionId, newIds)
+  } catch (err) {
+    ui.toastError(expertiseError(err, 'Could not apply these instructions'))
   } finally {
     expertiseLoading.value = false
   }
@@ -2187,6 +2202,8 @@ async function removeExpertisePack(packId) {
   try {
     const newIds = attachedPackIds.value.filter(id => id !== packId)
     await expertiseStore.setAttached(collectionStore.currentCollectionId, newIds)
+  } catch (err) {
+    ui.toastError(expertiseError(err, 'Could not remove these instructions'))
   } finally {
     expertiseLoading.value = false
   }
