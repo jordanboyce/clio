@@ -222,6 +222,22 @@ class Settings(BaseSettings):
     enable_chunk_boosts: bool = True
     chunk_boost_weight: float = 0.5        # scales the stored boost (-1..1)
 
+    # "Replaced by" relationships between documents (services/supersede.py).
+    # A document an owner marked as replaced is demoted by `superseded_penalty`
+    # (same 0-1 scale as the reranker probability / retrieval score), never
+    # removed: it still answers when it is the only match, and a request can
+    # turn the penalty off (filters.include_superseded) for "what did v2 say".
+    # 0.15 flips an older passage below an equally relevant current one but
+    # not below a clearly better match.
+    superseded_penalty: float = 0.15
+    # Collapse results whose text is a near-duplicate of a higher-ranked one
+    # into that result (it gains `duplicates`), then backfill to top_k.
+    # Jaccard over word 3-grams of the normalised text; numbers and
+    # negation/modal words must also agree, so "30 days" never merges with
+    # "45 days" and "may" never merges with "must".
+    collapse_duplicates: bool = True
+    duplicate_similarity_threshold: float = 0.95
+
 
     # Server configuration. The default binds loopback only: the app has no
     # auth unless AUTH_PASSWORD is set, so reaching the network has to be a

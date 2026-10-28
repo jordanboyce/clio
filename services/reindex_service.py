@@ -24,6 +24,26 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
+def _safe_supersede_marks(store) -> list:
+    """Owners' 'replaced by' marks, read before a reindex rebuilds the table.
+    A reindex must not fail because of this bookkeeping."""
+    try:
+        return store.list_supersede_marks()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Could not read 'replaced by' marks before reindex: {e}")
+        return []
+
+
+def _safe_restore_supersede_marks(store, marks: list) -> None:
+    if not marks:
+        return
+    try:
+        restored = store.restore_supersede_marks(marks)
+        logger.info(f"Restored {restored}/{len(marks)} 'replaced by' marks after reindex")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Could not restore 'replaced by' marks after reindex: {e}")
+
+
 class ReindexService:
     """Manages document re-indexing operations."""
 
@@ -263,6 +283,9 @@ class ReindexService:
 
             # Clear existing index AFTER getting the document list
             logger.info(f"Clearing existing index for collection {collection_id} (job {job_id})")
+            # Owners' "replaced by" calls live in the table clear_index empties;
+            # document ids are content hashes, so they can be put back below.
+            supersede_marks = _safe_supersede_marks(vector_store.metadata_store)
             vector_store.clear_index()
 
             # Process each document
@@ -301,6 +324,8 @@ class ReindexService:
                 except Exception as e:
                     logger.error(f"Failed to process {doc_path.name}: {e}")
                     continue
+
+            _safe_restore_supersede_marks(vector_store.metadata_store, supersede_marks)
 
             # Save the index to disk
             logger.info("Saving re-indexed data to disk...")
@@ -425,6 +450,7 @@ class ReindexService:
             # For extension-scoped reindex, we don't clear the whole index.
             # Instead, we delete only the documents being reindexed, then re-add them.
             logger.info(f"Deleting {total_docs} documents for extension reindex (job {job_id})")
+            supersede_marks = _safe_supersede_marks(indexer.vector_store.metadata_store)
             for doc_info in document_list:
                 indexer.delete_document(doc_info["document_id"])
 
@@ -464,6 +490,8 @@ class ReindexService:
                 except Exception as e:
                     logger.error(f"Failed to process {doc_path.name}: {e}")
                     continue
+
+            _safe_restore_supersede_marks(vector_store.metadata_store, supersede_marks)
 
             # Save the index to disk
             logger.info("Saving re-indexed data to disk...")
@@ -745,6 +773,9 @@ class ReindexService:
 
             # Clear existing index AFTER getting the document list
             logger.info(f"Clearing existing index for re-indexing job {job_id}")
+            # Owners' "replaced by" calls live in the table clear_index empties;
+            # document ids are content hashes, so they can be put back below.
+            supersede_marks = _safe_supersede_marks(vector_store.metadata_store)
             vector_store.clear_index()
 
             # Process each document
@@ -783,6 +814,8 @@ class ReindexService:
                 except Exception as e:
                     logger.error(f"Failed to process {doc_path.name}: {e}")
                     continue
+
+            _safe_restore_supersede_marks(vector_store.metadata_store, supersede_marks)
 
             # Save the index to disk
             logger.info("Saving re-indexed data to disk...")

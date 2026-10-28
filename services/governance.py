@@ -255,6 +255,62 @@ def set_document_sensitivity(
     return {"document_id": document_id, "sensitivity": label}
 
 
+def set_document_superseded(
+    collection_id: str, document_id: str, replaced_by: str, note: Optional[str] = None,
+    *, actor: Any = _UNSET,
+) -> Dict[str, Any]:
+    """Record that ``replaced_by`` is the current version of ``document_id``.
+
+    Both documents must be in the collection. Raises KeyError for an unknown
+    id and ValueError for self-reference or a cycle. Cached chat answers are
+    dropped: an answer that cited the old version may no longer be the one
+    the collection would give.
+    """
+    from services.indexer_manager import indexer_manager
+
+    store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store
+    old = store.get_document_info(document_id)
+    new = store.get_document_info(replaced_by)
+    if not old:
+        raise KeyError(document_id)
+    if not new:
+        raise KeyError(replaced_by)
+    if actor is _UNSET:
+        from middleware.user_context import get_request_user
+
+        actor = get_request_user()
+    row = store.set_document_superseded(document_id, replaced_by, note)
+    _invalidate_answers(collection_id)
+    audit.record("document.supersede", actor=actor, collection_id=collection_id,
+                 document_id=document_id, target=replaced_by,
+                 detail={"filename": old.get("filename"), "replaced_by": new.get("filename"),
+                         "note": row.get("superseded_note")})
+    return row
+
+
+def clear_document_superseded(
+    collection_id: str, document_id: str, *, actor: Any = _UNSET,
+) -> Dict[str, Any]:
+    """Undo set_document_superseded. Raises KeyError for an unknown id."""
+    from services.indexer_manager import indexer_manager
+
+    store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store
+    doc_info = store.get_document_info(document_id)
+    if not doc_info:
+        raise KeyError(document_id)
+    if actor is _UNSET:
+        from middleware.user_context import get_request_user
+
+        actor = get_request_user()
+    cleared = store.clear_document_superseded(document_id)
+    if cleared:
+        _invalidate_answers(collection_id)
+        audit.record("document.supersede_cleared", actor=actor, collection_id=collection_id,
+                     document_id=document_id, target=doc_info.get("superseded_by"),
+                     detail={"filename": doc_info.get("filename")})
+    return {"document_id": document_id, "cleared": cleared}
+
+
 def _invalidate_answers(collection_id: str) -> None:
     """A document's visibility changed: cached answers that cited it are stale."""
     try:
