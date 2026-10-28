@@ -564,6 +564,19 @@ def _serialize_result(
         payload["line_start"] = result.line_start
     if getattr(result, "line_end", None) is not None:
         payload["line_end"] = result.line_end
+    # Older version of a document an owner marked as replaced: say so, and
+    # name the current one so the agent can look there instead.
+    superseded_by = getattr(result, "superseded_by", None)
+    if superseded_by:
+        payload["superseded_by"] = superseded_by
+        payload["superseded_notice"] = (
+            f"Older version: this document was replaced by {superseded_by.get('filename')}. "
+            "Prefer the current version, and say so if you cite this one."
+        )
+    duplicates = getattr(result, "duplicates", None)
+    if duplicates:
+        payload["duplicates"] = duplicates
+        payload["duplicate_count"] = getattr(result, "duplicate_count", None) or len(duplicates)
 
     return payload
 
@@ -777,7 +790,8 @@ def get_collection_info(
     return _tool_response(payload, "get_collection_info")
 
 
-_FILTER_KEYS = ("document_ids", "filenames", "source_formats", "date_from", "date_to")
+_FILTER_KEYS = ("document_ids", "filenames", "source_formats", "date_from", "date_to",
+                "include_superseded")
 
 
 def _normalize_search_filters(filters: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -805,6 +819,9 @@ def _normalize_search_filters(filters: dict[str, Any] | None) -> dict[str, Any] 
         val = filters.get(key)
         if val and str(val).strip():
             out[key] = str(val).strip()
+
+    if filters.get("include_superseded") is True or str(filters.get("include_superseded")).lower() == "true":
+        out["include_superseded"] = True
 
     unknown = set(filters) - set(_FILTER_KEYS)
     if unknown:
@@ -1309,10 +1326,25 @@ def _research_documents_impl(
         return merged
 
     def literal_branch(pattern):
-        per = _per_collection(lambda cid, indexer, collection: [
-            {**hit, "collection_id": cid}
-            for hit in find_in_documents_sync(pattern, collection_id=cid, max_results=20,
-                                              filters=resolved_filters)["matches"]])
+        def _literal(cid, indexer, collection):
+            hits = [{**hit, "collection_id": cid}
+                    for hit in find_in_documents_sync(pattern, collection_id=cid, max_results=20,
+                                                      filters=resolved_filters)["matches"]]
+            # Exact-match hits skip the ranker that demotes replaced documents,
+            # so label them here (research_search discounts them).
+            try:
+                info = indexer.vector_store.metadata_store.get_supersede_info(
+                    [h.get("document_id") for h in hits])
+                for h in hits:
+                    rel = info.get(h.get("document_id"))
+                    if rel:
+                        h["superseded_by"] = {"document_id": rel["document_id"],
+                                              "filename": rel["filename"]}
+            except Exception:  # noqa: BLE001 - labels are best effort
+                pass
+            return hits
+
+        per = _per_collection(_literal)
         if not multi:
             return per[0][1] if per else []
         # Literal hits carry no score: interleave so no collection monopolises
@@ -1325,7 +1357,12 @@ def _research_documents_impl(
         return merged
 
     result = research(query, subqueries, search_branch, literal_branch, top_k=top_k,
-                      max_per_document=max_per_document, max_context_chars=max_context_chars)
+                      max_per_document=max_per_document, max_context_chars=max_context_chars,
+                      collapse_threshold=(float(settings.duplicate_similarity_threshold)
+                                          if settings.collapse_duplicates else None),
+                      protected_documents=(resolved_filters or {}).get("document_ids"),
+                      literal_superseded_factor=(1.0 if (resolved_filters or {}).get("include_superseded")
+                                                 else 0.6))
     collections = [{"collection_id": cid, "collection_name": _mcp_safe_name(collection, cid),
                     "corpus_version": _corpus_version(cid)}
                    for cid, (_, collection) in stores.items()]
@@ -1382,7 +1419,10 @@ async def research_documents(
     max_context_chars: 1000–40000 total excerpt characters, not tokens or total
     JSON size. At most seven retrieval branches per collection; no hidden model
     calls. filters: document_ids, filenames, source_formats, date_from/date_to
-    (upload dates). Numeric questions should use the structured-table tools.
+    (upload dates), include_superseded (rank documents marked as replaced like
+    current ones; default is to demote them). Results carry `superseded_by`
+    when a passage is from an older, replaced version, and `duplicates` when
+    the same text appears in other files. Numeric questions should use the structured-table tools.
     """
     return await asyncio.to_thread(research_documents_sync, query,
         collection_id=collection_id, subqueries=subqueries, top_k=top_k,
@@ -1581,6 +1621,7 @@ def search_collection_sync(
                 "page_number": result.page_number,
                 "similarity_score": round(float(result.similarity_score), 4),
                 "document_id": result.document_id,
+                **({"superseded_by": result.superseded_by} if getattr(result, "superseded_by", None) else {}),
             }
             for rank, result in enumerate(search_result.get("results", []), start=1)
         ]
@@ -1619,8 +1660,18 @@ async def search_collection(
           - filenames: list of exact filenames
           - source_formats: list of file types, e.g. ["pdf", "docx"]
           - date_from / date_to: ISO timestamps bounding the document upload time
+          - include_superseded: true to rank documents marked as replaced
+            like any other (ask for this only for "what did the old/previous
+            version say" questions). By default they are ranked below
+            current text but still returned.
         Call get_collection_info() (or get_collection_facets) first to discover
         document ids, filenames, and available formats.
+
+    Result fields worth acting on: `superseded_by` ({document_id, filename})
+    means that passage is from an OLDER version replaced by that document;
+    prefer the current version and tell the user when you cite the old one.
+    `duplicates` lists other files containing the same text, so you can say
+    "also in …" instead of treating copies as independent confirmation.
 
     When NOT to use this tool:
     For any numeric, aggregation, sum, count, average, ranking, filter, or

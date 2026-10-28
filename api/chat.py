@@ -487,6 +487,24 @@ def _prepare_turn(chat_request: ChatRequest, collection_id: str, model_hint: str
         return None, None
 
 
+def _supersede_fields(r) -> dict:
+    """Source-payload fields for a passage from a replaced document and for
+    folded copies; absent when the passage is ordinary."""
+    out = {}
+    if getattr(r, "superseded_by", None):
+        out["superseded_by"] = r.superseded_by
+    if getattr(r, "duplicates", None):
+        out["duplicates"] = r.duplicates
+        out["duplicate_count"] = getattr(r, "duplicate_count", None) or len(r.duplicates)
+    return out
+
+
+def _supersede_note(r) -> str:
+    from services.supersede import source_note
+
+    return source_note(r)
+
+
 def _source_dicts(results, base_url: str) -> list[dict]:
     label_cache: dict = {}
     return [
@@ -499,6 +517,7 @@ def _source_dicts(results, base_url: str) -> list[dict]:
             "pdf_url": f"{base_url}/documents/{r.document_id}/pdf?collection_id={cid}",
             "page_url": f"{base_url}/documents/{r.document_id}/pdf?collection_id={cid}#page={r.page_number}",
             "sensitivity": _source_sensitivity(cid, r, label_cache),
+            **_supersede_fields(r),
         }
         for r, cid in results
     ]
@@ -641,7 +660,7 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
         filtered = [(r, cid) for r, cid in zip(context_results, result_collection_ids)
                     if r.filename not in structured_ctx["inlined_filenames"]]
         context_text = "\n\n---\n\n".join(
-            f"[Source {i + 1}: {r.filename}, page {r.page_number}]\n{r.text_snippet}"
+            f"[Source {i + 1}: {r.filename}, page {r.page_number}{_supersede_note(r)}]\n{r.text_snippet}"
             for i, (r, _) in enumerate(filtered)
         ) or _NO_CONTEXT
         # Evidence keeps citation numbering stable as tool calls discover more

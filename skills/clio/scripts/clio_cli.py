@@ -321,7 +321,26 @@ def cmd_job(c: Client, a) -> Any:
 
 def cmd_search(c: Client, a) -> Any:
     cid = resolve_collection(c, a.collection)
-    return c.post_json("/search", {"query": a.query, "top_k": a.top_k}, collection_id=cid)
+    body: dict = {"query": a.query, "top_k": a.top_k}
+    if getattr(a, "include_superseded", False):
+        body["filters"] = {"include_superseded": True}
+    return c.post_json("/search", body, collection_id=cid)
+
+
+def cmd_supersede(c: Client, a) -> Any:
+    """Suggest, record or clear 'replaced by' relationships between documents."""
+    cid = resolve_collection(c, a.collection)
+    if a.action == "suggest":
+        return c.get("/documents/supersede-suggestions", collection_id=cid)
+    if a.action == "mark":
+        if not a.replaced_by:
+            raise ClioError("mark needs both the old document id and the id that replaces it")
+        body = {"replaced_by": a.replaced_by}
+        if a.note:
+            body["note"] = a.note
+        return c.post_json(f"/documents/{a.document_id}/supersede", body, collection_id=cid)
+    return c._request("DELETE", f"/documents/{a.document_id}/supersede",
+                      query={"collection_id": cid})
 
 
 # -- custom file types commands -------------------------------------------------
@@ -464,7 +483,16 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("search", help="search a collection")
     s.add_argument("query"); s.add_argument("--collection", "-c", default="default")
     s.add_argument("--top-k", type=int, default=5)
+    s.add_argument("--include-superseded", action="store_true",
+                   help="do not demote documents marked as replaced (for 'what did v2 say')")
     s.set_defaults(fn=cmd_search)
+    s = sub.add_parser("supersede", help="suggest, mark or clear 'replaced by' between documents")
+    s.add_argument("action", choices=["suggest", "mark", "clear"])
+    s.add_argument("document_id", nargs="?", help="the OLD document (mark/clear)")
+    s.add_argument("replaced_by", nargs="?", help="document id of the current version (mark)")
+    s.add_argument("--collection", "-c", default="default")
+    s.add_argument("--note", help="why it was replaced (mark)")
+    s.set_defaults(fn=cmd_supersede)
     s = sub.add_parser("types", help="list registered custom file types")
     s.set_defaults(fn=cmd_types)
     s = sub.add_parser("type-suggest", help="propose a profile from a sample file")
