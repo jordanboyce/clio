@@ -42,6 +42,12 @@ ACTIONS: List[str] = [
     "collection.published",
     "collection.exported",      # bundle downloaded (with/without originals)
     "collection.imported",      # collection created from a bundle
+    "collection.guide",         # guide text changed (length/digest/scan verdict, never the text)
+    "collection.metadata",      # name/description changed (length/digest only)
+    "collection.expertise",     # expertise packs attached/detached
+    "expertise.create",         # expertise pack created (id, name, digest)
+    "expertise.update",
+    "expertise.delete",
     "share.create",
     "share.accept",
     "share.revoke",

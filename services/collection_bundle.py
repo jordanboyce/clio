@@ -35,6 +35,7 @@ import faiss
 import numpy as np
 
 from config import settings
+from services import authored_text
 
 logger = logging.getLogger(__name__)
 
@@ -413,8 +414,8 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
                                                      meta.get("name") or "this bundle")
 
         collection = collection_service.create_collection(
-            name=name or meta.get("name") or "Imported collection",
-            description=meta.get("description") or "",
+            name=(name or meta.get("name") or "Imported collection")[: authored_text.MAX_NAME_CHARS],
+            description=(meta.get("description") or "")[: authored_text.MAX_DESCRIPTION_CHARS],
             color=meta.get("color") or "#3b82f6",
             chunk_size=int(meta.get("chunk_size") or 500),
             chunk_overlap=int(meta.get("chunk_overlap") or 50),
@@ -422,7 +423,7 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
             owner_id=owner_id,
         )
         cid = collection["id"]
-        updates = {"guide": meta.get("guide")}
+        updates = {"guide": (meta.get("guide") or "")[: authored_text.MAX_GUIDE_CHARS]}
         try:
             updates["sensitivity"] = normalize_sensitivity(meta.get("sensitivity"))
         except Exception:
@@ -478,6 +479,12 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
             "from": meta.get("name"), "documents": len(kept), "blocked": len(blocked),
             "sources": len(extracted), "vectors": "reused" if reuse else "re-embed",
             "signature": signature or None,
+            # The bundle's guide is text from another deployment: record that
+            # it arrived (size + fingerprint, never the text) and what the
+            # prompt-injection scan said about it.
+            "guide_chars": len(meta.get("guide") or ""),
+            "guide_digest": authored_text.digest(meta.get("guide")) if meta.get("guide") else None,
+            "guide_flag": ((collection_service.get_collection(cid) or {}).get("guide_flag") or {}).get("level"),
         },
     )
     return {
