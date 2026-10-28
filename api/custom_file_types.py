@@ -8,13 +8,18 @@ what the server will read, or sends a sample to a model, is admin-only.
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 
+from api import deps
 from api.deps import require_admin
+from middleware.user_context import get_current_user_id
 from services import audit
 from services import custom_file_types as cft
 from services import custom_file_type_suggest as suggest_mod
+from services import custom_file_type_usage as usage_mod
+from services.ai_service import resolve_default_provider
+from services.collection_service import collection_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/custom-file-types", tags=["custom-file-types"])
@@ -52,46 +57,112 @@ def _public(profile: Dict[str, Any]) -> Dict[str, Any]:
     return profile
 
 
+def _ai_available() -> bool:
+    """Whether a chat model is configured for the suggestion's optional AI pass.
+
+    Asks the same resolver the suggestion uses (the deployment's default chat
+    provider, air-gapped mode respected), so the answer matches what ``suggest``
+    will do. Nothing is sent anywhere.
+    """
+    try:
+        provider, _model = resolve_default_provider(purpose="Custom file type availability check")
+    except Exception:
+        return False
+    return provider is not None
+
+
+def _usage(extension: str, user_id: Optional[str]) -> Dict[str, Any]:
+    """Per-collection usage over the collections this caller can see."""
+    visible = collection_service.get_all_collections(user_id=user_id)
+    return usage_mod.usage_by_collection(extension, visible, deps.get_indexer)
+
+
+def _usage_or_none(extension: str, user_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Usage for a response whose main work already succeeded: never fails it."""
+    try:
+        return _usage(extension, user_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Could not count files for {extension}: {e}")
+        return None
+
+
 @router.get("")
 async def list_custom_file_types():
     """Registered types, so the UI can show and accept their extensions."""
-    return {"types": [_public(p) for p in cft.registry.all()]}
+    return {
+        "types": [_public(p) for p in cft.registry.all()],
+        # Whether the suggestion's optional AI pass has a model to use.
+        "ai": {"available": _ai_available()},
+    }
+
+
+@router.get("/{extension}/usage")
+def custom_file_type_usage(extension: str, user_id: str = Depends(get_current_user_id)):
+    """How many indexed files use this extension, per collection (admin only).
+
+    Counts only collections the caller can see, and only servable documents.
+    ``can_reindex`` says whether the caller owns that collection (the scoped
+    re-index is an owner action). Works for a type that has since been
+    deleted, since its files stay indexed.
+    """
+    require_admin("manage custom file types")
+    try:
+        return _usage(extension, user_id)
+    except cft.ProfileError as e:
+        raise _bad_request(e)
 
 
 @router.put("/{extension}")
-async def save_custom_file_type(extension: str, body: ProfileBody):
-    """Create or replace the profile for one extension (admin only)."""
+def save_custom_file_type(extension: str, body: ProfileBody, user_id: str = Depends(get_current_user_id)):
+    """Create or replace the profile for one extension (admin only).
+
+    The profile is replaced as a whole: send every field you want to keep.
+    ``reading_changed`` says whether this save changes how files are read; when
+    it does, ``usage`` lists, per collection, the indexed files that should be
+    re-indexed to pick it up.
+    """
     admin = require_admin("manage custom file types")
     try:
-        # Get count of documents with this extension before saving
-        from services.app_database import app_db
-        affected_count = app_db.count_documents_by_extension(extension)
-        
         profile = cft.registry.put(
             extension, body.model_dump(exclude_none=True), user=admin or "")
     except cft.ProfileError as e:
         raise _bad_request(e)
+    changed = profile["reading_updated_at"] == profile["updated_at"]
     audit.record("custom_file_type.save", target=profile["extension"],
-                 detail={"label": profile["label"], "enabled": profile["enabled"]})
-    return {"profile": _public(profile), "affected_documents": affected_count}
+                 detail={"label": profile["label"], "enabled": profile["enabled"],
+                         "source": profile["source"], "reading_changed": changed})
+    usage = _usage_or_none(profile["extension"], user_id)
+    return {
+        "profile": _public(profile),
+        "reading_changed": changed,
+        "affected_documents": usage["total_documents"] if usage else None,
+        "usage": usage,
+    }
 
 
 @router.delete("/{extension}")
-async def delete_custom_file_type(extension: str):
-    """Stop accepting an extension (admin only). Already-indexed files are kept."""
+def delete_custom_file_type(extension: str, user_id: str = Depends(get_current_user_id)):
+    """Stop accepting an extension (admin only). Already-indexed files are kept.
+
+    The files stay searchable but are no longer a supported type, so a scoped
+    re-index of them is refused until the type is registered again (it would
+    drop them from the collection).
+    """
     require_admin("manage custom file types")
     try:
-        # Get count of documents with this extension before deleting
-        from services.app_database import app_db
-        affected_count = app_db.count_documents_by_extension(extension)
-        
         removed = cft.registry.delete(extension)
     except cft.ProfileError as e:
         raise _bad_request(e)
     if not removed:
         raise HTTPException(status_code=404, detail=f"No custom file type {extension}")
-    audit.record("custom_file_type.delete", target=cft.normalize_extension(extension))
-    return {"deleted": True, "affected_documents": affected_count}
+    ext = cft.normalize_extension(extension)
+    audit.record("custom_file_type.delete", target=ext)
+    usage = _usage_or_none(ext, user_id)
+    return {
+        "deleted": True,
+        "affected_documents": usage["total_documents"] if usage else None,
+        "usage": usage,
+    }
 
 
 @router.post("/preview")

@@ -1084,45 +1084,6 @@ class SQLiteBackend(DatabaseBackend):
                    FROM reindex_jobs WHERE status IN ('pending', 'running') ORDER BY id DESC LIMIT 1"""
             )
 
-    def count_documents_by_extension(self, extension: str) -> int:
-        """Count documents with a specific extension across all collections.
-
-        This scans the metadata.db of each collection to find documents
-        whose filename ends with the given extension.
-
-        Args:
-            extension: File extension to count (e.g. '.acme', '.cfgx')
-
-        Returns:
-            Total count of documents with this extension
-        """
-        if not extension.startswith('.'):
-            extension = '.' + extension
-        extension = extension.lower()
-
-        total = 0
-        data_dir = settings.data_dir / "collections"
-        if not data_dir.exists():
-            return 0
-
-        for coll_dir in data_dir.iterdir():
-            if not coll_dir.is_dir():
-                continue
-            metadata_db = coll_dir / "indexes" / "metadata.db"
-            if not metadata_db.exists():
-                continue
-            try:
-                with sqlite_connect(metadata_db) as conn:
-                    cursor = conn.execute(
-                        "SELECT COUNT(*) FROM documents WHERE LOWER(filename) LIKE ?",
-                        (f"%{extension}",)
-                    )
-                    total += cursor.fetchone()[0] or 0
-            except Exception as e:
-                logger.warning(f"Failed to count documents in {coll_dir.name}: {e}")
-
-        return total
-
     # ── AI Preferences ───────────────────────────────────────
 
     def get_ai_preferences(self) -> Optional[Dict[str, Any]]:

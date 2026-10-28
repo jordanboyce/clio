@@ -286,7 +286,24 @@ def validate_profile(extension: str, raw: Any) -> Dict[str, Any]:
         "source": source,
         "updated_at": _text_field(raw, "updated_at", 40),
         "updated_by": _text_field(raw, "updated_by", 200),
+        "reading_updated_at": _text_field(raw, "reading_updated_at", 40),
     }
+
+
+# The fields that decide what text a file produces. Everything else on a
+# profile (label, description, kind, source, who/when) can change without
+# making an already-indexed file out of date.
+READING_FIELDS = (
+    "format", "record_path", "title_field", "include", "exclude", "labels",
+    "records_per_section", "max_value_chars", "enabled",
+)
+
+
+def reading_changed(old: Optional[Dict[str, Any]], new: Dict[str, Any]) -> bool:
+    """Whether `new` reads files differently from `old` (None means a new type)."""
+    if old is None:
+        return True
+    return any(old.get(k) != new.get(k) for k in READING_FIELDS)
 
 
 # ── rendering ──────────────────────────────────────────────────────────
@@ -541,20 +558,25 @@ class CustomFileTypeRegistry:
         profile = self._load().get(ext)
         return dict(profile) if profile else None
 
-    def lookup(self, filename: str) -> Optional[Dict[str, Any]]:
-        """The enabled profile for a filename, judged by its last suffix."""
+    def lookup(self, filename: str, include_disabled: bool = False) -> Optional[Dict[str, Any]]:
+        """The enabled profile for a filename, judged by its last suffix.
+
+        ``include_disabled`` also returns a switched-off profile, for code that
+        describes files already indexed (their kind does not change because
+        the type stopped accepting new uploads).
+        """
         suffix = Path(str(filename)).suffix.lower()
         if not suffix:
             return None
         profile = self._load().get(suffix)
-        if profile is None or not profile["enabled"]:
+        if profile is None or not (profile["enabled"] or include_disabled):
             return None
         return dict(profile)
 
-    def extensions(self, kind: Optional[str] = None) -> set:
+    def extensions(self, kind: Optional[str] = None, include_disabled: bool = False) -> set:
         return {
             ext for ext, p in self._load().items()
-            if p["enabled"] and (kind is None or p["kind"] == kind)
+            if (p["enabled"] or include_disabled) and (kind is None or p["kind"] == kind)
         }
 
     def _write(self, types: Dict[str, Dict[str, Any]]) -> None:
@@ -578,11 +600,20 @@ class CustomFileTypeRegistry:
 
     def put(self, ext: str, raw: Any, user: Optional[str] = None) -> Dict[str, Any]:
         profile = validate_profile(ext, raw)
-        profile["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        profile["updated_at"] = now
         profile["updated_by"] = user or ""
         with self._lock:
             self._stamp, self._checked = None, 0.0
             types = dict(self._load())
+            previous = types.get(profile["extension"])
+            # Moves only when the text this profile produces changes, so the
+            # UI can tell files indexed before that point are out of date.
+            if previous is None or reading_changed(previous, profile):
+                profile["reading_updated_at"] = now
+            else:
+                profile["reading_updated_at"] = (
+                    previous.get("reading_updated_at") or previous.get("updated_at") or now)
             types[profile["extension"]] = profile
             self._write(types)
         return dict(profile)
