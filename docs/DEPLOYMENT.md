@@ -637,6 +637,53 @@ all-files.csv`. The same data is at `GET /documents/stats` and
 the export streams page by page, so a collection of tens of thousands of files
 costs flat memory, and each export is written to the audit trail.
 
+### Retrieval coverage
+
+Borrowed from how Context7 scores indexed libraries: each collection can be
+asked "how findable is my content?" before anyone relies on it. **Settings ->
+Indexing -> Retrieval coverage** (or `clio_cli.py coverage -c Policies`) shows
+the latest report; the collection's owner runs it.
+
+- **What a run does.** It samples up to 100 passages (cap 300; a fixed seed, so
+  two runs on an unchanged collection ask the same questions; spread evenly
+  across documents so a large file does not dominate), turns each into a
+  search a person might type, and sends it through the same search that the
+  app, API and MCP use (automatic mode, with the re-ranker if it is on). It
+  records whether the passage and its document came back in the top 5 and top
+  10. No model is involved by default: a query is the passage's heading, or
+  its few most distinctive words and names, never the passage pasted back.
+  A passage with no searchable words (a table of numbers) is reported as
+  unprobed, not as a miss.
+- **What the report shows.** Sources found in the top 5, passages in the top 10,
+  MRR, the hardest-to-find documents with the searches that missed, passages
+  that never came back, the probe method, the embedding model and the corpus
+  version at run time, and how long it took. **It measures retrieval
+  findability, not answer correctness**: a high score means the right source
+  is returned for questions drawn from its own text, not that an answer built
+  from it is right. Real users ask differently from their own documents.
+- **Your own questions** (owners; Settings, or `POST .../coverage/questions`)
+  pair a question with the file that should answer it. They are scored
+  separately and are the most trustworthy signal: they come from what people
+  actually ask. Each add and remove is in the audit trail.
+- **Optional model-written questions.** `COVERAGE_LLM_QUESTIONS=true` asks the
+  default chat provider to phrase the questions, which sends the sampled
+  passages to that provider. It is off by default; with `OFFLINE_MODE=true`
+  only a local provider is used, and any model failure falls back to the
+  heuristic probes with a note in the report.
+- **Staleness and cost.** A report is marked stale when documents are added,
+  replaced, removed or quarantined, or the embedding model changes; the
+  numbers are kept so you can see the trend, but treat them as old. A run is a
+  background thread (a few seconds to about two minutes, hard-capped at 3
+  minutes, partial results reported as such), one per collection (a second
+  request gets a 409) and two per deployment. Quarantined documents are never
+  read. The latest report is stored in the collection's own `metadata.db`, so
+  it travels with backups and collection exports.
+- **For agents.** MCP `list_collections` adds `newest_upload` and, once a report
+  exists, `quality: {coverage_hit_at_5, report_age, stale}` (plus
+  `owner_question_hit_at_5` when owners wrote questions) so an agent can prefer
+  the collection that is fresh and findable. Treat a stale or low score as a
+  reason to double-check, not as a verdict.
+
 ### Custom file types
 
 JSON-like files with an extension only one product uses (`.acme`, `.cfgx`, ...)

@@ -16,6 +16,8 @@ directory.
     clio_cli.py stats --collection policies                  # exact counts, sizes, types
     clio_cli.py files --collection policies --type pdf       # list files (table)
     clio_cli.py files -c policies --csv all-files.csv        # every file, however many
+    clio_cli.py coverage -c policies                         # how findable is this collection?
+    clio_cli.py coverage -c policies --run                   # owner: refresh the report
     clio_cli.py jobs
 
 The token is read from the environment (or --token-file), never from argv, so
@@ -315,6 +317,37 @@ def cmd_jobs(c: Client, a) -> Any:
     return c.get("/documents/jobs")
 
 
+def cmd_coverage(c: Client, a) -> Any:
+    """Show a collection's retrieval coverage report, or run a fresh one (--run).
+
+    Running is owner-only on the server and takes seconds to a couple of
+    minutes; the command waits for it unless --no-wait.
+    """
+    cid = resolve_collection(c, a.collection)
+    path = f"/api/collections/{cid}/coverage"
+    if a.run:
+        payload = {"probes": a.probes} if a.probes else {}
+        try:
+            c.post_json(path, payload)
+        except ClioError as e:
+            if "HTTP 409" not in str(e):
+                raise
+            if not a.json:
+                print("a run is already in progress; waiting for it", file=sys.stderr)
+        if a.no_wait:
+            return {"collection_id": cid, "run": c.get(path).get("run")}
+    while True:
+        data = c.get(path)
+        run = data.get("run") or {}
+        if not a.run or run.get("state") != "running":
+            break
+        if not a.json:
+            print(f"  coverage run: {run.get('done', 0)}/{run.get('total') or '?'} probes", file=sys.stderr)
+        time.sleep(a.poll)
+    data["collection_id"] = cid
+    return data
+
+
 def cmd_job(c: Client, a) -> Any:
     return c.get(f"/documents/upload/{a.job_id}/status")
 
@@ -381,7 +414,59 @@ def _human(n: Optional[int]) -> str:
     return f"{size:.1f} TB"
 
 
+def _pct(v: Optional[float]) -> str:
+    return "-" if v is None else f"{round(100 * v)}%"
+
+
+def render_coverage(result: dict) -> str:
+    report, run = result.get("report"), result.get("run") or {}
+    if run.get("state") == "running" and not report:
+        return f"coverage run in progress ({run.get('done', 0)}/{run.get('total') or '?'} probes)"
+    if run.get("state") == "failed":
+        return f"coverage run failed: {run.get('error')}"
+    if not report:
+        return "no coverage report yet; an owner can create one with: clio_cli.py coverage -c NAME --run"
+    o = report["overall"]
+    stale = report.get("stale_reasons") or []
+    lines = [
+        f"retrieval coverage  document hit@5 {_pct(o['document_hit_at_5'])}  "
+        f"chunk hit@10 {_pct(o['chunk_hit_at_10'])}  MRR {o['mrr_chunk'] if o['mrr_chunk'] is not None else '-'}  "
+        f"({o['probes']} probes, {report.get('age') or '?'} old)",
+    ]
+    if stale:
+        lines.append("STALE: " + ", ".join(s.replace("_", " ") for s in stale) + " since this run; re-run it")
+    pm = report["probe_method"]
+    used = ", ".join(f"{m} {v['probes']}" for m, v in pm["by_method"].items()) or "none"
+    lines.append(f"probes: {used}; embedding {report.get('embedding_model')}; corpus {report['corpus_version']}")
+    lines.append(report["measures"])
+    for note in report.get("notes", [])[1:-1]:
+        lines.append(f"note: {note}")
+    weak = report.get("weakest_documents") or []
+    if weak:
+        lines.append("weakest documents")
+        for d in weak[:5]:
+            lines.append(f"  {d['filename']}  {_pct(d['document_hit_at_5'])} of {d['probes']} probes found")
+            for f in d["failing_probes"][:2]:
+                lines.append(f"      missed: {f['query']!r}")
+    never = report["chunks_never_retrieved"]["count"]
+    if never:
+        lines.append(f"{never} probed chunks never came back in the top 10")
+    if report["unprobeable_chunks"]["count"]:
+        lines.append(f"{report['unprobeable_chunks']['count']} chunks have no searchable words (table noise?)")
+    owner = report.get("owner_questions")
+    if owner:
+        lines.append(f"owner questions  hit@5 {_pct(owner['document_hit_at_5'])} "
+                     f"({owner['measured']} of {owner['total']} measured)")
+        for item in owner["items"]:
+            if item["status"] != "hit":
+                names = ", ".join(d["filename"] for d in item["expected_documents"])
+                lines.append(f"  {item['status'].replace('_', ' ')}: {item['question']}  (expected {names})")
+    return "\n".join(lines)
+
+
 def render(command: str, result: Any) -> str:
+    if command == "coverage":
+        return render_coverage(result)
     if command == "search":
         rows = [f"{r['filename']} p.{r['page_number']}  score {r['similarity_score']:.2f}\n"
                 f"    {r['text_snippet'].strip()[:300]}" for r in result.get("results", [])]
@@ -458,6 +543,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-wait", action="store_true")
     s.add_argument("--poll", type=float, default=2.0)
     s.set_defaults(fn=cmd_reindex)
+    s = sub.add_parser("coverage", help="how findable a collection's content is (owner: --run to refresh)")
+    s.add_argument("--collection", "-c", default="default")
+    s.add_argument("--run", action="store_true", help="run a fresh report (owner only) and wait for it")
+    s.add_argument("--probes", type=int, help="chunks to sample, up to 300 (default 100)")
+    s.add_argument("--no-wait", action="store_true")
+    s.add_argument("--poll", type=float, default=2.0)
+    s.set_defaults(fn=cmd_coverage)
     sub.add_parser("jobs", help="recent indexing jobs").set_defaults(fn=cmd_jobs)
     s = sub.add_parser("job", help="one indexing job"); s.add_argument("job_id", type=int)
     s.set_defaults(fn=cmd_job)
@@ -501,6 +593,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             result.get("status") not in (None, "completed") or result.get("failed_files")):
         return 1
     if args.command == "reindex" and isinstance(result, dict) and result.get("status") == "failed":
+        return 1
+    if args.command == "coverage" and isinstance(result, dict) and (result.get("run") or {}).get("state") == "failed":
         return 1
     return 0
 
