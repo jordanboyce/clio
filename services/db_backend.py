@@ -319,10 +319,6 @@ class DatabaseBackend(ABC):
     def get_active_reindex_job(self) -> Optional[Dict[str, Any]]:
         ...
 
-    @abstractmethod
-    def count_documents_by_extension(self, extension: str) -> int:
-        ...
-
     # ── AI Preferences ───────────────────────────────────────
 
     @abstractmethod

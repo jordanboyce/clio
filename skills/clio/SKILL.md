@@ -106,6 +106,13 @@ enumerate from search results; they are the top few passages, not the corpus.
   `list_changes`.
 - Check progress with `list_index_jobs` / `get_index_job`, or `clio_cli.py
   jobs`.
+- A product-specific JSON-like extension (`.acme`) is indexed only after an
+  administrator registers it. `clio_cli.py types` lists what is registered;
+  `type-suggest`/`type-save` (admin) propose and save a profile, and the save
+  answer says how many indexed files per collection use it. After a profile
+  change, `clio_cli.py reindex -c NAME --ext .acme` re-reads only those files
+  (collection owner; other documents untouched). A deleted type's files stay
+  searchable but cannot be re-indexed until the type is registered again.
 - Do not upload anything the user has not told you to share. Collections are
   visible to everyone with access.
 

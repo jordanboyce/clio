@@ -98,3 +98,23 @@ def test_file_kinds_follow_the_profile(acme):
     assert file_kinds.kind_counts({".acme": 3, ".pdf": 1, ".weird": 2}) == {
         "code": 0, "docs": 1, "data": 3, "media": 0, "other": 2}
     assert file_kinds.keys_for_file_type("other", [".acme", ".weird"]) == [".weird"]
+
+
+def test_a_switched_off_type_keeps_its_kind_for_files_already_indexed(acme):
+    """Switching a type off stops new uploads, but its indexed files must not
+    fall into "other" in the sidebar and stats."""
+    cft.registry.put(".acme", {"label": "Acme export", "enabled": False})
+    assert not is_supported_filename("pumps.acme")
+    assert file_kinds.kind_for_filename("pumps.acme") == "data"
+    assert file_kinds.kind_counts({".acme": 2})["data"] == 2
+    assert ".acme" in file_kinds.keys_for_file_type("data", [".acme", ".weird"])
+    assert ".weird" not in file_kinds.keys_for_file_type("data", [".acme", ".weird"])
+
+
+def test_the_native_file_picker_offers_registered_types(acme, monkeypatch):
+    from services import file_picker
+
+    types = file_picker.supported_filetypes()
+    assert ".acme" in types[0][1] and ("Custom file types", "*.acme") in types
+    cft.registry.delete(".acme")
+    assert file_picker.supported_filetypes() == list(file_picker.SUPPORTED_FILETYPES)

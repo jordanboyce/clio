@@ -1387,6 +1387,7 @@ import { useBackgroundJobsStore } from './stores/backgroundJobsStore'
 import { useProviderStore } from './stores/providerStore'
 import { useStatsStore } from './stores/statsStore'
 import { useUiStore } from './stores/uiStore'
+import { useCustomFileTypesStore } from './stores/customFileTypesStore'
 
 // Fold legacy provider keys (chat_provider, ai_api_key_*) into the unified
 // config before any tab mounts and reads it.
@@ -2334,6 +2335,8 @@ onMounted(async () => {
   // Load user info
   await userStore.loadCurrentUser()
   if (userStore.adminConsole) reviewStore.start()
+  // Registered custom file types, so their files are drawn with their kind.
+  useCustomFileTypesStore().load()
 
   // Load collections first
   await collectionStore.loadCollections()

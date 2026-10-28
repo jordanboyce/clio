@@ -2,10 +2,26 @@
 // media, web), a short label for the tile, and the icon. The server owns the
 // authoritative family boundaries (services/file_kinds.py) for counting and
 // filtering; this table only decides how a known file is drawn.
+import { shallowRef } from 'vue'
 import {
   FileText, FileCode, Table2, Braces, Image, Mic, Globe, Terminal, Database,
   FileJson, Settings2, FileType, Hash, Layers,
 } from 'lucide-vue-next'
+
+// Types an administrator registered (Settings → Custom file types), keyed by
+// bare lowercase extension: { acme: { kind: 'data', label: 'Acme export' } }.
+// Reactive, so anything that draws a file with describeFile() updates when the
+// list loads or changes. Filled by stores/customFileTypesStore from
+// GET /api/custom-file-types; the server's kind is authoritative.
+export const customFileTypes = shallowRef({})
+export function setCustomFileTypes(list) {
+  const next = {}
+  for (const t of list || []) {
+    const ext = String(t?.extension || '').toLowerCase().replace(/^\./, '')
+    if (ext) next[ext] = { kind: t.kind, label: t.label || '', enabled: t.enabled !== false }
+  }
+  customFileTypes.value = next
+}
 
 const LANG = {
   // label, icon override
@@ -77,6 +93,13 @@ export function describeFile(name, { isWeb = false } = {}) {
   if (MEDIA[ext]) return { family: 'media', label: MEDIA[ext][0], icon: MEDIA[ext][1] || Image, tile: FAMILIES.media.tile }
   if (LANG[ext]) return { family: 'code', label: LANG[ext][0], icon: LANG[ext][1] || FileCode, tile: FAMILIES.code.tile }
   if (ext === 'ipynb') return { family: 'code', label: 'nb', icon: Braces, tile: FAMILIES.code.tile }
+  // A registered custom type is drawn as its profile's kind, never as "other".
+  // Built-ins win above, matching the server (a profile cannot take over .pdf).
+  const custom = customFileTypes.value[ext]
+  if (custom && FAMILIES[custom.kind] && custom.kind !== 'other') {
+    const icon = custom.kind === 'data' ? FileJson : custom.kind === 'code' ? FileCode : FileText
+    return { family: custom.kind, label: ext, icon, tile: FAMILIES[custom.kind].tile }
+  }
   return { family: 'other', label: ext || '', icon: FileType, tile: FAMILIES.other.tile }
 }
 

@@ -649,29 +649,68 @@ The parser accepts strict JSON, JSON with `//` and `/* */` comments and trailing
 commas, and JSON Lines / concatenated values. Files up to 100 MB. Profiles live in
 `<data dir>/custom_file_types.json`, so a normal backup carries them, and changes
 apply without a restart. Changing or removing a profile does not touch files
-already indexed; use **Re-index** to apply a new profile to them.
+already indexed. To apply a changed profile to them, re-index just that
+extension (below); the rest of the collection is left exactly as it is.
 
-**Web UI** (admin only): Settings → Indexing → Custom file types, or Admin tab → Custom file types.
+**Web UI** (admin only): Settings → Custom file types. The panel is hidden for
+non-admins, and also hides itself if the server answers 403.
 - List all registered types with extension, label, kind, source (manual/heuristic/AI), and who updated it.
-- Add/edit: pick a sample file → Suggest profile (toggle AI on/off) → live preview → Save.
-- Delete: shows how many indexed documents use the extension, keeps them searchable, and offers **Re-index N files** to re-process them with a new profile.
+- Add/edit: pick a sample file → Suggest profile (toggle AI on/off; the toggle is off, with the reason, when no chat model is configured) → live preview → Save. The saved source is `ai` or `heuristic` while the profile is still what was suggested, and `manual` once you edit it. A message says when the AI pass fell back to rules and why. A 400 from the server (for example a record path that is not in the sample) is shown in the dialog.
+- After a save that changes how files are read (not a new label or description), the panel says "N indexed files use .acme", per collection, how many were indexed with an older profile, and offers **Re-index N files** for each collection you own. For a collection owned by someone else it says its owner must do it. The **Files** button on a row opens the same list later.
+- Delete: counts the indexed files first, per collection. They stay searchable. They cannot be re-indexed afterwards (see below), so no re-index is offered; register the extension again to re-index them.
+- Registered types are drawn with their `kind` (data, docs, code) in the source list and stats, not as "other", and are accepted by uploads, the native file picker and folder scans.
 
 All changes are admin-only (`ADMIN_EMAILS`) and audited. Reading the list is open.
 
 ```bash
 # 1. Ask for a proposal from a sample file (nothing is saved)
-curl -H "Authorization: Bearer ***" -F extension=.acme -F "file=@sample.acme"      "$CLIO_URL/api/custom-file-types/suggest"
+curl -H "Authorization: Bearer $CLIO_TOKEN" -F extension=.acme -F "file=@sample.acme" \
+     "$CLIO_URL/api/custom-file-types/suggest"
 # add -F use_ai=false to keep the sample off any model
 
 # 2. Check what a (possibly edited) profile would index
-curl -H "Authorization: Bearer ***" -H 'Content-Type: application/json'      -d '{"extension":".acme","sample":"...","profile":{"record_path":"pumps","title_field":"name","exclude":["id"]}}'      "$CLIO_URL/api/custom-file-types/preview"
+curl -H "Authorization: Bearer $CLIO_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"extension":".acme","sample":"...","profile":{"record_path":"pumps","title_field":"name","exclude":["id"]}}' \
+     "$CLIO_URL/api/custom-file-types/preview"
 
-# 3. Save it; uploads, folder sync and re-index now accept .acme
-curl -X PUT -H "Authorization: Bearer ***" -H 'Content-Type: application/json'      -d '{"label":"Acme export","record_path":"pumps","title_field":"name","exclude":["id"]}'      "$CLIO_URL/api/custom-file-types/.acme"
+# 3. Save it; uploads, folder sync and re-index now accept .acme.
+#    The response says whether the save changes how files are read and, per
+#    collection you can see, how many indexed files use .acme.
+curl -X PUT -H "Authorization: Bearer $CLIO_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"label":"Acme export","record_path":"pumps","title_field":"name","exclude":["id"]}' \
+     "$CLIO_URL/api/custom-file-types/.acme"
 
-# 4. Re-index files of a specific extension (scoped re-index, other docs untouched)
-curl -X POST -H "Authorization: Bearer ***" -H 'Content-Type: application/json'      -d '["\.acme"]' "$CLIO_URL/api/collections/{id}/reindex-extensions"
+# 4. How many indexed files use it, per collection (admin; works after a delete too)
+curl -H "Authorization: Bearer $CLIO_TOKEN" "$CLIO_URL/api/custom-file-types/.acme/usage"
+
+# 5. Re-index only .acme files in one collection (collection owner)
+curl -X POST -H "Authorization: Bearer $CLIO_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"extensions":[".acme"]}' "$CLIO_URL/api/collections/COLLECTION_ID/reindex-extensions"
 ```
+
+`PUT` replaces the whole profile: send every field you want to keep. The answer
+is `{profile, reading_changed, affected_documents, usage}`; `usage` lists each
+collection with its `documents`, `out_of_date` and whether you can re-index it.
+"Out of date" means indexed before the profile last changed how files are read
+(`format`, `record_path`, `title_field`, `include`, `exclude`, `labels`,
+`records_per_section`, `max_value_chars`, `enabled`); it uses the index time
+already stored on each document, so nothing is added to existing indexes.
+
+**Scoped re-index.** `POST /api/collections/{id}/reindex-extensions` takes
+`{"extensions": [".acme"]}` (case and the leading dot are optional), is owner
+only and audited, and runs as the usual background job (one re-index at a time:
+409 while another runs). Only documents with those extensions are re-read; every
+other document keeps its chunks, ids and vectors. The job uses the collection's
+live index, so uploads, deletes and search keep working and nothing is lost on
+save. Each file is read and embedded before its old entry is swapped out, so a
+file that no longer parses keeps its previous entry and the job ends as failed
+with the file names; a missing source file fails the job before anything
+changes. Review decisions (quarantine, approval, sensitivity, injection
+review) carry over. The request is refused with **400** for an empty list, a
+malformed extension, spreadsheets (those need a full re-index of the
+collection), and any extension the server does not currently read, including a
+deleted or switched-off custom type: re-indexing would extract again and drop
+the files. Indexed files of a deleted type stay searchable as they are.
 
 Profile fields: `label`, `description`, `format` (`auto`, `json`, `jsonl`, `text`),
 `kind` (`data`, `docs`, `code`; how the file is grouped in stats), `record_path`
@@ -693,7 +732,8 @@ for prompt injection and content-policy hits like any other source.
 **CLI** (`skills/clio/scripts/clio_cli.py`):
 - `clio_cli.py types` — list registered types
 - `clio_cli.py type-suggest .acme sample.acme [--use-ai]` — propose a profile
-- `clio_cli.py type-save .acme '{"record_path":"pumps","title_field":"name"}'` — save a profile
+- `clio_cli.py type-save .acme '{"record_path":"pumps","title_field":"name"}'` — save a profile (the answer includes the per-collection usage)
+- `clio_cli.py reindex -c Plant --ext .acme` — re-index only those files in a collection (repeat `--ext` for several)
 
 ### Link indexing
 

@@ -490,6 +490,7 @@ class DocumentIndexer:
         self,
         prepared: List[PreparedDocument],
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        embeddings: Optional[Any] = None,
     ) -> List[DocumentMetadata]:
         """
         Embed and persist a batch of prepared documents in one pass.
@@ -504,6 +505,10 @@ class DocumentIndexer:
             prepared: PreparedDocuments from prepare_document
             progress_callback: Optional (chunks_done, chunks_total) callback
                 covering the whole batch
+            embeddings: Vectors the caller already computed for every chunk of
+                `prepared`, in order. A caller that replaces an existing
+                document embeds first and only then removes the old one, so a
+                failing model never leaves the document missing.
 
         Returns:
             One DocumentMetadata per prepared document, in input order
@@ -517,10 +522,13 @@ class DocumentIndexer:
             f"({len(all_chunks)} chunks)"
         )
 
-        embeddings = self.embedding_service.embed_texts(
-            [chunk.text for chunk in all_chunks],
-            progress_callback=progress_callback,
-        )
+        if embeddings is None:
+            embeddings = self.embedding_service.embed_texts(
+                [chunk.text for chunk in all_chunks],
+                progress_callback=progress_callback,
+            )
+        elif len(embeddings) != len(all_chunks):
+            raise ValueError("Precomputed embeddings do not match the chunks")
         self.vector_store.add_chunks(all_chunks, embeddings)
 
         indexed_at = datetime.utcnow().isoformat()
