@@ -68,7 +68,7 @@ describe('EmbeddingMismatchNotice', () => {
 
   it('shows the server reason when re-indexing cannot start', async () => {
     http.get.mockResolvedValueOnce({ data: mismatch() })
-    http.post.mockRejectedValueOnce({ response: { data: { detail: 'Re-indexing job 3 is already running' } } })
+    http.post.mockRejectedValueOnce({ status: 409, message: 'Re-indexing job 3 is already running' })
     const w = await mountNotice()
     await w.get('button.btn-warning').trigger('click')
     await w.get('[data-testid="confirm-reindex"]').trigger('click')

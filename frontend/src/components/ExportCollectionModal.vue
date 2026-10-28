@@ -83,7 +83,7 @@ async function open(collection) {
   try {
     preview.value = (await http.get(`/api/collections/${encodeURIComponent(collection.id)}/export/preview`)).data
   } catch (err) {
-    error.value = err.response?.data?.detail || err.message || 'Could not read this collection.'
+    error.value = err?.message || 'Could not read this collection.'
   } finally {
     loading.value = false
   }

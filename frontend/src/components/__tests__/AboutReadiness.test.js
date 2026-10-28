@@ -68,7 +68,7 @@ describe('About dialog deployment check', () => {
   })
 
   it('disappears for people who are not allowed to see it', async () => {
-    http.get.mockImplementation(() => Promise.reject({ response: { status: 403 } }))
+    http.get.mockImplementation(() => Promise.reject({ status: 403, message: 'Forbidden' }))
     const wrapper = mountAbout()
     await wrapper.get('[data-testid="readiness"] button').trigger('click')
     await flushPromises()

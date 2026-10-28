@@ -127,7 +127,7 @@ async function onFile(event) {
     summary.value = data
     name.value = data.name
   } catch (err) {
-    error.value = err.response?.data?.detail || err.message || 'Could not read that file.'
+    error.value = err?.message || 'Could not read that file.'
   } finally {
     checking.value = false
   }

@@ -43,12 +43,12 @@
           <div class="text-sm tabular-nums">{{ pct(overall.chunk_hit_at_10) }}</div>
           <div class="text-xs text-base-content/55">passages in top 10</div>
         </div>
-        <div>
+        <div :title="'Mean reciprocal rank: 1.0 means the right passage always comes back first; 0.5 means it is typically second.'">
           <div class="text-sm tabular-nums">{{ overall.mrr_chunk ?? '–' }}</div>
-          <div class="text-xs text-base-content/55">MRR</div>
+          <div class="text-xs text-base-content/55">rank quality</div>
         </div>
         <div class="text-xs text-base-content/55">
-          {{ overall.probes }} probes · {{ report.age || 'unknown age' }} old
+          {{ overall.probes }} test searches · {{ report.age || 'unknown age' }} old
         </div>
       </div>
 
@@ -74,7 +74,7 @@
             <div class="flex items-baseline justify-between gap-3">
               <span class="text-sm truncate" :title="d.filename">{{ d.filename }}</span>
               <span class="text-xs tabular-nums text-base-content/60 shrink-0">
-                {{ pct(d.document_hit_at_5) }} of {{ d.probes }} probes
+                {{ pct(d.document_hit_at_5) }} of {{ d.probes }} searches
               </span>
             </div>
             <ul v-if="d.failing_probes?.length" class="mt-1 space-y-0.5">
@@ -103,7 +103,7 @@
       </p>
 
       <p class="text-xs text-base-content/45">
-        Probes: {{ methodText }} · embedding model {{ report.embedding_model || 'unknown' }} · {{ report.duration_seconds }}s
+        Test searches: {{ methodText }} · embedding model {{ report.embedding_model || 'unknown' }} · {{ report.duration_seconds }}s
       </p>
     </template>
 
@@ -244,7 +244,7 @@ async function load() {
     questions.value = data.questions || []
     error.value = ''
   } catch (e) {
-    error.value = e.response?.data?.detail || 'Could not load the coverage report'
+    error.value = e?.message || 'Could not load the coverage report'
   } finally {
     loaded.value = true
   }
@@ -258,8 +258,8 @@ async function startRun() {
     await http.post(`/api/collections/${props.collectionId}/coverage`, {})
   } catch (e) {
     // 409: someone else's run is already going; just follow it.
-    if (e.response?.status !== 409) {
-      error.value = e.response?.data?.detail || 'Could not start the report'
+    if (e?.status !== 409) {
+      error.value = e?.message || 'Could not start the report'
       return
     }
   }
@@ -278,7 +278,7 @@ async function addQuestion() {
     newExpected.value = ''
     await load()
   } catch (e) {
-    questionError.value = e.response?.data?.detail || 'Could not add the question'
+    questionError.value = e?.message || 'Could not add the question'
   } finally {
     adding.value = false
   }
@@ -290,7 +290,7 @@ async function removeQuestion(id) {
     await http.delete(`/api/collections/${props.collectionId}/coverage/questions/${id}`)
     await load()
   } catch (e) {
-    questionError.value = e.response?.data?.detail || 'Could not remove the question'
+    questionError.value = e?.message || 'Could not remove the question'
   }
 }
 

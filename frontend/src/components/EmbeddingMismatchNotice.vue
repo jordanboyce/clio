@@ -94,7 +94,7 @@ async function startReindex() {
     confirming.value = false
     emit('reindex-started', data.job_id)
   } catch (e) {
-    error.value = e.response?.data?.detail || 'Could not start re-indexing'
+    error.value = e?.message || 'Could not start re-indexing'
   } finally {
     busy.value = false
   }

@@ -196,10 +196,10 @@ async function onSave(saved) {
 }
 
 function describeError(err, fallback) {
-  if (err?.response?.status === 403) {
-    return new Error(err.response.data?.detail || 'Only an administrator can change saved instructions.')
+  if (err?.status === 403) {
+    return new Error(err?.message || 'Only an administrator can change saved instructions.')
   }
-  return new Error(err?.response?.data?.detail || err?.message || fallback)
+  return new Error(err?.message || fallback)
 }
 
 function onDelete() {

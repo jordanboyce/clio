@@ -614,7 +614,7 @@ const loadMcpSettings = async () => {
     const response = await http.get('/api/mcp/config')
     mcpSettings.value = { ...mcpSettings.value, ...response.data }
   } catch (error) {
-    mcpError.value = error.response?.data?.detail || 'Failed to load MCP settings'
+    mcpError.value = error?.message || 'Failed to load MCP settings'
   } finally {
     mcpLoading.value = false
   }
@@ -658,7 +658,7 @@ const loadTokens = async () => {
       exportTokenId.value = activeTokens.value[0]?.id || ''
     }
   } catch (error) {
-    mcpError.value = error.response?.data?.detail || 'Failed to load MCP tokens'
+    mcpError.value = error?.message || 'Failed to load MCP tokens'
   }
 }
 
@@ -686,7 +686,7 @@ const createToken = async () => {
     await loadTokens()
     exportTokenId.value = response.data.id
   } catch (error) {
-    mcpError.value = error.response?.data?.detail || 'Failed to create MCP token'
+    mcpError.value = error?.message || 'Failed to create MCP token'
   } finally {
     tokenCreating.value = false
   }
@@ -703,7 +703,7 @@ const revokeToken = async (token) => {
     await loadTokens()
     mcpStatus.value = `${token.name} revoked`
   } catch (error) {
-    mcpError.value = error.response?.data?.detail || 'Failed to revoke token'
+    mcpError.value = error?.message || 'Failed to revoke token'
   }
 }
 
@@ -736,7 +736,7 @@ const saveMcpToggle = async () => {
   try {
     await http.post('/api/mcp/config', { enable_mcp: mcpSettings.value.enable_mcp })
   } catch (error) {
-    mcpError.value = error.response?.data?.detail || 'Failed to update MCP status'
+    mcpError.value = error?.message || 'Failed to update MCP status'
     mcpSettings.value.enable_mcp = !mcpSettings.value.enable_mcp
   }
 }
@@ -763,7 +763,7 @@ const saveMcpSettings = async () => {
     mcpStatus.value = 'MCP settings saved'
     await loadMcpSettings()
   } catch (error) {
-    mcpError.value = error.response?.data?.detail || 'Failed to save MCP settings'
+    mcpError.value = error?.message || 'Failed to save MCP settings'
   } finally {
     mcpSaving.value = false
   }

@@ -154,10 +154,10 @@ watch(() => props.pack, (p) => {
 // 403 means the server's admin gate refused: say so plainly rather than
 // showing a bare "Request failed with status code 403".
 function failureMessage(err, fallback) {
-  if (err?.response?.status === 403) {
-    return err.response.data?.detail || 'Only an administrator can change saved instructions.'
+  if (err?.status === 403) {
+    return err?.message || 'Only an administrator can change saved instructions.'
   }
-  return err?.response?.data?.detail || err?.message || fallback
+  return err?.message || fallback
 }
 
 function validate() {
