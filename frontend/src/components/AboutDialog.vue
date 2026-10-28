@@ -109,7 +109,7 @@ async function checkReadiness() {
     readiness.value.report = data
   } catch (err) {
     // Admin-only deployments answer 401/403 for everyone else: just hide the section.
-    if ([401, 403].includes(err?.response?.status)) readiness.value.allowed = false
+    if ([401, 403].includes(err?.status)) readiness.value.allowed = false
   } finally {
     readiness.value.loading = false
   }

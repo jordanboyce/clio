@@ -1367,7 +1367,7 @@ const loadEmbeddingCatalog = async () => {
   } catch (error) {
     embeddingCatalog.value = []
     embeddingCatalogError.value = 'Could not load the list of embedding providers. Reload the page to try again.'
-    console.error('Failed to load embedding providers:', error.response?.data?.detail || error)
+    console.error('Failed to load embedding providers:', error?.message || error)
   }
 }
 
@@ -1426,7 +1426,7 @@ const testEmbeddingSettings = async () => {
   } catch (error) {
     embeddingTestResult.value = {
       ok: false,
-      error: error.response?.data?.detail || 'The test could not be run. Check the server log.',
+      error: error?.message || 'The test could not be run. Check the server log.',
     }
   } finally {
     embeddingTesting.value = false
@@ -1461,8 +1461,8 @@ const saveEmbeddingSettings = async () => {
     await loadEmbeddingSettings(response.data || {})
     embeddingTestResult.value = probe.data
   } catch (error) {
-    embeddingSaveError.value = error.response?.data?.detail || 'Could not save embedding settings.'
-    console.error('Failed to save embedding settings:', error.response?.data?.detail || error)
+    embeddingSaveError.value = error?.message || 'Could not save embedding settings.'
+    console.error('Failed to save embedding settings:', error?.message || error)
   } finally {
     embeddingSaving.value = false
   }
@@ -1526,7 +1526,7 @@ const saveOCRSettings = async () => {
     ocrSettingsSaved.value = true
     setTimeout(() => { ocrSettingsSaved.value = false }, 5000)
   } catch (error) {
-    console.error('Failed to save OCR settings:', error.response?.data?.detail || error)
+    console.error('Failed to save OCR settings:', error?.message || error)
   }
 }
 
@@ -1549,7 +1549,7 @@ const saveInferenceSettings = async () => {
     inferenceSettingsSaved.value = true
     setTimeout(() => { inferenceSettingsSaved.value = false }, 5000)
   } catch (error) {
-    console.error('Failed to save inference settings:', error.response?.data?.detail || error)
+    console.error('Failed to save inference settings:', error?.message || error)
   }
 }
 
@@ -1614,7 +1614,7 @@ const saveChunkSettings = async () => {
     chunkSettingsSaved.value = true
     setTimeout(() => { chunkSettingsSaved.value = false }, 4000)
   } catch (err) {
-    chunkSettingsError.value = err.response?.data?.detail || 'Failed to save chunk settings.'
+    chunkSettingsError.value = err?.message || 'Failed to save chunk settings.'
     setTimeout(() => { chunkSettingsError.value = '' }, 5000)
   }
 }
@@ -1650,7 +1650,7 @@ const startReindex = async () => {
     reindexSuccess.value = true
     setTimeout(() => { reindexSuccess.value = false }, 8000)
   } catch (error) {
-    reindexError.value = error.response?.data?.detail || 'Failed to start re-indexing'
+    reindexError.value = error?.message || 'Failed to start re-indexing'
     setTimeout(() => { reindexError.value = '' }, 8000)
   } finally {
     reindexing.value = false
@@ -2046,7 +2046,7 @@ const clearAllData = async () => {
       clearSuccess.value = false
     }, 5000)
   } catch (error) {
-    clearError.value = error.response?.data?.detail || 'Failed to clear data'
+    clearError.value = error?.message || 'Failed to clear data'
   } finally {
     clearing.value = false
   }

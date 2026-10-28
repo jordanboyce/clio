@@ -56,7 +56,7 @@ describe('Export dialog', () => {
   })
 
   it('shows the server reason when the collection cannot be exported', async () => {
-    http.get.mockRejectedValue({ response: { data: { detail: 'This collection has nothing indexed to export yet.' } } })
+    http.get.mockRejectedValue({ status: 400, message: 'This collection has nothing indexed to export yet.' })
     const wrapper = mount(ExportCollectionModal)
     wrapper.vm.open({ id: 'c1', name: 'Empty' })
     await flushPromises()
@@ -119,7 +119,7 @@ describe('Import dialog', () => {
   })
 
   it('explains a bad file and offers another', async () => {
-    http.post.mockRejectedValueOnce({ response: { data: { detail: 'That file is not a Clio collection export (.clio.zip).' } } })
+    http.post.mockRejectedValueOnce({ status: 400, message: 'That file is not a Clio collection export (.clio.zip).' })
     const wrapper = mount(ImportCollectionModal)
     await pickFile(wrapper)
     expect(wrapper.text()).toContain('not a Clio collection export')

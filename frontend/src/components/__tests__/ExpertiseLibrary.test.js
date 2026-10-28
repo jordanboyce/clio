@@ -52,7 +52,7 @@ describe('Saved instructions are admin-written', () => {
 
   it('says plainly when the server refuses a save with 403', async () => {
     const wrapper = await mountLibrary({ admin: true })
-    http.put.mockRejectedValue({ message: 'Request failed with status code 403', response: { status: 403, data: { detail: 'Only an administrator can manage saved instructions.' } } })
+    http.put.mockRejectedValue({ status: 403, message: 'Only an administrator can manage saved instructions.' })
     await wrapper.get('button[title="Edit"]').trigger('click')
     const save = wrapper.findAll('button').find(b => b.text().includes('Save Changes'))
     await save.trigger('click')
@@ -74,7 +74,7 @@ describe('Saved instructions are admin-written', () => {
     const wrapper = await mountLibrary({ admin: true })
     HTMLDialogElement.prototype.showModal = HTMLDialogElement.prototype.showModal || function () {}
     HTMLDialogElement.prototype.close = HTMLDialogElement.prototype.close || function () {}
-    http.delete.mockRejectedValue({ response: { status: 403, data: { detail: 'Only an administrator can manage saved instructions.' } } })
+    http.delete.mockRejectedValue({ status: 403, message: 'Only an administrator can manage saved instructions.' })
     await wrapper.get('button[title="Delete"]').trigger('click')
     await wrapper.findAll('button').find(b => b.text() === 'Delete').trigger('click')
     await flushPromises()

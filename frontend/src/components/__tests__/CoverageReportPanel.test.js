@@ -120,7 +120,7 @@ describe('CoverageReportPanel', () => {
     http.get
       .mockResolvedValueOnce(payload({ report: null }))
       .mockResolvedValue(payload({ report: null, run: { state: 'running', done: 1, total: 10 } }))
-    http.post.mockRejectedValueOnce({ response: { status: 409, data: { detail: 'already in progress' } } })
+    http.post.mockRejectedValueOnce({ status: 409, message: 'already in progress' })
     const w = await mountPanel()
     await w.get('[data-testid="coverage-run"]').trigger('click')
     await flushPromises()
@@ -131,7 +131,7 @@ describe('CoverageReportPanel', () => {
 
   it('shows the server message when a run cannot start', async () => {
     http.get.mockResolvedValueOnce(payload({ report: null }))
-    http.post.mockRejectedValueOnce({ response: { status: 403, data: { detail: 'Only the owner can do that' } } })
+    http.post.mockRejectedValueOnce({ status: 403, message: 'Only the owner can do that' })
     const w = await mountPanel()
     await w.get('[data-testid="coverage-run"]').trigger('click')
     await flushPromises()
@@ -185,7 +185,7 @@ describe('CoverageReportPanel', () => {
 
     it('shows the server reason when a question is rejected, and keeps the text', async () => {
       http.get.mockResolvedValueOnce(payload({ questions: [] }))
-      http.post.mockRejectedValueOnce({ response: { data: { detail: 'No document named missing.md' } } })
+      http.post.mockRejectedValueOnce({ status: 400, message: 'No document named missing.md' })
       const w = await mountPanel()
       const [q, files] = w.get('[data-testid="coverage-question-form"]').findAll('input')
       await q.setValue('Where is the roadmap?')

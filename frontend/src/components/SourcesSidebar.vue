@@ -1817,7 +1817,7 @@ const indexGit = async () => {
     emit('document-deleted')
   } catch (err) {
     // The server's reason (policy refusal, unreachable host) is the useful part.
-    indexError.value = err?.response?.data?.detail || err?.message || 'Could not add the repository'
+    indexError.value = err?.message || 'Could not add the repository'
   } finally {
     gitSubmitting.value = false
     loadSyncFolders()
@@ -2223,10 +2223,10 @@ const availablePacks = computed(() =>
 // Choosing which instructions a collection follows is the owner's call (the
 // server answers 403 to anyone else, including a read-write collaborator).
 function expertiseError(err, fallback) {
-  if (err?.response?.status === 403) {
+  if (err?.status === 403) {
     return new Error('Only the owner of this collection can change which instructions it follows.')
   }
-  return new Error(err?.response?.data?.detail || err?.message || fallback)
+  return new Error(err?.message || fallback)
 }
 
 async function loadExpertise(collId) {

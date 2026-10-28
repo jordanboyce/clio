@@ -651,7 +651,7 @@ const executeSearch = async () => {
           return { provider, results: response.data.results, synthesis: response.data.synthesis, aiUsage: response.data.ai_usage }
         } catch (err) {
           if (signal.aborted) throw err
-          return { provider, error: err.response?.data?.detail || err.message || 'Request failed' }
+          return { provider, error: err?.message || 'Request failed' }
         }
       }))
       if (!isCurrent()) return
@@ -678,7 +678,7 @@ const executeSearch = async () => {
     statsStore.fetchStatsDebounced()
   } catch (err) {
     if (!isCurrent()) return
-    error.value = err.response?.data?.detail || err.message || 'Search failed. Please try again.'
+    error.value = err?.message || 'Search failed. Please try again.'
   } finally {
     if (abortController === controller) {
       loading.value = false
