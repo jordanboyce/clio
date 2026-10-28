@@ -443,6 +443,51 @@ hash, act on user reports, and suspend an identity — which revokes every
 MCP token it holds. Suspension leaves the person's documents in place; removal
 is a separate, reviewable decision.
 
+## Old versions and duplicate text
+
+Policy sets accumulate v2 next to v3, and the same paragraph in several files.
+Clio handles both at search time and never hides anything.
+
+**Replaced by.** A collection owner marks a document as replaced by another one
+in the same collection (Sources → the *Replaced by…* button on a row, or
+`POST /documents/{id}/supersede` with `{"replaced_by": "<document_id>", "note": "…"}`;
+`DELETE` on the same path clears it; `clio_cli.py supersede mark|clear`). Search
+then ranks the older document `SUPERSEDED_PENALTY` (default `0.15`, on the same
+0–1 scale as the reranker probability) below an equally relevant current
+passage. It still appears when it is the only match, and every result from it
+carries `superseded_by: {document_id, filename}`. Chat, research and MCP tell the
+model to prefer the current version and to say so when it cites the older one.
+For "what did v2 say" questions a search passes `filters.include_superseded: true`
+(MCP/chat tool argument, `/search` body, `clio_cli.py search --include-superseded`):
+the penalty is skipped and the label stays.
+
+Rules: both documents must be in the collection, a document cannot replace itself
+or close a loop, and a quarantined document cannot be named as the replacement
+(its name would show in results). Deleting the replacement clears the mark on the
+older document. Re-indexing the older document, or a full or per-extension
+reindex, keeps the mark. Each change is in the audit log
+(`document.supersede`, `document.supersede_cleared`) and drops cached chat answers.
+The column is added by an automatic migration (schema 3.8); older databases open
+unchanged.
+
+**Suggestions.** `GET /documents/supersede-suggestions?collection_id=…` (read
+access) lists likely pairs: file names that differ by a version, year or
+revision token (`v2`/`v3`, `2025`/`2026`, `rev B`), `(1)` / `- Copy` duplicates,
+and different files with identical opening text. Nothing is applied; owners accept
+or dismiss each one in the Sources panel (dismissals are remembered in that
+browser only).
+
+**Duplicate text.** After ranking, a result whose text is the same as a
+higher-ranked one after normalising case, whitespace and punctuation, or whose
+word-3-gram Jaccard similarity is at least `DUPLICATE_SIMILARITY_THRESHOLD`
+(default `0.95`), is folded into it. The surviving result carries
+`duplicates: [{document_id, filename, page}]` (at most 5) and `duplicate_count`, so
+a citation can say "also in …". Passages that differ in a number, or in a word like
+*may*/*must*/*not*, are never merged. `top_k` is refilled from the next-ranked
+candidates. A document the user selected as a source always keeps its own result.
+Turn it off with `COLLAPSE_DUPLICATES=false`. The one cost: when copies were
+found and the reranker is off, that search runs a second, wider retrieval.
+
 ## Capacity & scaling
 
 Clio is **one process by design**: the FAISS indexes, background-job
