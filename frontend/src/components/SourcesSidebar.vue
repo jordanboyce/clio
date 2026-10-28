@@ -63,6 +63,13 @@
       class="m-2 flex-shrink-0"
       :collection-id="collectionStore.currentCollectionId"
     />
+    <SupersedeSuggestions
+      v-if="collectionStore.currentCollectionId && collectionStore.canEditCurrent"
+      ref="supersedeSuggestions"
+      class="flex-shrink-0"
+      :collection-id="collectionStore.currentCollectionId"
+      @changed="onSupersedeChanged"
+    />
 
     <!-- Storage against the per-collection cap. Hidden until half the cap is
          used: a near-empty meter above every source list told people nothing
@@ -677,6 +684,16 @@
                 :class="labelBadgeClass(doc.sensitivity_effective)"
                 :title="`Sensitivity: ${doc.sensitivity_effective}${doc.sensitivity ? ' (set on this document)' : ' (collection default)'}`"
               >{{ doc.sensitivity_effective }}</span>
+              <!-- Replaced by a newer document: quiet, informational -->
+              <span
+                v-if="replacedBadge(doc)"
+                class="badge badge-xs badge-ghost gap-0.5 max-w-[10rem]"
+                :title="replacedBadge(doc).title"
+                data-testid="replaced-badge"
+              >
+                <Replace :size="9" aria-hidden="true" />
+                <span class="truncate">{{ replacedBadge(doc).text }} · {{ replacedBadge(doc).name }}</span>
+              </span>
               <!-- Content-policy outcome -->
               <button
                 v-if="policyBadge(doc.policy_status)"
@@ -718,6 +735,17 @@
             >
               <Eye :size="12" />
             </a>
+            <button
+              v-if="collectionStore.canEditCurrent"
+              class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content"
+              @click="supersedeDoc = doc"
+              :disabled="deleting"
+              :title="doc.superseded_by ? 'Change or clear the replacement' : 'Mark as replaced by…'"
+              :aria-label="`Mark ${doc.filename} as replaced by another source`"
+              data-testid="replace-action"
+            >
+              <Replace :size="12" />
+            </button>
             <button
               class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content"
               @click="openReport(doc)"
@@ -1014,6 +1042,14 @@
       <form method="dialog" class="modal-backdrop"><button @click="closeReportModal">close</button></form>
     </dialog>
 
+    <SupersedeDialog
+      v-if="collectionStore.currentCollectionId"
+      :doc="supersedeDoc"
+      :collection-id="collectionStore.currentCollectionId"
+      @close="supersedeDoc = null"
+      @changed="onSupersedeChanged"
+    />
+
   </div>
 </template>
 
@@ -1021,7 +1057,10 @@
 import { ref, computed, markRaw, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import http from '../utils/http'
 import EmbeddingMismatchNotice from './EmbeddingMismatchNotice.vue'
-import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync, GitBranch, EyeOff } from 'lucide-vue-next'
+import SupersedeDialog from './SupersedeDialog.vue'
+import SupersedeSuggestions from './SupersedeSuggestions.vue'
+import { replacedBadge } from '../utils/supersede'
+import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync, GitBranch, EyeOff, Replace } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useUiStore } from '../stores/uiStore'
 import { useUserStore } from '../stores/userStore'
@@ -1092,6 +1131,16 @@ const isLinkDoc = (doc) => doc?.source_type === 'url' && /^https?:\/\//i.test(do
 
 // Document management state
 const documents = ref([])
+
+// "Replaced by…" picker (SupersedeDialog) and the suggestions list share this
+// refresh: the relationship changes how a row reads and how search ranks it.
+const supersedeDoc = ref(null)
+const supersedeSuggestions = ref(null)
+const onSupersedeChanged = async () => {
+  await loadDocuments()
+  supersedeSuggestions.value?.load?.()
+}
+
 const loading = ref(false)
 const deleting = ref(false)
 const error = ref('')

@@ -9,6 +9,7 @@
           <span v-if="result.source_format" class="uppercase text-xs">{{ result.source_format }}</span>
           <span v-if="showLabel(result.sensitivity)" class="badge badge-sm" :class="labelBadgeClass(result.sensitivity)">{{ result.sensitivity }}</span>
         </div>
+        <SupersedeNote :source="result" />
         <div v-if="result.source_format === 'csv' && result.csv_columns && result.csv_values" class="mt-3 overflow-x-auto">
           <table class="table table-sm"><thead><tr><th v-for="col in result.csv_columns" :key="col">{{ col }}</th></tr></thead><tbody><tr><td v-for="col in result.csv_columns" :key="col"><span v-html="highlightSnippet(result.csv_values[col] ?? '', query)"></span></td></tr></tbody></table>
         </div>
@@ -36,6 +37,7 @@ import { ExternalLink } from 'lucide-vue-next'
 import { labelBadgeClass, showLabel } from '../utils/governance'
 import { sourceHref } from '../utils/answerEvidence'
 import { highlightSnippet } from '../utils/searchPresentation'
+import SupersedeNote from './SupersedeNote.vue'
 const props = defineProps({ result: { type: Object, required: true }, index: { type: Number, required: true }, query: { type: String, default: '' } })
 const href = computed(() => sourceHref(props.result))
 const location = computed(() => {
