@@ -3,13 +3,15 @@
 import json
 import logging
 
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import Depends, File, Form, HTTPException, Request, UploadFile, status
+from pydantic import BaseModel, Field
 
 from config import settings
 from services.config_manager import config_manager
-from services.reindex_service import reindex_service
+from services import audit
+from services.reindex_service import normalize_reindex_extensions, reindex_service
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
 from middleware.user_context import get_current_user_id
@@ -147,80 +149,71 @@ async def start_collection_reindex(collection_id: str, user_id: str = Depends(ge
         )
 
 
+class ReindexExtensionsRequest(BaseModel):
+    extensions: List[str] = Field(
+        ..., description="Extensions to re-index, e.g. ['.acme']. Case and the leading dot are optional.")
+
+
 @router.post(
     "/api/collections/{collection_id}/reindex-extensions",
-    summary="Start re-indexing specific file extensions in a collection",
+    summary="Re-index only the documents with the given file extensions",
     tags=["collections"],
 )
 async def start_extension_reindex(
     collection_id: str,
-    extensions: list[str],
+    body: ReindexExtensionsRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Start a background re-indexing job for specific file extensions in a collection.
+    """Start a background job that re-reads only documents with these extensions.
 
-    This reindexes only documents whose file extension matches one of the
-    given extensions, leaving other documents untouched.
+    The point is applying a changed custom-file-type profile to files already
+    indexed, without rebuilding the rest of the collection: other documents keep
+    their chunks and vectors untouched. Owner only (it changes how the
+    collection is built). One re-index runs at a time (409 otherwise).
 
-    Args:
-        collection_id: Collection to reindex
-        extensions: List of extensions to reindex (e.g. ['.acme', '.cfgx'])
+    Refused with 400 for an empty list, a malformed extension, spreadsheets
+    (those need a full re-index) and any extension the server does not
+    currently read, such as a deleted custom type: re-indexing it would drop the
+    files, so they are left searchable as they are.
 
-    Returns:
-        - job_id: ID for tracking re-indexing progress
-        - status: Initial job status
-        - collection_id: Collection being reindexed
-        - extensions: Extensions being reindexed
-        - message: Human-readable status message
+    Returns the ``job_id`` to follow on ``GET /api/reindex/status``.
     """
-    try:
-        from api.deps import require_collection_access
-        require_collection_access(collection_id, user_id, owner=True)
+    from api.deps import require_collection_access
 
-        # Get collection settings
-        collection = collection_service.get_collection(collection_id)
-        if not collection:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Collection '{collection_id}' not found"
-            )
-
-        # Get collection paths
-        documents_dir = indexer_manager.get_documents_path(collection_id)
-        indexes_dir = indexer_manager.get_indexes_path(collection_id)
-
-        # Start extension-scoped re-indexing
-        job_id = await reindex_service.start_extension_reindex(
-            collection_id=collection_id,
-            documents_dir=documents_dir,
-            indexes_dir=indexes_dir,
-            embedding_model=collection["embedding_model"],
-            chunk_size=collection["chunk_size"],
-            chunk_overlap=collection["chunk_overlap"],
-            extensions=extensions,
-        )
-
-        return {
-            "job_id": job_id,
-            "status": "started",
-            "collection_id": collection_id,
-            "extensions": extensions,
-            "message": f"Extension re-indexing job started for {len(extensions)} extension(s) in collection '{collection_id}'"
-        }
-
-    except RuntimeError as e:
+    require_collection_access(collection_id, user_id, owner=True)
+    if not collection_service.get_collection(collection_id):
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(e)
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Collection '{collection_id}' not found"
         )
-    except HTTPException:
-        raise
+
+    try:
+        wanted = normalize_reindex_extensions(body.extensions)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    try:
+        job_id = await reindex_service.start_extension_reindex(
+            collection_id=collection_id, extensions=wanted,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to start extension re-indexing for collection {collection_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to start extension re-indexing: {str(e)}"
         )
+
+    audit.record("collection.reindex_extensions", collection_id=collection_id,
+                 detail={"extensions": wanted, "job_id": job_id})
+    return {
+        "job_id": job_id,
+        "status": "started",
+        "collection_id": collection_id,
+        "extensions": wanted,
+        "message": f"Re-indexing {', '.join(wanted)} files in collection '{collection_id}'",
+    }
 
 
 @router.get(
