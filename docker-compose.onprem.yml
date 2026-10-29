@@ -19,6 +19,10 @@
 # same bytes everywhere, which is what makes it auditable. Full walkthrough:
 # docs/ONPREM.md.
 
+# Pin the project name so it matches docker-compose.yml whatever the
+# directory is called (the fixed container_name below would otherwise collide).
+name: clio
+
 services:
   clio:
     # No build: an image built once, carried in, and pinned by tag or digest.

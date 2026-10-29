@@ -63,10 +63,15 @@ images live under `ghcr.io/jordanboyce/asymptote`.
    cosmetic.
 3. If you reference `ASYMPTOTE_IMAGE` / `ASYMPTOTE_PULL_POLICY` in your
    environment, rename them to `CLIO_IMAGE` / `CLIO_PULL_POLICY`.
-4. `docker compose up -d` — the service is now named `clio`, so use
+4. Remove the old container first: `docker rm -f asymptote clio` (whichever
+   exist; `docker ps -a` shows them). Compose does **not** replace it for you:
+   a checkout that was in an `asymptote` directory was a different Compose
+   project, so `up` fails with `The container name "/clio" is already in use`.
+   Removing a container leaves its data alone (`./data` and named volumes are
+   kept). Then `docker compose up -d` — the service is now named `clio`, so use
    `docker compose logs clio` (or `docker compose logs -f` for all services).
-   Compose recreates the container under the new name; the data mount is the
-   same.
+   The project name is pinned to `clio` in the compose files, so this cannot
+   recur from a renamed directory.
 5. Reconnect MCP clients if you pinned the old server name; the endpoint URL
    (`/mcp`) is unchanged.
 6. If a reverse proxy or tunnel of your own addresses the container by its
