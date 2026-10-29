@@ -23,6 +23,10 @@ export const useUiStore = defineStore('ui', () => {
     sourcesVersion.value++
   }
 
+  // Which Research view is showing (library | map | reviews); the ribbon can
+  // open Research straight onto its citation graph or review queue.
+  const researchView = ref('library')
+
   let nextId = 1
 
   function notify(message, type = 'info', { duration = 4000 } = {}) {
@@ -48,5 +52,5 @@ export const useUiStore = defineStore('ui', () => {
     return notify(message, 'error', { duration: 6000 })
   }
 
-  return { toasts, offline, highlightAddSources, sourcesVersion, sourcesChanged, notify, dismiss, toastError }
+  return { toasts, offline, highlightAddSources, sourcesVersion, sourcesChanged, researchView, notify, dismiss, toastError }
 })

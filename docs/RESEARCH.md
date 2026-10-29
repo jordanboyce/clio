@@ -1,6 +1,6 @@
 # Research: papers and books
 
-**Research** (under *More*, or `G` then `R`) turns a collection of papers,
+**Research** (in the ribbon, or `G` then `R`; under *More* on a phone) turns a collection of papers,
 books and reports into a library a lab can work from. It was built around
 requests from lab researchers:
 
@@ -85,31 +85,39 @@ context. The quotes and page links are there so you can check in seconds.
 
 ## The citation map
 
-Modelled on Obsidian's graph view: each source is a dot, sized by how many
-citations connect it, and the layout is a live force simulation rather than a
-fixed diagram. An arrow-free line means one cites the other (turn *Arrows* on
-to see which way); a dashed line leads to a cited work the collection lacks.
+Each source is a dot, sized by how many citations connect it, laid out by a
+live force simulation in the spirit of graph tools such as Obsidian — and
+built for a research library: it also shows the works your sources cite that
+you don't have, and it can color every source by its screening verdict, so
+the map shows what is worth reading next. A line means one cites the other
+(turn on *Arrows* to see which way); a dashed line leads to a cited work the
+collection lacks.
 
 - **Hover** a dot to light its citations and name its neighbours; everything
   else fades. **Click** to read its abstract in a card; **double-click** to
-  open the source. Drag dots to rearrange; scroll to zoom. Titles fade in as
-  you zoom (*Text fade threshold*).
+  open the source. Drag dots to rearrange; scroll to zoom. Titles appear as
+  you zoom in.
 - **Local graph** (from the card) shows one source and what is within one,
   two or three citations of it — the depth slider in the bar at the top.
-- **Graph settings** (the button at the top right), in four sections that
-  collapse like Obsidian's:
+- **Graph settings** (the button at the top right), in four sections:
   - *Filters* — search by title words, an author's surname or a year
-    (`okafor 2021`; Enter jumps to the first match); *Cited works*, and how
-    many of your sources must cite one before it is drawn; *Orphans*, the
-    sources that cite nothing here and are cited by nothing here.
-  - *Groups* — colour by type (papers, books, sources outside the selection,
-    works not in the collection), by publication year, or not at all.
-  - *Display* — arrows, text fade threshold, node size, link thickness.
-  - *Forces* — center force, repel force, link force, link distance.
+    (`okafor 2021`; Enter jumps to the first match); *Cited works you don't
+    have*, and how many of your sources must cite one before it is drawn;
+    *Unconnected sources*, the ones that cite nothing here and are cited by
+    nothing here.
+  - *Color* — by type (papers, books, sources outside the selection, works
+    not in the collection); by **relevance**, the verdicts from *Screen* for a
+    question you choose (worth reading, partly relevant, can't tell, not about
+    this, not screened yet); by publication year; or none.
+  - *Display* — arrows, the zoom at which titles appear, dot size, line
+    thickness.
+  - *Layout* — center force, repel force, link force, link distance.
   Settings are remembered in your browser; *restore defaults* resets them.
 - With a selection, a source of the collection outside it appears as *in the
   collection, not selected*; a cited work with an open copy can be downloaded
   from its card.
+- The ribbon's *Citation graph* item (off by default; switch it on in
+  *Customize the ribbon*) opens Research straight on the graph.
 
 ## Without a model, or offline
 
