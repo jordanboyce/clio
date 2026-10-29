@@ -7,6 +7,7 @@ import asyncio
 from services.embedder import EmbeddingUnavailable
 from fastapi import Header, HTTPException, status, Request
 
+from services import table_row_search
 from services.ai_service import AIService, create_provider
 from services.collection_overview import build_collection_overview as _build_collection_overview
 from services.structured_chat import (
@@ -14,6 +15,7 @@ from services.structured_chat import (
     collect_structured_tables,
 )
 from models.schemas import (
+    SearchMode,
     SearchRequest,
     SearchResponse,
 )
@@ -153,6 +155,19 @@ async def search_documents(
         )
 
         results = search_result["results"]
+
+        # Spreadsheets are SQL tables, not passages; add the rows that contain
+        # every keyword so they are findable without an AI provider. Skipped
+        # for an explicit semantic search, which asks for meaning, not words.
+        if search_request.mode != SearchMode.SEMANTIC:
+            rows = await asyncio.to_thread(
+                table_row_search.row_results,
+                indexer,
+                search_request.query,
+                search_request.top_k,
+                search_request.filters.to_dict() if search_request.filters else None,
+            )
+            results = table_row_search.merge(results, rows, search_request.top_k)
 
         # Add URLs to each result (include collection_id for proper routing)
         # and resolve the sensitivity label in force (document override,

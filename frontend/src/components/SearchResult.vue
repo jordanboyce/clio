@@ -10,7 +10,7 @@
           <span v-if="showLabel(result.sensitivity)" class="badge badge-sm" :class="labelBadgeClass(result.sensitivity)">{{ result.sensitivity }}</span>
         </div>
         <SupersedeNote :source="result" />
-        <div v-if="result.source_format === 'csv' && result.csv_columns && result.csv_values" class="mt-3 overflow-x-auto">
+        <div v-if="result.csv_columns && result.csv_values" class="mt-3 overflow-x-auto">
           <table class="table table-sm"><thead><tr><th v-for="col in result.csv_columns" :key="col">{{ col }}</th></tr></thead><tbody><tr><td v-for="col in result.csv_columns" :key="col"><span v-html="highlightSnippet(result.csv_values[col] ?? '', query)"></span></td></tr></tbody></table>
         </div>
         <p v-else class="mt-3 text-sm leading-7 whitespace-pre-wrap break-words max-w-prose" v-html="highlightSnippet(result.text_snippet || 'No passage preview available.', query)"></p>

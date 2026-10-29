@@ -23,6 +23,9 @@ export const useSearchStore = defineStore('search', () => {
   const lastQuery = ref('')
   const searched = ref(false)
   const lastOptions = ref(null)
+  // Set by another tab that hands a question over to Find (Ask with no model
+  // connected): the Find tab runs the query once when it opens.
+  const runOnOpen = ref(false)
 
   // Support for multiple AI providers
   const aiResponses = ref([])  // Array of {provider, synthesis, aiUsage}
@@ -247,6 +250,7 @@ export const useSearchStore = defineStore('search', () => {
     lastOptions,
     searched,
     aiResponses,
+    runOnOpen,
     cache, // Reactive cache ref
     // Actions
     setSearchResults,
