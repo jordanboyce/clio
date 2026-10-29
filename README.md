@@ -109,15 +109,26 @@ call), so many agents can be connected at once. From the **Connect** tab:
    and can be limited to specific collections; revoke one from the same
    screen when a machine is retired. Tick *Allow adding and updating sources*
    to let that agent save notes and summaries back into a collection.
-2. **Pick your client and copy the snippet.** Coding agents and IDEs:
-   Claude Code, Codex, Pi, Gemini CLI, Cursor, VS Code, Copilot CLI,
-   Windsurf, Zed, Cline, Roo Code, Kiro, OpenCode. Desktop and chat apps: Claude
-   Desktop, claude.ai, ChatGPT, Grok, Hermes Agent, Goose, AnythingLLM,
-   LibreChat, Open WebUI. Automation and APIs: n8n, LangChain, the Python
-   and TypeScript MCP SDKs, the OpenAI Responses API, the Anthropic MCP
-   connector, the xAI API, and a generic entry (URL, bearer header, first
-   call to make) for everything else. Clients that only speak the older
-   HTTP+SSE transport use `/mcp/sse` with the same header.
+2. **Pick your client and take what you need.** Every connection fact
+   (server URL, legacy SSE URL, header, collection id) can be copied on its
+   own, and the recipes are shaped by your choices: which collections to
+   scope to (none, one, or one server entry per collection), whether the
+   token is written into the file, read from an environment variable in the
+   client's own syntax, or left out for an open server or OAuth sign-in, the
+   transport, and the server name. Each client then offers its documented
+   formats (config file, CLI command, install link or secret prompt where
+   one exists), as a whole file or as just the server entry to merge into a
+   file you already have. Coding agents and IDEs: Claude Code, Codex, Pi,
+   Gemini CLI, Qwen Code, Cursor, VS Code, Copilot CLI, Windsurf, Zed,
+   Cline, Roo Code, Kiro, OpenCode, Amp, Factory Droid, Crush, Mistral Vibe,
+   JetBrains, Continue. Desktop and chat apps: Claude Desktop, claude.ai,
+   ChatGPT, Grok, Hermes Agent, Goose, AnythingLLM, LibreChat, LM Studio,
+   Warp, Open WebUI. Automation and APIs: n8n, LangChain, the Python and
+   TypeScript MCP SDKs, the Claude Agent SDK, the OpenAI Agents SDK, the
+   Vercel AI SDK, Pydantic AI, Google ADK, the OpenAI Responses API, the
+   Anthropic MCP connector, the xAI API, and a generic entry (connection
+   facts plus an mcp-remote bridge) for everything else. Clients that only
+   speak the older HTTP+SSE transport use `/mcp/sse` with the same header.
 3. Hosted assistants — claude.ai, ChatGPT, Grok — add the URL as a custom
    connector from their own settings. They connect from the vendor's servers,
    so the endpoint must be reachable from the internet; with an identity
