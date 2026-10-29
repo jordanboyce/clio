@@ -59,6 +59,20 @@ def authors_label(authors: List[str]) -> str:
     return f"{surnames[0]} et al"
 
 
+_SMALL_WORDS = {"a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "into", "nor", "of",
+                "on", "or", "the", "to", "with", "vs", "via"}
+
+
+def _readable_case(title: str) -> str:
+    """Books often print their title in capitals; a file name in capitals is
+    hard to scan. Only an all-capitals title is recased — the words stay."""
+    letters = [c for c in title if c.isalpha()]
+    if not letters or not all(c.isupper() for c in letters):
+        return title
+    words = title.lower().split()
+    return " ".join(w if i and w in _SMALL_WORDS else w[:1].upper() + w[1:] for i, w in enumerate(words))
+
+
 def _shorten(title: str, limit: int) -> str:
     title = " ".join((title or "").split()).rstrip(" .")
     if len(title) <= limit:
@@ -91,7 +105,7 @@ def suggest_filename(paper: Optional[dict], current_filename: str,
         "year": str(paper.get("year") or ""),
         "authors": authors_label(authors),
         "first_author": _surname(authors[0]) if authors else "",
-        "title": _shorten(paper.get("title") or "", MAX_TITLE_CHARS),
+        "title": _shorten(_readable_case(paper.get("title") or ""), MAX_TITLE_CHARS),
         "venue": " ".join((paper.get("venue") or "").split())[:40],
         "doi": (paper.get("doi") or "").replace("/", "_"),
     }

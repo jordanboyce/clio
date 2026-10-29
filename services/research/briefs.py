@@ -53,12 +53,12 @@ _RETRIEVAL_QUERIES = (
 )
 
 _PROMPT = (
-    "Prepare a review of a research paper for a researcher who will read it later. "
+    "Prepare a review of a source (a research paper, a book, a report) for a researcher who will read it later. "
     "{scope}\n\n"
     "{rules}\n\n"
     "Return this JSON object (each list may be empty):\n"
-    "{{\"tldr\": [one point: the paper's main contribution],\n"
-    "  \"question\": [points: the problem or question the paper addresses],\n"
+    "{{\"tldr\": [one point: the main contribution or argument],\n"
+    "  \"question\": [points: the problem or question it addresses],\n"
     "  \"approach\": [points: methods, data, experimental design, sample sizes],\n"
     "  \"findings\": [points: results, with their numbers exactly as written],\n"
     "  \"limitations\": [points: limitations or caveats the AUTHORS state; never your own critique]"
@@ -73,7 +73,7 @@ _PROMPT = (
 
 def _prompt(passages: Dict[str, dict], question: Optional[str], scope: str) -> str:
     if question:
-        relevance_key = ",\n  \"relevance\": [points: what the paper offers for the researcher's question]"
+        relevance_key = ",\n  \"relevance\": [points: what it offers for the researcher's question]"
         relevance_rule = (f"The researcher's question is: {question}\nIf these passages offer nothing for "
                           "it, leave \"relevance\" empty.\n")
     else:
@@ -123,20 +123,25 @@ def prepare(indexer, document_id: str, provider, model: str, depth: str = "brief
     notes: List[str] = []
     if not passages:
         return {"sections": [], "rejected": 0, "coverage": {"passages": 0, "of": 0},
-                "model": model or "", "usage": usage, "notes": ["The paper has no indexed text."]}
+                "model": model or "", "usage": usage, "notes": ["The source has no indexed text."]}
 
     if depth == "brief":
         queries = list(_RETRIEVAL_QUERIES) + ([question] if question else [])
         hit_ids, _ = search_passage_ids(indexer, document_id, queries, passages, per_query=3)
         windows = [select(passages, list(passages)[:4] + hit_ids + list(passages)[-2:], BRIEF_BUDGET_CHARS)]
-        scope = ("You are shown selected passages, not the whole paper; review only what they show.")
+        scope = ("You are shown selected passages, not the whole document; review only what they show.")
     else:
         windows = _windows(passages, WINDOW_CHARS)
         if len(windows) > THOROUGH_MAX_WINDOWS:
-            notes.append(f"The paper is long: the first {THOROUGH_MAX_WINDOWS} of {len(windows)} parts "
-                         "were read.")
-            windows = windows[:THOROUGH_MAX_WINDOWS]
-        scope = "You are shown part {n} of {total} of the paper, in order; review only this part."
+            # A book does not fit: read parts spread evenly from the first to
+            # the last, so the review covers its whole arc rather than only
+            # its opening chapters, and say so.
+            step = (len(windows) - 1) / (THOROUGH_MAX_WINDOWS - 1)
+            picked = sorted({round(i * step) for i in range(THOROUGH_MAX_WINDOWS)})
+            notes.append(f"The document is long: {len(picked)} of its {len(windows)} parts were read, "
+                         "spread evenly from beginning to end.")
+            windows = [windows[i] for i in picked]
+        scope = "You are shown part {n} of {total} read from the document, in order; review only this part."
 
     order = {pid: i for i, pid in enumerate(passages)}
     sections: Dict[str, List[dict]] = {}
@@ -166,7 +171,7 @@ def prepare(indexer, document_id: str, provider, model: str, depth: str = "brief
         notes.append(f"The model's answer for {failed_windows} part(s) could not be read; "
                      "those parts are not reviewed.")
     if rejected:
-        notes.append(f"{rejected} statement(s) were removed because their quote was not found in the paper.")
+        notes.append(f"{rejected} statement(s) were removed because their quote was not found in the source.")
 
     out_sections = []
     for key, title in SECTIONS:
@@ -175,7 +180,7 @@ def prepare(indexer, document_id: str, provider, model: str, depth: str = "brief
         items = sections.get(key, [])[:MAX_ITEMS_PER_SECTION[key]]
         out_sections.append({"key": key, "title": title, "items": items})
     if not any(s["items"] for s in out_sections) and not failed_windows:
-        notes.append("No statement could be verified against the paper, so the review is empty.")
+        notes.append("No statement could be verified against the source, so the review is empty.")
 
     shown_chars = sum(len(passages[p]["text"]) for p in read_ids)
     total_chars = sum(len(p["text"]) for p in passages.values())

@@ -134,8 +134,9 @@ def test_extract_reads_record_from_page_one():
     assert found["year"] == 2021
     assert found["abstract"].startswith("We measured root hydraulic conductance in 240 saplings")
     assert found["abstract"].endswith("than the bottom quartile.")
-    assert found["provenance"]["abstract"] == {"source": "paper", "page": 1,
+    assert found["provenance"]["abstract"] == {"source": "paper", "page": 1, "kind": "abstract",
                                                "detail": "text under the Abstract heading"}
+    assert found["kind"] == "article" and found["isbn"] is None
 
 
 def test_extract_numbered_references_with_identifiers_and_body_links():
@@ -161,6 +162,62 @@ def test_extract_short_bracketed_reference_list():
                                             "[2] B. Kim. Second cited work on roots. 2003.\n"})
     assert [r["raw_text"] for r in refs] == ["A. Lee. First cited work on soils. 2001.",
                                              "B. Kim. Second cited work on roots. 2003."]
+
+
+BOOK = {
+    1: "",                                                      # cover (an image)
+    2: "The Quiet Forest\n",                                    # half-title
+    3: "The Quiet Forest\nA Natural History of Temperate Woodlands\nby Eleanor Marsh\nNorthwind Press\n",
+    4: "Copyright © 2009, 2014 by Eleanor Marsh\nFirst published 2009 by Northwind Press\n"
+       "ISBN 978-0-306-40615-7 (paperback)\nPrinted in nowhere.\n",
+    5: "Contents\nPreface ix\n1 Soils 1\nReferences 30\n2 Canopies 31\nBibliography 80\nIndex 95\n",
+    6: "Preface\nThis book began as a set of field notes kept over twelve summers in the same valley. "
+       "It describes how temperate woodlands recover after drought, fire and felling, and why some "
+       "never do. Each chapter starts from a single plot and widens to the landscape. Readers who "
+       "want the measurements will find them in the tables; readers who want the story can skip them.",
+    7: "Chapter 1\nSoils\nForest soils hold water in the litter layer.",
+    8: "References\n[1] A. Lee. Litter moisture in beech stands. Imaginary Soil Letters, 2001. doi:10.5555/isl.2001.9\n"
+       "[2] B. Kim. Fungal networks after fire. Imaginary Mycology, 2003.\n",
+    9: "References\n[3] C. Diaz. Soil crusts in clearings. Imaginary Soil Letters, 2005.\n",
+    10: "Chapter 2\nCanopies\nCanopy gaps close within a decade. See https://example.org/gap-data for plots.",
+    11: "References\n[1] D. Moreau. Stomatal closure under soil drying in oak seedlings. Plant Water Letters, 2019.\n",
+    12: "Chapter 3\nRecovery\nRecovery is slow.",
+    13: "Bibliography\nAllen, C. D., Macalady, A. K. (2010). A global overview of drought and heat-induced tree mortality.\n"
+        "Forest Ecology and Management, 259, 660-684.\n",
+    14: "Index\nbeech, 3, 8\ncanopy, 31\n",
+}
+
+
+def test_extract_reads_a_book():
+    found = extract.extract_paper(BOOK)
+    assert found["kind"] == "book" and found["isbn"] == "9780306406157"
+    assert found["title"] == "The Quiet Forest"
+    assert found["provenance"]["title"]["page"] == 2
+    assert found["authors"] == ["Eleanor Marsh"]
+    assert found["year"] == 2014                                  # the edition in hand
+    assert found["provenance"]["year"]["detail"] == "copyright line on page 4"
+    assert found["abstract"].startswith("This book began as a set of field notes")
+    assert found["provenance"]["abstract"]["kind"] == "opening"   # labelled, not called an abstract
+    assert found["abstract"].endswith("can skip them.")             # stops before Chapter 1
+    assert found["doi"] is None                                   # chapter 1 cites a DOI; the book has none
+    texts = [r["raw_text"] for r in found["references"]]
+    # Chapter lists (including the running head on page 9) and the bibliography;
+    # nothing from the index or the chapter that follows.
+    assert [t.split(".")[0] for t in texts] == ["A", "B", "C", "D", "Allen, C"]
+    assert [r["page_number"] for r in found["references"]] == [8, 8, 9, 11, 13]
+    assert [link["url"] for link in found["links"]] == ["https://example.org/gap-data"]
+
+
+def test_markdown_title_is_its_heading_not_its_first_sentence():
+    page = "# **Clio**\n\n**Ask your sources. Check the evidence. Connect your AI tools** and more text here\n"
+    assert extract.extract_paper({1: page}, fmt="md")["title"] == "Clio"
+    assert extract.extract_paper({1: "**Just bold text, no heading, and quite long**\n"}, fmt="md")["title"] is None
+
+
+def test_isbn_needs_a_valid_checksum():
+    assert extract.find_isbns("ISBN 978-0-306-40615-7") == ["9780306406157"]
+    assert extract.find_isbns("ISBN 0-306-40615-2") == ["0306406152"]
+    assert extract.find_isbns("ISBN 978-0-306-40615-8") == []
 
 
 def test_extract_leaves_missing_fields_empty_and_says_so():
@@ -230,6 +287,9 @@ def test_suggest_filename():
         "Root Hydraulics Predict Drought Survival in Temperate Saplings.pdf"
     assert naming.suggest_filename({"title": "A/B: what? *really*"}, "a.pdf", "{title}") == "A B what really.pdf"
     assert naming.suggest_filename({"title": None}, "a.pdf") is None
+    assert naming.suggest_filename({"title": "THE STRUCTURE OF SCIENTIFIC REVOLUTIONS", "year": 1970,
+                                    "authors": ["Thomas S. Kuhn"]}, "kuhn.pdf") == \
+        "1970 - Kuhn - The Structure of Scientific Revolutions.pdf"
     with pytest.raises(ValueError):
         naming.suggest_filename(paper, "a.pdf", "{journal}")
 
@@ -341,7 +401,30 @@ def test_registry_record_used_only_when_its_title_is_on_page_one(indexer, monkey
     answers["doi:10.5555/jie.2021.0042"] = _openalex_work("Something entirely different about fish", "10.5555/x")
     paper = library.analyze_document("c1", indexer, "doc-1")
     assert paper["venue"] is None
-    assert any("not this paper's title" in n for n in paper["analysis_notes"])
+    assert any("not this document's title" in n for n in paper["analysis_notes"])
+
+
+def test_book_record_comes_from_open_library_by_isbn(tmp_path, docs_dir, monkeypatch):
+    monkeypatch.setattr(config.settings, "research_lookup_enabled", True)
+    ix = build_collection(tmp_path, {"scan_0042.pdf": [BOOK[p] or " " for p in sorted(BOOK)]})
+    ix.document_extractor.extract_text.side_effect = OSError("no file in tests")
+    calls = []
+
+    def fake_get(url, params=None):
+        calls.append(url)
+        if url.endswith("/api/books"):
+            return _Resp({"ISBN:9780306406157": {
+                "title": "The quiet forest", "authors": [{"name": "Eleanor Marsh"}],
+                "publish_date": "2014", "publishers": [{"name": "Northwind Press"}]}})
+        return None
+    monkeypatch.setattr(lookup, "_get", fake_get)
+    paper = library.analyze_document("c1", ix, "doc-1")
+    assert paper["kind"] == "book" and paper["isbn"] == "9780306406157"
+    assert paper["venue"] == "Northwind Press" and paper["provenance"]["venue"]["source"] == "openlibrary"
+    assert "front matter" in paper["provenance"]["title"]["detail"]
+    assert paper["abstract"].startswith("This book began")      # the book's own words stay
+    assert calls[0].endswith("/api/books")
+    assert naming.suggest_filename(paper, "scan_0042.pdf") == "2014 - Marsh - The quiet forest.pdf"
 
 
 def test_title_search_rejects_a_title_not_printed_in_the_reference(monkeypatch):
@@ -555,6 +638,13 @@ def test_api_library_flow(client):
 
     graph = client.get("/api/research/graph?collection_id=c1").json()
     assert graph["stats"]["internal_edges"] == 1 and graph["stats"]["external_nodes"] == 1
+    # Limited to a selection: only that source, no edge, and a work cited once
+    # by the selection is not "cited by several".
+    scoped = client.post("/api/research/graph?collection_id=c1", json={"document_ids": ["doc-1"]}).json()
+    assert [n["id"] for n in scoped["nodes"]] == ["doc-1"] and scoped["edges"] == []
+    scoped = client.post("/api/research/graph?collection_id=c1",
+                         json={"document_ids": ["doc-1"], "min_citations": 1}).json()
+    assert scoped["stats"]["external_nodes"] == 3     # Hale (not selected), Moreau, Novak
 
 
 def test_api_read_only_users_cannot_change_anything(client):

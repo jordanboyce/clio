@@ -14,7 +14,7 @@ from typing import Dict, Iterable, List, Optional
 
 from services.research import lookup
 from services.research.extract import (
-    clean_text, extract_paper, normalize_doi, title_guess,
+    FRONT_PAGES, clean_text, extract_paper, normalize_doi, title_guess,
 )
 from services.research.grounding import similarity
 from services.research.store import ResearchStore, now_iso
@@ -92,16 +92,18 @@ def paper_pages(collection_id: str, indexer, doc: dict) -> Dict[int, str]:
 
 # ── analysis ────────────────────────────────────────────────────────────
 
-def _confirm_registry(record: Optional[dict], page_one: str, how: str,
+def _confirm_registry(record: Optional[dict], printed_in: str, how: str, where: str,
                       notes: List[str]) -> Optional[dict]:
-    """Accept a registry record only if its title is printed on page one."""
+    """Accept a registry record only if its title is printed where the
+    document's own title is (page one of an article, the front matter of a
+    book)."""
     if not record or not record.get("title"):
         return None
-    score = similarity(record["title"], page_one)
+    score = similarity(record["title"], printed_in)
     if score < PAGE_ONE_MATCH_THRESHOLD:
         notes.append(
-            f"The {how} on page 1 points to a registry record titled “{record['title'][:120]}”, "
-            "which is not this paper's title, so that record was not used."
+            f"The {how} printed {where} points to a registry record titled “{record['title'][:120]}”, "
+            "which is not this document's title, so that record was not used."
         )
         return None
     return {**record, "match": round(score, 3)}
@@ -116,7 +118,7 @@ def _deterministic_resolution(entry: dict) -> dict:
     elif entry.get("url") and "doi.org/" not in entry["url"].lower():
         is_pdf = entry["url"].lower().split("?")[0].endswith(".pdf")
         entry.update(resolved_url=entry["url"], resolved_kind="pdf" if is_pdf else "page",
-                     resolved_via="URL printed in the paper", status="resolved")
+                     resolved_via="URL printed in the source", status="resolved")
     return entry
 
 
@@ -135,41 +137,49 @@ def analyze_document(collection_id: str, indexer, document_id: str,
         store.replace_references(document_id, [])
         return store.get_paper(document_id) or {}
 
-    found = extract_paper(pages, document_path(collection_id, doc))
+    found = extract_paper(pages, document_path(collection_id, doc), fmt=doc.get("source_format"))
     notes = list(found["notes"])
     provenance = dict(found["provenance"])
-    fields = {k: found[k] for k in ("title", "authors", "year", "doi", "arxiv_id", "venue", "abstract")}
-    page_one = pages[min(pages)] if pages else ""
+    fields = {k: found[k] for k in ("title", "authors", "year", "doi", "arxiv_id", "isbn", "venue",
+                                    "abstract", "kind")}
+    ordered = sorted(pages)
+    if found["kind"] == "book":
+        printed_in = "\n".join(pages[p] for p in ordered[:FRONT_PAGES])
+        where = "in the front matter"
+    else:
+        printed_in = pages[ordered[0]] if ordered else ""
+        where = "on page 1"
 
     if use_registry and lookup.lookup_available():
         record, how = None, ""
-        if fields["doi"]:
-            how = "DOI"
-            record = _confirm_registry(lookup.by_doi(fields["doi"]), page_one, how, notes)
-        if not record and fields["arxiv_id"]:
-            how = "arXiv id"
-            record = _confirm_registry(lookup.by_arxiv(fields["arxiv_id"]), page_one, how, notes)
+        for how, ident, fetch in (("ISBN", fields["isbn"], lookup.by_isbn),
+                                  ("DOI", fields["doi"], lookup.by_doi),
+                                  ("arXiv id", fields["arxiv_id"], lookup.by_arxiv)):
+            if ident and not record:
+                record = _confirm_registry(fetch(ident), printed_in, how, where, notes)
+                if record:
+                    break
         if not record and fields["title"]:
-            record = lookup.by_title(fields["title"], page_one, fields["year"])
+            record = lookup.by_title(fields["title"], printed_in, fields["year"])
             how = "title search"
         if record:
-            detail = (f"{record['source']} record for the {how} printed on page 1"
+            detail = (f"{record['source']} record for the {how} printed {where}"
                       if how != "title search" else f"{record['source']} title search")
-            detail += f"; its title is printed on page 1 (match {record['match']:.2f})"
+            detail += f"; its title is printed {where} (match {record['match']:.2f})"
             for field in ("title", "authors", "year", "venue", "doi", "arxiv_id"):
                 if record.get(field):
                     fields[field] = record[field]
                     provenance[field] = {"source": record["source"], "detail": detail}
-            # The paper's own abstract is quoted verbatim; a registry abstract
-            # only fills the gap when the paper's could not be found.
+            # The document's own abstract is quoted verbatim; a registry
+            # abstract only fills the gap when none could be found.
             if not fields["abstract"] and record.get("abstract"):
                 fields["abstract"] = record["abstract"]
-                provenance["abstract"] = {"source": record["source"], "detail": detail}
+                provenance["abstract"] = {"source": record["source"], "kind": "abstract", "detail": detail}
         elif not notes or "registry" not in " ".join(notes):
-            notes.append("No scholarly registry record could be confirmed for this paper; "
+            notes.append("No scholarly registry record could be confirmed for this document; "
                          "its details come from its own text.")
     elif use_registry:
-        notes.append("Registry lookups are off on this server; details come from the paper's own text.")
+        notes.append("Registry lookups are off on this server; details come from the document's own text.")
 
     store.upsert_paper(document_id, **fields, provenance=provenance,
                        analysis_notes=notes, analyzed_at=now_iso())

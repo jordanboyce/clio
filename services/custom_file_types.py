@@ -98,6 +98,36 @@ def _clean_jsonc(text: str) -> str:
     return "".join(out)
 
 
+# Deeper than any real configuration or data file. Checked before parsing
+# because the interpreter's own limit is not a guard: Python 3.13's JSON
+# decoder parses thousands of levels without a RecursionError, and the
+# flattening and rendering that follow would then pay for every level.
+MAX_NESTING = 200
+
+
+def _nesting_depth(text: str) -> int:
+    """The deepest bracket nesting outside string literals (one linear pass)."""
+    depth = deepest = 0
+    in_string = escape = False
+    for c in text:
+        if in_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+        elif c == '"':
+            in_string = True
+        elif c in "[{":
+            depth += 1
+            if depth > deepest:
+                deepest = depth
+        elif c in "]}":
+            depth = max(0, depth - 1)
+    return deepest
+
+
 def _line_of(text: str, pos: int) -> int:
     return text.count("\n", 0, max(0, pos)) + 1
 
@@ -117,12 +147,17 @@ def parse_lenient(text: str, fmt: str = "auto") -> Any:
             if not line:
                 continue
             try:
-                records.append(json.loads(_clean_jsonc(line)))
+                cleaned_line = _clean_jsonc(line)
+                if _nesting_depth(cleaned_line) > MAX_NESTING:
+                    raise RecursionError
+                records.append(json.loads(cleaned_line))
             except (ValueError, RecursionError):
                 records.append({"_raw": line})
         return records
 
     cleaned = _clean_jsonc(text)
+    if _nesting_depth(cleaned) > MAX_NESTING:
+        raise ProfileError("The file nests too deeply to read")
     decoder = json.JSONDecoder()
     values: List[Any] = []
     pos = 0

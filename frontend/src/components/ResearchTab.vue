@@ -2,13 +2,13 @@
   <div class="max-w-6xl mx-auto py-4 space-y-4" data-testid="research-tab">
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h2 class="text-lg font-semibold">Papers</h2>
+        <h2 class="text-lg font-semibold">Research</h2>
         <p class="text-sm text-base-content/60">
-          Decide what to read, keep papers findable, and follow what they cite. Details come from each paper's own
-          text<span v-if="capabilities.registry_lookups"> or the scholarly record for the identifier it prints</span>.
+          Decide what to read, keep papers and books findable, and follow what they cite. Details come from each
+          source's own text<span v-if="capabilities.registry_lookups"> or the catalogue record for the identifier it prints</span>.
         </p>
       </div>
-      <div class="segmented" role="tablist" aria-label="Papers view">
+      <div class="segmented" role="tablist" aria-label="Research view">
         <button
           v-for="v in views"
           :key="v.id"
@@ -24,18 +24,31 @@
       </div>
     </div>
 
+    <!-- The app-wide source selection (the Sources panel's checkboxes) scopes everything here. -->
+    <div v-if="selectionCount" class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-box bg-base-200/70 px-3 py-2 text-sm" data-testid="research-scope">
+      <ListChecks :size="15" class="shrink-0 text-base-content/60" aria-hidden="true" />
+      <span>
+        Working on the <strong class="tabular-nums">{{ selectionCount }}</strong> selected source{{ selectionCount === 1 ? '' : 's' }}
+        <span class="text-base-content/55">— the same selection Ask and Find use.</span>
+      </span>
+      <button class="btn btn-xs btn-ghost" @click="selection.clear()">Clear selection</button>
+    </div>
+
     <div class="flex gap-4 min-h-0">
       <div class="flex-1 min-w-0">
         <!-- Library -->
         <div v-if="view === 'library'" class="space-y-3">
           <div v-if="loaded && !papers.length" class="text-sm text-base-content/60 py-10 text-center">
-            No papers in this collection yet. Add PDFs from the Sources panel, then come back here.
+            No papers or books in this collection yet. Add PDFs from the Sources panel, then come back here.
           </div>
 
           <template v-else>
             <div v-if="canWrite && unanalyzed.length" class="alert py-2 px-3 text-sm" data-testid="research-analyze-banner">
-              <span>{{ unanalyzed.length }} paper{{ unanalyzed.length === 1 ? ' has' : 's have' }} not been read for title, authors, abstract and references yet.</span>
-              <button class="btn btn-xs btn-primary" :disabled="analyzing" @click="analyzeNew">
+              <span>
+                {{ unanalyzed.length }} {{ selectionCount ? 'selected ' : '' }}source{{ unanalyzed.length === 1 ? ' has' : 's have' }}
+                not been read for title, authors, abstract and references yet.
+              </span>
+              <button class="btn btn-xs btn-primary" :disabled="analyzing" @click="analyzeNew()">
                 <span v-if="analyzing" class="loading loading-spinner loading-xs" />Analyze {{ unanalyzed.length }}
               </button>
             </div>
@@ -46,7 +59,7 @@
                 v-model="question"
                 class="input input-bordered input-sm flex-1 min-w-[16rem]"
                 placeholder="What are you looking for? e.g. effect of root depth on drought survival"
-                aria-label="Research question to screen papers against"
+                aria-label="Research question to screen sources against"
                 list="research-questions"
               />
               <datalist id="research-questions">
@@ -54,24 +67,36 @@
               </datalist>
               <button class="btn btn-sm" :disabled="!canScreen || screening" :title="screenHint">
                 <span v-if="screening" class="loading loading-spinner loading-xs" />
-                Screen {{ screenTargets.length }} paper{{ screenTargets.length === 1 ? '' : 's' }}
+                Screen {{ screenTargets.length }} {{ selectionCount ? 'selected' : '' }} source{{ screenTargets.length === 1 ? '' : 's' }}
               </button>
             </form>
             <p v-if="screenHint && question.trim()" class="text-xs text-base-content/55 -mt-1">{{ screenHint }}</p>
 
             <div class="flex flex-wrap items-center gap-2 text-xs">
-              <input v-model="filter" class="input input-bordered input-xs w-48" placeholder="Filter by title, author, year" aria-label="Filter papers" />
-              <select v-model="sort" class="select select-bordered select-xs" aria-label="Sort papers">
+              <input v-model="filter" class="input input-bordered input-xs w-48" placeholder="Filter by title, author, year" aria-label="Filter sources" />
+              <select v-model="sort" class="select select-bordered select-xs" aria-label="Sort sources">
                 <option value="verdict" :disabled="!hasVerdicts">Most relevant first</option>
                 <option value="recent">Recently added</option>
                 <option value="year">Newest publication</option>
                 <option value="cited">Most cited in this collection</option>
                 <option value="title">Title</option>
               </select>
+              <label v-if="selectionCount" class="flex items-center gap-1 cursor-pointer">
+                <input v-model="selectedOnly" type="checkbox" class="checkbox checkbox-xs" />Selected only
+              </label>
               <span class="text-base-content/50 tabular-nums">{{ shown.length }} of {{ papers.length }}</span>
+              <button class="btn btn-xs btn-ghost" :disabled="!shown.length" @click="selectShown">
+                {{ allShownSelected ? 'Unselect shown' : 'Select shown' }}
+              </button>
               <span class="flex-1" />
               <template v-if="canWrite">
-                <span v-if="selected.size" class="text-base-content/60">{{ selected.size }} selected</span>
+                <button
+                  v-if="!unanalyzed.length && scoped.length"
+                  class="btn btn-xs btn-ghost"
+                  :disabled="analyzing"
+                  title="Read titles, authors, abstracts and references again (after an update, or a wrong result)"
+                  @click="analyzeAgain"
+                ><span v-if="analyzing" class="loading loading-spinner loading-xs" />Read {{ selectionCount ? 'selected' : 'all' }} again</button>
                 <button class="btn btn-xs btn-ghost" :disabled="!renameCandidates.length" @click="openRenamePreview">
                   Rename to descriptive names ({{ renameCandidates.length }})
                 </button>
@@ -86,15 +111,17 @@
                 :class="openId === p.document_id ? 'bg-base-200/60' : 'hover:bg-base-200/30'"
               >
                 <input
-                  v-if="canWrite"
                   type="checkbox"
                   class="checkbox checkbox-xs mt-1"
-                  :checked="selected.has(p.document_id)"
+                  :checked="selectedSet.has(p.document_id)"
                   :aria-label="`Select ${p.title || p.filename}`"
-                  @change="toggleSelect(p.document_id)"
+                  @change="selection.toggle(p.document_id)"
                 />
                 <button class="min-w-0 flex-1 text-left" @click="openPaper(p.document_id)">
-                  <span class="block text-sm font-medium leading-snug">{{ p.title || p.filename }}</span>
+                  <span class="block text-sm font-medium leading-snug">
+                    {{ p.title || p.filename }}
+                    <span v-if="p.kind === 'book'" class="badge badge-ghost badge-xs align-middle ml-1">book</span>
+                  </span>
                   <span class="block text-xs text-base-content/60 mt-0.5">
                     <template v-if="p.analyzed">
                       {{ authorsShort(p.authors) || 'Authors unknown' }}<span v-if="p.year"> · {{ p.year }}</span><span v-if="p.venue"> · {{ p.venue }}</span>
@@ -112,7 +139,7 @@
                   </span>
                   <span class="text-base-content/45 tabular-nums space-x-2">
                     <span v-if="p.unread_briefs" class="text-primary">● review</span>
-                    <span v-if="p.cited_by" :title="`Cited by ${p.cited_by} of your papers`">↖ {{ p.cited_by }}</span>
+                    <span v-if="p.cited_by" :title="`Cited by ${p.cited_by} of your sources`">↖ {{ p.cited_by }}</span>
                     <span v-if="p.references" :title="`${p.references} references`">≡ {{ p.references }}</span>
                   </span>
                 </div>
@@ -124,6 +151,7 @@
         <ResearchMap
           v-else-if="view === 'map'"
           :collection-id="collectionId"
+          :document-ids="selectionCount ? scopeIds : null"
           :can-download="canWrite && capabilities.link_download"
           :refresh-key="refreshKey"
           @open="openPaper"
@@ -133,7 +161,7 @@
           v-else
           :collection-id="collectionId"
           :papers="papers"
-          :selected-ids="[...selected]"
+          :selected-ids="selectionCount ? scopeIds : []"
           :provider-id="providerId"
           :can-write="canWrite"
           :refresh-key="refreshKey"
@@ -142,10 +170,14 @@
         />
       </div>
 
-      <!-- Paper panel: inline on wide screens, a sheet on narrow ones -->
+      <!-- Source panel: beside the list on wide screens, a sheet on narrow
+           ones, and a drawer over the map so the map keeps its width. -->
       <div
         v-if="openId"
-        class="fixed inset-0 z-[65] bg-base-100 lg:static lg:z-auto lg:w-[26rem] lg:shrink-0 lg:border lg:border-base-300 lg:rounded-box lg:max-h-[calc(100vh-10rem)] lg:sticky lg:top-2"
+        class="fixed inset-0 z-[65] bg-base-100"
+        :class="view === 'map'
+          ? 'lg:inset-auto lg:right-4 lg:top-16 lg:bottom-4 lg:w-[26rem] lg:border lg:border-base-300 lg:rounded-box lg:shadow-xl'
+          : 'lg:static lg:z-auto lg:w-[26rem] lg:shrink-0 lg:border lg:border-base-300 lg:rounded-box lg:max-h-[calc(100vh-10rem)] lg:sticky lg:top-2'"
       >
         <ResearchPaperPanel
           :document-id="openId"
@@ -164,8 +196,8 @@
       <div class="modal-box max-w-3xl space-y-3">
         <h3 class="font-semibold">Rename to descriptive names</h3>
         <p class="text-sm text-base-content/70">
-          Names are built from each paper's title, authors and year as found in the paper. Papers without a
-          known title are left alone. Every paper keeps its original name, so this can be undone one at a time.
+          Names are built from each source's title, authors and year as found in it (or in its catalogue record).
+          Sources without a known title are left alone. Each keeps its original name, so this can be undone one at a time.
         </p>
         <label class="form-control">
           <span class="label-text text-xs mb-1">Pattern — {{ namingFields }}</span>
@@ -194,16 +226,19 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { Library, Network, NotebookPen } from 'lucide-vue-next'
+import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
+import { Library, ListChecks, Network, NotebookPen } from 'lucide-vue-next'
 import ResearchPaperPanel from './ResearchPaperPanel.vue'
-import ResearchMap from './ResearchMap.vue'
 import ResearchReviews from './ResearchReviews.vue'
+
+// The map brings Vue Flow and dagre; load them only when the map is opened.
+const ResearchMap = defineAsyncComponent(() => import('./ResearchMap.vue'))
 import { researchApi, VERDICTS, authorsShort } from '../utils/researchApi.js'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useProviderStore } from '../stores/providerStore'
 import { useUiStore } from '../stores/uiStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
+import { useSelectionStore } from '../stores/selectionStore'
 
 const views = [
   { id: 'library', label: 'Library', icon: Library },
@@ -215,6 +250,7 @@ const collectionStore = useCollectionStore()
 const providerStore = useProviderStore()
 const ui = useUiStore()
 const jobsStore = useBackgroundJobsStore()
+const selection = useSelectionStore()
 
 const collectionId = computed(() => collectionStore.currentCollectionId)
 const providerId = computed(() => providerStore.activeProviderId || null)
@@ -228,7 +264,7 @@ const naming = ref({ default_pattern: '{year} - {authors} - {title}', fields: []
 const loaded = ref(false)
 const refreshKey = ref(0)
 const openId = ref(null)
-const selected = ref(new Set())
+const selectedOnly = ref(false)
 const filter = ref('')
 const sort = ref('recent')
 const question = ref('')
@@ -253,10 +289,8 @@ async function loadPapers() {
     canWrite.value = Boolean(data.can_write)
     naming.value = data.naming || naming.value
     if (!pattern.value) pattern.value = naming.value.default_pattern
-    const ids = new Set(papers.value.map(p => p.document_id))
-    selected.value = new Set([...selected.value].filter(id => ids.has(id)))
   } catch (err) {
-    ui.toastError(err, 'Could not load papers')
+    ui.toastError(err, 'Could not load sources')
   } finally {
     loaded.value = true
   }
@@ -274,7 +308,6 @@ async function loadVerdicts() {
 
 watch(collectionId, () => {
   openId.value = null
-  selected.value = new Set()
   verdicts.value = {}
   loaded.value = false
   loadPapers()
@@ -294,11 +327,20 @@ watch(() => jobsStore.dataRefreshTick, () => {
 
 onBeforeUnmount(() => { clearTimeout(pollTimer); clearTimeout(verdictTimer); clearTimeout(previewTimer) })
 
-const unanalyzed = computed(() => papers.value.filter(p => !p.analyzed))
+// The selection can hold spreadsheets or code too; here it counts only the
+// sources this view works on. With nothing selected, the scope is all of them.
+const selectedSet = computed(() => new Set(selection.currentIds))
+const selectedPapers = computed(() => papers.value.filter(p => selectedSet.value.has(p.document_id)))
+const selectionCount = computed(() => selectedPapers.value.length)
+const scoped = computed(() => selectionCount.value ? selectedPapers.value : papers.value)
+const scopeIds = computed(() => scoped.value.map(p => p.document_id))
+watch(selectionCount, (n) => { if (!n) selectedOnly.value = false })
+
+const unanalyzed = computed(() => scoped.value.filter(p => !p.analyzed))
 const hasVerdicts = computed(() => Object.keys(verdicts.value).length > 0)
 const shown = computed(() => {
   const f = filter.value.trim().toLowerCase()
-  let list = papers.value
+  let list = selectedOnly.value ? selectedPapers.value : papers.value
   if (f) {
     list = list.filter(p => [p.title, p.filename, (p.authors || []).join(' '), p.year, p.venue]
       .some(v => String(v || '').toLowerCase().includes(f)))
@@ -314,18 +356,20 @@ const shown = computed(() => {
   return [...list].sort(by[sort.value] || by.recent)
 })
 
-const screenTargets = computed(() => selected.value.size ? [...selected.value] : papers.value.map(p => p.document_id))
+const screenTargets = computed(() => scopeIds.value)
 const canScreen = computed(() => canWrite.value && providerId.value && question.value.trim().length >= 3 && screenTargets.value.length)
 const screenHint = computed(() => {
-  if (!providerId.value) return 'Screening needs a model (Settings). Open a paper to see where it discusses your question without one.'
-  if (!canWrite.value) return 'Open a paper to check it; screening the whole collection needs edit access.'
+  if (!providerId.value) return 'Screening needs a model (Settings). Open a source to see where it discusses your question without one.'
+  if (!canWrite.value) return 'Open a source to check it; screening the collection needs edit access.'
   return ''
 })
 
-function toggleSelect(id) {
-  const next = new Set(selected.value)
-  next.has(id) ? next.delete(id) : next.add(id)
-  selected.value = next
+const allShownSelected = computed(() => shown.value.length > 0 && shown.value.every(p => selectedSet.value.has(p.document_id)))
+
+function selectShown() {
+  const ids = shown.value.map(p => p.document_id)
+  if (allShownSelected.value) selection.remove(ids)
+  else selection.set([...selection.currentIds, ...ids])
 }
 
 function openPaper(id) {
@@ -355,17 +399,23 @@ function pollJob(jobId, done) {
   }, 2500)
 }
 
-async function analyzeNew() {
+function analyzeAgain() {
+  return analyzeNew({ onlyNew: false })
+}
+
+async function analyzeNew({ onlyNew = true } = {}) {
   analyzing.value = true
   try {
-    const out = await researchApi.analyzeMany(collectionId.value, { only_new: true })
+    const out = await researchApi.analyzeMany(collectionId.value, {
+      only_new: onlyNew, document_ids: selectionCount.value ? scopeIds.value : null,
+    })
     if (!out.job) { analyzing.value = false; return loadPapers() }
     pollJob(out.job.job_id, (job, finished) => {
       loadPapers()
       if (finished) {
         analyzing.value = false
         refreshKey.value++
-        if (job?.failed) ui.notify(`${job.failed} paper(s) could not be read`, 'warning')
+        if (job?.failed) ui.notify(`${job.failed} source(s) could not be read`, 'warning')
       }
     })
   } catch (err) {
@@ -386,7 +436,7 @@ async function screen() {
       loadVerdicts()
       if (finished) {
         screening.value = false
-        if (job?.failed) ui.notify(`${job.failed} paper(s) could not be screened`, 'warning')
+        if (job?.failed) ui.notify(`${job.failed} source(s) could not be screened`, 'warning')
       }
     })
   } catch (err) {
@@ -397,8 +447,7 @@ async function screen() {
 
 // ── rename ──
 const renameCandidates = computed(() => {
-  const pool = selected.value.size ? papers.value.filter(p => selected.value.has(p.document_id)) : papers.value
-  return pool.filter(p => p.suggested_filename && p.suggested_filename !== p.filename)
+  return scoped.value.filter(p => p.suggested_filename && p.suggested_filename !== p.filename)
 })
 const namingFields = computed(() => (naming.value.fields || []).map(f => `{${f}}`).join(' '))
 const renamePreview = ref([])
@@ -436,7 +485,7 @@ async function renameSelected() {
   renaming.value = true
   try {
     const out = await researchApi.renameMany(collectionId.value, renameChecked.value, pattern.value)
-    ui.notify(`Renamed ${out.renamed.length} paper${out.renamed.length === 1 ? '' : 's'}`
+    ui.notify(`Renamed ${out.renamed.length} source${out.renamed.length === 1 ? '' : 's'}`
       + (out.skipped.length ? ` · ${out.skipped.length} left as they were` : ''), 'success')
     renameOpen.value = false
     ui.sourcesChanged()

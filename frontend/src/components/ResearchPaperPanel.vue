@@ -1,5 +1,5 @@
 <template>
-  <aside class="flex flex-col h-full min-h-0" data-testid="research-paper-panel" aria-label="Paper details">
+  <aside class="flex flex-col h-full min-h-0" data-testid="research-paper-panel" aria-label="Source details">
     <header class="flex items-start gap-2 px-4 pt-4 pb-3 border-b border-base-300">
       <div class="min-w-0 flex-1">
         <h3 class="font-semibold leading-snug">{{ paper?.title || paper?.filename || 'Loading…' }}</h3>
@@ -8,7 +8,9 @@
           <span v-if="paper.year"> · {{ paper.year }}</span>
           <span v-if="paper.venue"> · {{ paper.venue }}</span>
         </p>
-        <p v-if="paper && (paper.doi || paper.arxiv_id)" class="text-xs mt-1 space-x-3">
+        <p v-if="paper && (paper.doi || paper.arxiv_id || paper.isbn)" class="text-xs mt-1 space-x-3">
+          <span v-if="paper.kind === 'book'" class="badge badge-ghost badge-xs">book</span>
+          <a v-if="paper.isbn" class="link link-hover" :href="`https://openlibrary.org/isbn/${paper.isbn}`" target="_blank" rel="noopener">ISBN {{ paper.isbn }}</a>
           <a v-if="paper.doi" class="link link-hover" :href="`https://doi.org/${paper.doi}`" target="_blank" rel="noopener">doi:{{ paper.doi }}</a>
           <a v-if="paper.arxiv_id" class="link link-hover" :href="`https://arxiv.org/abs/${paper.arxiv_id}`" target="_blank" rel="noopener">arXiv:{{ paper.arxiv_id }}</a>
         </p>
@@ -50,22 +52,28 @@
       <!-- Abstract -->
       <section>
         <div class="flex items-baseline justify-between gap-2 mb-1">
-          <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/55">Abstract</h4>
-          <span v-if="paper.abstract" class="text-[11px] text-base-content/45">{{ sourceLabel(paper.provenance?.abstract) }}</span>
+          <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/55">
+            {{ isOpening(paper.provenance?.abstract) ? 'Opening' : 'Abstract' }}
+          </h4>
+          <span v-if="paper.abstract" class="text-[11px] text-base-content/45 text-right">{{ abstractLabel(paper.provenance?.abstract) }}</span>
         </div>
         <p v-if="paper.abstract" class="text-sm leading-relaxed whitespace-pre-line">{{ paper.abstract }}</p>
-        <p v-else-if="paper.analyzed" class="text-sm text-base-content/55">No abstract could be found in this paper.</p>
+        <p v-else-if="paper.analyzed" class="text-sm text-base-content/55">No abstract, preface or introduction was found.</p>
         <div v-else class="text-sm text-base-content/60 flex items-center gap-2">
           Not analyzed yet.
           <button v-if="paper.can_write" class="btn btn-xs btn-outline" :disabled="busy.analyze" @click="analyze">
             <span v-if="busy.analyze" class="loading loading-spinner loading-xs" />Analyze
           </button>
         </div>
+        <p v-if="busy.analyze" class="text-xs text-base-content/50 mt-1">Reading it in the background — a long book can take a minute or two.</p>
         <ul v-if="paper.analysis_notes?.length" class="mt-2 space-y-0.5">
           <li v-for="note in paper.analysis_notes" :key="note" class="text-xs text-base-content/50">{{ note }}</li>
         </ul>
         <details v-if="Object.keys(paper.provenance || {}).length" class="mt-1 text-xs text-base-content/50">
           <summary class="cursor-pointer">Where these details came from</summary>
+          <button v-if="paper.can_write" class="btn btn-xs btn-ghost mt-1" :disabled="busy.analyze" @click="analyze">
+            <span v-if="busy.analyze" class="loading loading-spinner loading-xs" />Read it again
+          </button>
           <ul class="mt-1 space-y-0.5">
             <li v-for="(prov, field) in paper.provenance" :key="field">
               <span class="font-medium">{{ field.replace('_', ' ') }}</span>: {{ sourceLabel(prov) }}<span v-if="prov.detail"> — {{ prov.detail }}</span>
@@ -89,7 +97,7 @@
           </button>
         </form>
         <p v-if="!providerId" class="text-xs text-base-content/50">
-          No model set up: you will see where the paper discusses it, without a verdict.
+          No model set up: you will see where the source discusses it, without a verdict.
         </p>
         <div v-if="assessment" class="space-y-2">
           <div v-if="assessment.verdict" class="flex items-center gap-2">
@@ -107,7 +115,7 @@
           </p>
           <p v-for="note in assessment.notes || []" :key="note" class="text-xs text-base-content/50">{{ note }}</p>
           <details v-if="assessment.retrieval?.length" :open="!assessment.verdict">
-            <summary class="text-xs cursor-pointer text-base-content/60">Where the paper discusses it ({{ assessment.retrieval.length }})</summary>
+            <summary class="text-xs cursor-pointer text-base-content/60">Where the source discusses it ({{ assessment.retrieval.length }})</summary>
             <ul class="mt-1.5 space-y-2">
               <li v-for="hit in assessment.retrieval" :key="hit.passage" class="text-xs leading-relaxed">
                 <a class="link link-hover text-base-content/55" :href="pageUrl(collectionId, paper.document_id, hit.page)" target="_blank" rel="noopener">p. {{ hit.page }}</a>
@@ -143,7 +151,7 @@
           </p>
         </template>
         <p v-else-if="!queuedReview" class="text-xs text-base-content/50">
-          No review yet. A review quotes the paper for every statement it makes.
+          No review yet. A review quotes the source for every statement it makes.
         </p>
       </section>
 
@@ -169,7 +177,7 @@
             >Download…</button>
           </div>
         </div>
-        <p v-if="!paper.reference_list.length" class="text-xs text-base-content/50">No reference list was found in this paper.</p>
+        <p v-if="!paper.reference_list.length" class="text-xs text-base-content/50">No reference list or bibliography was found.</p>
         <ol class="space-y-1.5">
           <li v-for="entry in visibleRefs" :key="entry.id" class="text-xs leading-relaxed flex gap-2">
             <span class="tabular-nums text-base-content/40 w-5 shrink-0 text-right">{{ entry.ordinal }}</span>
@@ -201,7 +209,7 @@
       </section>
 
       <section v-if="paper.cited_by_list?.length" class="space-y-1.5">
-        <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/55">Cited by your papers</h4>
+        <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/55">Cited by your sources</h4>
         <ul class="space-y-1">
           <li v-for="c in paper.cited_by_list" :key="c.document_id" class="text-xs">
             <button class="link link-hover text-left" @click="$emit('open', c.document_id)">{{ c.filename }}</button>
@@ -243,11 +251,11 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { FileText, X } from 'lucide-vue-next'
 import ResearchEvidence from './ResearchEvidence.vue'
 import ResearchBrief from './ResearchBrief.vue'
-import { researchApi, VERDICTS, pageUrl, sourceLabel } from '../utils/researchApi.js'
+import { researchApi, VERDICTS, pageUrl, sourceLabel, abstractLabel, isOpening } from '../utils/researchApi.js'
 import { useUiStore } from '../stores/uiStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 
@@ -282,7 +290,7 @@ async function load() {
   try {
     paper.value = await researchApi.paper(props.collectionId, props.documentId)
   } catch (err) {
-    ui.toastError(err, 'Could not load the paper')
+    ui.toastError(err, 'Could not load the source')
   } finally {
     loading.value = false
   }
@@ -312,15 +320,34 @@ function refStatus(entry) {
   return { label: entry.doi ? 'DOI' : 'As printed', tone: 'badge-ghost' }
 }
 
+// Analysis runs as a background job: a book is hundreds of pages, more than
+// one request should wait for.
+let analyzeTimer = null
+onBeforeUnmount(() => clearTimeout(analyzeTimer))
+
 async function analyze() {
   busy.analyze = true
+  const documentId = props.documentId
   try {
-    paper.value = await researchApi.analyzeOne(props.collectionId, props.documentId)
-    emit('changed')
+    const out = await researchApi.analyzeMany(props.collectionId, { document_ids: [documentId], only_new: false })
+    if (!out.job) { busy.analyze = false; return load() }
+    const poll = async () => {
+      try {
+        const job = (await researchApi.jobs(props.collectionId)).jobs.find(j => j.job_id === out.job.job_id)
+        if (job && ['queued', 'running'].includes(job.status)) { analyzeTimer = setTimeout(poll, 2000); return }
+        busy.analyze = false
+        if (job?.failed) ui.notify(job.errors?.[0]?.error || 'Analysis failed', 'error')
+        if (props.documentId === documentId) await load()
+        emit('changed')
+      } catch (err) {
+        busy.analyze = false
+        ui.toastError(err, 'Analysis failed')
+      }
+    }
+    analyzeTimer = setTimeout(poll, 1200)
   } catch (err) {
-    ui.toastError(err, 'Analysis failed')
-  } finally {
     busy.analyze = false
+    ui.toastError(err, 'Analysis failed')
   }
 }
 

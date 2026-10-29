@@ -1,38 +1,41 @@
 import { describe, expect, it } from 'vitest'
-import { layoutGraph, nodeRadius, edgePath } from '../citationLayout.js'
-import { authorsShort, nextLocalTime, pageUrl, sourceLabel } from '../researchApi.js'
+import { layoutCitations, neighborhood, matchesQuery, NODE_SIZE } from '../citationLayout.js'
+import { abstractLabel, authorsShort, nextLocalTime, pageUrl, sourceLabel } from '../researchApi.js'
 
 describe('citation map layout', () => {
   const nodes = [
-    { id: 'a', type: 'paper', cited_by: 0 },
-    { id: 'b', type: 'paper', cited_by: 3 },
-    { id: 'c', type: 'paper', cited_by: 0 },
-    { id: 'x', type: 'external', cited_by: 2 },
+    { id: 'a', type: 'paper' },
+    { id: 'b', type: 'paper' },
+    { id: 'c', type: 'paper' },
+    { id: 'x', type: 'external' },
+    { id: 'lonely', type: 'paper' },
   ]
   const edges = [{ source: 'a', target: 'b' }, { source: 'c', target: 'b' }, { source: 'a', target: 'x' }]
 
-  it('is deterministic and stays inside the canvas', () => {
-    const one = layoutGraph(nodes, edges, { width: 400, height: 300 })
-    const two = layoutGraph(nodes, edges, { width: 400, height: 300 })
-    expect(one).toEqual(two)
-    for (const p of Object.values(one)) {
-      expect(p.x).toBeGreaterThanOrEqual(20)
-      expect(p.x).toBeLessThanOrEqual(380)
-      expect(p.y).toBeGreaterThanOrEqual(20)
-      expect(p.y).toBeLessThanOrEqual(280)
-    }
+  it('puts citing sources left of what they cite, and is stable', () => {
+    const one = layoutCitations(nodes, edges)
+    expect(one).toEqual(layoutCitations(nodes, edges))
+    expect(one.a.x).toBeLessThan(one.b.x)
+    expect(one.c.x).toBeLessThan(one.b.x)
+    expect(one.a.x).toBeLessThan(one.x.x)
   })
 
-  it('pulls citing papers closer than unrelated ones', () => {
-    const pos = layoutGraph(nodes, edges, { width: 600, height: 600 })
-    const d = (m, n) => Math.hypot(pos[m].x - pos[n].x, pos[m].y - pos[n].y)
-    expect(d('a', 'b')).toBeLessThan(d('c', 'x'))
+  it('parks unconnected sources in a grid below instead of a tall column', () => {
+    const pos = layoutCitations(nodes, edges)
+    const bottom = Math.max(...['a', 'b', 'c', 'x'].map(id => pos[id].y + NODE_SIZE.source.height))
+    expect(pos.lonely.y).toBeGreaterThan(bottom)
+    const many = Array.from({ length: 9 }, (_, i) => ({ id: `n${i}`, type: 'paper' }))
+    const grid = layoutCitations(many, [], { gridColumns: 4 })
+    expect(new Set(Object.values(grid).map(p => p.y)).size).toBe(3)
   })
 
-  it('sizes nodes by citations and stops arrows at the rim', () => {
-    expect(nodeRadius({ type: 'paper', cited_by: 4 })).toBeGreaterThan(nodeRadius({ type: 'paper', cited_by: 0 }))
-    expect(nodeRadius({ type: 'external', cited_by: 0 })).toBeLessThan(nodeRadius({ type: 'paper', cited_by: 0 }))
-    expect(edgePath({ x: 0, y: 0 }, { x: 100, y: 0 }, 10)).toBe('M0.0,0.0 L87.0,0.0')
+  it('finds neighbours both ways and matches what people type', () => {
+    expect([...neighborhood('b', edges)].sort()).toEqual(['a', 'b', 'c'])
+    const node = { title: 'Root Hydraulics Predict Drought Survival', authors: ['Mira Okafor'], year: 2021 }
+    expect(matchesQuery(node, 'okafor 2021')).toBe(true)
+    expect(matchesQuery(node, 'drought hydraulics')).toBe(true)
+    expect(matchesQuery(node, 'okafor 2020')).toBe(false)
+    expect(matchesQuery(node, '  ')).toBe(false)
   })
 })
 
@@ -45,9 +48,13 @@ describe('research helpers', () => {
   })
 
   it('says where a detail came from', () => {
-    expect(sourceLabel({ source: 'paper', page: 1 })).toBe('From the paper, page 1')
+    expect(sourceLabel({ source: 'paper', page: 1 })).toBe('From the source, page 1')
     expect(sourceLabel({ source: 'openalex' })).toBe('From OpenAlex')
+    expect(sourceLabel({ source: 'openlibrary' })).toBe('From Open Library')
     expect(sourceLabel(null)).toBe('')
+    expect(abstractLabel({ source: 'paper', page: 6, kind: 'opening',
+      detail: 'opening of the Preface, quoted (there is no abstract)' }))
+      .toBe('Opening of the Preface, page 6 — quoted; there is no abstract')
   })
 
   it('links to a page of the paper', () => {

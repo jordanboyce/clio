@@ -20,9 +20,21 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 MAX_ABSTRACT_CHARS = 4000
+MAX_OPENING_CHARS = 1500
 MAX_REFERENCE_CHARS = 1200
-MAX_REFERENCES = 500
+MAX_REFERENCES = 1500
 MAX_LINKS = 200
+# Front matter: a book's title page follows a cover and a half-title, its
+# copyright page and ISBN follow that; a paper has all of it on page one.
+FRONT_PAGES = 8
+# Where an opening passage (preface, introduction) may start.
+OPENING_PAGES = 30
+# A document this long, or one that prints an ISBN, is treated as a book.
+BOOK_MIN_PAGES = 80
+# A reference section in a book closes at the next chapter; this caps one
+# that never does (a bibliography running to the end is fine, a misread
+# heading swallowing half the book is not).
+MAX_SECTION_PAGES = 60
 
 # ── identifiers ─────────────────────────────────────────────────────────
 
@@ -101,6 +113,30 @@ def arxiv_year(arxiv_id: str) -> Optional[int]:
     return 2000 + int(match.group(1))
 
 
+_ISBN_RE = re.compile(r"ISBN(?:[-‐ ]?1[03])?[:\s]*((?:97[89][-‐\s]?)?(?:\d[-‐\s]?){9}[\dXx])", re.IGNORECASE)
+
+
+def _isbn_valid(digits: str) -> bool:
+    if len(digits) == 13 and digits.isdigit():
+        total = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(digits[:12]))
+        return (10 - total % 10) % 10 == int(digits[12])
+    if len(digits) == 10 and digits[:9].isdigit() and (digits[9].isdigit() or digits[9] in "Xx"):
+        total = sum((10 - i) * int(d) for i, d in enumerate(digits[:9]))
+        check = 10 if digits[9] in "Xx" else int(digits[9])
+        return (total + check) % 11 == 0
+    return False
+
+
+def find_isbns(text: str) -> List[str]:
+    """ISBNs printed after an "ISBN" label, checksum-verified, hyphens dropped."""
+    out = []
+    for match in _ISBN_RE.finditer(text or ""):
+        digits = re.sub(r"[^0-9Xx]", "", match.group(1)).upper()
+        if _isbn_valid(digits) and digits not in out:
+            out.append(digits)
+    return out
+
+
 # ── text normalization ──────────────────────────────────────────────────
 
 def clean_text(text: str) -> str:
@@ -145,6 +181,9 @@ def _looks_like_title(line: str) -> bool:
     return True
 
 
+_TITLE_WORDS = {"The", "the", "A", "An", "an", "Of", "of", "On", "on", "In", "in", "For", "for", "To", "to",
+                "With", "with", "From", "from", "At", "at", "Is", "is", "How", "Why", "What", "When", "Toward",
+                "Towards", "Into", "into", "Beyond", "Under", "under", "Between", "between"}
 _NAME_PARTICLES = {"van", "von", "de", "der", "da", "di", "le", "la", "del", "den", "du", "dos", "ter"}
 
 
@@ -154,14 +193,18 @@ def _looks_like_authors(line: str) -> bool:
     words = [w for w in stripped.split() if w and w.lower() not in _NAME_PARTICLES]
     if not words or len(words) > 40:
         return False
+    # "The Quiet Forest" is capitalized like a name list; articles and
+    # prepositions never appear in names.
+    if any(w in _TITLE_WORDS for w in words):
+        return False
     capitalized = sum(1 for w in words if w[:1].isupper())
     # Affiliation marks glued to a name ("Smith1", "Brown*") are a strong tell.
     marked = bool(re.search(r"[A-Za-z][\d∗*†‡§¶]", line))
     return capitalized >= 0.8 * len(words) and ("," in line or " and " in line or marked or len(words) <= 4)
 
 
-def title_from_text(first_page: str) -> Optional[Tuple[str, str]]:
-    """The first title-like run of lines on page one: ``(title, rule)``."""
+def title_from_text(first_page: str, page_number: int = 1) -> Optional[Tuple[str, str]]:
+    """The first title-like run of lines on a page: ``(title, rule)``."""
     lines = _lines(first_page)[:30]
     for i, line in enumerate(lines):
         if not _looks_like_title(line) or _looks_like_authors(line):
@@ -173,49 +216,59 @@ def title_from_text(first_page: str) -> Optional[Tuple[str, str]]:
         for nxt in lines[i + 1:i + 3]:
             wrapped = len(parts[-1]) > 35 and not parts[-1].endswith(".")
             if (_looks_like_title(nxt) and not _looks_like_authors(nxt)
-                    and not nxt.endswith(".")
+                    and not nxt.endswith(".") and not nxt.lower().startswith("by ")
                     and len(" ".join(parts + [nxt])) <= 250
                     and (wrapped or nxt[:1].islower())):
                 parts.append(nxt)
             else:
                 break
-        return clean_text(" ".join(parts)), "first title-like lines of page 1"
+        return clean_text(" ".join(parts)), f"first title-like lines of page {page_number}"
     return None
 
 
-def title_from_pdf(path: Path, first_page: str) -> Optional[Tuple[str, str]]:
-    """The largest-font lines at the top of page one, or the PDF's Title
-    field — either accepted only when page one actually contains it."""
+def title_from_pdf(path: Path, pages: Dict[int, str]) -> Optional[Tuple[str, str, int]]:
+    """The largest type in the top half of the first front-matter page that
+    has any, or the PDF's Title field — accepted only when that page's text
+    contains it. Returns ``(title, rule, page)``."""
     if path is None or path.suffix.lower() != ".pdf" or not path.exists():
         return None
-    page_norm = _norm(first_page)
+    front = [p for p in sorted(pages)[:FRONT_PAGES] if (pages[p] or "").strip()]
     try:
         import pdfplumber
         with pdfplumber.open(str(path)) as pdf:
-            if not pdf.pages:
-                return None
-            page = pdf.pages[0]
-            words = page.extract_words(extra_attrs=["size"], keep_blank_chars=False)
-            top_half = [w for w in words if w["top"] < page.height * 0.5]
-            if top_half:
+            for number in front:
+                if number - 1 >= len(pdf.pages):
+                    break
+                page = pdf.pages[number - 1]
+                words = page.extract_words(extra_attrs=["size"], keep_blank_chars=False)
+                top_half = [w for w in words if w["top"] < page.height * 0.5]
                 sizes = [round(w["size"], 1) for w in top_half if any(c.isalpha() for c in w["text"])]
-                if sizes:
-                    biggest = max(sizes)
-                    body = Counter(round(w["size"], 1) for w in words).most_common(1)[0][0]
-                    if biggest >= body + 1.5:
-                        title_words = [w for w in top_half if abs(round(w["size"], 1) - biggest) <= 0.6]
-                        title_words.sort(key=lambda w: (round(w["top"]), w["x0"]))
-                        candidate = clean_text(" ".join(w["text"] for w in title_words))
-                        if 12 <= len(candidate) <= 300 and _norm(candidate) in page_norm:
-                            return candidate, "largest type on page 1"
+                if not sizes:
+                    continue
+                biggest = max(sizes)
+                body = Counter(round(w["size"], 1) for w in words).most_common(1)[0][0]
+                # A title page may hold nothing but the title, so "bigger
+                # than the body text" is measured against the page only
+                # when the page has body text to measure.
+                if biggest < body + 1.5 and len(words) > 40:
+                    continue
+                title_words = [w for w in top_half if abs(round(w["size"], 1) - biggest) <= 0.6]
+                title_words.sort(key=lambda w: (round(w["top"]), w["x0"]))
+                candidate = clean_text(" ".join(w["text"] for w in title_words))
+                if 12 <= len(candidate) <= 300 and _norm(candidate) in _norm(pages[number]) \
+                        and _looks_like_title(candidate):
+                    return candidate, f"largest type on page {number}", number
+                break
     except Exception:  # noqa: BLE001 - a layout read is a bonus, never required
         pass
     try:
         from pypdf import PdfReader
         meta = PdfReader(str(path)).metadata
         raw = clean_text(str(meta.title)) if meta and meta.title else ""
-        if 12 <= len(raw) <= 300 and _norm(raw) in page_norm:
-            return raw, "PDF title field, confirmed on page 1"
+        if 12 <= len(raw) <= 300:
+            for number in front:
+                if _norm(raw) in _norm(pages[number]):
+                    return raw, f"PDF title field, confirmed on page {number}", number
     except Exception:  # noqa: BLE001
         pass
     return None
@@ -227,6 +280,11 @@ _NAME_RE = re.compile(
     r"^(?:[A-Z][a-zA-Z'\-]*\.?\s+){1,3}(?:(?:van|von|de|der|da|di|le|la|del|den|du|dos|ter)\s+)*"
     r"[A-Z][a-zA-Z'\-]+$"
 )
+
+
+_PUBLISHER_RE = re.compile(
+    r"\b(?:press|publish\w*|books|editions?|verlag|inc|ltd|llc|group|house|media|university|"
+    r"college|institute|society|library|limited|company|co)\b\.?", re.IGNORECASE)
 
 
 def authors_from_text(first_page: str, title: Optional[str]) -> List[str]:
@@ -242,18 +300,41 @@ def authors_from_text(first_page: str, title: Optional[str]) -> List[str]:
     for line in lines[start:start + 8]:
         if line.lower().startswith(("abstract", "introduction")):
             break
+        # Books: "by Ada Lovelace", "Edited by …".
+        line = re.sub(r"^(?:(?:edited|written|translated)\s+)?by\s+", "", line, flags=re.IGNORECASE)
         if not _looks_like_authors(line):
             if names:
                 break
             continue
         for part in re.split(r",|\band\b|&|;", re.sub(r"[\d∗*†‡§¶]", "", line)):
             name = " ".join(part.split())
-            if _NAME_RE.match(name) and 1 < len(name.split()) <= 5 and name not in names:
+            if (_NAME_RE.match(name) and 1 < len(name.split()) <= 5 and name not in names
+                    and not _PUBLISHER_RE.search(name)):
                 names.append(name)
     return names[:30]
 
 
 # ── year ────────────────────────────────────────────────────────────────
+
+_COPYRIGHT_RE = re.compile(
+    r"(?:©|\(c\)|copyright|first published|published)(?:\s*(?:©|\(c\)|in|by))*[^\n]{0,40}?"
+    r"((?:19|20)\d\d(?:\s*[,–-]\s*(?:19|20)\d\d)*)",
+    re.IGNORECASE,
+)
+
+
+def copyright_year(pages: Dict[int, str]) -> Optional[Tuple[int, int]]:
+    """The latest year on a copyright / "first published" line in the front
+    matter — the edition in hand: ``(year, page)``."""
+    this_year = datetime.now().year
+    for number in sorted(pages)[:FRONT_PAGES]:
+        years = []
+        for match in _COPYRIGHT_RE.finditer(pages[number] or ""):
+            years.extend(int(y) for y in _YEAR_RE.findall(match.group(1)) if int(y) <= this_year + 1)
+        if years:
+            return max(years), number
+    return None
+
 
 def year_from_text(first_page: str, arxiv_id: Optional[str]) -> Optional[Tuple[int, str]]:
     if arxiv_id:
@@ -294,6 +375,58 @@ def abstract_from_text(pages: Dict[int, str]) -> Optional[Tuple[str, int]]:
     return None
 
 
+_OPENING_HEAD_RE = re.compile(
+    r"(?:^|\n)[ \t]*(?:(?:\d+|[IVX]+|chapter\s+(?:1|one|i))\.?[ \t]+)?"
+    r"(preface|foreword|introduction|prologue|overview)[ \t]*\n",
+    re.IGNORECASE,
+)
+
+
+def _is_contents_page(text: str) -> bool:
+    lines = _lines(text)
+    if len(lines) < 5:
+        return False
+    numbered = sum(1 for line in lines if re.search(r"(?:\.{2,}|\s)\d{1,4}$", line))
+    return numbered >= 0.4 * len(lines) or bool(re.match(r"\s*(?:table of\s+)?contents\b", text, re.IGNORECASE))
+
+
+def opening_from_text(pages: Dict[int, str]) -> Optional[Tuple[str, int, str]]:
+    """When there is no abstract: the first paragraphs under a Preface,
+    Foreword or Introduction heading — quoted, never summarized, and
+    labelled as an opening rather than an abstract: ``(text, page, heading)``."""
+    for number in sorted(pages)[:OPENING_PAGES]:
+        text = pages[number] or ""
+        if _is_contents_page(text):
+            continue
+        head = _OPENING_HEAD_RE.search(text)
+        if not head:
+            continue
+        body = text[head.end():]
+        # Stop at the next page's own heading: an opening that runs on into
+        # Chapter 1 is no longer the preface it is labelled as.
+        end = re.search(r"\n[ \t]*(?:chapter|part)\b", body, re.IGNORECASE)
+        if end:
+            body = body[:end.start()]
+        nxt = sorted(p for p in pages if p > number)[:2]
+        for p in nxt:
+            following = pages[p] or ""
+            if (len(body) >= MAX_OPENING_CHARS or end
+                    or _SECTION_END_RE.match("\n" + following.lstrip())
+                    or _OPENING_HEAD_RE.match("\n" + following.lstrip())
+                    or _REF_HEAD_RE.match("\n" + following.lstrip())):
+                break
+            body += "\n" + following
+        body = clean_text(body)
+        if len(body) < 200:
+            continue
+        cut = body[:MAX_OPENING_CHARS]
+        sentence_end = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
+        if sentence_end > 300:
+            cut = cut[:sentence_end + 1]
+        return cut, number, head.group(1).capitalize()
+    return None
+
+
 # ── references ──────────────────────────────────────────────────────────
 
 _REF_HEAD_RE = re.compile(
@@ -314,29 +447,59 @@ _AUTHOR_YEAR_START_RE = re.compile(
 )
 
 
-def _reference_section(pages: Dict[int, str]) -> List[Tuple[int, str]]:
-    """``[(page, text)]`` from the last References heading to the end
-    (or to an appendix that follows it)."""
-    ordered = sorted(pages)
-    start: Optional[Tuple[int, int]] = None
-    for page_number in ordered:
-        for match in _REF_HEAD_RE.finditer("\n" + (pages[page_number] or "")):
-            start = (page_number, max(0, match.end() - 1))
-    if start is None:
-        return []
-    section = []
-    for page_number in ordered:
-        if page_number < start[0]:
-            continue
-        text = "\n" + (pages[page_number] or "")
-        if page_number == start[0]:
-            text = "\n" + text[start[1]:]
-        end = _REF_END_RE.search(text)
-        if end:
-            section.append((page_number, text[:end.start()]))
+# A book's reference list for one chapter ends where the next chapter, part
+# or the index begins.
+_SECTION_END_RE = re.compile(
+    r"\n[ \t]*(?:(?:chapter|part)[ \t]+(?:\d+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten)\b"
+    r"|index[ \t]*\n)",
+    re.IGNORECASE,
+)
+
+
+def _reference_sections(pages: Dict[int, str]) -> List[List[Tuple[int, str]]]:
+    """Every reference list: ``[[(page, text), …], …]``.
+
+    A paper has one, at the end. A book may have one per chapter plus a
+    bibliography, and prints "References" as a running head on every page
+    of each — a heading met inside an open section continues it rather
+    than starting another. A section closes at an appendix,
+    acknowledgements, the next chapter or part, the index, or after
+    MAX_SECTION_PAGES pages."""
+    sections: List[List[Tuple[int, str]]] = []
+    current: Optional[List[Tuple[int, str]]] = None
+    for number in sorted(pages):
+        text = "\n" + (pages[number] or "")
+        pos = 0
+        while True:
+            if current is None:
+                if _is_contents_page(text):
+                    break
+                head = _REF_HEAD_RE.search(text, pos)
+                if not head:
+                    break
+                current = []
+                pos = max(0, head.end() - 1)
+            else:
+                running = _REF_HEAD_RE.match(text, pos)
+                if running and pos == 0:
+                    pos = max(0, running.end() - 1)
+            ends = [m for m in (_REF_END_RE.search(text, pos), _SECTION_END_RE.search(text, pos)) if m]
+            end = min(ends, key=lambda m: m.start()) if ends else None
+            if end:
+                if text[pos:end.start()].strip():
+                    current.append((number, text[pos:end.start()]))
+                sections.append(current)
+                current = None
+                pos = end.start() + 1
+                continue
+            current.append((number, text[pos:]))
+            if len(current) >= MAX_SECTION_PAGES:
+                sections.append(current)
+                current = None
             break
-        section.append((page_number, text))
-    return section
+    if current:
+        sections.append(current)
+    return [s for s in sections if any(t.strip() for _, t in s)]
 
 
 def _split_entries(section: List[Tuple[int, str]]) -> List[Tuple[int, str]]:
@@ -365,7 +528,7 @@ def _split_entries(section: List[Tuple[int, str]]) -> List[Tuple[int, str]]:
             entries = []
             for i, m in enumerate(starts):
                 end = starts[i + 1].start() if i + 1 < len(starts) else len(joined)
-                entries.append((page_at(m.start()), joined[m.end():end]))
+                entries.append((page_at(m.end() - 1), joined[m.end():end]))
             return entries
 
     # Author-year style: a new entry starts on a line that opens with
@@ -426,13 +589,13 @@ def title_guess(raw: str) -> str:
 
 
 def references_from_text(pages: Dict[int, str]) -> List[dict]:
-    """Reference-list entries with any identifier each one prints."""
-    section = _reference_section(pages)
-    if not section:
-        return []
+    """Reference-list entries with any identifier each one prints, across
+    every reference section (numbering restarts per chapter in many books,
+    so each section is split on its own)."""
+    entries = [entry for section in _reference_sections(pages) for entry in _split_entries(section)]
     out: List[dict] = []
     seen = set()
-    for page_number, raw in _split_entries(section):
+    for page_number, raw in entries:
         text = clean_text(raw)
         if len(text) < 20 or not re.search(r"[A-Za-z]{3}", text):
             continue
@@ -462,16 +625,17 @@ def references_from_text(pages: Dict[int, str]) -> List[dict]:
 def links_from_text(pages: Dict[int, str], exclude: Optional[set] = None) -> List[dict]:
     """URLs written in the body of the paper (the reference list's own
     URLs belong to their entries and are left out)."""
-    section_pages = {p for p, _ in _reference_section(pages)}
+    in_sections: Dict[int, List[str]] = {}
+    for section in _reference_sections(pages):
+        for number, chunk in section:
+            in_sections.setdefault(number, []).append(chunk)
     exclude = {u.lower() for u in (exclude or set())}
     out, seen = [], set()
     for page_number in sorted(pages):
         text = pages[page_number] or ""
-        if page_number in section_pages:
-            head = None
-            for match in _REF_HEAD_RE.finditer("\n" + text):
-                head = match
-            text = text[:head.start()] if head else ""
+        for chunk in in_sections.get(page_number, []):
+            if chunk.strip():
+                text = text.replace(chunk.lstrip("\n"), " ")
         for url in find_urls(text):
             low = url.lower()
             if low in seen or low in exclude:
@@ -493,51 +657,112 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", clean_text(text).lower())
 
 
-def extract_paper(pages: Dict[int, str], path: Optional[Path] = None) -> dict:
-    """Bibliographic record + references + links, each field with provenance."""
+_MD_HEADING_RE = re.compile(r"^[ \t]{0,3}#{1,2}[ \t]+(.+?)[ \t#]*$", re.MULTILINE)
+
+
+def title_from_markdown(text: str) -> Optional[str]:
+    """A Markdown document's first top-level heading, without emphasis marks."""
+    match = _MD_HEADING_RE.search(text or "")
+    if not match:
+        return None
+    title = re.sub(r"[*_`]+", "", match.group(1)).strip()
+    return title if 2 <= len(title) <= 250 else None
+
+
+def extract_paper(pages: Dict[int, str], path: Optional[Path] = None, fmt: Optional[str] = None) -> dict:
+    """Bibliographic record + references + links, each field with provenance.
+
+    Works for articles (everything on page one) and books (cover, title
+    page, copyright page, per-chapter bibliographies); ``kind`` says which
+    the document looked like."""
     pages = {int(k): v or "" for k, v in (pages or {}).items()}
     ordered = sorted(pages)
-    first = pages[ordered[0]] if ordered else ""
-    first_number = ordered[0] if ordered else 1
+    front_numbers = [p for p in ordered[:FRONT_PAGES] if pages[p].strip()]
+    first_number = front_numbers[0] if front_numbers else (ordered[0] if ordered else 1)
+    first = pages.get(first_number, "")
+    front_text = "\n".join(pages[p] for p in front_numbers)
     provenance: Dict[str, dict] = {}
     notes: List[str] = []
 
-    found_title = title_from_pdf(path, first) if path else None
-    found_title = found_title or title_from_text(first)
-    title = found_title[0] if found_title else None
-    if found_title:
-        provenance["title"] = {"source": "paper", "page": first_number, "detail": found_title[1]}
-    else:
-        notes.append("No title could be read from page 1.")
+    isbns = find_isbns(front_text) or (find_isbns(pages[ordered[-1]]) if ordered else [])
+    isbn = isbns[0] if isbns else None
+    # A book's own identifiers sit on its copyright page; the front pages
+    # read here may already reach a first chapter and its citations.
+    imprint_page = next((p for p in front_numbers
+                         if find_isbns(pages[p]) or _COPYRIGHT_RE.search(pages[p])), None)
+    is_book = bool(isbn) or len(ordered) >= BOOK_MIN_PAGES
+    if isbn:
+        provenance["isbn"] = {"source": "paper", "detail": "printed in the front matter"}
 
-    # The paper's own identifiers are the ones printed on page one (header,
-    # footer, arXiv stamp). Later pages carry the identifiers of cited works.
-    dois = find_dois(first)
+    found = title_from_pdf(path, pages) if path else None
+    title_page = found[2] if found else None
+    if not found and (fmt or "").lower() in ("md", "markdown"):
+        md_title = title_from_markdown(first)
+        if md_title:
+            found, title_page = (md_title, "first Markdown heading", first_number), first_number
+    if not found and (fmt or "").lower() not in ("md", "markdown"):
+        for number in front_numbers if is_book else front_numbers[:1]:
+            if _is_contents_page(pages[number]):
+                continue
+            text_title = title_from_text(pages[number], number)
+            if text_title:
+                found, title_page = (*text_title, number), number
+                break
+    title = found[0] if found else None
+    if found:
+        provenance["title"] = {"source": "paper", "page": title_page, "detail": found[1]}
+    else:
+        notes.append("No title could be read from the first pages.")
+    title_page = title_page or first_number
+
+    # A paper's own identifiers are printed on page one (header, footer,
+    # arXiv stamp); later pages carry the identifiers of cited works.
+    if is_book:
+        dois = find_dois(pages[imprint_page]) if imprint_page else []
+        doi_page = imprint_page
+    else:
+        dois, doi_page = find_dois(first), first_number
     doi = dois[0] if dois else None
     if doi:
-        provenance["doi"] = {"source": "paper", "page": first_number, "detail": "printed on page 1"}
+        provenance["doi"] = {"source": "paper", "page": doi_page,
+                             "detail": "printed on the copyright page" if is_book else "printed on page 1"}
     arxiv = find_arxiv_ids(first)
     arxiv_id = arxiv[0] if arxiv else None
     if arxiv_id:
         provenance["arxiv_id"] = {"source": "paper", "page": first_number, "detail": "printed on page 1"}
 
-    authors = authors_from_text(first, title)
+    after_title = [p for p in front_numbers if p >= title_page][:2]
+    authors = authors_from_text("\n".join(pages[p] for p in after_title), title)
     if authors:
-        provenance["authors"] = {"source": "paper", "page": first_number,
+        provenance["authors"] = {"source": "paper", "page": title_page,
                                  "detail": "author line under the title (heuristic)"}
 
-    found_year = year_from_text(first, arxiv_id)
+    found_year, year_page = None, first_number
+    if arxiv_id:
+        found_year = year_from_text(first, arxiv_id)
+    if not found_year:
+        copy = copyright_year(pages)
+        if copy:
+            found_year, year_page = (copy[0], f"copyright line on page {copy[1]}"), copy[1]
+    if not found_year and not is_book:
+        found_year = year_from_text(first, None)
     year = found_year[0] if found_year else None
     if found_year:
-        provenance["year"] = {"source": "paper", "page": first_number, "detail": found_year[1]}
+        provenance["year"] = {"source": "paper", "page": year_page, "detail": found_year[1]}
 
     found_abstract = abstract_from_text(pages)
     abstract = found_abstract[0] if found_abstract else None
     if found_abstract:
-        provenance["abstract"] = {"source": "paper", "page": found_abstract[1],
+        provenance["abstract"] = {"source": "paper", "page": found_abstract[1], "kind": "abstract",
                                   "detail": "text under the Abstract heading"}
     else:
-        notes.append("No section headed 'Abstract' was found on the first two pages.")
+        opening = opening_from_text(pages)
+        if opening:
+            abstract = opening[0]
+            provenance["abstract"] = {"source": "paper", "page": opening[1], "kind": "opening",
+                                      "detail": f"opening of the {opening[2]}, quoted (there is no abstract)"}
+        else:
+            notes.append("No abstract, preface or introduction was found in the first pages.")
 
     references = references_from_text(pages)
     if not references:
@@ -546,11 +771,13 @@ def extract_paper(pages: Dict[int, str], path: Optional[Path] = None) -> dict:
     links = links_from_text(pages, exclude=ref_urls)
 
     return {
+        "kind": "book" if is_book else "article",
         "title": title,
         "authors": authors,
         "year": year,
         "doi": doi,
         "arxiv_id": arxiv_id,
+        "isbn": isbn,
         "venue": None,
         "abstract": abstract,
         "provenance": provenance,

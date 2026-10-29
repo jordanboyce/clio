@@ -347,9 +347,9 @@ def egress_paths() -> List[Dict[str, str]]:
     # Scholarly registries (research workspace metadata and references)
     from services.research.lookup import lookup_available
     lookups_on = lookup_available()
-    add("Scholarly registries", "api.openalex.org, api.crossref.org, export.arxiv.org" if lookups_on else "disabled",
+    add("Scholarly registries", "api.openalex.org, api.crossref.org, export.arxiv.org, openlibrary.org" if lookups_on else "disabled",
         "open" if lookups_on else "blocked",
-        "Only identifiers (DOI, arXiv id) and cited titles are sent, never passages."
+        "Only identifiers (DOI, arXiv id, ISBN) and cited titles are sent, never passages."
         if lookups_on else "Paper metadata comes from the paper's own text only.")
 
     # Git

@@ -119,7 +119,7 @@ def _paper_doc(indexer, document_id: str) -> dict:
     for doc in _papers(indexer):
         if doc["document_id"] == document_id:
             return doc
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Paper {document_id} not found")
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Source {document_id} not found")
 
 
 def _select(indexer, document_ids: Optional[List[str]]) -> List[dict]:
@@ -128,7 +128,7 @@ def _select(indexer, document_ids: Optional[List[str]]) -> List[dict]:
         wanted = set(document_ids)
         docs = [d for d in docs if d["document_id"] in wanted]
         if not docs:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="None of those papers were found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="None of those sources were found")
     return docs
 
 
@@ -284,7 +284,7 @@ def analyze_many(body: AnalyzeRequest, collection_id: str = "default") -> dict:
         done = store.get_papers([d["document_id"] for d in docs])
         docs = [d for d in docs if not (done.get(d["document_id"]) or {}).get("analyzed_at")]
     if not docs:
-        return {"job": None, "message": "Every selected paper is already analyzed."}
+        return {"job": None, "message": "Every selected source is already analyzed."}
     job = jobs_service.start_job(
         collection_id=collection_id, store=store, kind="analyze", documents=docs,
         work=lambda d, _job_id: library.analyze_document(collection_id, indexer, d["document_id"],
@@ -311,14 +311,14 @@ def rename_paper(document_id: str, body: RenameRequest, collection_id: str = "de
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         if not new_name:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                                detail="No title is known for this paper yet, so there is no name to suggest. "
+                                detail="No title is known for this source yet, so there is no name to suggest. "
                                        "Analyze it first, or type a name.")
     try:
         return naming.rename_document(collection_id, indexer, document_id, new_name, store=store)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except KeyError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Paper {document_id} not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Source {document_id} not found")
 
 
 @router.post("/api/research/papers/{document_id}/restore-name", tags=["research"],
@@ -330,7 +330,7 @@ def restore_name(document_id: str, collection_id: str = "default") -> dict:
     store = library.research_store(indexer)
     original = (store.get_paper(document_id) or {}).get("original_filename")
     if not original:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This paper has not been renamed")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This source has not been renamed")
     return naming.rename_document(collection_id, indexer, document_id, original, store=store)
 
 
@@ -378,7 +378,7 @@ def _chosen_references(store, body_document_id: Optional[str], reference_ids: Op
     elif body_document_id:
         refs = store.list_references(body_document_id)
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name a paper or some references")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name a source or some references")
     if not include_links:
         refs = [r for r in refs if r["kind"] == "reference"]
     return refs
@@ -466,12 +466,28 @@ async def download_references(body: DownloadRequest, collection_id: str = "defau
 
 # ── graph ───────────────────────────────────────────────────────────────
 
-@router.get("/api/research/graph", tags=["research"], summary="Citation graph of the collection's papers")
+class GraphRequest(BaseModel):
+    document_ids: Optional[List[str]] = Field(None, max_length=5000,
+                                              description="Limit the map to these sources (the user's selection)")
+    include_external: bool = True
+    min_citations: int = Field(2, ge=1, le=20)
+
+
+@router.get("/api/research/graph", tags=["research"], summary="Citation graph of the collection's sources")
 def citation_graph(collection_id: str = "default", include_external: bool = True, min_citations: int = 2) -> dict:
+    return citation_graph_for(GraphRequest(include_external=include_external,
+                                           min_citations=max(1, min(int(min_citations), 20))), collection_id)
+
+
+@router.post("/api/research/graph", tags=["research"], summary="Citation graph of selected sources")
+def citation_graph_for(body: GraphRequest, collection_id: str = "default") -> dict:
+    """With ``document_ids`` the map holds only those sources, the citations
+    among them, and the works several of them cite."""
     indexer = _indexer(collection_id)
     store = library.research_store(indexer)
-    return build_graph(store, _papers(indexer), include_external=include_external,
-                       min_citations=max(1, min(int(min_citations), 20)))
+    docs = _select(indexer, body.document_ids) if body.document_ids else _papers(indexer)
+    return build_graph(store, docs, include_external=body.include_external,
+                       min_citations=body.min_citations)
 
 
 # ── assessment ──────────────────────────────────────────────────────────
@@ -558,7 +574,7 @@ def start_research_job(
         reviewed = store.reviewed_documents(body.depth, (body.question or "").strip() or None)
         docs = [d for d in docs if d["document_id"] not in reviewed]
         if not docs:
-            return {"job": None, "message": "Every selected paper already has a review like this."}
+            return {"job": None, "message": "Every selected source already has a review like this."}
     question = (body.question or "").strip() or None
 
     def work(doc: dict, job_id: str) -> None:

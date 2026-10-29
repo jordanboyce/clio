@@ -17,8 +17,8 @@ PASSAGE_CHARS = 1800
 
 GROUNDING_RULES = (
     "Rules you must follow:\n"
-    "- Use ONLY the numbered passages below. They are excerpts of one paper. Do not use "
-    "anything you know about this paper, its authors or its field from elsewhere.\n"
+    "- Use ONLY the numbered passages below. They are excerpts of one document. Do not use "
+    "anything you know about this document, its authors or its field from elsewhere.\n"
     "- Every point must carry \"quote\": words copied exactly, character for character, from "
     "ONE passage (one sentence or clause, 20-300 characters), and \"passage\": that passage's "
     "id, e.g. \"P4\". Never paraphrase inside a quote. A point you cannot quote, leave out.\n"

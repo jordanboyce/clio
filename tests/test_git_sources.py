@@ -357,7 +357,13 @@ def test_http_token_is_never_offered_to_a_host_nobody_allowlisted(monkeypatch):
 
 def test_changes_endpoint_and_watch_toggle(client, env, folder):
     body = {"path": str(folder), "collection_id": COLLECTION}
-    assert client.post("/documents/sync-folder", json=body).status_code in (200, 202)
+    first = client.post("/documents/sync-folder", json=body)
+    assert first.status_code in (200, 202)
+    # The sync indexes on a background thread. Rewriting readme.txt before
+    # that job has read it would let it index the new text, and the second
+    # sync would then (rightly) see no change.
+    if first.json()["job_id"]:
+        assert _wait_for_job(client, first.json()["job_id"])["status"] == "completed"
 
     watched = client.post("/documents/sync-folders/watch",
                           json={**body, "watch": True, "interval_minutes": 30})
@@ -367,7 +373,9 @@ def test_changes_endpoint_and_watch_toggle(client, env, folder):
     assert listed["folders"][0]["watch"] is True
 
     (folder / "readme.txt").write_text(_text("readme", salt=6), encoding="utf-8")
-    client.post("/documents/sync-folder", json=body)
+    second = client.post("/documents/sync-folder", json=body)
+    assert second.status_code == 202 and second.json()["job_id"]
+    assert _wait_for_job(client, second.json()["job_id"])["status"] == "completed"
     feed = client.get("/documents/changes", params={"collection_id": COLLECTION}).json()
     assert feed["latest_id"] == 1 and feed["events"][0]["changed"] == ["readme.txt"]
     assert client.get("/documents/changes", params={"collection_id": COLLECTION, "since": 1}).json()["events"] == []

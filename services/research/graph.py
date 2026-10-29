@@ -78,6 +78,7 @@ def build_graph(store: ResearchStore, documents: List[dict], include_external: b
             "authors": paper.get("authors") or [],
             "year": paper.get("year"),
             "venue": paper.get("venue"),
+            "kind": paper.get("kind"),
             "abstract": paper.get("abstract"),
             "abstract_source": (paper.get("provenance") or {}).get("abstract"),
             "analyzed": bool(paper.get("analyzed_at")),
@@ -89,14 +90,18 @@ def build_graph(store: ResearchStore, documents: List[dict], include_external: b
     if include_external:
         groups: Dict[str, dict] = {}
         for ref in references:
-            if ref.get("matched_document_id"):
+            matched = ref.get("matched_document_id")
+            if matched in ids:
                 continue
-            key = _external_key(ref)
+            # A source of the collection left out of the selection: grouped
+            # by its id, and drawn as "in your collection".
+            key = f"lib:{matched}" if matched else _external_key(ref)
             if not key:
                 continue
             group = groups.setdefault(key, {"citers": set(), "refs": []})
             group["citers"].add(ref["document_id"])
             group["refs"].append(ref)
+        outside = store.get_papers([k[4:] for k in groups if k.startswith("lib:")])
         ranked = sorted(groups.items(), key=lambda kv: (-len(kv[1]["citers"]), kv[0]))
         for key, group in ranked:
             if len(group["citers"]) < max(1, min_citations):
@@ -104,26 +109,35 @@ def build_graph(store: ResearchStore, documents: List[dict], include_external: b
             if len(external_nodes) >= MAX_EXTERNAL_NODES:
                 break
             first = group["refs"][0]
+            in_collection = key.startswith("lib:")
+            known = (outside.get(key[4:]) or {}) if in_collection else {}
             # A registry title when one was verified; otherwise the reference
             # as printed, flagged so the view does not present it as a title.
-            label = first.get("title") or title_guess(first.get("raw_text") or "")
+            title = known.get("title") or first.get("title")
+            label = title or title_guess(first.get("raw_text") or "")
             node_id = "ext:" + key
             external_nodes.append({
                 "id": node_id,
                 "type": "external",
+                "in_collection": in_collection,
+                "document_id": key[4:] if in_collection else None,
+                "authors": known.get("authors") or [],
+                "abstract": known.get("abstract"),
+                "abstract_source": (known.get("provenance") or {}).get("abstract"),
                 "label": _short(label),
-                "title": first.get("title"),
+                "title": title,
                 "as_cited": first.get("raw_text"),
                 "year": first.get("year"),
                 "doi": first.get("doi"),
                 "arxiv_id": first.get("arxiv_id"),
                 "cited_by": len(group["citers"]),
                 "reference_ids": [r["id"] for r in group["refs"]],
-                "downloadable": any(r.get("resolved_kind") == "pdf" or r.get("doi") or r.get("arxiv_id")
-                                    for r in group["refs"]),
+                "downloadable": not in_collection and any(
+                    r.get("resolved_kind") == "pdf" or r.get("doi") or r.get("arxiv_id") for r in group["refs"]),
             })
-            reason = {"doi": "same DOI", "arxiv": "same arXiv id", "title": "same registry title",
-                      "cited": "same cited title"}[key.split(":", 1)[0]]
+            reason = first.get("match_reason") if in_collection else {
+                "doi": "same DOI", "arxiv": "same arXiv id", "title": "same registry title",
+                "cited": "same cited title"}[key.split(":", 1)[0]]
             for citer in sorted(group["citers"]):
                 edges.append({"source": citer, "target": node_id, "reason": reason,
                               "reference_id": next(r["id"] for r in group["refs"] if r["document_id"] == citer),

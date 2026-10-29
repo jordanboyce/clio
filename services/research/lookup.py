@@ -1,7 +1,7 @@
 """Scholarly registry lookups: OpenAlex, Crossref and the arXiv API.
 
 A registry record is only ever consulted for an identifier the paper itself
-prints (a DOI or arXiv id), or — for a reference with no identifier — for a
+prints (a DOI, arXiv id or a book's ISBN — Open Library), or — for a reference with no identifier — for a
 title search whose answer must then be found printed in that reference
 (``grounding.similarity`` >= ``TITLE_MATCH_THRESHOLD``). A registry answer
 that fails its check is discarded, with a note saying why.
@@ -30,6 +30,7 @@ from services.research.grounding import similarity
 logger = logging.getLogger(__name__)
 
 OPENALEX = "https://api.openalex.org"
+OPENLIBRARY = "https://openlibrary.org"
 CROSSREF = "https://api.crossref.org"
 ARXIV_API = "https://export.arxiv.org/api/query"
 TITLE_MATCH_THRESHOLD = 0.9
@@ -210,7 +211,49 @@ def _from_arxiv(xml_text: str, arxiv_id: str) -> Optional[dict]:
     }
 
 
+def _from_openlibrary(data: dict, isbn: str) -> Optional[dict]:
+    if not isinstance(data, dict) or not data.get("title"):
+        return None
+    year = None
+    match = re.search(r"(1[5-9]\d\d|20\d\d)", str(data.get("publish_date") or ""))
+    if match:
+        year = int(match.group(1))
+    publishers = [p.get("name") for p in data.get("publishers") or [] if p.get("name")]
+    excerpt = ((data.get("excerpts") or [{}])[0] or {}).get("text")
+    return {
+        "title": data["title"],
+        "authors": [a.get("name") for a in data.get("authors") or [] if a.get("name")][:50],
+        "year": year,
+        "venue": publishers[0] if publishers else None,
+        "doi": None,
+        "arxiv_id": None,
+        "isbn": isbn,
+        "abstract": excerpt or None,
+        "pdf_url": None,
+        "landing_url": data.get("url"),
+        "is_oa": False,
+        "source": "openlibrary",
+    }
+
+
 # ── public lookups ──────────────────────────────────────────────────────
+
+def by_isbn(isbn: str) -> Optional[dict]:
+    """Open Library's record for a book's ISBN (title, authors, year,
+    publisher). Books have no open PDF to offer, so nothing to download."""
+    isbn = re.sub(r"[^0-9Xx]", "", isbn or "").upper()
+    if not isbn or not lookup_available():
+        return None
+
+    def fetch():
+        key = f"ISBN:{isbn}"
+        response = _get(f"{OPENLIBRARY}/api/books", {"bibkeys": key, "format": "json", "jscmd": "data"})
+        if response is None:
+            return None
+        return _from_openlibrary((response.json() or {}).get(key) or {}, isbn)
+
+    return _cached(f"isbn:{isbn}", fetch)
+
 
 def by_doi(doi: str) -> Optional[dict]:
     """OpenAlex first (it knows open-access copies), Crossref as fallback."""
