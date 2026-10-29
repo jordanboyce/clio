@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -127,17 +128,75 @@ def _scrub(text: str) -> str:
 # ── Local work trees ─────────────────────────────────────────────────────
 
 def head_info(path: Path) -> Optional[Dict[str, str]]:
-    """``{head, branch}`` for a work tree, or None when it is not a usable repository."""
+    """``{head, branch}`` for a work tree, or None when it is not a usable repository.
+
+    One git call: the Sources panel asks this for every git source it lists.
+    """
     path = Path(path)
     if not is_worktree(path) or not git_available():
         return None
     try:
-        head = _run(["rev-parse", "HEAD"], cwd=path, safe_dir=path, timeout=30).strip()
-        branch = _run(["rev-parse", "--abbrev-ref", "HEAD"], cwd=path, safe_dir=path, timeout=30).strip()
+        out = _run(["rev-parse", "HEAD", "--abbrev-ref", "HEAD"], cwd=path, safe_dir=path, timeout=30)
     except GitError as e:
         logger.info(f"{path} has a .git entry but is not readable as a repository: {e}")
         return None
-    return {"head": head, "branch": branch}
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    if not lines:
+        return None  # an empty repository: no commit to read
+    return {"head": lines[0], "branch": lines[1] if len(lines) > 1 else "HEAD"}
+
+
+def worktree_fingerprint(path: Path, head: Optional[str] = None) -> Optional[str]:
+    """A cheap digest of what a sync of this checkout would see.
+
+    HEAD plus, for every path ``git status`` lists (modified, staged, deleted
+    or untracked-but-not-ignored: exactly the files ``list_files`` indexes
+    beyond the commit), its size and mtime. Nothing is hashed, so this costs
+    one ``git status`` however large the tree. Equal fingerprints mean no
+    indexed file can have changed; a differing one says *something* did (a
+    ``touch`` counts, which only costs one unnecessary sync).
+
+    None when the folder is not a readable repository. ``head`` saves the
+    call when the caller has just read it.
+    """
+    path = Path(path)
+    if head is None:
+        info = head_info(path)
+        if info is None:
+            return None
+        head = info["head"]
+    try:
+        out = _run(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"],
+                   cwd=path, safe_dir=path, timeout=120)
+    except GitError as e:
+        logger.info(f"git status failed in {path}: {e}")
+        return None
+    digest = hashlib.sha256(head.encode())
+    for entry in out.split("\0"):
+        if len(entry) < 4:
+            continue
+        rel = entry[3:]
+        digest.update(rel.encode("utf-8", "surrogateescape"))
+        try:
+            st = (path / rel).stat()
+            digest.update(f"\0{st.st_size}\0{st.st_mtime_ns}\n".encode())
+        except OSError:
+            digest.update(b"\0gone\n")
+    return digest.hexdigest()
+
+
+def count_commits(path: Path, old: Optional[str], new: Optional[str]) -> Optional[int]:
+    """How many commits ``new`` is ahead of ``old``; None when git cannot say
+    (``old`` rewritten away, or beyond a shallow clone's history)."""
+    if not old or not new:
+        return None
+    if old == new:
+        return 0
+    try:
+        out = _run(["rev-list", "--count", f"{old}..{new}"], cwd=path, safe_dir=path, timeout=60)
+        return int(out.strip())
+    except (GitError, ValueError):
+        return None
 
 
 def list_files(path: Path, recursive: bool = True) -> Optional[List[str]]:
@@ -275,29 +334,47 @@ def _auth_env(url: str, host: str) -> Dict[str, str]:
     }
 
 
+# One refresh of a clone at a time. The same repository can be a source of
+# several collections, and the watcher and a Sync button can both want it:
+# a reset while another sync is hashing the tree would index a mix of two
+# commits.
+_clone_locks: Dict[str, threading.Lock] = {}
+_clone_locks_guard = threading.Lock()
+
+
+def clone_lock(dest: Path) -> threading.Lock:
+    key = str(Path(dest).resolve())
+    with _clone_locks_guard:
+        lock = _clone_locks.get(key)
+        if lock is None:
+            lock = _clone_locks[key] = threading.Lock()
+        return lock
+
+
 def ensure_clone(url: str, branch: str = "") -> Path:
     """Clone (first time) or refresh (afterwards) a remote repository; return its path."""
     info = validate_remote(url, branch)
     dest = clone_path(info["url"], info["branch"])
     env = _auth_env(info["url"], info["host"])
-    if (dest / ".git").exists():
-        ref = info["branch"] or "HEAD"
-        _run(["fetch", f"--depth={CLONE_DEPTH}", "--no-tags", "--no-recurse-submodules", "origin", ref],
-             cwd=dest, safe_dir=dest, env_extra=env)
-        _run(["reset", "--hard", "FETCH_HEAD"], cwd=dest, safe_dir=dest)
-        _run(["clean", "-fdxq"], cwd=dest, safe_dir=dest)
+    with clone_lock(dest):
+        if (dest / ".git").exists():
+            ref = info["branch"] or "HEAD"
+            _run(["fetch", f"--depth={CLONE_DEPTH}", "--no-tags", "--no-recurse-submodules", "origin", ref],
+                 cwd=dest, safe_dir=dest, env_extra=env)
+            _run(["reset", "--hard", "FETCH_HEAD"], cwd=dest, safe_dir=dest)
+            _run(["clean", "-fdxq"], cwd=dest, safe_dir=dest)
+            return dest
+        repos_dir().mkdir(parents=True, exist_ok=True)
+        args = ["clone", f"--depth={CLONE_DEPTH}", "--no-tags", "--single-branch", "--no-recurse-submodules"]
+        if info["branch"]:
+            args += ["--branch", info["branch"]]
+        args += ["--", info["url"], str(dest)]
+        try:
+            _run(args, env_extra=env)
+        except GitError:
+            shutil.rmtree(dest, ignore_errors=True)  # a half-made clone must not be mistaken for one
+            raise
         return dest
-    repos_dir().mkdir(parents=True, exist_ok=True)
-    args = ["clone", f"--depth={CLONE_DEPTH}", "--no-tags", "--single-branch", "--no-recurse-submodules"]
-    if info["branch"]:
-        args += ["--branch", info["branch"]]
-    args += ["--", info["url"], str(dest)]
-    try:
-        _run(args, env_extra=env)
-    except GitError:
-        shutil.rmtree(dest, ignore_errors=True)  # a half-made clone must not be mistaken for one
-        raise
-    return dest
 
 
 def remote_head(url: str, branch: str = "") -> Optional[str]:

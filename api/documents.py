@@ -39,7 +39,7 @@ from services.form_field_extractor import (
     estimate_form_likelihood,
     is_form_like_text,
 )
-from services import audit, git_source, governance, source_changes, storage_quota
+from services import audit, git_source, governance, source_changes, source_watcher, storage_quota
 from services.content_policy import BlockedContentError, ContentRejectedError
 from services.storage_quota import StorageLimitExceeded
 from services.link_fetcher import LinkError, LinkRefused, link_indexing_available, validate_link
@@ -853,11 +853,32 @@ def sync_folder(  # sync: hashing and pruning run in FastAPI's threadpool, not o
     ``prune_missing`` documents whose file has disappeared from the folder
     are removed. Only new and changed files go through a background job.
 
+    A path that is a managed clone (added through ``/documents/sync-git``)
+    is fetched from its remote first, so "Sync" on a repository means
+    "get the latest commits, then index what changed"; a clone lost with
+    the data directory is made again. Files deleted upstream are always
+    pruned from a clone.
+
     Returns 202 with ``status: "queued"`` and a ``job_id`` when something
     was queued, or 200 with ``status: "up_to_date"`` (``job_id: null``)
     when nothing needed indexing — pruning may still have happened, see
     ``pruned``.
     """
+    # Same gate as /documents/upload-repo: write access plus the AUP, and
+    # the collection must exist. Pruning deletes documents, which the
+    # write gate already covers.
+    _require_ingest(request.collection_id)
+    try:
+        get_indexer(request.collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    prune_missing = request.prune_missing
+    remembered_entry = _remembered_source(request.collection_id, request.path)
+    if remembered_entry and remembered_entry.get("git_url"):
+        _refresh_managed_clone(remembered_entry)
+        prune_missing = True
+
     folder = Path(request.path)
     if not folder.exists():
         raise HTTPException(
@@ -869,15 +890,6 @@ def sync_folder(  # sync: hashing and pruning run in FastAPI's threadpool, not o
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Path is not a directory: {request.path}",
         )
-
-    # Same gate as /documents/upload-repo: write access plus the AUP, and
-    # the collection must exist. Pruning deletes documents, which the
-    # write gate already covers.
-    _require_ingest(request.collection_id)
-    try:
-        get_indexer(request.collection_id)
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
     file_extensions = None
     if request.file_extensions:
@@ -900,7 +912,7 @@ def sync_folder(  # sync: hashing and pruning run in FastAPI's threadpool, not o
             recursive=request.recursive,
             file_extensions=file_extensions,
             exclude_patterns=request.exclude_patterns,
-            prune_missing=request.prune_missing,
+            prune_missing=prune_missing,
             uploaded_by=get_request_user(),
             remember=remember or None,
         )
@@ -911,6 +923,31 @@ def sync_folder(  # sync: hashing and pruning run in FastAPI's threadpool, not o
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     return _sync_response(outcome, response)
+
+
+def _remembered_source(collection_id: str, path: str) -> Optional[dict]:
+    """The sync memory entry for ``path`` in this collection, if any."""
+    try:
+        root = str(Path(path).resolve())
+    except OSError:
+        return None
+    return next((e for e in upload_service.list_sync_folders(collection_id) if e.get("path") == root), None)
+
+
+def _refresh_managed_clone(entry: dict) -> Path:
+    """Fetch a managed clone's remote (cloning again when the directory is
+    gone), translating git's refusals and failures into HTTP errors."""
+    if not git_source.git_available():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="git is not installed on this server")
+    try:
+        info = git_source.validate_remote(entry["git_url"], entry.get("git_ref") or None)
+        return git_source.ensure_clone(info["url"], info["branch"])
+    except git_source.GitRefused as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except git_source.GitError as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=f"Could not fetch the repository: {e}")
 
 
 def _sync_response(outcome: dict, response: Response) -> SyncFolderResponse:
@@ -1027,6 +1064,10 @@ def _sync_record(entry: dict) -> SyncFolderRecord:
     known["exists"] = Path(entry["path"]).is_dir()
     if entry.get("git_url"):
         known["label"] = git_source.display_name(entry["git_url"])
+    try:
+        known.update(source_watcher.freshness(entry))
+    except Exception as e:  # noqa: BLE001 - the listing must never fail over a freshness probe
+        logger.warning(f"Could not judge freshness of {entry.get('path')}: {e}")
     return SyncFolderRecord(**known)
 
 
