@@ -1,79 +1,113 @@
 <template>
   <div class="space-y-2" data-testid="research-map">
     <p v-if="graph && !graph.stats.analyzed" class="text-sm text-base-content/60 py-8 text-center">
-      Analyze your sources to draw the map: their reference lists are what connect them.
+      Analyze your sources to draw the graph: their reference lists are what connect them.
     </p>
 
-    <div v-else class="relative flex gap-3 h-[calc(100dvh-13rem)] min-h-[420px]">
-    <div class="research-flow relative flex-1 min-w-0 rounded-box border border-base-300 bg-base-100 overflow-hidden">
-      <VueFlow
-        v-if="flowNodes.length"
-        :nodes="flowNodes"
-        :edges="flowEdges"
-        :node-types="nodeTypes"
-        :min-zoom="0.15"
-        :max-zoom="2"
-        :nodes-connectable="false"
-        :edges-updatable="false"
-        :elevate-edges-on-select="true"
-        @nodes-initialized="showReadable"
-        @node-click="onNodeClick"
-        @node-mouse-enter="({ node }) => (hoveredId = node.id)"
-        @node-mouse-leave="hoveredId = null"
-        @pane-click="selectedId = null"
-      >
-        <Background :gap="18" :size="1" pattern-color="var(--color-base-300)" />
-        <Controls position="bottom-left" :show-interactive="false" @fit-view="partial = false" />
-        <MiniMap
-          position="bottom-right"
-          :width="160"
-          :height="110"
-          pannable
-          zoomable
-          :node-color="miniColor"
-          :node-stroke-width="0"
-          mask-color="color-mix(in oklch, var(--color-base-content) 8%, transparent)"
-        />
-      </VueFlow>
-      <p v-else-if="graph" class="text-sm text-base-content/60 p-8 text-center">
-        Nothing to draw with these settings.
+    <div
+      v-else
+      ref="frame"
+      class="research-graph relative rounded-box border border-base-300 bg-base-100 overflow-hidden h-[calc(100dvh-13rem)] min-h-[420px] select-none"
+    >
+      <div ref="host" class="absolute inset-0" data-testid="research-graph-canvas" />
+
+      <p v-if="graph && !shown.nodes.length" class="absolute inset-0 grid place-items-center text-sm text-base-content/55 pointer-events-none">
+        Nothing to show with these filters.
       </p>
 
-      <!-- Toolbar -->
-      <div class="absolute top-2 left-2 right-2 sm:right-auto z-10 flex flex-wrap items-center gap-2 rounded-box border border-base-300 bg-base-100/95 px-2 py-1.5 text-xs shadow-sm">
-        <label class="input input-bordered input-xs flex items-center gap-1 w-48">
-          <Search :size="12" aria-hidden="true" />
-          <input v-model="query" type="search" class="grow" placeholder="Find title, author, year" aria-label="Find on the map" @keydown.enter="jumpToMatch" />
+      <!-- Local graph: the selection's neighbourhood, like Obsidian's local graph -->
+      <div v-if="localOf" class="absolute top-3 left-3 z-10 flex items-center gap-2 rounded-full border border-base-300 bg-base-100/95 pl-3 pr-1 py-1 text-xs shadow-sm">
+        <Crosshair :size="13" class="text-primary shrink-0" aria-hidden="true" />
+        <span class="max-w-[14rem] truncate">Local graph · {{ shortLabel(nodeById[localOf] || {}, 40) }}</span>
+        <label class="flex items-center gap-1 text-base-content/60">
+          depth
+          <input v-model.number="settings.localDepth" type="range" class="range range-xs w-16" v-bind="SLIDERS.localDepth" aria-label="Local graph depth" />
+          <span class="tabular-nums w-2">{{ settings.localDepth }}</span>
         </label>
-        <span v-if="query.trim()" class="text-base-content/55 tabular-nums">{{ matches.length }} found</span>
-        <label class="flex items-center gap-1 cursor-pointer" title="Works your sources cite that are not among them">
-          <input v-model="showExternal" type="checkbox" class="checkbox checkbox-xs" />Cited works
-        </label>
-        <select v-if="showExternal" v-model.number="minCitations" class="select select-bordered select-xs w-auto" aria-label="Show cited works cited by at least">
-          <option v-for="n in [1, 2, 3, 5]" :key="n" :value="n">cited by {{ n }}+</option>
-        </select>
-        <label v-if="looseCount" class="flex items-center gap-1 cursor-pointer" :title="`${looseCount} sources cite nothing here and are cited by nothing here`">
-          <input v-model="hideLoose" type="checkbox" class="checkbox checkbox-xs" />Hide unconnected ({{ looseCount }})
-        </label>
-        <label v-if="selectedId" class="flex items-center gap-1 cursor-pointer">
-          <input v-model="focusOnly" type="checkbox" class="checkbox checkbox-xs" />Only its neighbours
-        </label>
-        <span class="text-base-content/50 hidden md:inline">
-          {{ graph?.stats?.papers || 0 }} sources · {{ graph?.stats?.internal_edges || 0 }} citations between them
-        </span>
+        <button class="btn btn-ghost btn-xs btn-circle" aria-label="Back to the whole graph" @click="localOf = null"><X :size="13" /></button>
       </div>
 
-      <p v-if="partial" class="absolute top-[3.4rem] left-2 z-10 rounded bg-base-100/90 px-2 py-0.5 text-[11px] text-base-content/60">
-        Showing part of the map at a readable size — drag the overview or press ⛶ to see it all.
-      </p>
-    </div>
+      <!-- Settings drawer (Filters · Groups · Display · Forces) -->
+      <div class="absolute top-3 right-3 z-20 flex flex-col items-end gap-2">
+        <button
+          v-if="!settingsOpen"
+          class="btn btn-sm btn-square border-base-300 bg-base-100/95 shadow-sm"
+          aria-label="Graph settings"
+          title="Graph settings"
+          @click="settingsOpen = true"
+        ><Settings2 :size="16" /></button>
+        <div
+          v-else
+          class="graph-settings w-64 max-h-[calc(100dvh-16rem)] overflow-y-auto rounded-box border border-base-300 bg-base-100/95 shadow-lg backdrop-blur text-xs"
+          data-testid="graph-settings"
+        >
+          <div class="flex items-center justify-end gap-1 px-2 pt-2">
+            <button class="btn btn-ghost btn-xs btn-square" title="Restore default settings" aria-label="Restore default settings" @click="restoreDefaults">
+              <RotateCcw :size="13" />
+            </button>
+            <button class="btn btn-ghost btn-xs btn-square" aria-label="Close settings" @click="settingsOpen = false"><X :size="14" /></button>
+          </div>
 
-      <!-- Quick view: beside the canvas, never over it, so whatever is
-           selected stays in sight. A sheet over the canvas on narrow screens. -->
+          <section v-for="section in sections" :key="section.id" class="border-b border-base-300/60 last:border-b-0">
+            <button class="flex w-full items-center gap-1 px-3 py-2 font-medium text-base-content/80 hover:text-base-content" :aria-expanded="open[section.id]" @click="open[section.id] = !open[section.id]">
+              <ChevronRight :size="13" class="transition-transform" :class="open[section.id] ? 'rotate-90' : ''" aria-hidden="true" />
+              {{ section.label }}
+            </button>
+            <div v-show="open[section.id]" class="space-y-2.5 px-3 pb-3">
+              <template v-if="section.id === 'filters'">
+                <label class="input input-bordered input-xs flex items-center gap-1.5 w-full">
+                  <Search :size="12" class="text-base-content/50" aria-hidden="true" />
+                  <input v-model="settings.search" type="search" class="grow" placeholder="Search title, author, year" aria-label="Search the graph" @keydown.enter="centerOnMatch" />
+                </label>
+                <p v-if="settings.search.trim()" class="text-base-content/50 -mt-1">{{ matchIds.size }} match{{ matchIds.size === 1 ? '' : 'es' }} · Enter to jump</p>
+                <label class="setting-row"><span>Cited works</span><input v-model="settings.showCited" type="checkbox" class="toggle toggle-xs" /></label>
+                <div v-if="settings.showCited" class="setting-slider">
+                  <span>Cited by at least <b class="tabular-nums">{{ settings.minCitations }}</b></span>
+                  <input v-model.number="settings.minCitations" type="range" class="range range-xs" v-bind="SLIDERS.minCitations" aria-label="Cited by at least" />
+                </div>
+                <label class="setting-row"><span>Orphans</span><input v-model="settings.showOrphans" type="checkbox" class="toggle toggle-xs" /></label>
+              </template>
+
+              <template v-else-if="section.id === 'groups'">
+                <div class="join w-full">
+                  <button v-for="opt in colorOptions" :key="opt.id" class="btn btn-xs join-item flex-1" :class="settings.colorBy === opt.id ? 'btn-active' : ''" @click="settings.colorBy = opt.id">{{ opt.label }}</button>
+                </div>
+                <ul v-if="settings.colorBy === 'type'" class="space-y-1">
+                  <li v-for="item in TYPE_LEGEND" :key="item.group" class="flex items-center gap-2 text-base-content/70">
+                    <span class="legend-dot" :class="`legend-${item.group}`" aria-hidden="true" />{{ item.label }}
+                  </li>
+                </ul>
+                <div v-else-if="settings.colorBy === 'year' && years" class="space-y-1 text-base-content/70">
+                  <div class="h-2 rounded-full legend-years" aria-hidden="true" />
+                  <div class="flex justify-between tabular-nums"><span>{{ years.min }}</span><span>{{ years.max }}</span></div>
+                </div>
+              </template>
+
+              <template v-else-if="section.id === 'display'">
+                <label class="setting-row"><span>Arrows</span><input v-model="settings.arrows" type="checkbox" class="toggle toggle-xs" /></label>
+                <div v-for="key in ['textFade', 'nodeSize', 'linkThickness']" :key="key" class="setting-slider">
+                  <span>{{ sliderLabels[key] }}</span>
+                  <input v-model.number="settings[key]" type="range" class="range range-xs" v-bind="SLIDERS[key]" :aria-label="sliderLabels[key]" />
+                </div>
+              </template>
+
+              <template v-else-if="section.id === 'forces'">
+                <div v-for="key in ['centerForce', 'repelForce', 'linkForce', 'linkDistance']" :key="key" class="setting-slider">
+                  <span>{{ sliderLabels[key] }}</span>
+                  <input v-model.number="settings[key]" type="range" class="range range-xs" v-bind="SLIDERS[key]" :aria-label="sliderLabels[key]" />
+                </div>
+              </template>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- Quick view of the selected node -->
       <aside
         v-if="selected"
-        class="research-quickview absolute inset-x-2 bottom-2 z-20 max-h-[60%] md:static md:inset-auto md:w-80 md:max-h-none md:shrink-0 overflow-y-auto rounded-box border border-base-300 bg-base-100 p-3 space-y-2"
+        class="absolute z-10 bottom-3 left-3 w-80 max-w-[calc(100%-1.5rem)] max-h-[55%] overflow-y-auto rounded-box border border-base-300 bg-base-100/95 p-3 space-y-2 shadow-lg backdrop-blur"
         aria-live="polite"
+        data-testid="graph-quickview"
       >
         <div class="flex items-start gap-2">
           <div class="font-medium leading-snug text-sm flex-1">{{ selected.title || selected.label }}</div>
@@ -81,6 +115,7 @@
         </div>
         <div v-if="selected.type === 'paper'" class="text-xs text-base-content/60">
           {{ authorsShort(selected.authors) }}<span v-if="selected.year"> · {{ selected.year }}</span>
+          <span v-if="selected.kind === 'book'"> · book</span>
           · cited by {{ selected.cited_by }} · cites {{ selected.cites }}
         </div>
         <div v-else class="text-xs text-base-content/60">
@@ -102,29 +137,34 @@
             :disabled="downloading"
             @click="downloadExternal"
           >Download into collection</button>
-          <button class="btn btn-xs btn-ghost" @click="focusOnly = !focusOnly">{{ focusOnly ? 'Show all' : 'Only its neighbours' }}</button>
+          <button class="btn btn-xs btn-ghost" @click="localOf = localOf === selected.id ? null : selected.id">
+            <Crosshair :size="12" aria-hidden="true" />{{ localOf === selected.id ? 'Whole graph' : 'Local graph' }}
+          </button>
         </div>
       </aside>
+
+      <!-- Zoom -->
+      <div class="absolute bottom-3 right-3 z-10 join join-vertical shadow-sm">
+        <button class="btn btn-xs btn-square join-item bg-base-100/95" aria-label="Zoom in" @click="zoomBy(1.4)"><Plus :size="13" /></button>
+        <button class="btn btn-xs btn-square join-item bg-base-100/95" aria-label="Zoom out" @click="zoomBy(1 / 1.4)"><Minus :size="13" /></button>
+        <button class="btn btn-xs btn-square join-item bg-base-100/95" aria-label="Zoom to fit" title="Zoom to fit" @click="fit"><Maximize :size="12" /></button>
+      </div>
+      <p class="absolute bottom-3 left-1/2 -translate-x-1/2 z-0 text-[11px] text-base-content/40 pointer-events-none hidden md:block" :class="selected ? 'md:hidden' : ''">
+        {{ shown.nodes.length }} nodes · {{ shown.edges.length }} links · scroll to zoom, drag to move, double-click to open
+      </p>
     </div>
-    <p class="text-[11px] text-base-content/45">
-      Arrows point from a source to the works it cites, drawn only where a reference matches by DOI, arXiv id or full
-      title. Scroll to zoom, drag to pan, and use the overview in the corner to jump around.
-    </p>
   </div>
 </template>
 
 <script setup>
-import { computed, markRaw, nextTick, ref, watch } from 'vue'
-import { VueFlow, MarkerType, useVueFlow } from '@vue-flow/core'
-import { Background } from '@vue-flow/background'
-import { Controls } from '@vue-flow/controls'
-import { MiniMap } from '@vue-flow/minimap'
-import '@vue-flow/core/dist/style.css'
-import '@vue-flow/controls/dist/style.css'
-import '@vue-flow/minimap/dist/style.css'
-import { Search, X } from 'lucide-vue-next'
-import ResearchMapNode from './ResearchMapNode.vue'
-import { layoutCitations, neighborhood, matchesQuery, NODE_SIZE } from '../utils/citationLayout.js'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
+import ForceGraph from 'force-graph'
+import { forceCollide, forceX, forceY } from 'd3-force-3d'
+import { ChevronRight, Crosshair, Maximize, Minus, Plus, RotateCcw, Search, Settings2, X } from 'lucide-vue-next'
+import {
+  DEFAULT_SETTINGS, SLIDERS, TYPE_LEGEND, groupOf, labelAlpha, loadSettings, matchesQuery, neighborIds,
+  nodeRadius, saveSettings, shortLabel, visibleGraph, yearRange, yearStrength,
+} from '../utils/citationGraph.js'
 import { researchApi, authorsShort, abstractLabel } from '../utils/researchApi.js'
 import { useUiStore } from '../stores/uiStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
@@ -135,146 +175,289 @@ const props = defineProps({
   canDownload: { type: Boolean, default: false },
   refreshKey: { type: Number, default: 0 },
 })
-defineEmits(['open'])
+const emit = defineEmits(['open'])
 
 const ui = useUiStore()
 const jobsStore = useBackgroundJobsStore()
-const { fitView, setCenter, getViewport } = useVueFlow()
 
-// Below this zoom the cards' text is too small to read on a laptop. A map
-// that would only fit smaller starts at this zoom on its best-connected
-// source instead, with the overview minimap for the rest.
-const READABLE_ZOOM = 0.7
-const partial = ref(false)
-const nodeTypes = { source: markRaw(ResearchMapNode), external: markRaw(ResearchMapNode) }
+const sections = [
+  { id: 'filters', label: 'Filters' },
+  { id: 'groups', label: 'Groups' },
+  { id: 'display', label: 'Display' },
+  { id: 'forces', label: 'Forces' },
+]
+const open = reactive({ filters: true, groups: false, display: false, forces: false })
+const colorOptions = [{ id: 'type', label: 'Type' }, { id: 'year', label: 'Year' }, { id: 'none', label: 'None' }]
+const sliderLabels = {
+  textFade: 'Text fade threshold', nodeSize: 'Node size', linkThickness: 'Link thickness',
+  centerForce: 'Center force', repelForce: 'Repel force', linkForce: 'Link force', linkDistance: 'Link distance',
+}
 
-const graph = ref(null)
-const showExternal = ref(true)
-const minCitations = ref(2)
-const hideLoose = ref(true)
-const focusOnly = ref(false)
+const settings = reactive(loadSettings())
+const settingsOpen = ref(false)
+const graph = shallowRef(null)
 const selectedId = ref(null)
 const hoveredId = ref(null)
-const query = ref('')
+const localOf = ref(null)
 const downloading = ref(false)
-const positions = ref({})
+const frame = ref(null)
+const host = ref(null)
+
+// ── data ────────────────────────────────────────────────────────────────
 
 async function load() {
   try {
     graph.value = await researchApi.graph(props.collectionId, {
-      includeExternal: showExternal.value, minCitations: minCitations.value, documentIds: props.documentIds,
+      includeExternal: settings.showCited, minCitations: settings.minCitations, documentIds: props.documentIds,
     })
   } catch (err) {
-    ui.toastError(err, 'Could not load the citation map')
+    ui.toastError(err, 'Could not load the graph')
   }
 }
-watch(() => [props.collectionId, props.refreshKey, showExternal.value, minCitations.value,
+watch(() => [props.collectionId, props.refreshKey, settings.showCited, settings.minCitations,
   (props.documentIds || []).join(',')], load, { immediate: true })
 
-const linkedIds = computed(() => {
-  const ids = new Set()
-  for (const e of graph.value?.edges || []) { ids.add(e.source); ids.add(e.target) }
-  return ids
-})
-const looseCount = computed(() => (graph.value?.nodes || []).filter(n => !linkedIds.value.has(n.id)).length)
 const nodeById = computed(() => Object.fromEntries((graph.value?.nodes || []).map(n => [n.id, n])))
 const selected = computed(() => nodeById.value[selectedId.value] || null)
-const focus = computed(() => selectedId.value ? neighborhood(selectedId.value, graph.value?.edges || []) : null)
-const matches = computed(() => (graph.value?.nodes || []).filter(n => matchesQuery(n, query.value)).map(n => n.id))
-
-const visibleNodes = computed(() => {
-  let list = graph.value?.nodes || []
-  if (hideLoose.value && linkedIds.value.size) list = list.filter(n => linkedIds.value.has(n.id))
-  if (focusOnly.value && focus.value) list = list.filter(n => focus.value.has(n.id))
-  return list
+const shown = computed(() => visibleGraph(graph.value, settings, localOf.value))
+const years = computed(() => yearRange(shown.value.nodes))
+const matchIds = computed(() => new Set(shown.value.nodes.filter(n => matchesQuery(n, settings.search)).map(n => n.id)))
+const focus = computed(() => {
+  const id = hoveredId.value || selectedId.value
+  return id ? neighborIds(id, shown.value.edges) : null
 })
-const visibleEdges = computed(() => {
-  const ids = new Set(visibleNodes.value.map(n => n.id))
-  return (graph.value?.edges || []).filter(e => ids.has(e.source) && ids.has(e.target))
-})
+watch(selectedId, (id) => { if (!id && localOf.value) localOf.value = null })
 
-let flowReady = false
+// ── colours, read from the active theme ─────────────────────────────────
 
-// Lay out only when the set of drawn nodes changes, so a selection or a
-// search does not reshuffle the map under the reader.
-watch(() => [visibleNodes.value.map(n => n.id).join('|'), visibleEdges.value.length], async () => {
-  positions.value = layoutCitations(visibleNodes.value.map(n => ({ ...n, type: n.type === 'external' ? 'external' : 'source' })),
-    visibleEdges.value)
-  // The first draw is framed by @nodes-initialized, once Vue Flow has
-  // measured the cards; later redraws (a filter, a refresh) here.
-  if (flowReady) {
-    await nextTick()
-    await showReadable()
+const colors = reactive({ content: '#888', primary: '#55f', secondary: '#c4c', info: '#3ad', base: '#fff', warning: '#fb0' })
+
+function readColors() {
+  const style = getComputedStyle(frame.value || document.documentElement)
+  for (const [key, cssVar] of Object.entries({
+    content: '--color-base-content', primary: '--color-primary', secondary: '--color-secondary',
+    info: '--color-info', base: '--color-base-100', warning: '--color-warning',
+  })) {
+    const value = style.getPropertyValue(cssVar).trim()
+    if (value) colors[key] = value
   }
-}, { immediate: true })
-
-async function showReadable() {
-  flowReady = true
-  await fitView({ padding: 0.12 })
-  partial.value = false
-  if (getViewport().zoom >= READABLE_ZOOM || focusOnly.value) return
-  const hub = [...visibleNodes.value].sort((a, b) =>
-    ((b.cited_by || 0) + (b.cites || 0)) - ((a.cited_by || 0) + (a.cites || 0)))[0]
-  const pos = hub && positions.value[hub.id]
-  if (!pos) return
-  partial.value = true
-  await setCenter(pos.x + NODE_SIZE.source.width / 2, pos.y + NODE_SIZE.source.height / 2,
-    { zoom: READABLE_ZOOM })
 }
 
-const flowNodes = computed(() => visibleNodes.value.map(n => {
-  const type = n.type === 'external' ? 'external' : 'source'
-  const size = NODE_SIZE[type]
-  const dimmed = Boolean(focus.value && !focus.value.has(n.id)) ||
-    Boolean(query.value.trim() && !matches.value.includes(n.id))
-  return {
-    id: n.id,
-    type,
-    position: positions.value[n.id] || { x: 0, y: 0 },
-    selected: n.id === selectedId.value,
-    draggable: true,
-    data: { ...n, ...size, dimmed, match: matches.value.includes(n.id) },
+function withAlpha(color, alpha) {
+  const c = String(color).trim()
+  if (/^(oklch|oklab|lab|lch|rgb|hsl|hwb)\(/.test(c) && !c.includes('/')) return c.replace(/\)$/, ` / ${alpha})`)
+  if (/^#[0-9a-f]{6}$/i.test(c)) {
+    const n = parseInt(c.slice(1), 16)
+    return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
   }
-}))
-const flowEdges = computed(() => visibleEdges.value.map((e, i) => {
-  // Hovering a card lights its citations without changing the selection.
-  const anchor = hoveredId.value || selectedId.value
-  const lit = Boolean(anchor) && (e.source === anchor || e.target === anchor)
-  const faded = Boolean(anchor) && !lit
-  return {
-    id: `e${i}-${e.source}-${e.target}`,
-    source: e.source,
-    target: e.target,
-    type: 'default',
-    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
-    class: ['research-edge', e.external ? 'is-external' : '', lit ? 'is-lit' : '', faded ? 'is-faded' : ''].join(' '),
-    label: undefined,
-    data: { reason: e.reason },
-  }
-}))
+  return c
+}
 
-function onNodeClick({ node }) {
+function fillFor(node) {
+  const group = groupOf(node, settings.colorBy)
+  if (group === 'year') return withAlpha(colors.primary, yearStrength(node.year, years.value))
+  if (group === 'book') return colors.secondary
+  if (group === 'outside') return colors.info
+  if (group === 'cited') return withAlpha(colors.content, 0.35)
+  return withAlpha(colors.content, 0.72)
+}
+
+// ── the force graph ─────────────────────────────────────────────────────
+
+// Label size in graph units: about 7 px on screen at zoom 1.6, where the
+// default text fade makes labels fully visible.
+const LABEL_SIZE = 4.4
+
+let fg = null
+let resizeObserver = null
+let themeObserver = null
+let fitPending = true
+let lastClick = { id: null, at: 0 }
+const nodeCache = new Map()   // keeps positions when the drawn set changes
+
+function drawNode(node, ctx, scale) {
+  const degree = shown.value.degree[node.id] || 0
+  const r = nodeRadius(node, degree, settings.nodeSize)
+  const isFocus = !focus.value || focus.value.has(node.id)
+  const searching = Boolean(settings.search.trim())
+  const isMatch = matchIds.value.has(node.id)
+  const dim = !isFocus || (searching && !isMatch)
+  ctx.globalAlpha = dim ? 0.14 : 1
+
+  ctx.beginPath()
+  ctx.arc(node.x, node.y, r, 0, 2 * Math.PI)
+  if (node.type === 'external' && !node.in_collection) {
+    ctx.fillStyle = colors.base
+    ctx.fill()
+    ctx.lineWidth = 1.1 / scale + 0.4
+    ctx.strokeStyle = withAlpha(colors.content, 0.55)
+    ctx.stroke()
+  } else {
+    ctx.fillStyle = node.id === hoveredId.value || node.id === selectedId.value ? colors.primary : fillFor(node)
+    ctx.fill()
+  }
+  if (node.id === selectedId.value || (searching && isMatch)) {
+    ctx.beginPath()
+    ctx.arc(node.x, node.y, r + 2.2 / scale + 0.6, 0, 2 * Math.PI)
+    ctx.lineWidth = 1.6 / scale
+    ctx.strokeStyle = node.id === selectedId.value ? colors.primary : colors.warning
+    ctx.stroke()
+  }
+
+  // Labels fade in with zoom; the hovered node and its neighbours always speak.
+  const emphasised = focus.value && focus.value.has(node.id)
+  const alpha = emphasised ? 1 : labelAlpha(scale, settings.textFade)
+  if (alpha > 0.02 && !dim) {
+    // Text belongs to the graph and scales with it, as in Obsidian; the
+    // hovered node and its neighbours never shrink below a readable size.
+    const size = emphasised ? Math.max(LABEL_SIZE, 11 / scale) : LABEL_SIZE
+    ctx.globalAlpha = alpha * (emphasised || !focus.value ? 1 : 0.5)
+    ctx.font = `${node.id === hoveredId.value ? 600 : 400} ${size}px "Inter Variable", Inter, system-ui, sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = colors.content
+    ctx.fillText(shortLabel(node, emphasised ? 80 : 40), node.x, node.y + r + 3 / scale)
+  }
+  ctx.globalAlpha = 1
+}
+
+function paintPointerArea(node, color, ctx) {
+  const r = nodeRadius(node, shown.value.degree[node.id] || 0, settings.nodeSize)
+  ctx.fillStyle = color
+  ctx.beginPath()
+  ctx.arc(node.x, node.y, r + 3, 0, 2 * Math.PI)
+  ctx.fill()
+}
+
+function linkLit(link) {
+  const anchor = hoveredId.value || selectedId.value
+  const s = link.source?.id ?? link.source
+  const t = link.target?.id ?? link.target
+  return Boolean(anchor) && (s === anchor || t === anchor)
+}
+function linkColor(link) {
+  if (linkLit(link)) return withAlpha(colors.primary, 0.9)
+  const faded = hoveredId.value || selectedId.value
+  return withAlpha(colors.content, faded ? 0.06 : 0.2)
+}
+const linkWidth = (link) => settings.linkThickness * (linkLit(link) ? 1.8 : 0.9)
+
+function applyForces() {
+  if (!fg) return
+  fg.d3Force('center', null)
+  fg.d3Force('x', forceX(0).strength(settings.centerForce))
+  fg.d3Force('y', forceY(0).strength(settings.centerForce))
+  fg.d3Force('charge').strength(-settings.repelForce).distanceMax(600)
+  fg.d3Force('link').distance(settings.linkDistance).strength(settings.linkForce)
+  // Nodes never sit on top of each other.
+  fg.d3Force('collide', forceCollide(node =>
+    nodeRadius(node, shown.value.degree[node.id] || 0, settings.nodeSize) + 2))
+  fg.d3ReheatSimulation()
+}
+
+function redraw() {
+  if (!fg) return
+  fg.nodeCanvasObject(drawNode)
+  fg.linkColor(linkColor).linkWidth(linkWidth)
+    .linkDirectionalArrowLength(settings.arrows ? 3.5 * settings.linkThickness + 1 : 0)
+    .linkDirectionalArrowColor(linkColor)
+}
+
+function setData() {
+  if (!fg) return
+  const nodes = shown.value.nodes.map(n => {
+    const prev = nodeCache.get(n.id)
+    const node = prev ? Object.assign(prev, n) : { ...n }
+    nodeCache.set(n.id, node)
+    return node
+  })
+  const links = shown.value.edges.map(e => ({ source: e.source, target: e.target, external: e.external, reason: e.reason }))
+  fg.graphData({ nodes, links })
+}
+
+function onNodeClick(node) {
+  const now = Date.now()
+  if (lastClick.id === node.id && now - lastClick.at < 350) {
+    // Double-click opens the source, as in Obsidian.
+    if (node.type === 'paper' || node.in_collection) emit('open', node.document_id || node.id)
+  }
+  lastClick = { id: node.id, at: now }
   selectedId.value = node.id
 }
 
-function jumpToMatch() {
-  const id = matches.value[0]
-  const pos = id && positions.value[id]
-  if (!pos) return
-  selectedId.value = id
-  setCenter(pos.x + 110, pos.y + 30, { zoom: 1.1, duration: 300 })
+function init() {
+  if (fg || !host.value) return
+  readColors()
+  fg = ForceGraph()(host.value)
+    .backgroundColor('rgba(0,0,0,0)')
+    .nodeId('id')
+    .nodeLabel(() => '')
+    .nodeCanvasObjectMode(() => 'replace')
+    .nodeCanvasObject(drawNode)
+    .nodePointerAreaPaint(paintPointerArea)
+    .linkColor(linkColor)
+    .linkWidth(linkWidth)
+    .linkLineDash(link => (link.external ? [2, 2] : null))
+    .linkDirectionalArrowRelPos(1)
+    .linkDirectionalArrowLength(settings.arrows ? 4 : 0)
+    .linkDirectionalArrowColor(linkColor)
+    .d3VelocityDecay(0.32)
+    .cooldownTime(4000)
+    .minZoom(0.1)
+    .maxZoom(8)
+    .onNodeHover(node => {
+      hoveredId.value = node?.id ?? null
+      host.value.style.cursor = node ? 'pointer' : ''
+    })
+    .onNodeClick(onNodeClick)
+    .onBackgroundClick(() => { selectedId.value = null })
+    .onEngineStop(() => {
+      if (fitPending) { fitPending = false; fit() }
+    })
+  const size = () => {
+    const rect = host.value?.getBoundingClientRect()
+    if (rect && fg) fg.width(rect.width).height(rect.height)
+  }
+  resizeObserver = new ResizeObserver(size)
+  resizeObserver.observe(host.value)
+  size()
+  themeObserver = new MutationObserver(() => { readColors(); redraw() })
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] })
+  applyForces()
+  setData()
 }
 
-watch(focusOnly, () => nextTick(() => { partial.value = false; fitView({ padding: 0.15, duration: 250, maxZoom: 1.2 }) }))
-// The quick view takes width from the canvas; re-fit when focused so the
-// selection's neighbourhood stays fully in view.
-watch(() => Boolean(selectedId.value), () => nextTick(() => {
-  if (focusOnly.value) fitView({ padding: 0.15, duration: 200, maxZoom: 1.2 })
-}))
-watch(selectedId, (id) => { if (!id) focusOnly.value = false })
+watch(host, (el) => { if (el) nextTick(init) })
+watch(shown, () => { setData(); if (fg) { fitPending = true; fg.d3ReheatSimulation() } })
+watch(() => [settings.centerForce, settings.repelForce, settings.linkForce, settings.linkDistance, settings.nodeSize], applyForces)
+watch(() => [hoveredId.value, selectedId.value, settings.search, settings.colorBy, settings.arrows,
+  settings.textFade, settings.nodeSize, settings.linkThickness], redraw)
+watch(settings, () => saveSettings(settings), { deep: true })
+watch(localOf, () => nextTick(() => fit()))
 
-function miniColor(node) {
-  return node.type === 'external' ? 'var(--color-base-300)' : 'var(--color-primary)'
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  themeObserver?.disconnect()
+  if (fg) { fg.pauseAnimation(); fg._destructor?.() }
+  fg = null
+})
+
+// ── controls ────────────────────────────────────────────────────────────
+
+function fit() { fg?.zoomToFit(400, 60) }
+function zoomBy(factor) { if (fg) fg.zoom(fg.zoom() * factor, 250) }
+
+function centerOnMatch() {
+  const id = [...matchIds.value][0]
+  const node = id && nodeCache.get(id)
+  if (!node || !fg) return
+  selectedId.value = id
+  fg.centerAt(node.x, node.y, 400)
+  fg.zoom(Math.max(fg.zoom(), 2.2), 400)
+}
+
+function restoreDefaults() {
+  Object.assign(settings, { ...DEFAULT_SETTINGS })
 }
 
 async function downloadExternal() {
@@ -292,18 +475,13 @@ async function downloadExternal() {
 }
 </script>
 
-<style>
-/* Vue Flow ships fixed light colours; follow the active daisyUI theme. */
-.research-flow .vue-flow__edge-path { stroke: color-mix(in oklch, var(--color-base-content) 22%, transparent); stroke-width: 1; }
-.research-flow .research-edge.is-external .vue-flow__edge-path { stroke-dasharray: 4 3; }
-.research-flow .research-edge.is-lit .vue-flow__edge-path { stroke: var(--color-primary); stroke-width: 2; }
-.research-flow .research-edge.is-faded { opacity: 0.12; }
-.research-flow .research-edge.is-lit { z-index: 1; }
-.research-flow .vue-flow__arrowhead polyline { stroke: color-mix(in oklch, var(--color-base-content) 45%, transparent); fill: color-mix(in oklch, var(--color-base-content) 45%, transparent); }
-.research-flow .vue-flow__node { padding: 0; border: 0; background: transparent; box-shadow: none; }
-.research-flow .research-handle { opacity: 0; width: 1px; height: 1px; min-width: 0; min-height: 0; border: 0; }
-.research-flow .vue-flow__controls { box-shadow: none; border: 1px solid var(--color-base-300); border-radius: 0.5rem; overflow: hidden; }
-.research-flow .vue-flow__controls-button { background: var(--color-base-100); border-bottom-color: var(--color-base-300); fill: var(--color-base-content); color: var(--color-base-content); }
-.research-flow .vue-flow__controls-button:hover { background: var(--color-base-200); }
-.research-flow .vue-flow__minimap { background: var(--color-base-200); border: 1px solid var(--color-base-300); border-radius: 0.5rem; }
+<style scoped>
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; cursor: pointer; color: color-mix(in oklch, var(--color-base-content) 80%, transparent); }
+.setting-slider { display: flex; flex-direction: column; gap: 0.3rem; color: color-mix(in oklch, var(--color-base-content) 70%, transparent); }
+.legend-dot { width: 0.6rem; height: 0.6rem; border-radius: 9999px; flex-shrink: 0; }
+.legend-article { background: color-mix(in oklch, var(--color-base-content) 72%, transparent); }
+.legend-book { background: var(--color-secondary); }
+.legend-outside { background: var(--color-info); }
+.legend-cited { border: 1.5px solid color-mix(in oklch, var(--color-base-content) 55%, transparent); }
+.legend-years { background: linear-gradient(to right, color-mix(in oklch, var(--color-primary) 30%, transparent), var(--color-primary)); }
 </style>

@@ -1,41 +1,69 @@
 import { describe, expect, it } from 'vitest'
-import { layoutCitations, neighborhood, matchesQuery, NODE_SIZE } from '../citationLayout.js'
+import {
+  DEFAULT_SETTINGS, SLIDERS, groupOf, labelAlpha, localIds, matchesQuery, nodeRadius, sanitize, visibleGraph,
+  yearRange, yearStrength,
+} from '../citationGraph.js'
 import { abstractLabel, authorsShort, nextLocalTime, pageUrl, sourceLabel } from '../researchApi.js'
 
-describe('citation map layout', () => {
-  const nodes = [
-    { id: 'a', type: 'paper' },
-    { id: 'b', type: 'paper' },
-    { id: 'c', type: 'paper' },
-    { id: 'x', type: 'external' },
-    { id: 'lonely', type: 'paper' },
-  ]
-  const edges = [{ source: 'a', target: 'b' }, { source: 'c', target: 'b' }, { source: 'a', target: 'x' }]
+describe('citation graph model', () => {
+  const graph = {
+    nodes: [
+      { id: 'a', type: 'paper', title: 'Root Hydraulics Predict Drought Survival', authors: ['Mira Okafor'], year: 2021 },
+      { id: 'b', type: 'paper', kind: 'book', title: 'The Quiet Forest', year: 2014 },
+      { id: 'c', type: 'paper', year: 2018 },
+      { id: 'x', type: 'external', in_collection: false },
+      { id: 'lonely', type: 'paper' },
+    ],
+    edges: [{ source: 'a', target: 'b' }, { source: 'c', target: 'b' }, { source: 'a', target: 'x', external: true }],
+  }
 
-  it('puts citing sources left of what they cite, and is stable', () => {
-    const one = layoutCitations(nodes, edges)
-    expect(one).toEqual(layoutCitations(nodes, edges))
-    expect(one.a.x).toBeLessThan(one.b.x)
-    expect(one.c.x).toBeLessThan(one.b.x)
-    expect(one.a.x).toBeLessThan(one.x.x)
+  it('filters cited works and orphans like Obsidian', () => {
+    const all = visibleGraph(graph, { ...DEFAULT_SETTINGS })
+    expect(all.nodes.map(n => n.id)).toEqual(['a', 'b', 'c', 'x', 'lonely'])
+    expect(all.degree).toEqual({ a: 2, b: 2, c: 1, x: 1 })
+    const noCited = visibleGraph(graph, { ...DEFAULT_SETTINGS, showCited: false })
+    expect(noCited.nodes.map(n => n.id)).not.toContain('x')
+    expect(noCited.edges).toHaveLength(2)
+    const noOrphans = visibleGraph(graph, { ...DEFAULT_SETTINGS, showOrphans: false })
+    expect(noOrphans.nodes.map(n => n.id)).not.toContain('lonely')
   })
 
-  it('parks unconnected sources in a grid below instead of a tall column', () => {
-    const pos = layoutCitations(nodes, edges)
-    const bottom = Math.max(...['a', 'b', 'c', 'x'].map(id => pos[id].y + NODE_SIZE.source.height))
-    expect(pos.lonely.y).toBeGreaterThan(bottom)
-    const many = Array.from({ length: 9 }, (_, i) => ({ id: `n${i}`, type: 'paper' }))
-    const grid = layoutCitations(many, [], { gridColumns: 4 })
-    expect(new Set(Object.values(grid).map(p => p.y)).size).toBe(3)
+  it('builds a local graph to the requested depth', () => {
+    expect([...localIds('c', graph.edges, 1)].sort()).toEqual(['b', 'c'])
+    expect([...localIds('c', graph.edges, 2)].sort()).toEqual(['a', 'b', 'c'])
+    expect([...localIds('c', graph.edges, 3)].sort()).toEqual(['a', 'b', 'c', 'x'])
+    const local = visibleGraph(graph, { ...DEFAULT_SETTINGS, localDepth: 1 }, 'a')
+    expect(local.nodes.map(n => n.id).sort()).toEqual(['a', 'b', 'x'])
   })
 
-  it('finds neighbours both ways and matches what people type', () => {
-    expect([...neighborhood('b', edges)].sort()).toEqual(['a', 'b', 'c'])
-    const node = { title: 'Root Hydraulics Predict Drought Survival', authors: ['Mira Okafor'], year: 2021 }
-    expect(matchesQuery(node, 'okafor 2021')).toBe(true)
-    expect(matchesQuery(node, 'drought hydraulics')).toBe(true)
-    expect(matchesQuery(node, 'okafor 2020')).toBe(false)
-    expect(matchesQuery(node, '  ')).toBe(false)
+  it('sizes nodes by links and fades labels in with zoom', () => {
+    expect(nodeRadius({ type: 'paper' }, 4)).toBeGreaterThan(nodeRadius({ type: 'paper' }, 0))
+    expect(nodeRadius({ type: 'paper' }, 1, 2)).toBeCloseTo(2 * nodeRadius({ type: 'paper' }, 1))
+    expect(labelAlpha(0.2, 0.9)).toBe(0)
+    expect(labelAlpha(0.9, 0.9)).toBe(1)
+    expect(labelAlpha(0.7, 0.9)).toBeGreaterThan(0)
+  })
+
+  it('groups by type or year', () => {
+    expect(groupOf(graph.nodes[0], 'type')).toBe('article')
+    expect(groupOf(graph.nodes[1], 'type')).toBe('book')
+    expect(groupOf(graph.nodes[3], 'type')).toBe('cited')
+    expect(groupOf({ type: 'external', in_collection: true }, 'type')).toBe('outside')
+    const range = yearRange(graph.nodes)
+    expect(range).toEqual({ min: 2014, max: 2021 })
+    expect(yearStrength(2014, range)).toBeCloseTo(0.3)
+    expect(yearStrength(2021, range)).toBeCloseTo(1)
+  })
+
+  it('matches what people type and keeps settings in range', () => {
+    expect(matchesQuery(graph.nodes[0], 'okafor 2021')).toBe(true)
+    expect(matchesQuery(graph.nodes[0], 'okafor 2020')).toBe(false)
+    expect(matchesQuery(graph.nodes[0], ' ')).toBe(false)
+    const clean = sanitize({ repelForce: 99999, colorBy: 'rainbow', arrows: 1, nodeSize: 'big' })
+    expect(clean.repelForce).toBe(SLIDERS.repelForce.max)
+    expect(clean.colorBy).toBe('type')
+    expect(clean.arrows).toBe(true)
+    expect(clean.nodeSize).toBe(DEFAULT_SETTINGS.nodeSize)
   })
 })
 
