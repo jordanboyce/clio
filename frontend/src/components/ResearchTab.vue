@@ -231,7 +231,7 @@ import { Library, ListChecks, Network, NotebookPen } from 'lucide-vue-next'
 import ResearchPaperPanel from './ResearchPaperPanel.vue'
 import ResearchReviews from './ResearchReviews.vue'
 
-// The map brings Vue Flow and dagre; load them only when the map is opened.
+// The map brings the canvas force graph; load it only when the map is opened.
 const ResearchMap = defineAsyncComponent(() => import('./ResearchMap.vue'))
 import { researchApi, VERDICTS, authorsShort } from '../utils/researchApi.js'
 import { useCollectionStore } from '../stores/collectionStore'

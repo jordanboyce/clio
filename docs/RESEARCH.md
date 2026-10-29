@@ -85,19 +85,31 @@ context. The quotes and page links are there so you can check in seconds.
 
 ## The citation map
 
-- Laid out in layers: a source on the left, what it cites to its right, so
-  arrows mostly run one way. Sources that cite nothing here and are cited by
-  nothing here are hidden by default (*Hide unconnected*).
-- A large library opens at a readable zoom on its best-connected source; the
-  overview in the corner and the *fit* button show everything.
-- Hover a card to light up its citations; click it to read its abstract
-  beside the map, then *Only its neighbours* to hide everything else.
-- *Find* matches title words, an author's surname or a year (`okafor 2021`);
-  Enter jumps to the first match.
-- *Cited works* adds the works your sources cite but the collection lacks
-  (cited by at least 1, 2, 3 or 5 of them), with *Download into collection*
-  when an open copy exists. With a selection, a source of the collection
-  outside it appears as *in your collection*.
+Modelled on Obsidian's graph view: each source is a dot, sized by how many
+citations connect it, and the layout is a live force simulation rather than a
+fixed diagram. An arrow-free line means one cites the other (turn *Arrows* on
+to see which way); a dashed line leads to a cited work the collection lacks.
+
+- **Hover** a dot to light its citations and name its neighbours; everything
+  else fades. **Click** to read its abstract in a card; **double-click** to
+  open the source. Drag dots to rearrange; scroll to zoom. Titles fade in as
+  you zoom (*Text fade threshold*).
+- **Local graph** (from the card) shows one source and what is within one,
+  two or three citations of it — the depth slider in the bar at the top.
+- **Graph settings** (the button at the top right), in four sections that
+  collapse like Obsidian's:
+  - *Filters* — search by title words, an author's surname or a year
+    (`okafor 2021`; Enter jumps to the first match); *Cited works*, and how
+    many of your sources must cite one before it is drawn; *Orphans*, the
+    sources that cite nothing here and are cited by nothing here.
+  - *Groups* — colour by type (papers, books, sources outside the selection,
+    works not in the collection), by publication year, or not at all.
+  - *Display* — arrows, text fade threshold, node size, link thickness.
+  - *Forces* — center force, repel force, link force, link distance.
+  Settings are remembered in your browser; *restore defaults* resets them.
+- With a selection, a source of the collection outside it appears as *in the
+  collection, not selected*; a cited work with an open copy can be downloaded
+  from its card.
 
 ## Without a model, or offline
 
