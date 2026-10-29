@@ -2040,6 +2040,24 @@ class MetadataStore:
             conn.commit()
             logger.info(f"Updated source for document {document_id}: {source_type} -> {source_path}")
 
+    def rename_document(self, document_id: str, filename: str) -> bool:
+        """Change a document's display filename on its record and every chunk.
+
+        Chunks carry the filename too (citations and search results show
+        it), so both tables move together in one transaction. Moving the
+        stored file to match is the caller's job — see
+        services/research/naming.rename_document."""
+        with sqlite_connect(self.db_path) as conn:
+            cur = conn.execute("UPDATE documents SET filename = ? WHERE document_id = ?",
+                               (filename, document_id))
+            if cur.rowcount == 0:
+                return False
+            conn.execute("UPDATE chunks SET filename = ? WHERE document_id = ?",
+                         (filename, document_id))
+            conn.commit()
+        logger.info(f"Renamed document {document_id} to {filename!r}")
+        return True
+
     def get_document_ids_by_content_hashes(self, hashes) -> Dict[str, str]:
         """``{content_hash: document_id}`` for every hash that already has a
         document row here.

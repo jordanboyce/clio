@@ -618,6 +618,21 @@ class Settings(BaseSettings):
     # which carries the project URL as Wikimedia requires).
     link_user_agent: str = ""
 
+    # Research workspace (services/research). Paper metadata and reference
+    # resolution consult scholarly registries — OpenAlex, Crossref and the
+    # arXiv API — by an identifier printed in the paper, so a field is
+    # either read from the paper or from the registry record, never written
+    # by a model. RESEARCH_LOOKUP_ENABLED=false keeps it to the paper's own
+    # text; OFFLINE_MODE disables lookups outright. RESEARCH_CONTACT_EMAIL is
+    # sent as OpenAlex/Crossref ask ("polite pool"); empty sends none.
+    research_lookup_enabled: bool = True
+    research_contact_email: str = ""
+    research_lookup_timeout_seconds: float = 15.0
+    # How many papers one background review job may cover, and how many such
+    # jobs run at once across the process (each holds a model connection).
+    research_max_job_documents: int = 200
+    research_max_concurrent_jobs: int = 1
+
     # Audio transcription (meeting recordings via local Whisper)
     # Model size: tiny | base | small | medium | large-v3
     #   tiny   ~39MB   fastest, lowest accuracy

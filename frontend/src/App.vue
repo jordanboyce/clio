@@ -632,6 +632,7 @@
 
             <SearchTab v-if="activeTab === 'search'" @switch-tab="switchTab" />
             <ArtifactsTab v-if="activeTab === 'generate'" />
+            <ResearchTab v-if="activeTab === 'research'" />
             <ExpertiseLibrary v-if="activeTab === 'expertise'" />
             <MCPTab v-if="activeTab === 'mcp'" />
             <AdminTab v-if="activeTab === 'admin'" />
@@ -1330,7 +1331,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
-import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert } from 'lucide-vue-next'
+import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig } from 'lucide-vue-next'
 import CommandPalette from './components/CommandPalette.vue'
 import EmbeddingMismatchNotice from './components/EmbeddingMismatchNotice.vue'
 import ShortcutsDialog from './components/ShortcutsDialog.vue'
@@ -1360,6 +1361,7 @@ import ChatTab from './components/ChatTab.vue'
 // gone missing (deploy under an open tab) from rendering as an empty pane.
 const SearchTab = lazyView(() => import('./components/SearchTab.vue'))
 const ArtifactsTab = lazyView(() => import('./components/ArtifactsTab.vue'))
+const ResearchTab = lazyView(() => import('./components/ResearchTab.vue'))
 const SettingsTab = lazyView(() => import('./components/SettingsTab.vue'))
 const MCPTab = lazyView(() => import('./components/MCPTab.vue'))
 const ShareModal = lazyView(() => import('./components/ShareModal.vue'))
@@ -1437,7 +1439,7 @@ const setGlobalProvider = (pid) => {
 }
 
 // Restore the last active tab so a refresh doesn't dump the user back in Chat
-const VALID_TABS = ['chat', 'search', 'generate', 'expertise', 'mcp', 'admin', 'settings', 'collections']
+const VALID_TABS = ['chat', 'search', 'generate', 'research', 'expertise', 'mcp', 'admin', 'settings', 'collections']
 const savedTab = localStorage.getItem('active_tab')
 const activeTab = ref(VALID_TABS.includes(savedTab) ? savedTab : 'chat')
 watch(activeTab, (tab) => localStorage.setItem('active_tab', tab))
@@ -1995,6 +1997,7 @@ const paletteCommands = computed(() => {
   if (chatTabEnabled.value) add('Go to', 'Ask', MessageSquare, () => switchTab('chat'), { keys: ['G', 'A'], keywords: 'chat question' })
   add('Go to', 'Find', Search, () => switchTab('search'), { keys: ['G', 'F'], keywords: 'search passages' })
   add('Go to', 'Connect', Plug, () => switchTab('mcp'), { keys: ['G', 'C'], keywords: 'mcp token claude chatgpt client' })
+  add('Go to', 'Papers', LibraryBig, () => switchTab('research'), { keys: ['G', 'P'], keywords: 'research papers citations references abstracts reviews' })
   add('Go to', 'Reports', FileText, () => switchTab('generate'), { keywords: 'generate briefing summary' })
   add('Go to', 'Saved instructions', BookOpen, () => switchTab('expertise'), { keywords: 'expertise packs' })
   if (userStore.adminConsole) add('Go to', 'Administration', Gauge, () => switchTab('admin'), { keywords: 'admin audit access' })
@@ -2064,7 +2067,7 @@ const onGlobalKeydown = (e) => {
   if (key === 'g' || key === 'G') { goPrefixUntil = now + 1200; return }
   if (goPrefixUntil > now) {
     goPrefixUntil = 0
-    const target = { a: chatTabEnabled.value ? 'chat' : null, f: 'search', c: 'mcp', o: 'collections', s: 'settings' }[key.toLowerCase()]
+    const target = { a: chatTabEnabled.value ? 'chat' : null, f: 'search', c: 'mcp', p: 'research', o: 'collections', s: 'settings' }[key.toLowerCase()]
     if (target) { e.preventDefault(); switchTab(target) }
   }
 }

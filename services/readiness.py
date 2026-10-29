@@ -344,6 +344,14 @@ def egress_paths() -> List[Dict[str, str]]:
     add("Web links", "any public web host" if links_on else "disabled", "open" if links_on else "blocked",
         "Fetched by the server when someone adds a link." if links_on else "The server never fetches web pages.")
 
+    # Scholarly registries (research workspace metadata and references)
+    from services.research.lookup import lookup_available
+    lookups_on = lookup_available()
+    add("Scholarly registries", "api.openalex.org, api.crossref.org, export.arxiv.org" if lookups_on else "disabled",
+        "open" if lookups_on else "blocked",
+        "Only identifiers (DOI, arXiv id) and cited titles are sent, never passages."
+        if lookups_on else "Paper metadata comes from the paper's own text only.")
+
     # Git
     allowed = [h.strip() for h in settings.git_allowed_hosts.split(",") if h.strip()]
     if allowed:

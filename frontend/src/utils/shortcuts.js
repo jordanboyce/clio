@@ -45,6 +45,7 @@ export const SHORTCUT_GROUPS = [
       { keys: ['G', 'A'], label: 'Ask', seq: true },
       { keys: ['G', 'F'], label: 'Find', seq: true },
       { keys: ['G', 'C'], label: 'Connect', seq: true },
+      { keys: ['G', 'P'], label: 'Papers', seq: true },
       { keys: ['G', 'O'], label: 'Collections', seq: true },
       { keys: ['G', 'S'], label: 'Settings', seq: true },
     ],
