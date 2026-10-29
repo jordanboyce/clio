@@ -4,9 +4,14 @@
       <div>
         <h3 id="ribbon-customize-title" class="font-semibold">Customize the ribbon</h3>
         <p class="text-sm text-base-content/60 mt-0.5">
-          Choose what the icon bar shows and in what order. You can also drag icons on the ribbon itself.
+          Choose what the ribbon shows and in what order; a divider marks where one kind of item gives way to
+          the next. You can also drag icons on the ribbon itself.
         </p>
       </div>
+      <label class="flex items-center justify-between gap-3 text-sm cursor-pointer">
+        <span>Show names next to the icons</span>
+        <input type="checkbox" class="toggle toggle-sm" :checked="layout.labels" @change="update({ ...layout, labels: $event.target.checked })" />
+      </label>
       <ul class="divide-y divide-base-300/70 rounded-box border border-base-300" data-testid="ribbon-customize-list">
         <li
           v-for="(item, i) in items"
@@ -20,6 +25,7 @@
           @dragend="dragging = null; dragOver = null"
         >
           <GripVertical :size="14" class="text-base-content/35 cursor-grab flex-shrink-0" aria-hidden="true" />
+          <span class="w-14 text-[10px] uppercase tracking-wide text-base-content/40 flex-shrink-0">{{ GROUP_LABELS[item.group] }}</span>
           <label class="flex flex-1 items-center gap-2 cursor-pointer text-sm">
             <input
               type="checkbox"
@@ -61,6 +67,7 @@ const props = defineProps({
 const emit = defineEmits(['close', 'update:layout'])
 
 const hiddenSet = computed(() => new Set(props.layout.hidden))
+const GROUP_LABELS = { ask: 'Ask', work: 'Work', share: 'Share', actions: 'Action' }
 const dragging = ref(null)
 const dragOver = ref(null)
 

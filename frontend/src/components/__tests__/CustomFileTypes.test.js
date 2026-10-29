@@ -35,6 +35,15 @@ beforeEach(() => {
   HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
 })
 
+// Every mounted panel is unmounted after its test. Clearing the page is not
+// enough: a panel left mounted keeps its debounced preview timer (a real
+// 300 ms setTimeout), which on a busy machine fired during a later test and
+// posted through the shared http mock.
+const mounted = []
+afterEach(() => {
+  while (mounted.length) mounted.pop().unmount()
+})
+
 let routes
 function route(map) {
   routes = map
@@ -53,6 +62,7 @@ async function mountPanel({ admin = true, types = [ACME], ai = true, extra = {} 
   user.adminConsole = admin
   route({ get: { '/api/custom-file-types': { types, ai: { available: ai } }, ...extra } })
   const w = mount(CustomFileTypes, { global: { plugins: [pinia] }, attachTo: document.body })
+  mounted.push(w)
   await flushPromises()
   return w
 }
@@ -199,11 +209,17 @@ describe('CustomFileTypes', () => {
   describe('editing', () => {
     it('re-renders the preview once, 300 ms after the last keystroke, with the edited profile', async () => {
       const w = await mountPanel()
-      await openEdit(w)
+      // Fake timers before the editor opens: opening it schedules a preview,
+      // and a real 300 ms timer from that moment would fire mid-test on a
+      // slow machine and post a request this test does not expect.
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      await openEdit(w)
       http.post.mockResolvedValue({ data: { preview: { ...PREVIEW, text: 'edited preview' } } })
       await pickFile(w, '#cft-preview-sample')          // an edit has no sample until one is picked
       await vi.advanceTimersByTimeAsync(300)
+      // The sample's own preview reads the file and posts after two awaits;
+      // let it land before clearing, or it is miscounted as an early call.
+      await flushPromises()
       http.post.mockClear()
 
       await w.get('#cft-exclude').setValue('id, site')

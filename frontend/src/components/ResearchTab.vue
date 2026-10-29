@@ -154,6 +154,7 @@
           :document-ids="selectionCount ? scopeIds : null"
           :can-download="canWrite && capabilities.link_download"
           :refresh-key="refreshKey"
+          :question="question"
           @open="openPaper"
         />
 

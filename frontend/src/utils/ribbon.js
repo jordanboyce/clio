@@ -6,21 +6,27 @@
 // lives in localStorage and survives updates: items added in a later
 // release are appended to a saved layout rather than lost.
 
+// Grouped by purpose — asking, working with sources, sharing them, quick
+// actions — and the ribbon draws a quiet divider where the group changes, so
+// Ask and Find read as the primary pair rather than two icons among twelve.
+// `hidden` marks the ones off by default: each is reachable elsewhere (the
+// Research view's own tabs, the command palette), so the default ribbon
+// stays short and anyone who wants them can switch them on.
 export const RIBBON_ITEMS = [
-  { id: 'chat', label: 'Ask', tab: 'chat' },
-  { id: 'search', label: 'Find', tab: 'search' },
-  { id: 'research', label: 'Research', tab: 'research', view: 'library' },
-  { id: 'graph', label: 'Citation graph', tab: 'research', view: 'map' },
-  { id: 'reviews', label: 'Reviews', tab: 'research', view: 'reviews', hidden: true },
-  { id: 'generate', label: 'Reports', tab: 'generate' },
-  { id: 'expertise', label: 'Saved instructions', tab: 'expertise' },
-  { id: 'mcp', label: 'Connect', tab: 'mcp' },
-  { id: 'collections', label: 'Collections', tab: 'collections' },
-  { id: 'add-sources', label: 'Add sources', action: 'add-sources' },
-  { id: 'new-chat', label: 'New chat', action: 'new-chat', hidden: true },
-  { id: 'notes', label: 'Notes and tools', action: 'notes', hidden: true },
-  { id: 'palette', label: 'Command palette', action: 'palette' },
-  { id: 'admin', label: 'Administration', tab: 'admin', adminOnly: true },
+  { id: 'chat', label: 'Ask', tab: 'chat', group: 'ask' },
+  { id: 'search', label: 'Find', tab: 'search', group: 'ask' },
+  { id: 'research', label: 'Research', tab: 'research', view: 'library', group: 'work' },
+  { id: 'graph', label: 'Citation graph', tab: 'research', view: 'map', group: 'work', hidden: true },
+  { id: 'reviews', label: 'Reviews', tab: 'research', view: 'reviews', group: 'work', hidden: true },
+  { id: 'generate', label: 'Reports', tab: 'generate', group: 'work' },
+  { id: 'expertise', label: 'Saved instructions', tab: 'expertise', group: 'work' },
+  { id: 'mcp', label: 'Connect', tab: 'mcp', group: 'share' },
+  { id: 'collections', label: 'Collections', tab: 'collections', group: 'share' },
+  { id: 'admin', label: 'Administration', tab: 'admin', adminOnly: true, group: 'share' },
+  { id: 'add-sources', label: 'Add sources', action: 'add-sources', group: 'actions' },
+  { id: 'new-chat', label: 'New chat', action: 'new-chat', group: 'actions', hidden: true },
+  { id: 'notes', label: 'Notes and tools', action: 'notes', group: 'actions', hidden: true },
+  { id: 'palette', label: 'Command palette', action: 'palette', group: 'actions', hidden: true },
 ]
 
 const STORAGE_KEY = 'clio_ribbon'
@@ -30,6 +36,9 @@ export function defaultLayout() {
   return {
     order: RIBBON_ITEMS.map(i => i.id),
     hidden: RIBBON_ITEMS.filter(i => i.hidden).map(i => i.id),
+    // Icons alone suit people who know them; names beside the icons suit
+    // everyone else. A preference, not a mode of the app.
+    labels: false,
   }
 }
 
@@ -43,7 +52,7 @@ export function normalizeLayout(saved) {
   // An item new since the layout was saved arrives with its default visibility.
   const savedIds = new Set(saved.order)
   for (const id of base.hidden) if (!savedIds.has(id) && !hidden.includes(id)) hidden.push(id)
-  return { order: [...new Set(order)], hidden: [...new Set(hidden)] }
+  return { order: [...new Set(order)], hidden: [...new Set(hidden)], labels: Boolean(saved.labels) }
 }
 
 export function loadLayout() {
@@ -99,6 +108,11 @@ export function toggleHidden(layout, id) {
 }
 
 /** Is this item the place the app is showing now? */
+/** Where a divider belongs: before an item whose group differs from the last. */
+export function withDividers(items) {
+  return items.map((item, i) => ({ item, divider: i > 0 && items[i - 1].group !== item.group }))
+}
+
 export function isActive(item, activeTab, researchView) {
   if (!item.tab || item.tab !== activeTab) return false
   return !item.view || item.view === researchView

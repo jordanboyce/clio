@@ -1,6 +1,7 @@
 <template>
   <nav
-    class="app-ribbon flex flex-col items-center gap-1 w-11 flex-shrink-0 border-r border-base-300 bg-base-100 py-1.5"
+    class="app-ribbon flex flex-col gap-1 flex-shrink-0 border-r border-base-300 bg-base-100 py-1.5"
+    :class="labels ? 'w-44 items-stretch px-1.5' : 'w-11 items-center'"
     aria-label="Ribbon"
     data-testid="app-ribbon"
     @contextmenu.prevent="openMenu($event, null)"
@@ -8,27 +9,29 @@
     <!-- The panel toggle is fixed at the top, as in Obsidian. -->
     <button
       class="ribbon-btn"
-      :class="{ 'is-active': sourcesOpen }"
+      :class="{ 'is-active': sourcesOpen, 'has-label': labels }"
       :aria-pressed="sourcesOpen"
       :aria-label="sourcesOpen ? 'Hide sources panel' : 'Show sources panel'"
-      :data-tip="sourcesOpen ? 'Hide sources panel' : 'Show sources panel'"
+      :data-tip="labels ? null : (sourcesOpen ? 'Hide sources panel' : 'Show sources panel')"
       @click="$emit('action', { action: 'toggle-sources' })"
     >
-      <component :is="sourcesOpen ? PanelLeftClose : PanelLeft" :size="18" />
+      <component :is="sourcesOpen ? PanelLeftClose : PanelLeft" :size="18" class="flex-shrink-0" />
+      <span v-if="labels" class="truncate">Sources</span>
     </button>
-    <div class="w-6 border-t border-base-300 my-1" aria-hidden="true" />
+    <div class="ribbon-divider" aria-hidden="true" />
 
+    <template v-for="{ item, divider } in grouped" :key="item.id">
+    <div v-if="divider" class="ribbon-divider" aria-hidden="true" />
     <button
-      v-for="item in items"
-      :key="item.id"
       class="ribbon-btn"
       :class="{
+        'has-label': labels,
         'is-active': isActive(item, activeTab, researchView),
         'is-drop-target': dropTarget === item.id && dragging && dragging !== item.id,
       }"
       :aria-label="item.label"
       :aria-current="isActive(item, activeTab, researchView) ? 'page' : undefined"
-      :data-tip="item.label"
+      :data-tip="labels ? null : item.label"
       :data-ribbon-item="item.id"
       draggable="true"
       @click="$emit('action', item)"
@@ -39,15 +42,18 @@
       @drop.prevent="onDrop(item)"
       @dragend="dragging = null; dropTarget = null"
     >
-      <component :is="ICONS[item.id]" :size="18" />
+      <component :is="ICONS[item.id]" :size="18" class="flex-shrink-0" />
+      <span v-if="labels" class="truncate">{{ item.label }}</span>
       <span v-if="item.id === 'admin' && adminBadge > 0" class="ribbon-dot" aria-hidden="true" />
     </button>
+    </template>
 
     <div class="flex-1 w-full" @dragover.prevent @drop.prevent="onDrop(null)" />
 
     <div class="dropdown dropdown-right dropdown-end">
-      <button tabindex="0" class="ribbon-btn" aria-label="Help" data-tip="Help" aria-haspopup="menu">
-        <HelpCircle :size="18" />
+      <button tabindex="0" class="ribbon-btn" :class="{ 'has-label': labels }" aria-label="Help" :data-tip="labels ? null : 'Help'" aria-haspopup="menu">
+        <HelpCircle :size="18" class="flex-shrink-0" />
+        <span v-if="labels">Help</span>
       </button>
       <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-[80] w-56 p-2 shadow border border-base-300 ml-1">
         <li><a href="https://github.com/jordanboyce/clio#readme" target="_blank" rel="noopener"><BookOpen :size="14" />Documentation</a></li>
@@ -60,13 +66,14 @@
     </div>
     <button
       class="ribbon-btn"
-      :class="{ 'is-active': activeTab === 'settings' }"
+      :class="{ 'is-active': activeTab === 'settings', 'has-label': labels }"
       aria-label="Settings"
-      data-tip="Settings"
+      :data-tip="labels ? null : 'Settings'"
       :aria-current="activeTab === 'settings' ? 'page' : undefined"
       @click="$emit('action', { tab: 'settings' })"
     >
-      <Settings :size="18" />
+      <Settings :size="18" class="flex-shrink-0" />
+      <span v-if="labels">Settings</span>
     </button>
 
     <!-- Right-click menu -->
@@ -79,6 +86,7 @@
       @contextmenu.prevent
     >
       <li v-if="menu.item"><button role="menuitem" @click="hide(menu.item)"><EyeOff :size="14" />Hide “{{ menu.item.label }}”</button></li>
+      <li><button role="menuitem" @click="setLabels(!labels)"><Type :size="14" />{{ labels ? 'Show icons only' : 'Show names' }}</button></li>
       <li><button role="menuitem" @click="closeMenu(); $emit('customize')"><SlidersHorizontal :size="14" />Customize ribbon…</button></li>
       <li><button role="menuitem" @click="reset"><RotateCcw :size="14" />Reset to default</button></li>
     </ul>
@@ -86,13 +94,13 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   BookOpen, Command, EyeOff, FileText, FolderPlus, Gauge, HelpCircle, Info, Keyboard, Layers, LibraryBig,
   MessageSquare, MessageSquarePlus, Network, NotebookPen, PanelLeft, PanelLeftClose, PanelRight, Plug, RotateCcw,
-  Search, Settings, SlidersHorizontal, Sparkles, SquareTerminal,
+  Search, Settings, SlidersHorizontal, Sparkles, SquareTerminal, Type,
 } from 'lucide-vue-next'
-import { defaultLayout, isActive, placeBefore, toggleHidden } from '../utils/ribbon.js'
+import { defaultLayout, isActive, placeBefore, toggleHidden, withDividers } from '../utils/ribbon.js'
 
 const ICONS = {
   chat: MessageSquare, search: Search, research: LibraryBig, graph: Network, reviews: NotebookPen,
@@ -110,6 +118,8 @@ const props = defineProps({
 })
 const emit = defineEmits(['action', 'customize', 'update:layout'])
 
+const labels = computed(() => Boolean(props.layout.labels))
+const grouped = computed(() => withDividers(props.items))
 const menu = ref(null)
 const menuEl = ref(null)
 const dragging = ref(null)
@@ -121,6 +131,10 @@ function openMenu(event, item) {
 function closeMenu() { menu.value = null }
 function hide(item) {
   emit('update:layout', toggleHidden(props.layout, item.id))
+  closeMenu()
+}
+function setLabels(on) {
+  emit('update:layout', { ...props.layout, labels: on })
   closeMenu()
 }
 function reset() {
@@ -167,6 +181,8 @@ function onDrop(target) {
   color: color-mix(in oklch, var(--color-base-content) 55%, transparent);
   transition: background-color 120ms, color 120ms;
 }
+.ribbon-btn.has-label { width: 100%; justify-content: flex-start; gap: 0.6rem; padding: 0 0.5rem; font-size: 0.8125rem; }
+.ribbon-divider { align-self: center; width: 1.5rem; margin: 0.2rem 0; border-top: 1px solid var(--color-base-300); }
 .ribbon-btn:hover { color: var(--color-base-content); background-color: color-mix(in oklch, var(--color-base-content) 9%, transparent); }
 .ribbon-btn.is-active { color: var(--color-base-content); background-color: color-mix(in oklch, var(--color-base-content) 14%, transparent); }
 .ribbon-btn.is-drop-target { box-shadow: 0 -2px 0 0 var(--color-primary); }

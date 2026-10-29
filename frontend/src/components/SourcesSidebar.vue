@@ -674,13 +674,17 @@
           @replace="(doc) => (supersedeDoc = doc)"
           @report="openReport"
           @delete="confirmDelete"
+          @injection="openInjectionWarnings"
+          @policy="openPolicyFlags"
         />
-        <div v-if="documents.length < docTotal" class="p-2 text-center">
-          <button class="btn btn-xs btn-ghost" @click="loadMoreDocuments" :disabled="loadingMore">
-            <span v-if="loadingMore" class="loading loading-spinner loading-xs"></span>
-            Load more ({{ documents.length.toLocaleString() }} of {{ docTotal.toLocaleString() }})
-          </button>
-        </div>
+        <p v-if="loadingMore && documents.length < docTotal" class="px-3 py-1.5 text-[11px] text-base-content/50 flex items-center gap-1.5">
+          <span class="loading loading-spinner loading-xs"></span>
+          Loading {{ documents.length.toLocaleString() }} of {{ docTotal.toLocaleString() }}…
+        </p>
+        <p v-if="treeTruncated" class="px-3 py-1.5 text-[11px] text-base-content/55" data-testid="tree-truncated">
+          Showing the first {{ documents.length.toLocaleString() }} of {{ docTotal.toLocaleString() }} sources —
+          filter to narrow it down, or switch to the detailed list.
+        </p>
       </div>
 
       <!-- Document list -->
@@ -1145,6 +1149,7 @@ import { labelBadgeClass, showLabel, policyBadge, policyFlagPages, categoryLabel
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useExpertiseStore } from '../stores/expertiseStore'
 import { useSelectionStore } from '../stores/selectionStore'
+import { useLayoutStore } from '../stores/layoutStore'
 import { useStatsStore } from '../stores/statsStore'
 import { formatBytes, describeStorage } from '../utils/format'
 import { describeFile, FAMILIES, isTabularFile } from '../utils/fileTypes'
@@ -1943,21 +1948,40 @@ const toggleSelectAll = () => {
 // preferences; the folding is kept per collection.
 const readPref = (key, fallback) => { try { return localStorage.getItem(key) ?? fallback } catch { return fallback } }
 const writePref = (key, value) => { try { localStorage.setItem(key, value) } catch { /* a preference */ } }
-const viewMode = ref(readPref('clio_sources_view', 'tree') === 'list' ? 'list' : 'tree')
+const layoutStore = useLayoutStore()
+const viewMode = computed(() => layoutStore.sourcesView)
 const treeSort = ref(readPref('clio_sources_sort', 'name') === 'recent' ? 'recent' : 'name')
-const setViewMode = (mode) => { viewMode.value = mode; writePref('clio_sources_view', mode) }
+const setViewMode = (mode) => layoutStore.setSourcesView(mode)
+watch(viewMode, (mode) => { if (mode === 'tree') loadTreeRemainder() })
 const setTreeSort = (by) => {
   treeSort.value = by
   writePref('clio_sources_sort', by)
   document.activeElement?.blur()
 }
+// The collection's remembered sync folders (their roots name the tree's
+// folders). Declared here, ahead of the tree that reads it.
+const syncFolders = ref([])
 const sourceTree = computed(() => sortFiles(buildTree(documents.value, syncFolders.value), treeSort.value))
 const collapseKey = () => `clio_tree_collapsed:${collectionStore.currentCollectionId}`
+// No saved folding yet: a small tree opens fully; a big one (a repository)
+// opens one level deep, so the first look is the shape, not 5,000 rows.
+let foldingChosen = false
 const loadCollapsed = () => {
-  try { return new Set(JSON.parse(localStorage.getItem(collapseKey()) || '[]')) } catch { return new Set() }
+  try {
+    const saved = localStorage.getItem(collapseKey())
+    foldingChosen = saved !== null
+    return new Set(JSON.parse(saved || '[]'))
+  } catch {
+    foldingChosen = false
+    return new Set()
+  }
 }
 const collapsedFolders = ref(loadCollapsed())
-const saveCollapsed = () => writePref(collapseKey(), JSON.stringify([...collapsedFolders.value]))
+const BIG_TREE = 150
+const saveCollapsed = () => {
+  foldingChosen = true
+  writePref(collapseKey(), JSON.stringify([...collapsedFolders.value]))
+}
 const toggleFolder = (path) => {
   const next = new Set(collapsedFolders.value)
   next.has(path) ? next.delete(path) : next.add(path)
@@ -1965,6 +1989,11 @@ const toggleFolder = (path) => {
   saveCollapsed()
 }
 const allFolderPaths = computed(() => folderPaths(sourceTree.value))
+watch(sourceTree, (tree) => {
+  if (foldingChosen || tree.count <= BIG_TREE) return
+  const topLevel = new Set(tree.folders.map(f => f.path))
+  collapsedFolders.value = new Set(allFolderPaths.value.filter(p => !topLevel.has(p)))
+})
 const allCollapsed = computed(() => allFolderPaths.value.length > 0 &&
   allFolderPaths.value.every(p => collapsedFolders.value.has(p)))
 const toggleCollapseAll = () => {
@@ -2012,9 +2041,17 @@ const setDocKind = (kind) => {
   loadDocuments()
 }
 
-const _docParams = (offset) => ({
+// A folder tree is only right when it holds the whole collection: a
+// folder showing 40 of its 900 files, or a tick that selects only the
+// loaded ones, would mislead. In folder view the remaining pages load in
+// bigger steps after the first, up to TREE_MAX; past that the panel says so.
+const TREE_PAGE = 1000
+const TREE_MAX = 10000
+let loadGeneration = 0
+
+const _docParams = (offset, limit = DOC_PAGE) => ({
   collection_id: collectionStore.currentCollectionId,
-  limit: DOC_PAGE,
+  limit,
   offset,
   ...(docSearch.value ? { q: docSearch.value } : {}),
   ...(docKind.value ? { kind: docKind.value } : {}),
@@ -2023,9 +2060,11 @@ const _docParams = (offset) => ({
 const loadDocuments = async () => {
   loading.value = true
   error.value = ''
+  const generation = ++loadGeneration
 
   try {
     const response = await http.get('/documents', { params: _docParams(0) })
+    if (generation !== loadGeneration) return
     documents.value = response.data.documents || []
     docTotal.value = response.data.total_documents ?? documents.value.length
     if (response.data.kind_counts) kindCounts.value = response.data.kind_counts
@@ -2036,7 +2075,28 @@ const loadDocuments = async () => {
   } finally {
     loading.value = false
   }
+  if (generation === loadGeneration && viewMode.value === 'tree') loadTreeRemainder(generation)
 }
+
+const loadTreeRemainder = async (generation = loadGeneration) => {
+  while (generation === loadGeneration && documents.value.length < Math.min(docTotal.value, TREE_MAX)) {
+    loadingMore.value = true
+    try {
+      const response = await http.get('/documents', { params: _docParams(documents.value.length, TREE_PAGE) })
+      if (generation !== loadGeneration) return
+      const page = response.data.documents || []
+      if (!page.length) break
+      documents.value = documents.value.concat(page)
+      docTotal.value = response.data.total_documents ?? docTotal.value
+    } catch (err) {
+      error.value = err?.message || 'Failed to load more sources'
+      break
+    } finally {
+      loadingMore.value = false
+    }
+  }
+}
+const treeTruncated = computed(() => viewMode.value === 'tree' && docTotal.value > TREE_MAX && documents.value.length >= TREE_MAX)
 
 const loadMoreDocuments = async () => {
   loadingMore.value = true
@@ -2280,7 +2340,6 @@ const deleteBulk = async () => {
 
 // Watch for collection changes
 // Folders synced into this collection before (server-side memory).
-const syncFolders = ref([])
 const syncingPath = ref('')
 const folderLabel = (path) => {
   const parts = String(path || '').split(/[\\/]/).filter(Boolean)

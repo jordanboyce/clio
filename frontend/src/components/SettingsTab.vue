@@ -120,6 +120,50 @@
           </div>
         </section>
 
+        <!-- ═══ Layout ═══ -->
+        <section v-show="activeSection === 'layout'" aria-labelledby="settings-layout" data-testid="settings-layout">
+          <h2 id="settings-layout" class="sr-only">Layout</h2>
+
+          <div class="pb-6 space-y-4">
+            <div>
+              <div class="text-sm font-medium">Ribbon</div>
+              <p class="text-xs text-base-content/55 mt-1 max-w-[56ch] leading-relaxed">
+                The column of icons on the left edge. Choose what it holds and in what order, or right-click it
+                any time. On a phone the bottom tab bar takes its place.
+              </p>
+            </div>
+            <div class="flex items-start justify-between gap-8 max-w-xl">
+              <div class="min-w-0">
+                <div class="text-sm">Show names next to the icons</div>
+                <p class="text-xs text-base-content/55 mt-0.5">Wider, and easier for anyone who does not know the icons yet.</p>
+              </div>
+              <input
+                type="checkbox"
+                class="toggle toggle-primary toggle-sm flex-shrink-0 mt-0.5"
+                :checked="layoutStore.ribbon.labels"
+                @change="layoutStore.setRibbonLabels($event.target.checked)"
+                aria-label="Show names next to the ribbon icons"
+              />
+            </div>
+            <button class="btn btn-sm btn-outline" @click="layoutStore.customizeOpen = true">Customize the ribbon…</button>
+          </div>
+
+          <div class="pt-6 border-t border-base-300/60 space-y-3">
+            <div>
+              <div class="text-sm font-medium">Sources panel</div>
+              <p class="text-xs text-base-content/55 mt-1 max-w-[56ch] leading-relaxed">
+                Folders follow where sources came from: a synced folder or repository keeps its structure, links
+                group by site, uploads sit at the top. The detailed list shows pages, labels and review status on
+                every row.
+              </p>
+            </div>
+            <div class="join" role="group" aria-label="Show sources as">
+              <button class="btn btn-sm join-item" :class="layoutStore.sourcesView === 'tree' ? 'btn-active' : ''" :aria-pressed="layoutStore.sourcesView === 'tree'" @click="layoutStore.setSourcesView('tree')">Folders</button>
+              <button class="btn btn-sm join-item" :class="layoutStore.sourcesView === 'list' ? 'btn-active' : ''" :aria-pressed="layoutStore.sourcesView === 'list'" @click="layoutStore.setSourcesView('list')">Detailed list</button>
+            </div>
+          </div>
+        </section>
+
         <!-- ═══ AI Providers ═══ -->
         <section v-show="activeSection === 'providers'" aria-labelledby="settings-providers">
           <h2 id="settings-providers" class="sr-only">AI Providers</h2>
@@ -1052,6 +1096,7 @@ import http from '../utils/http'
 import { ChevronDown, Check, ShieldCheck, ShieldAlert } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
+import { useLayoutStore } from '../stores/layoutStore'
 import { useUserStore } from '../stores/userStore'
 import { useProviderStore } from '../stores/providerStore'
 import CustomFileTypes from './CustomFileTypes.vue'
@@ -1085,9 +1130,11 @@ const backgroundJobsStore = useBackgroundJobsStore()
 // ── Settings shell: section rail + basic/advanced depth ──
 const userStore = useUserStore()
 const providerStore = useProviderStore()
+const layoutStore = useLayoutStore()
 
 const ALL_SECTIONS = [
   { id: 'general', label: 'General' },
+  { id: 'layout', label: 'Layout' },
   { id: 'providers', label: 'AI Providers' },
   { id: 'indexing', label: 'Indexing' },
   { id: 'custom-file-types', label: 'Custom file types' },

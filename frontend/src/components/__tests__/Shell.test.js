@@ -14,11 +14,20 @@ describe('Ribbon', () => {
   it('shows every visible item with the current place marked', async () => {
     const wrapper = mountRibbon()
     const labels = wrapper.findAll('[data-ribbon-item]').map(b => b.attributes('aria-label'))
-    expect(labels.slice(0, 4)).toEqual(['Ask', 'Find', 'Research', 'Citation graph'])
-    expect(wrapper.get('[data-ribbon-item="graph"]').attributes('aria-current')).toBe('page')
-    expect(wrapper.get('[data-ribbon-item="research"]').attributes('aria-current')).toBeUndefined()
+    expect(labels.slice(0, 4)).toEqual(['Ask', 'Find', 'Research', 'Reports'])
+    expect(wrapper.findAll('.ribbon-divider').length).toBeGreaterThanOrEqual(4)
+    expect(wrapper.get('[data-ribbon-item="research"]').attributes('aria-current')).toBeUndefined()   // map open
+    expect(wrapper.find('.has-label').exists()).toBe(false)
     await wrapper.get('[data-ribbon-item="mcp"]').trigger('click')
     expect(wrapper.emitted('action')[0][0].tab).toBe('mcp')
+    wrapper.unmount()
+  })
+
+  it('shows names beside the icons when asked', () => {
+    const wrapper = mountRibbon({ layout: { ...defaultLayout(), labels: true }, researchView: 'library' })
+    expect(wrapper.get('[data-ribbon-item="research"]').text()).toBe('Research')
+    expect(wrapper.get('[data-ribbon-item="research"]').attributes('aria-current')).toBe('page')
+    expect(wrapper.get('[data-ribbon-item="research"]').attributes('data-tip')).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -68,6 +77,24 @@ describe('Sources tree', () => {
     await wrapper.findAll('[role="menuitem"]').find(i => i.text() === 'Select only this').trigger('click')
     expect(wrapper.emitted('select-only')[0]).toEqual([['3']])
     wrapper.unmount()
+  })
+
+  it('keeps the governance markers a regulated team relies on', async () => {
+    const flagged = buildTree([
+      { document_id: 'g1', filename: 'held.pdf', source_type: 'upload', policy_status: 'quarantined' },
+      { document_id: 'g2', filename: 'secret.pdf', source_type: 'upload', sensitivity_effective: 'restricted', uploaded_by: 'ada@lab.org' },
+      { document_id: 'g3', filename: 'odd.pdf', source_type: 'upload', injection_warnings: { 2: {} } },
+    ])
+    const wrapper = mount(SourcesTree, { props: { tree: flagged, collapsed: new Set(), selectedIds: [] } })
+    const rows = wrapper.findAll('[role="treeitem"]')
+    expect(rows[0].text()).toContain('held')
+    expect(rows[2].text()).toContain('restricted')
+    expect(rows[2].find('[title*="Added by ada@lab.org"]').exists()).toBe(true)
+    await rows[0].findAll('button').find(b => b.text() === 'held').trigger('click')
+    expect(wrapper.emitted('policy')[0][0].document_id).toBe('g1')
+    await rows[1].get('[aria-label^="Prompt-injection note"]').trigger('click')
+    expect(wrapper.emitted('injection')[0][0].document_id).toBe('g3')
+    expect(wrapper.emitted('toggle')).toBeUndefined()          // a marker click is not a selection
   })
 
   it('hides a collapsed folder and moves with the keyboard', async () => {

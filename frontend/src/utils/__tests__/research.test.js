@@ -49,6 +49,11 @@ describe('citation graph model', () => {
     expect(groupOf(graph.nodes[1], 'type')).toBe('book')
     expect(groupOf(graph.nodes[3], 'type')).toBe('cited')
     expect(groupOf({ type: 'external', in_collection: true }, 'type')).toBe('outside')
+    const verdicts = { a: { verdict: 'relevant' } }
+    expect(groupOf(graph.nodes[0], 'relevance', verdicts)).toBe('relevant')
+    expect(groupOf(graph.nodes[2], 'relevance', verdicts)).toBe('unscreened')
+    expect(groupOf(graph.nodes[3], 'relevance', verdicts)).toBe('cited')
+    expect(sanitize({ colorBy: 'relevance' }).colorBy).toBe('relevance')
     const range = yearRange(graph.nodes)
     expect(range).toEqual({ min: 2014, max: 2021 })
     expect(yearStrength(2014, range)).toBeCloseTo(0.3)

@@ -1317,7 +1317,8 @@ import StudioSidebar from './components/StudioSidebar.vue'
 import WorkspaceNav from './components/WorkspaceNav.vue'
 import AppRibbon from './components/AppRibbon.vue'
 import RibbonCustomizeDialog from './components/RibbonCustomizeDialog.vue'
-import { loadLayout, saveLayout, ribbonItems, visibleItems } from './utils/ribbon.js'
+import { ribbonItems, visibleItems } from './utils/ribbon.js'
+import { useLayoutStore } from './stores/layoutStore'
 import ReviewBell from './components/ReviewBell.vue'
 import ChangesBell from './components/ChangesBell.vue'
 import ModelPicker from './components/ModelPicker.vue'
@@ -1930,15 +1931,16 @@ const showShortcuts = ref(false)
 const showAbout = ref(false)
 
 // ── Ribbon ──
-const ribbonLayout = ref(loadLayout())
-const showRibbonCustomize = ref(false)
+const layoutStore = useLayoutStore()
+const ribbonLayout = computed(() => layoutStore.ribbon)
+const showRibbonCustomize = computed({
+  get: () => layoutStore.customizeOpen,
+  set: (v) => { layoutStore.customizeOpen = v },
+})
 const ribbonAccess = computed(() => ({ admin: userStore.adminConsole, chat: chatTabEnabled.value }))
 const ribbonAll = computed(() => ribbonItems(ribbonLayout.value, ribbonAccess.value))
 const ribbonVisible = computed(() => visibleItems(ribbonLayout.value, ribbonAccess.value))
-function setRibbonLayout(layout) {
-  ribbonLayout.value = layout
-  saveLayout(layout)
-}
+const setRibbonLayout = (layout) => layoutStore.setRibbon(layout)
 function runRibbonItem(item) {
   if (item.tab) {
     if (item.view) ui.researchView = item.view

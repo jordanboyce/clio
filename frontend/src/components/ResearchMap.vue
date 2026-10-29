@@ -60,19 +60,30 @@
                   <input v-model="settings.search" type="search" class="grow" placeholder="Search title, author, year" aria-label="Search the graph" @keydown.enter="centerOnMatch" />
                 </label>
                 <p v-if="settings.search.trim()" class="text-base-content/50 -mt-1">{{ matchIds.size }} match{{ matchIds.size === 1 ? '' : 'es' }} · Enter to jump</p>
-                <label class="setting-row"><span>Cited works</span><input v-model="settings.showCited" type="checkbox" class="toggle toggle-xs" /></label>
+                <label class="setting-row" title="Works your sources cite that are not in this collection"><span>Cited works you don't have</span><input v-model="settings.showCited" type="checkbox" class="toggle toggle-xs" /></label>
                 <div v-if="settings.showCited" class="setting-slider">
                   <span>Cited by at least <b class="tabular-nums">{{ settings.minCitations }}</b></span>
                   <input v-model.number="settings.minCitations" type="range" class="range range-xs" v-bind="SLIDERS.minCitations" aria-label="Cited by at least" />
                 </div>
-                <label class="setting-row"><span>Orphans</span><input v-model="settings.showOrphans" type="checkbox" class="toggle toggle-xs" /></label>
+                <label class="setting-row" title="Sources that cite nothing here and are cited by nothing here"><span>Unconnected sources</span><input v-model="settings.showOrphans" type="checkbox" class="toggle toggle-xs" /></label>
               </template>
 
               <template v-else-if="section.id === 'groups'">
                 <div class="join w-full">
                   <button v-for="opt in colorOptions" :key="opt.id" class="btn btn-xs join-item flex-1" :class="settings.colorBy === opt.id ? 'btn-active' : ''" @click="settings.colorBy = opt.id">{{ opt.label }}</button>
                 </div>
-                <ul v-if="settings.colorBy === 'type'" class="space-y-1">
+                <template v-if="settings.colorBy === 'relevance'">
+                  <select v-model="relevanceQuestion" class="select select-bordered select-xs w-full" aria-label="Question the sources were screened against">
+                    <option v-if="!questions.length" value="">No screening yet — use Screen in the Library</option>
+                    <option v-for="q in questions" :key="q" :value="q">{{ q }}</option>
+                  </select>
+                  <ul class="space-y-1">
+                    <li v-for="item in RELEVANCE_LEGEND" :key="item.group" class="flex items-center gap-2 text-base-content/70">
+                      <span class="legend-dot" :class="`legend-${item.group}`" aria-hidden="true" />{{ item.label }}
+                    </li>
+                  </ul>
+                </template>
+                <ul v-else-if="settings.colorBy === 'type'" class="space-y-1">
                   <li v-for="item in TYPE_LEGEND" :key="item.group" class="flex items-center gap-2 text-base-content/70">
                     <span class="legend-dot" :class="`legend-${item.group}`" aria-hidden="true" />{{ item.label }}
                   </li>
@@ -162,7 +173,7 @@ import ForceGraph from 'force-graph'
 import { forceCollide, forceX, forceY } from 'd3-force-3d'
 import { ChevronRight, Crosshair, Maximize, Minus, Plus, RotateCcw, Search, Settings2, X } from 'lucide-vue-next'
 import {
-  DEFAULT_SETTINGS, SLIDERS, TYPE_LEGEND, groupOf, labelAlpha, loadSettings, matchesQuery, neighborIds,
+  DEFAULT_SETTINGS, RELEVANCE_LEGEND, SLIDERS, TYPE_LEGEND, groupOf, labelAlpha, loadSettings, matchesQuery, neighborIds,
   nodeRadius, saveSettings, shortLabel, visibleGraph, yearRange, yearStrength,
 } from '../utils/citationGraph.js'
 import { researchApi, authorsShort, abstractLabel } from '../utils/researchApi.js'
@@ -174,6 +185,8 @@ const props = defineProps({
   documentIds: { type: Array, default: null },
   canDownload: { type: Boolean, default: false },
   refreshKey: { type: Number, default: 0 },
+  // The Library's current question, the default for color by relevance.
+  question: { type: String, default: '' },
 })
 const emit = defineEmits(['open'])
 
@@ -182,14 +195,16 @@ const jobsStore = useBackgroundJobsStore()
 
 const sections = [
   { id: 'filters', label: 'Filters' },
-  { id: 'groups', label: 'Groups' },
+  { id: 'groups', label: 'Color' },
   { id: 'display', label: 'Display' },
-  { id: 'forces', label: 'Forces' },
+  { id: 'forces', label: 'Layout' },
 ]
 const open = reactive({ filters: true, groups: false, display: false, forces: false })
-const colorOptions = [{ id: 'type', label: 'Type' }, { id: 'year', label: 'Year' }, { id: 'none', label: 'None' }]
+const colorOptions = [
+  { id: 'type', label: 'Type' }, { id: 'relevance', label: 'Relevance' }, { id: 'year', label: 'Year' }, { id: 'none', label: 'None' },
+]
 const sliderLabels = {
-  textFade: 'Text fade threshold', nodeSize: 'Node size', linkThickness: 'Link thickness',
+  textFade: 'Titles appear when zoomed in to', nodeSize: 'Dot size', linkThickness: 'Line thickness',
   centerForce: 'Center force', repelForce: 'Repel force', linkForce: 'Link force', linkDistance: 'Link distance',
 }
 
@@ -217,6 +232,27 @@ async function load() {
 watch(() => [props.collectionId, props.refreshKey, settings.showCited, settings.minCitations,
   (props.documentIds || []).join(',')], load, { immediate: true })
 
+// Screening verdicts for one question, from Research → Screen.
+const questions = ref([])
+const relevanceQuestion = ref('')
+const verdicts = shallowRef({})
+async function loadVerdicts() {
+  try {
+    const data = await researchApi.readingList(props.collectionId, relevanceQuestion.value || null)
+    questions.value = data.questions || []
+    if (!relevanceQuestion.value && questions.value.length) {
+      relevanceQuestion.value = questions.value.includes(props.question) ? props.question : questions.value[0]
+      return   // the watcher below loads that question's verdicts
+    }
+    verdicts.value = relevanceQuestion.value
+      ? Object.fromEntries((data.items || []).map(i => [i.document_id, i])) : {}
+  } catch { verdicts.value = {} }
+}
+watch(() => [props.collectionId, props.refreshKey, relevanceQuestion.value, settings.colorBy], () => {
+  if (settings.colorBy === 'relevance') loadVerdicts()
+}, { immediate: true })
+watch(verdicts, () => redraw())
+
 const nodeById = computed(() => Object.fromEntries((graph.value?.nodes || []).map(n => [n.id, n])))
 const selected = computed(() => nodeById.value[selectedId.value] || null)
 const shown = computed(() => visibleGraph(graph.value, settings, localOf.value))
@@ -230,13 +266,13 @@ watch(selectedId, (id) => { if (!id && localOf.value) localOf.value = null })
 
 // ── colours, read from the active theme ─────────────────────────────────
 
-const colors = reactive({ content: '#888', primary: '#55f', secondary: '#c4c', info: '#3ad', base: '#fff', warning: '#fb0' })
+const colors = reactive({ content: '#888', primary: '#55f', secondary: '#c4c', info: '#3ad', base: '#fff', warning: '#fb0', success: '#2b6' })
 
 function readColors() {
   const style = getComputedStyle(frame.value || document.documentElement)
   for (const [key, cssVar] of Object.entries({
     content: '--color-base-content', primary: '--color-primary', secondary: '--color-secondary',
-    info: '--color-info', base: '--color-base-100', warning: '--color-warning',
+    info: '--color-info', base: '--color-base-100', warning: '--color-warning', success: '--color-success',
   })) {
     const value = style.getPropertyValue(cssVar).trim()
     if (value) colors[key] = value
@@ -254,7 +290,12 @@ function withAlpha(color, alpha) {
 }
 
 function fillFor(node) {
-  const group = groupOf(node, settings.colorBy)
+  const group = groupOf(node, settings.colorBy, verdicts.value)
+  if (group === 'relevant') return colors.success
+  if (group === 'partial') return colors.info
+  if (group === 'not_established') return colors.warning
+  if (group === 'not_relevant') return withAlpha(colors.content, 0.25)
+  if (group === 'unscreened') return withAlpha(colors.content, 0.5)
   if (group === 'year') return withAlpha(colors.primary, yearStrength(node.year, years.value))
   if (group === 'book') return colors.secondary
   if (group === 'outside') return colors.info
@@ -483,5 +524,10 @@ async function downloadExternal() {
 .legend-book { background: var(--color-secondary); }
 .legend-outside { background: var(--color-info); }
 .legend-cited { border: 1.5px solid color-mix(in oklch, var(--color-base-content) 55%, transparent); }
+.legend-relevant { background: var(--color-success); }
+.legend-partial { background: var(--color-info); }
+.legend-not_established { background: var(--color-warning); }
+.legend-not_relevant { background: color-mix(in oklch, var(--color-base-content) 25%, transparent); }
+.legend-unscreened { background: color-mix(in oklch, var(--color-base-content) 50%, transparent); }
 .legend-years { background: linear-gradient(to right, color-mix(in oklch, var(--color-primary) 30%, transparent), var(--color-primary)); }
 </style>

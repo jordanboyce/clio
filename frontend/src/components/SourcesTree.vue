@@ -8,7 +8,7 @@
         'is-selected': row.kind === 'file' && selected.has(row.doc.document_id),
         'is-focused': focusIndex === index,
       }"
-      :style="{ paddingLeft: `${0.35 + row.depth * 1}rem` }"
+      :style="{ paddingLeft: `${0.35 + row.depth * INDENT}rem` }"
       role="treeitem"
       :aria-level="row.depth + 1"
       :aria-expanded="row.kind === 'folder' ? row.open : undefined"
@@ -20,7 +20,7 @@
       @contextmenu.prevent="openMenu($event, row)"
     >
       <!-- Indent guides, as in Obsidian and VS Code -->
-      <span v-for="d in row.depth" :key="d" class="tree-guide" :style="{ left: `${0.35 + (d - 1) * 1 + 0.45}rem` }" aria-hidden="true" />
+      <span v-for="d in row.depth" :key="d" class="tree-guide" :style="{ left: `${0.35 + (d - 1) * INDENT + 0.42}rem` }" aria-hidden="true" />
 
       <template v-if="row.kind === 'folder'">
         <ChevronRight :size="13" class="tree-chevron" :class="row.open ? 'rotate-90' : ''" aria-hidden="true" />
@@ -51,8 +51,32 @@
           @change="$emit('toggle', row.doc.document_id)"
         />
         <component :is="fileInfo(row.doc).icon" :size="14" class="flex-shrink-0" :class="iconTone(row.doc)" aria-hidden="true" />
-        <span class="truncate flex-1" :title="row.doc.source_path || row.doc.filename">{{ stem(row.doc.tree_label || row.doc.filename) }}</span>
-        <span v-if="badge(row.doc)" class="tree-flag" :class="badge(row.doc).cls" :title="badge(row.doc).title">{{ badge(row.doc).text }}</span>
+        <span class="truncate flex-1" :title="tooltip(row.doc)">{{ stem(row.doc.tree_label || row.doc.filename) }}</span>
+        <!-- What a reviewer or a regulated team needs to see on every row:
+             a held or flagged document, a possible prompt injection, a
+             sensitivity label, a newer version. -->
+        <button
+          v-if="policyBadge(row.doc.policy_status)"
+          class="tree-flag"
+          :class="POLICY_TONE[row.doc.policy_status] || 'text-base-content/55'"
+          :title="policyBadge(row.doc.policy_status).title + ' Click for details.'"
+          @click.stop="$emit('policy', row.doc)"
+        >{{ policyBadge(row.doc.policy_status).text }}</button>
+        <button
+          v-if="injectionBadge(row.doc)"
+          class="tree-flag inline-flex items-center"
+          :class="row.doc.injection_review ? 'text-base-content/40' : 'text-warning'"
+          :title="injectionBadge(row.doc).title"
+          :aria-label="`Prompt-injection note for ${row.doc.filename}`"
+          @click.stop="$emit('injection', row.doc)"
+        ><ShieldAlert :size="11" /></button>
+        <span
+          v-if="showLabel(row.doc.sensitivity_effective)"
+          class="tree-flag inline-flex items-center gap-0.5"
+          :class="LABEL_TONE[row.doc.sensitivity_effective] || 'text-base-content/55'"
+          :title="`Sensitivity: ${row.doc.sensitivity_effective}${row.doc.sensitivity ? ' (set on this document)' : ' (collection default)'}`"
+        ><Lock :size="9" aria-hidden="true" />{{ row.doc.sensitivity_effective }}</span>
+        <span v-if="row.doc.superseded_by" class="tree-flag text-base-content/45" title="Replaced by a newer version">replaced</span>
         <span class="tree-ext">{{ fileInfo(row.doc).label }}</span>
         <button
           class="tree-more"
@@ -93,9 +117,10 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   CheckSquare, ChevronRight, ChevronsDownUp, ExternalLink, FileSearch, Flag, Focus, Folder, FolderGit2, FolderOpen,
-  Globe, MoreHorizontal, Replace, Trash2,
+  Globe, Lock, MoreHorizontal, Replace, ShieldAlert, Trash2,
 } from 'lucide-vue-next'
 import { describeFile } from '../utils/fileTypes'
+import { injectionBadge, policyBadge, showLabel } from '../utils/governance'
 import { folderDocIds, folderSelection, visibleRows } from '../utils/sourceTree.js'
 
 const props = defineProps({
@@ -104,7 +129,12 @@ const props = defineProps({
   selectedIds: { type: Array, default: () => [] },
   canEdit: { type: Boolean, default: false },
 })
-const emit = defineEmits(['toggle', 'select', 'select-only', 'toggle-folder', 'collapse-others', 'open', 'chunks', 'replace', 'report', 'delete'])
+const emit = defineEmits(['toggle', 'select', 'select-only', 'toggle-folder', 'collapse-others', 'open', 'chunks', 'replace', 'report', 'delete', 'injection', 'policy'])
+
+// Tighter than a document list: a repository runs eight folders deep.
+const INDENT = 0.8
+const POLICY_TONE = { quarantined: 'text-error', flagged: 'text-warning', rejected: 'text-error' }
+const LABEL_TONE = { confidential: 'text-warning', restricted: 'text-error', public: 'text-success' }
 
 const selected = computed(() => new Set(props.selectedIds))
 const selectionMode = computed(() => props.selectedIds.length > 0)
@@ -125,12 +155,11 @@ function folderIcon(row) {
   if (row.node.group === 'links' || row.node.group === 'site') return Globe
   return row.open ? FolderOpen : Folder
 }
-function badge(doc) {
-  if (doc.policy_status && doc.policy_status !== 'clear' && doc.policy_status !== 'approved') {
-    return { text: doc.policy_status, cls: 'text-warning', title: `Content policy: ${doc.policy_status}` }
-  }
-  if (doc.superseded_by) return { text: 'replaced', cls: 'text-base-content/45', title: 'Replaced by a newer version' }
-  return null
+function tooltip(doc) {
+  const lines = [doc.source_path || doc.filename]
+  if (doc.tree_label && doc.tree_label !== doc.filename) lines.push(`Stored as ${doc.filename}`)
+  if (doc.uploaded_by) lines.push(`Added by ${doc.uploaded_by}`)
+  return lines.join('\n')
 }
 
 function onRowClick(row, index, event) {

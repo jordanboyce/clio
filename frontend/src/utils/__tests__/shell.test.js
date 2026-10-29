@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
   RIBBON_ITEMS, defaultLayout, isActive, moveItem, normalizeLayout, placeBefore, ribbonItems, toggleHidden,
-  visibleItems,
+  visibleItems, withDividers,
 } from '../ribbon.js'
 import { buildTree, folderDocIds, folderSelection, sortFiles, visibleRows } from '../sourceTree.js'
 
 describe('ribbon layout', () => {
-  it('shows the defaults and hides admin items from non-admins', () => {
+  it('shows a short default set, grouped, and hides admin items from non-admins', () => {
     const ids = visibleItems(defaultLayout()).map(i => i.id)
-    expect(ids.slice(0, 4)).toEqual(['chat', 'search', 'research', 'graph'])
+    expect(ids).toEqual(['chat', 'search', 'research', 'generate', 'expertise', 'mcp', 'collections', 'add-sources'])
     expect(ids).not.toContain('admin')
-    expect(ids).not.toContain('reviews')          // hidden by default
+    expect(ids).not.toContain('graph')            // off by default, reachable in Research
+    const dividers = withDividers(visibleItems(defaultLayout())).filter(r => r.divider).map(r => r.item.id)
+    expect(dividers).toEqual(['research', 'mcp', 'add-sources'])
     expect(visibleItems(defaultLayout(), { admin: true }).map(i => i.id)).toContain('admin')
     expect(visibleItems(defaultLayout(), { chat: false }).map(i => i.id)).not.toContain('chat')
   })
@@ -31,6 +33,8 @@ describe('ribbon layout', () => {
     expect(fixed.hidden).toContain('chat')
     expect(fixed.hidden).toContain('reviews')    // new since saved: default visibility
     expect(normalizeLayout('garbage')).toEqual(defaultLayout())
+    expect(normalizeLayout({ ...defaultLayout(), labels: 1 }).labels).toBe(true)
+    expect(moveItem({ ...defaultLayout(), labels: true }, 'mcp', 1).labels).toBe(true)
   })
 
   it('knows which item is the current place', () => {

@@ -1,11 +1,12 @@
 // The citation graph's model: what is drawn, and the settings that shape it.
 //
-// The view (ResearchMap.vue) follows Obsidian's graph: small nodes sized by
-// how connected they are, a force simulation instead of a fixed layout,
-// labels that fade in as you zoom, hover to light a node's neighbourhood,
-// and a settings drawer in four sections — Filters, Groups, Display, Forces —
-// plus a local graph around one source. Everything here is plain data and
-// functions so it can be tested without a canvas.
+// The view (ResearchMap.vue) borrows the reading habits of graph tools such as
+// Obsidian — dots sized by how connected they are, a live force layout,
+// titles that fade in as you zoom, hover to light a source's neighbourhood —
+// and adds what a research library needs: works cited but not held, and
+// colour by the screening verdict for a question, so the map shows what is
+// worth reading next. Everything here is plain data and functions so it can
+// be tested without a canvas.
 
 export const DEFAULT_SETTINGS = Object.freeze({
   // Filters
@@ -14,7 +15,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   minCitations: 2,
   showOrphans: true,      // sources with no citation either way
   // Groups
-  colorBy: 'type',        // type | year | none
+  colorBy: 'type',        // type | year | relevance | none
   // Display
   arrows: false,
   textFade: 1.6,          // zoom level at which labels are fully visible
@@ -75,7 +76,7 @@ export function sanitize(settings) {
     } else if (typeof def === 'boolean') {
       out[key] = Boolean(value)
     } else if (key === 'colorBy') {
-      out[key] = ['type', 'year', 'none'].includes(value) ? value : def
+      out[key] = ['type', 'year', 'relevance', 'none'].includes(value) ? value : def
     } else {
       out[key] = String(value)
     }
@@ -158,12 +159,25 @@ export function matchesQuery(node, query) {
 
 // ── groups ──────────────────────────────────────────────────────────────
 
-export function groupOf(node, colorBy) {
+export function groupOf(node, colorBy, verdicts = {}) {
   if (colorBy === 'none') return 'node'
   if (colorBy === 'year') return 'year'
+  if (colorBy === 'relevance') {
+    if (node.type === 'external') return 'cited'
+    return verdicts[node.id]?.verdict || 'unscreened'
+  }
   if (node.type === 'external') return node.in_collection ? 'outside' : 'cited'
   return node.kind === 'book' ? 'book' : 'article'
 }
+
+// The screening verdicts of Research → Screen, for one question.
+export const RELEVANCE_LEGEND = [
+  { group: 'relevant', label: 'Worth reading' },
+  { group: 'partial', label: 'Partly relevant' },
+  { group: 'not_established', label: 'Can’t tell from the text' },
+  { group: 'not_relevant', label: 'Not about this' },
+  { group: 'unscreened', label: 'Not screened yet' },
+]
 
 export const TYPE_LEGEND = [
   { group: 'article', label: 'Papers and documents' },
