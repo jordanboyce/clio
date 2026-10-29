@@ -84,7 +84,7 @@ pip install -r requirements-postgres.txt  # PostgreSQL for the app database
    passages and needs no model at all.
 3. **Connect** — give the same knowledge to the AI client you already use
    (next section).
-4. **Research** (under *More*) — for papers and books: screen them against a
+4. **Research** — for papers and books: screen them against a
    question, rename downloads descriptively, follow their references, map who
    cites whom, and prepare reviews overnight ([guide](docs/RESEARCH.md)).
 
@@ -207,16 +207,16 @@ goes through the app's access checks.
 | **Research a multi-part question** | Ask, MCP | `research_documents` runs focused subqueries, reports coverage gaps and weak evidence, and spans collections. [Guide](docs/AGENTIC_RESEARCH.md). |
 | **Get a finished answer in one agent call** | MCP | `ask_documents` returns the grounded, cited answer the in-app chat would give, when the deployment runs a model of its own (`AI_PROVIDER`). For agents whose own model is small or busy, or automations that just need the answer. |
 | **Query spreadsheets, not just prose** | Ask, Find, MCP | CSV/XLSX become typed tables; counts, sums, filters, and rankings run as SQL, never as guessed passage search. Find returns the rows that contain every word you search for (a customer, an invoice number, a SKU), with no model needed. |
-| **Triage, organize and review papers and books** | Research (under More) | Screens sources against your question with verdicts backed by verified quotes, renames downloads to *year – authors – title*, downloads what a source cites, maps citations between your sources, and prepares reviews overnight; works on the sources you select. Metadata comes from the source or a catalogue (OpenAlex, Crossref, arXiv, Open Library), never a model. [Guide](docs/RESEARCH.md). |
-| **Turn a collection into a document** | Reports (under More) | Source-grounded briefings, summaries, and reports with citations to review before sharing. |
-| **Teach it your house style or domain** | Saved instructions (under More) | Expertise packs add instructions and terminology per collection, versioned alongside the corpus. |
+| **Triage, organize and review papers and books** | Research | Screens sources against your question with verdicts backed by verified quotes, renames downloads to *year – authors – title*, downloads what a source cites, maps citations between your sources, and prepares reviews overnight; works on the sources you select. Metadata comes from the source or a catalogue (OpenAlex, Crossref, arXiv, Open Library), never a model. [Guide](docs/RESEARCH.md). |
+| **Turn a collection into a document** | Reports | Source-grounded briefings, summaries, and reports with citations to review before sharing. |
+| **Teach it your house style or domain** | Saved instructions | Expertise packs add instructions and terminology per collection, versioned alongside the corpus. |
 | **Give your AI assistant a private knowledge source** | Connect | Claude Desktop, claude.ai, ChatGPT, Grok and Claude Code sign in through your identity provider; Codex, VS Code, Cursor, Windsurf, AnythingLLM, Hermes Agent, Claude Code and any MCP SDK can also use a personal token. Agents can write notes and summaries back when a token allows it. |
 | **Index scanned pages, photos, audio, code** | Add sources | OCR (local Tesseract/Docling or a vision model), Whisper transcription, code-aware chunking, image description. |
 | **Index a whole source tree** | Add sources | Sixty-plus languages and config formats chunk by symbol (functions, classes, SQL objects, Terraform resources, shell functions, Vue/Svelte scripts), with `Makefile`, `Dockerfile` and friends recognised by name. Parsing is lenient: syntax errors, odd encodings and minified files still index; binaries, lockfiles, build output and vendored dependencies are skipped. Every passage keeps its symbol name and line range. |
 | **Keep a folder or repository in sync** | Add sources | Point Clio at a folder or a git repository once; every later sync hashes the tree, skips unchanged files, re-indexes changed ones, and can prune documents whose file was deleted. *Watch* re-syncs on an interval and every real change lands in the Updates feed (and an optional signed webhook). |
 | **Share an indexed collection with another Clio** | Collections | *Export* writes one `.clio.zip` (extracted text, pages, tables, vectors, and which embedding model made them); *Import* previews it and reuses the vectors when the model matches. |
-| **Move fast with the keyboard** | Everywhere | `⌘K` / `Ctrl+K` opens a command palette for every destination, collection, recent chat, theme and action; `?` shows the shortcuts. |
-| **Keep a shared corpus accountable** | Administration (under More) | Attribution on every document, an append-only audit trail (including agent reads if enabled), content-policy scanning with flag/quarantine/reject, sensitivity labels, blocklists, an acceptable-use gate. |
+| **Work the way you like** | Everywhere | An Obsidian-style ribbon down the left edge holds every destination and action — right-click it to hide, show or reorder items, or drag the icons. The Sources panel is a folder tree (synced folders keep their structure; tick a folder to select everything in it). `⌘K` / `Ctrl+K` opens a command palette for every destination, collection, recent chat, theme and action; `?` shows the shortcuts. |
+| **Keep a shared corpus accountable** | Administration | Attribution on every document, an append-only audit trail (including agent reads if enabled), content-policy scanning with flag/quarantine/reject, sensitivity labels, blocklists, an acceptable-use gate. |
 
 **Privacy.** Clio is self-hosted and open source (MIT). Documents and indexes
 live in the data directory on your machine; local embeddings, keyword search

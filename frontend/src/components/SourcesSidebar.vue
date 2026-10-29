@@ -4,9 +4,28 @@
     <!-- Control rail. Bare icon buttons, no heading bar: the panel names
          itself through the section labels below, the way every other
          document sidebar does. -->
-    <div class="side-rail border-b border-base-300 flex-shrink-0 bg-base-100" role="region" aria-label="Sources">
-      <!-- No collapse button here: the header toggle sits directly above this
-           rail at every width, and a second copy of it read as duplication. -->
+    <div class="side-rail border-b border-base-300 flex-shrink-0 bg-base-100" role="toolbar" aria-label="Sources">
+      <!-- The file explorer's toolbar, as in Obsidian: add, filter, sort,
+           fold, and how to show the list. -->
+      <button
+        v-if="collectionStore.canEditCurrent"
+        class="side-icon-btn text-base-content/55 hover:text-base-content"
+        :class="{ 'is-active': addSectionOpen }"
+        @click="toggleAddSection"
+        :title="`Add sources  (${modKeyLabel} U)`"
+        aria-label="Add sources"
+      >
+        <FilePlus :size="16" />
+      </button>
+      <button
+        v-if="collectionStore.canEditCurrent && webLinksAvailable"
+        class="side-icon-btn text-base-content/55 hover:text-base-content"
+        @click="openAddLink"
+        title="Add a link"
+        aria-label="Add a link"
+      >
+        <Link :size="15" />
+      </button>
       <button
         class="side-icon-btn text-base-content/55 hover:text-base-content"
         :class="{ 'is-active': filterOpen || docSearch }"
@@ -15,17 +34,43 @@
         title="Filter sources  ( / )"
         aria-label="Filter sources"
       >
-        <Search :size="16" />
+        <Search :size="15" />
+      </button>
+      <div class="dropdown dropdown-bottom">
+        <button tabindex="0" class="side-icon-btn text-base-content/55 hover:text-base-content" title="Sort" aria-label="Sort sources" aria-haspopup="menu">
+          <ArrowUpDown :size="15" />
+        </button>
+        <ul tabindex="0" class="dropdown-content menu menu-sm z-[70] w-44 rounded-box border border-base-300 bg-base-100 p-1.5 shadow">
+          <li><button :class="{ 'menu-active': treeSort === 'name' }" @click="setTreeSort('name')">File name (A to Z)</button></li>
+          <li><button :class="{ 'menu-active': treeSort === 'recent' }" @click="setTreeSort('recent')">Recently added</button></li>
+        </ul>
+      </div>
+      <button
+        v-if="viewMode === 'tree'"
+        class="side-icon-btn text-base-content/55 hover:text-base-content"
+        @click="toggleCollapseAll"
+        :title="allCollapsed ? 'Expand all folders' : 'Collapse all folders'"
+        :aria-label="allCollapsed ? 'Expand all folders' : 'Collapse all folders'"
+      >
+        <component :is="allCollapsed ? ChevronsUpDown : ChevronsDownUp" :size="15" />
       </button>
       <button
         class="side-icon-btn text-base-content/55 hover:text-base-content"
-        @click="loadDocuments"
+        @click="setViewMode(viewMode === 'tree' ? 'list' : 'tree')"
+        :title="viewMode === 'tree' ? 'Show as a detailed list' : 'Show as folders'"
+        :aria-label="viewMode === 'tree' ? 'Show as a detailed list' : 'Show as folders'"
+      >
+        <component :is="viewMode === 'tree' ? Rows3 : FolderTree" :size="15" />
+      </button>
+      <div class="flex-1"></div>
+      <button
+        class="side-icon-btn text-base-content/55 hover:text-base-content"
+        @click="refreshAll"
         title="Refresh sources"
         aria-label="Refresh sources list"
       >
-        <RefreshCw :size="15" :class="loading ? 'animate-spin' : ''" />
+        <RefreshCw :size="14" :class="loading ? 'animate-spin' : ''" />
       </button>
-      <div class="flex-1"></div>
       <span
         v-if="docTotal > 0"
         class="side-kbd tabular-nums text-base-content/40 pr-1.5"
@@ -104,7 +149,7 @@
             class="side-row font-medium text-base-content/80 hover:text-base-content"
             :class="{ 'is-active': addSectionOpen, 'animate-pulse': ui.highlightAddSources }"
             :aria-expanded="addSectionOpen"
-            @click="addSectionOpen = !addSectionOpen; ui.highlightAddSources = false"
+            @click="toggleAddSection"
           >
             <Plus :size="15" class="flex-shrink-0" aria-hidden="true" />
             <span class="flex-1">Add sources</span>
@@ -612,6 +657,32 @@
         <p v-else class="text-xs text-base-content/50">No sources yet. Use Add Sources above to get started.</p>
       </div>
 
+      <!-- Folder tree (Obsidian / VS Code style) -->
+      <div v-else-if="viewMode === 'tree'">
+        <SourcesTree
+          :tree="sourceTree"
+          :collapsed="collapsedFolders"
+          :selected-ids="selectedDocuments"
+          :can-edit="collectionStore.canEditCurrent"
+          @toggle="toggleSelect"
+          @select="selectMany"
+          @select-only="(ids) => (selectedDocuments = ids)"
+          @toggle-folder="toggleFolder"
+          @collapse-others="collapseOthers"
+          @open="openOriginal"
+          @chunks="openChunks"
+          @replace="(doc) => (supersedeDoc = doc)"
+          @report="openReport"
+          @delete="confirmDelete"
+        />
+        <div v-if="documents.length < docTotal" class="p-2 text-center">
+          <button class="btn btn-xs btn-ghost" @click="loadMoreDocuments" :disabled="loadingMore">
+            <span v-if="loadingMore" class="loading loading-spinner loading-xs"></span>
+            Load more ({{ documents.length.toLocaleString() }} of {{ docTotal.toLocaleString() }})
+          </button>
+        </div>
+      </div>
+
       <!-- Document list -->
       <div v-else class="px-1.5 pb-2">
         <div
@@ -1063,8 +1134,10 @@ import http from '../utils/http'
 import EmbeddingMismatchNotice from './EmbeddingMismatchNotice.vue'
 import SupersedeDialog from './SupersedeDialog.vue'
 import SupersedeSuggestions from './SupersedeSuggestions.vue'
+import SourcesTree from './SourcesTree.vue'
+import { buildTree, folderPaths, sortFiles } from '../utils/sourceTree.js'
 import { replacedBadge } from '../utils/supersede'
-import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync, GitBranch, EyeOff, Replace } from 'lucide-vue-next'
+import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync, GitBranch, EyeOff, Replace, FilePlus, ArrowUpDown, ChevronsDownUp, ChevronsUpDown, Rows3, FolderTree } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useUiStore } from '../stores/uiStore'
 import { useUserStore } from '../stores/userStore'
@@ -1863,6 +1936,60 @@ const toggleSelectAll = () => {
   }
 }
 
+// ── Tree view ────────────────────────────────────────────────────────────
+// Folders come from where sources came from (synced folders keep their
+// sub-folders, links group by site, uploads sit at the top). How the panel
+// shows them, the sort and which folders are folded are per-browser
+// preferences; the folding is kept per collection.
+const readPref = (key, fallback) => { try { return localStorage.getItem(key) ?? fallback } catch { return fallback } }
+const writePref = (key, value) => { try { localStorage.setItem(key, value) } catch { /* a preference */ } }
+const viewMode = ref(readPref('clio_sources_view', 'tree') === 'list' ? 'list' : 'tree')
+const treeSort = ref(readPref('clio_sources_sort', 'name') === 'recent' ? 'recent' : 'name')
+const setViewMode = (mode) => { viewMode.value = mode; writePref('clio_sources_view', mode) }
+const setTreeSort = (by) => {
+  treeSort.value = by
+  writePref('clio_sources_sort', by)
+  document.activeElement?.blur()
+}
+const sourceTree = computed(() => sortFiles(buildTree(documents.value, syncFolders.value), treeSort.value))
+const collapseKey = () => `clio_tree_collapsed:${collectionStore.currentCollectionId}`
+const loadCollapsed = () => {
+  try { return new Set(JSON.parse(localStorage.getItem(collapseKey()) || '[]')) } catch { return new Set() }
+}
+const collapsedFolders = ref(loadCollapsed())
+const saveCollapsed = () => writePref(collapseKey(), JSON.stringify([...collapsedFolders.value]))
+const toggleFolder = (path) => {
+  const next = new Set(collapsedFolders.value)
+  next.has(path) ? next.delete(path) : next.add(path)
+  collapsedFolders.value = next
+  saveCollapsed()
+}
+const allFolderPaths = computed(() => folderPaths(sourceTree.value))
+const allCollapsed = computed(() => allFolderPaths.value.length > 0 &&
+  allFolderPaths.value.every(p => collapsedFolders.value.has(p)))
+const toggleCollapseAll = () => {
+  collapsedFolders.value = allCollapsed.value ? new Set() : new Set(allFolderPaths.value)
+  saveCollapsed()
+}
+const collapseOthers = (path) => {
+  // Keep the folder and its ancestors open; fold every other folder.
+  const keep = new Set(allFolderPaths.value.filter(p => path === p || path.startsWith(`${p}/`)))
+  collapsedFolders.value = new Set(allFolderPaths.value.filter(p => !keep.has(p)))
+  saveCollapsed()
+}
+const selectMany = (ids, select) => {
+  const current = new Set(selectedDocuments.value)
+  for (const id of ids) select ? current.add(id) : current.delete(id)
+  selectedDocuments.value = [...current]
+}
+const openOriginal = (doc) => {
+  const url = isLinkDoc(doc)
+    ? doc.source_path
+    : `/documents/${doc.document_id}/pdf?collection_id=${encodeURIComponent(collectionStore.currentCollectionId)}`
+  window.open(url, '_blank', 'noopener')
+}
+watch(() => collectionStore.currentCollectionId, () => { collapsedFolders.value = loadCollapsed() })
+
 // Paged loading: the sidebar only ever holds the pages the user has seen.
 // A 75k-document collection would otherwise mean a ~30MB response and 75k
 // DOM rows on every refresh.
@@ -1903,6 +2030,7 @@ const loadDocuments = async () => {
     docTotal.value = response.data.total_documents ?? documents.value.length
     if (response.data.kind_counts) kindCounts.value = response.data.kind_counts
     if (docTotal.value > 0) justIndexed.value = false
+    if (docTotal.value > 0 && !addSectionTouched) addSectionOpen.value = false
   } catch (err) {
     error.value = err?.message || 'Failed to load sources'
   } finally {
@@ -1949,7 +2077,24 @@ const toggleFilter = () => {
 const openAddSources = () => {
   emit('open')
   addSectionOpen.value = true
+  addSectionTouched = true
   ui.highlightAddSources = false
+}
+// The add form opens by itself only for an empty collection; once there
+// are sources, the list is what the panel is for.
+let addSectionTouched = false
+const toggleAddSection = () => {
+  addSectionTouched = true
+  addSectionOpen.value = !addSectionOpen.value
+  ui.highlightAddSources = false
+}
+const openAddLink = () => {
+  openAddSources()
+  linkPanelOpen.value = true
+}
+const refreshAll = () => {
+  loadDocuments()
+  loadSyncFolders()
 }
 
 // `/` focuses the filter — the thing this panel is for. Ctrl/⌘+U (Add

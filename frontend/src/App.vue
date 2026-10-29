@@ -6,7 +6,9 @@
 
       <!-- The panel toggle is the first thing in the window and never moves,
            on every tab — no label, no brand competing with it for the corner. -->
+      <!-- On wider screens the ribbon carries this toggle (top of its column). -->
       <button
+        v-if="isCompact"
         class="side-icon-btn text-base-content/60 hover:text-base-content"
         :class="{ 'is-active': sourcesPanelShown }"
         @click="toggleSources"
@@ -28,16 +30,8 @@
         @create="openCreateCollectionModal"
       />
 
-      <WorkspaceNav
-        v-if="!isCollectionsView"
-        class="hidden md:flex"
-        :active-tab="activeTab"
-        :chat-enabled="chatTabEnabled"
-        :admin-console="userStore.adminConsole"
-        :admin-badge="reviewStore.total"
-        @navigate="switchTab"
-        @notes="openNotes"
-      />
+      <!-- Destinations live in the ribbon on wider screens and in the bottom
+           tab bar on phones; the header keeps scope, model and status. -->
 
       <!-- Spacer -->
       <div class="flex-1"></div>
@@ -85,58 +79,7 @@
       <!-- Source updates: what changed in watched folders and git repositories -->
       <ChangesBell />
 
-      <!-- Help menu (desktop; phones get it in the overflow menu) -->
-      <div class="dropdown dropdown-end hidden md:block">
-        <button tabindex="0" class="btn btn-ghost btn-circle btn-sm" title="Help" aria-label="Help menu" aria-haspopup="menu">
-          <HelpCircle :size="16" />
-        </button>
-        <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-50 w-56 p-2 shadow border border-base-300">
-          <li>
-            <a href="https://github.com/jordanboyce/clio#readme" target="_blank" rel="noopener">
-              <BookOpen :size="14" />
-              Documentation
-            </a>
-          </li>
-          <li>
-            <button @click="showPalette = true">
-              <Command :size="14" />
-              Command palette
-              <span class="ml-auto flex items-center gap-0.5" aria-hidden="true"><span class="kbd-hint">{{ MOD }}</span><span class="kbd-hint">K</span></span>
-            </button>
-          </li>
-          <li>
-            <button @click="showShortcuts = true">
-              <Keyboard :size="14" />
-              Keyboard shortcuts
-              <span class="ml-auto kbd-hint" aria-hidden="true">?</span>
-            </button>
-          </li>
-          <li>
-            <button @click="showOnboarding = true">
-              <Sparkles :size="14" />
-              Run setup again
-            </button>
-          </li>
-          <li>
-            <button @click="showAbout = true">
-              <Info :size="14" />
-              About Clio
-            </button>
-          </li>
-        </ul>
-      </div>
-
-      <!-- Settings button -->
-      <button
-        class="hidden md:inline-flex btn btn-ghost btn-circle btn-sm"
-        :class="{ 'bg-base-300': activeTab === 'settings' }"
-        @click="activeTab = 'settings'"
-        title="Settings"
-        aria-label="Settings"
-        :aria-current="activeTab === 'settings' ? 'page' : undefined"
-      >
-        <Settings :size="16" />
-      </button>
+      <!-- Help and Settings sit at the foot of the ribbon on wider screens. -->
 
       <!-- Phone: one overflow menu holds what the desktop header shows inline -->
       <div class="dropdown dropdown-end md:hidden">
@@ -205,19 +148,35 @@
     <!-- ── Body ── -->
     <div class="flex flex-1 overflow-hidden min-h-0 relative">
 
+      <!-- Ribbon: every destination and the everyday actions, Obsidian-style.
+           Customizable (right-click it); phones use the bottom tab bar. -->
+      <AppRibbon
+        v-if="!isCompact"
+        :items="ribbonVisible"
+        :layout="ribbonLayout"
+        :active-tab="activeTab"
+        :research-view="ui.researchView"
+        :sources-open="sourcesPanelShown"
+        :admin-badge="reviewStore.total"
+        @action="runRibbonItem"
+        @customize="showRibbonCustomize = true"
+        @update:layout="setRibbonLayout"
+      />
+
       <!-- Compact mode: side panels overlay the main surface instead of
            squeezing it, so the answer column keeps the full window width.
            This backdrop closes whichever panel is open. -->
       <div
-        v-if="isWorkspaceView && isCompact && (sourcesSidebarOpen || analysisSidebarOpen)"
+        v-if="(hasSourcesPanel || isWorkspaceView) && isCompact && (sourcesSidebarOpen || analysisSidebarOpen)"
         class="absolute inset-0 z-30 bg-base-content/20"
         @click="sourcesSidebarOpen = false; analysisSidebarOpen = false"
         aria-hidden="true"
       ></div>
 
-      <!-- Left sidebar: sources (resizable, hidden on collections overview) -->
+      <!-- Left sidebar: sources (resizable). Shown wherever the source
+           selection matters: Ask, Find, Research and Reports. -->
       <aside
-        v-show="isWorkspaceView"
+        v-show="hasSourcesPanel"
         class="bg-base-100 overflow-hidden flex flex-col"
         :class="[
           isResizing ? '' : 'transition-all duration-200 ease-in-out',
@@ -777,6 +736,13 @@
     <!-- Command palette, shortcuts sheet and About: the three things the
          Help menu and the keyboard open from anywhere. -->
     <CommandPalette :open="showPalette" :commands="paletteCommands" @close="showPalette = false" />
+    <RibbonCustomizeDialog
+      :open="showRibbonCustomize"
+      :items="ribbonAll"
+      :layout="ribbonLayout"
+      @update:layout="setRibbonLayout"
+      @close="showRibbonCustomize = false"
+    />
     <ShortcutsDialog :open="showShortcuts" @close="showShortcuts = false" />
     <AboutDialog :open="showAbout" @close="showAbout = false" />
 
@@ -1331,7 +1297,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
-import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig } from 'lucide-vue-next'
+import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig, Network, SlidersHorizontal } from 'lucide-vue-next'
 import CommandPalette from './components/CommandPalette.vue'
 import EmbeddingMismatchNotice from './components/EmbeddingMismatchNotice.vue'
 import ShortcutsDialog from './components/ShortcutsDialog.vue'
@@ -1349,6 +1315,9 @@ const chatTabEnabled = ref(true)
 import SourcesSidebar from './components/SourcesSidebar.vue'
 import StudioSidebar from './components/StudioSidebar.vue'
 import WorkspaceNav from './components/WorkspaceNav.vue'
+import AppRibbon from './components/AppRibbon.vue'
+import RibbonCustomizeDialog from './components/RibbonCustomizeDialog.vue'
+import { loadLayout, saveLayout, ribbonItems, visibleItems } from './utils/ribbon.js'
 import ReviewBell from './components/ReviewBell.vue'
 import ChangesBell from './components/ChangesBell.vue'
 import ModelPicker from './components/ModelPicker.vue'
@@ -1600,6 +1569,10 @@ function storageTitle(collection) {
 
 const isCollectionsView = computed(() => activeTab.value === 'collections')
 const isWorkspaceView = computed(() => ['chat', 'search'].includes(activeTab.value))
+// The Sources panel follows the selection: wherever selected sources scope
+// the work (Ask, Find, Research, Reports), the panel is there to change it.
+const SOURCES_TABS = ['chat', 'search', 'research', 'generate']
+const hasSourcesPanel = computed(() => SOURCES_TABS.includes(activeTab.value))
 const navigateMobile = (tab) => {
   switchTab(tab)
   sourcesSidebarOpen.value = false
@@ -1611,10 +1584,10 @@ const openNotes = () => {
 }
 // The header toggles live outside the workspace tabs, so off a workspace tab
 // they mean "take me back there with this panel open" rather than nothing.
-const sourcesPanelShown = computed(() => isWorkspaceView.value && sourcesSidebarOpen.value)
+const sourcesPanelShown = computed(() => hasSourcesPanel.value && sourcesSidebarOpen.value)
 const notesPanelShown = computed(() => isWorkspaceView.value && analysisSidebarOpen.value)
 const toggleSources = () => {
-  if (!isWorkspaceView.value) {
+  if (!hasSourcesPanel.value) {
     switchTab(chatTabEnabled.value ? 'chat' : 'search')
     sourcesSidebarOpen.value = true
     return
@@ -1956,6 +1929,36 @@ const showPalette = ref(false)
 const showShortcuts = ref(false)
 const showAbout = ref(false)
 
+// ── Ribbon ──
+const ribbonLayout = ref(loadLayout())
+const showRibbonCustomize = ref(false)
+const ribbonAccess = computed(() => ({ admin: userStore.adminConsole, chat: chatTabEnabled.value }))
+const ribbonAll = computed(() => ribbonItems(ribbonLayout.value, ribbonAccess.value))
+const ribbonVisible = computed(() => visibleItems(ribbonLayout.value, ribbonAccess.value))
+function setRibbonLayout(layout) {
+  ribbonLayout.value = layout
+  saveLayout(layout)
+}
+function runRibbonItem(item) {
+  if (item.tab) {
+    if (item.view) ui.researchView = item.view
+    switchTab(item.tab)
+    return
+  }
+  switch (item.action) {
+    case 'toggle-sources': return toggleSources()
+    case 'add-sources': return openAddSources()
+    case 'new-chat':
+      switchTab('chat')
+      return nextTick(newChat)
+    case 'notes': return toggleNotes()
+    case 'palette': showPalette.value = true; return
+    case 'shortcuts': showShortcuts.value = true; return
+    case 'onboarding': showOnboarding.value = true; return
+    case 'about': showAbout.value = true; return
+  }
+}
+
 const THEME_CHOICES = [
   { id: 'light', label: 'Light', icon: SunMedium },
   { id: 'dark', label: 'Dark', icon: Moon },
@@ -1983,7 +1986,7 @@ const newChat = () => {
 }
 // The Sources panel owns its Add-sources flow; it listens for this event.
 const openAddSources = () => {
-  if (!isWorkspaceView.value) switchTab(chatTabEnabled.value ? 'chat' : 'search')
+  if (!hasSourcesPanel.value) switchTab(chatTabEnabled.value ? 'chat' : 'search')
   sourcesSidebarOpen.value = true
   nextTick(() => window.dispatchEvent(new CustomEvent('clio:add-sources')))
 }
@@ -1997,7 +2000,9 @@ const paletteCommands = computed(() => {
   if (chatTabEnabled.value) add('Go to', 'Ask', MessageSquare, () => switchTab('chat'), { keys: ['G', 'A'], keywords: 'chat question' })
   add('Go to', 'Find', Search, () => switchTab('search'), { keys: ['G', 'F'], keywords: 'search passages' })
   add('Go to', 'Connect', Plug, () => switchTab('mcp'), { keys: ['G', 'C'], keywords: 'mcp token claude chatgpt client' })
-  add('Go to', 'Research', LibraryBig, () => switchTab('research'), { keys: ['G', 'R'], keywords: 'research papers books citations references abstracts reviews' })
+  add('Go to', 'Research', LibraryBig, () => { ui.researchView = 'library'; switchTab('research') }, { keys: ['G', 'R'], keywords: 'research papers books citations references abstracts reviews' })
+  add('Go to', 'Citation graph', Network, () => { ui.researchView = 'map'; switchTab('research') }, { keywords: 'graph map citations network obsidian' })
+  if (!isCompact.value) add('Layout', 'Customize the ribbon', SlidersHorizontal, () => { showRibbonCustomize.value = true }, { keywords: 'sidebar icons toolbar hide reorder' })
   add('Go to', 'Reports', FileText, () => switchTab('generate'), { keywords: 'generate briefing summary' })
   add('Go to', 'Saved instructions', BookOpen, () => switchTab('expertise'), { keywords: 'expertise packs' })
   if (userStore.adminConsole) add('Go to', 'Administration', Gauge, () => switchTab('admin'), { keywords: 'admin audit access' })

@@ -255,7 +255,8 @@ const selection = useSelectionStore()
 const collectionId = computed(() => collectionStore.currentCollectionId)
 const providerId = computed(() => providerStore.activeProviderId || null)
 
-const view = ref('library')
+// Shared with the ribbon, which can open Research on a given view.
+const view = computed({ get: () => ui.researchView, set: (v) => { ui.researchView = v } })
 const papers = ref([])
 const stats = ref({})
 const capabilities = ref({})

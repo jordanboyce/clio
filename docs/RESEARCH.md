@@ -1,6 +1,6 @@
 # Research: papers and books
 
-**Research** (under *More*, or `G` then `R`) turns a collection of papers,
+**Research** (in the ribbon, or `G` then `R`; under *More* on a phone) turns a collection of papers,
 books and reports into a library a lab can work from. It was built around
 requests from lab researchers:
 
@@ -96,6 +96,7 @@ to see which way); a dashed line leads to a cited work the collection lacks.
   you zoom (*Text fade threshold*).
 - **Local graph** (from the card) shows one source and what is within one,
   two or three citations of it — the depth slider in the bar at the top.
+- The ribbon's *Citation graph* icon opens Research straight on the graph.
 - **Graph settings** (the button at the top right), in four sections that
   collapse like Obsidian's:
   - *Filters* — search by title words, an author's surname or a year
