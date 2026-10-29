@@ -42,7 +42,9 @@ CREATE TABLE IF NOT EXISTS research_papers (
     original_filename TEXT,     -- the name before the first research rename
     renamed_at TEXT,
     analyzed_at TEXT,
-    analysis_notes TEXT         -- JSON list of plain-language notes
+    analysis_notes TEXT,        -- JSON list of plain-language notes
+    kind TEXT,                  -- 'article' | 'book' (how the document looked)
+    isbn TEXT
 );
 CREATE TABLE IF NOT EXISTS research_references (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,7 +114,9 @@ CREATE TABLE IF NOT EXISTS research_jobs (
 
 _PAPER_FIELDS = ("title", "authors", "year", "doi", "arxiv_id", "venue", "abstract",
                  "provenance", "original_filename", "renamed_at", "analyzed_at",
-                 "analysis_notes")
+                 "analysis_notes", "kind", "isbn")
+# Columns added after the table first shipped; created on older databases.
+_ADDED_PAPER_COLUMNS = (("kind", "TEXT"), ("isbn", "TEXT"))
 _JSON_PAPER_FIELDS = {"authors", "provenance", "analysis_notes"}
 
 _REFERENCE_FIELDS = ("kind", "ordinal", "raw_text", "page_number", "doi", "arxiv_id", "url",
@@ -147,6 +151,11 @@ class ResearchStore:
                 if key not in _initialized:
                     with sqlite_connect(self.db_path) as conn:
                         conn.executescript(_SCHEMA)
+                        have = {row[1] for row in conn.execute("PRAGMA table_info(research_papers)")}
+                        for column, kind in _ADDED_PAPER_COLUMNS:
+                            if column not in have:
+                                conn.execute(f"ALTER TABLE research_papers ADD COLUMN {column} {kind}")
+                        conn.commit()
                     _initialized.add(key)
 
     def _connect(self) -> sqlite3.Connection:

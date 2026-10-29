@@ -1,7 +1,7 @@
 import http from './http'
 import { buildProviderHeaders, getAPIProviderName } from './aiProviders.js'
 
-// The Papers view's calls to /api/research. Every call is scoped to one
+// The Research view's calls to /api/research. Every call is scoped to one
 // collection; the ones that run a model carry the active provider's headers
 // exactly as Ask does, so a team key or the deployment's model just works.
 
@@ -34,8 +34,10 @@ export const researchApi = {
     http.post(`/api/research/references/resolve?${q(cid)}`, body, { timeout: 180000 }).then(r => r.data),
   download: (cid, body) =>
     http.post(`/api/research/references/download?${q(cid)}`, body, { timeout: 180000 }).then(r => r.data),
-  graph: (cid, { includeExternal = true, minCitations = 2 } = {}) =>
-    http.get(`/api/research/graph?${q(cid, { include_external: includeExternal, min_citations: minCitations })}`).then(r => r.data),
+  graph: (cid, { includeExternal = true, minCitations = 2, documentIds = null } = {}) =>
+    http.post(`/api/research/graph?${q(cid)}`, {
+      include_external: includeExternal, min_citations: minCitations, document_ids: documentIds?.length ? documentIds : null,
+    }).then(r => r.data),
   assess: (cid, id, question, providerId) => {
     const { provider, headers } = modelArgs(providerId)
     return http.post(`/api/research/papers/${encodeURIComponent(id)}/assess?${q(cid)}`,
@@ -74,11 +76,29 @@ export function authorsShort(authors = []) {
   return `${surname(authors[0])} et al.`
 }
 
+// provenance.source 'paper' means "read from the document itself" (the
+// stored value predates books; it is not shown as the word "paper").
 export function sourceLabel(provenance) {
   if (!provenance) return ''
-  if (provenance.source === 'paper') return provenance.page ? `From the paper, page ${provenance.page}` : 'From the paper'
-  const names = { openalex: 'OpenAlex', crossref: 'Crossref', arxiv: 'arXiv' }
+  if (provenance.source === 'paper') return provenance.page ? `From the source, page ${provenance.page}` : 'From the source'
+  const names = { openalex: 'OpenAlex', crossref: 'Crossref', arxiv: 'arXiv', openlibrary: 'Open Library' }
   return `From ${names[provenance.source] || provenance.source}`
+}
+
+// A book has no abstract; its opening (preface, introduction) is shown in
+// its place, quoted, and must not be presented as an abstract.
+export function isOpening(provenance) {
+  return provenance?.kind === 'opening'
+}
+
+export function abstractLabel(provenance) {
+  if (!provenance) return ''
+  if (isOpening(provenance)) {
+    const where = provenance.page ? `, page ${provenance.page}` : ''
+    const heading = (provenance.detail || '').match(/opening of the (\w+)/)?.[1]
+    return `Opening of the ${heading || 'text'}${where} — quoted; there is no abstract`
+  }
+  return sourceLabel(provenance)
 }
 
 // "Tonight at 01:00" as an ISO time the server can wait for.

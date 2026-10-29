@@ -10,7 +10,7 @@
           :href="pageUrl(collectionId, documentId, item.page)"
           target="_blank"
           rel="noopener"
-          :title="item.match < 1 ? `Matched the paper's text at ${Math.round(item.match * 100)}% (extraction noise)` : 'Quoted verbatim from the paper'"
+          :title="item.match < 1 ? `Matched the source's text at ${Math.round(item.match * 100)}% (extraction noise)` : 'Quoted verbatim from the source'"
         >p. {{ item.page }}</a>
       </blockquote>
     </li>
@@ -20,7 +20,7 @@
 <script setup>
 import { pageUrl } from '../utils/researchApi.js'
 
-// One verified statement per row: what it says, the paper's own words that
+// One verified statement per row: what it says, the source's own words that
 // back it, and a link to the page. Nothing renders here without its quote —
 // the server drops any statement whose quote it could not find.
 defineProps({

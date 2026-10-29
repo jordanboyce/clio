@@ -7,7 +7,7 @@
       </section>
     </template>
     <p v-if="!filledSections.length" class="text-sm text-base-content/60">
-      Nothing in this review could be checked against the paper, so it is empty.
+      Nothing in this review could be checked against the source, so it is empty.
     </p>
     <p v-if="emptySections.length" class="text-xs text-base-content/50">
       Not covered by the passages read: {{ emptySections.join(', ').toLowerCase() }}.
@@ -15,7 +15,7 @@
     <footer class="text-xs text-base-content/50 space-y-0.5">
       <div>{{ coverageText }}</div>
       <div v-if="brief.rejected">
-        {{ brief.rejected }} statement{{ brief.rejected === 1 ? ' was' : 's were' }} left out because the quote was not found in the paper.
+        {{ brief.rejected }} statement{{ brief.rejected === 1 ? ' was' : 's were' }} left out because the quote was not found in the source.
       </div>
       <div v-for="note in otherNotes" :key="note">{{ note }}</div>
     </footer>

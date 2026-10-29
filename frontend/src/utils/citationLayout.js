@@ -1,79 +1,71 @@
-// A small, dependency-free force layout for the citation map.
+import dagre from '@dagrejs/dagre'
+
+// Layout for the citation map (drawn with Vue Flow).
 //
-// Deterministic: initial positions come from a seeded spiral, not
-// Math.random, so the same library draws the same map every time and a
-// person's mental picture of "where that paper sits" survives a reload.
-// Forces: every pair repels, every citation pulls its two ends together,
-// and a weak gravity keeps disconnected papers from drifting off.
+// Citations are close to a hierarchy — a work cites older works — so a
+// layered layout (dagre) reads far better than a force layout: citing
+// sources on the left, what they cite to the right, edges mostly flowing one
+// way and rarely crossing. Sources with no citation either way would form one
+// tall column in the first layer; they go in a compact grid underneath
+// instead, where they cost no width.
 
-export function layoutGraph(nodes, edges, { width = 800, height = 600, iterations = 300 } = {}) {
-  const n = nodes.length
-  const index = new Map(nodes.map((node, i) => [node.id, i]))
-  const cx = width / 2
-  const cy = height / 2
-  const golden = Math.PI * (3 - Math.sqrt(5))
-  const spread = Math.min(width, height) * 0.42
-  const pos = nodes.map((_, i) => {
-    const r = spread * Math.sqrt((i + 0.5) / Math.max(n, 1))
-    return { x: cx + r * Math.cos(i * golden), y: cy + r * Math.sin(i * golden), vx: 0, vy: 0 }
-  })
-  const links = edges
-    .map(e => [index.get(e.source), index.get(e.target)])
-    .filter(([a, b]) => a !== undefined && b !== undefined && a !== b)
+export const NODE_SIZE = {
+  source: { width: 232, height: 68 },
+  external: { width: 200, height: 56 },
+}
 
-  const area = width * height
-  const k = Math.sqrt(area / Math.max(n, 1)) * 0.6   // ideal edge length
-  for (let step = 0; step < iterations; step++) {
-    const cooling = 1 - step / iterations
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        let dx = pos[i].x - pos[j].x
-        let dy = pos[i].y - pos[j].y
-        let d2 = dx * dx + dy * dy
-        if (d2 < 0.01) { dx = 0.1 * (i - j); dy = 0.1; d2 = dx * dx + dy * dy }
-        const d = Math.sqrt(d2)
-        const force = (k * k) / d
-        const fx = (dx / d) * force
-        const fy = (dy / d) * force
-        pos[i].vx += fx; pos[i].vy += fy
-        pos[j].vx -= fx; pos[j].vy -= fy
-      }
-    }
-    for (const [a, b] of links) {
-      const dx = pos[a].x - pos[b].x
-      const dy = pos[a].y - pos[b].y
-      const d = Math.max(Math.sqrt(dx * dx + dy * dy), 0.01)
-      const force = (d * d) / k
-      const fx = (dx / d) * force
-      const fy = (dy / d) * force
-      pos[a].vx -= fx; pos[a].vy -= fy
-      pos[b].vx += fx; pos[b].vy += fy
-    }
-    const limit = Math.max(k * cooling, 1)
-    for (const p of pos) {
-      p.vx += (cx - p.x) * 0.02
-      p.vy += (cy - p.y) * 0.02
-      const v = Math.sqrt(p.vx * p.vx + p.vy * p.vy)
-      if (v > limit) { p.vx = (p.vx / v) * limit; p.vy = (p.vy / v) * limit }
-      p.x = Math.min(width - 20, Math.max(20, p.x + p.vx))
-      p.y = Math.min(height - 20, Math.max(20, p.y + p.vy))
-      p.vx = 0; p.vy = 0
-    }
+export function layoutCitations(nodes, edges, { direction = 'LR', gridColumns = 4 } = {}) {
+  const linked = new Set()
+  for (const e of edges) { linked.add(e.source); linked.add(e.target) }
+  const connected = nodes.filter(n => linked.has(n.id))
+  const loose = nodes.filter(n => !linked.has(n.id))
+
+  const g = new dagre.graphlib.Graph({ multigraph: false })
+  g.setGraph({ rankdir: direction, nodesep: 18, ranksep: 90, marginx: 20, marginy: 20 })
+  g.setDefaultEdgeLabel(() => ({}))
+  for (const n of connected) g.setNode(n.id, { ...sizeOf(n) })
+  for (const e of edges) {
+    if (g.hasNode(e.source) && g.hasNode(e.target) && e.source !== e.target) g.setEdge(e.source, e.target)
   }
-  return Object.fromEntries(nodes.map((node, i) => [node.id, { x: pos[i].x, y: pos[i].y }]))
+  if (connected.length) dagre.layout(g)
+
+  const positions = {}
+  let maxY = 0
+  for (const n of connected) {
+    const p = g.node(n.id)
+    const { width, height } = sizeOf(n)
+    // dagre gives centres; Vue Flow wants the top-left corner.
+    positions[n.id] = { x: p.x - width / 2, y: p.y - height / 2 }
+    maxY = Math.max(maxY, p.y + height / 2)
+  }
+  const top = connected.length ? maxY + 60 : 20
+  const cell = { width: NODE_SIZE.source.width + 18, height: NODE_SIZE.source.height + 18 }
+  loose.forEach((n, i) => {
+    positions[n.id] = { x: 20 + (i % gridColumns) * cell.width, y: top + Math.floor(i / gridColumns) * cell.height }
+  })
+  return positions
 }
 
-export function nodeRadius(node) {
-  const base = node.type === 'external' ? 5 : 7
-  return base + Math.min(10, Math.sqrt(node.cited_by || 0) * 3)
+function sizeOf(node) {
+  return node.type === 'external' ? NODE_SIZE.external : NODE_SIZE.source
 }
 
-// Shorten an edge so its arrowhead stops at the target circle's rim.
-export function edgePath(from, to, targetRadius) {
-  const dx = to.x - from.x
-  const dy = to.y - from.y
-  const d = Math.sqrt(dx * dx + dy * dy) || 1
-  const ex = to.x - (dx / d) * (targetRadius + 3)
-  const ey = to.y - (dy / d) * (targetRadius + 3)
-  return `M${from.x.toFixed(1)},${from.y.toFixed(1)} L${ex.toFixed(1)},${ey.toFixed(1)}`
+// A node and everything one citation away from it, either direction.
+export function neighborhood(id, edges) {
+  const ids = new Set([id])
+  for (const e of edges) {
+    if (e.source === id) ids.add(e.target)
+    if (e.target === id) ids.add(e.source)
+  }
+  return ids
+}
+
+// Case-insensitive match on what a person would type: title words, an
+// author's surname, a year.
+export function matchesQuery(node, query) {
+  const q = String(query || '').trim().toLowerCase()
+  if (!q) return false
+  const hay = [node.title, node.label, node.filename, (node.authors || []).join(' '), node.year]
+    .map(v => String(v || '').toLowerCase()).join(' ')
+  return q.split(/\s+/).every(term => hay.includes(term))
 }

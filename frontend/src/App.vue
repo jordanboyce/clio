@@ -1997,7 +1997,7 @@ const paletteCommands = computed(() => {
   if (chatTabEnabled.value) add('Go to', 'Ask', MessageSquare, () => switchTab('chat'), { keys: ['G', 'A'], keywords: 'chat question' })
   add('Go to', 'Find', Search, () => switchTab('search'), { keys: ['G', 'F'], keywords: 'search passages' })
   add('Go to', 'Connect', Plug, () => switchTab('mcp'), { keys: ['G', 'C'], keywords: 'mcp token claude chatgpt client' })
-  add('Go to', 'Papers', LibraryBig, () => switchTab('research'), { keys: ['G', 'P'], keywords: 'research papers citations references abstracts reviews' })
+  add('Go to', 'Research', LibraryBig, () => switchTab('research'), { keys: ['G', 'R'], keywords: 'research papers books citations references abstracts reviews' })
   add('Go to', 'Reports', FileText, () => switchTab('generate'), { keywords: 'generate briefing summary' })
   add('Go to', 'Saved instructions', BookOpen, () => switchTab('expertise'), { keywords: 'expertise packs' })
   if (userStore.adminConsole) add('Go to', 'Administration', Gauge, () => switchTab('admin'), { keywords: 'admin audit access' })
@@ -2067,7 +2067,7 @@ const onGlobalKeydown = (e) => {
   if (key === 'g' || key === 'G') { goPrefixUntil = now + 1200; return }
   if (goPrefixUntil > now) {
     goPrefixUntil = 0
-    const target = { a: chatTabEnabled.value ? 'chat' : null, f: 'search', c: 'mcp', p: 'research', o: 'collections', s: 'settings' }[key.toLowerCase()]
+    const target = { a: chatTabEnabled.value ? 'chat' : null, f: 'search', c: 'mcp', r: 'research', p: 'research', o: 'collections', s: 'settings' }[key.toLowerCase()]
     if (target) { e.preventDefault(); switchTab(target) }
   }
 }

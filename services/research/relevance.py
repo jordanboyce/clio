@@ -30,16 +30,16 @@ BUDGET_CHARS = 14000
 MAX_QUESTION_CHARS = 1000
 
 _PROMPT = (
-    "A researcher is deciding whether a paper is worth reading for their question. Decide "
-    "whether THIS PAPER contains information that addresses the question.\n\n"
+    "A researcher is deciding whether a source (a paper, a book, a report) is worth reading for "
+    "their question. Decide whether THIS SOURCE contains information that addresses the question.\n\n"
     "{rules}\n\n"
     "Return this JSON object:\n"
     "{{\"verdict\": \"relevant\" | \"partial\" | \"not_relevant\" | \"not_established\",\n"
     "  \"summary\": \"one or two sentences, stating only what your points show\",\n"
-    "  \"points\": [{{\"point\": \"what the paper offers for the question\", \"quote\": \"...\", "
+    "  \"points\": [{{\"point\": \"what the source offers for the question\", \"quote\": \"...\", "
     "\"passage\": \"P3\"}}],\n"
     "  \"missing\": [\"parts of the question these passages do not address\"]}}\n"
-    "Use \"relevant\" when the paper directly addresses the question, \"partial\" when it "
+    "Use \"relevant\" when the source directly addresses the question, \"partial\" when it "
     "covers part of it or something adjacent, \"not_relevant\" when the passages show it is "
     "about something else, and \"not_established\" when these excerpts are not enough to "
     "tell. Give at most 6 points.\n\n"
@@ -59,13 +59,13 @@ def assess(indexer, document_id: str, question: str, provider=None, model: Optio
     if not passages:
         return {"verdict": "not_established", "summary": "", "evidence": [], "rejected": 0,
                 "retrieval": [], "missing": [], "model": "",
-                "notes": ["The paper has no indexed text to assess."], "usage": {}}
+                "notes": ["The source has no indexed text to assess."], "usage": {}}
 
     hit_ids, retrieval = search_passage_ids(indexer, document_id, [question], passages, per_query=8)
     result = {"verdict": None, "summary": "", "evidence": [], "rejected": 0, "retrieval": retrieval,
               "missing": [], "model": "", "notes": [], "usage": {}}
     if provider is None:
-        result["notes"].append("No model configured: showing where the paper discusses the question.")
+        result["notes"].append("No model configured: showing where the source discusses the question.")
         return result
 
     leading = list(passages)[:LEADING_PASSAGES]
@@ -88,8 +88,8 @@ def assess(indexer, document_id: str, question: str, provider=None, model: Optio
         verdict = "not_established"
     if verdict in ("relevant", "partial") and not evidence:
         verdict = "not_established"
-        result["notes"].append("The model judged the paper relevant but none of its quotes were "
-                               "found in the paper, so the verdict was withdrawn.")
+        result["notes"].append("The model judged the source relevant but none of its quotes were "
+                               "found in the source, so the verdict was withdrawn.")
     summary = " ".join(str(parsed.get("summary") or "").split())[:500]
     if summary and evidence and not faithful(summary, " ".join(e["quote"] for e in evidence)):
         result["notes"].append("The model's summary stated numbers or negations not in its quotes "
@@ -102,7 +102,7 @@ def assess(indexer, document_id: str, question: str, provider=None, model: Optio
     result.update(verdict=verdict, summary=summary, evidence=evidence, rejected=rejected, missing=missing)
     if rejected:
         result["notes"].append(f"{rejected} statement(s) were removed because their quote was not "
-                               "found in the paper.")
+                               "found in the source.")
     result["shown"] = {"passages": len(shown), "of": len(passages)}
     return result
 

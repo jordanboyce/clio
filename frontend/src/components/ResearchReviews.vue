@@ -5,24 +5,24 @@
       <div>
         <h3 class="font-medium">Prepare reviews</h3>
         <p class="text-xs text-base-content/60 mt-0.5 max-w-[65ch]">
-          Clio reads each paper and writes a review you can skim later. Every statement quotes the paper,
+          Clio reads each source and writes a review you can skim later. Every statement quotes the source,
           and anything it cannot quote is left out. It runs on the server, so you can close this tab.
         </p>
       </div>
       <div class="grid gap-3 sm:grid-cols-2">
         <label class="form-control">
-          <span class="label-text text-xs mb-1">Papers</span>
+          <span class="label-text text-xs mb-1">Sources</span>
           <select v-model="scope" class="select select-bordered select-sm">
-            <option value="unreviewed">Papers without a review ({{ unreviewedCount }})</option>
-            <option v-if="selectedIds.length" value="selected">Selected papers ({{ selectedIds.length }})</option>
-            <option value="all">All papers ({{ papers.length }})</option>
+            <option value="unreviewed">Without a review yet ({{ unreviewedCount }})</option>
+            <option v-if="selectedIds.length" value="selected">Selected sources ({{ selectedIds.length }})</option>
+            <option value="all">All ({{ papers.length }})</option>
           </select>
         </label>
         <label class="form-control">
           <span class="label-text text-xs mb-1">Depth</span>
           <select v-model="depth" class="select select-bordered select-sm">
-            <option value="brief">Brief — key passages, one pass per paper</option>
-            <option value="thorough">Thorough — the whole paper, part by part</option>
+            <option value="brief">Brief — key passages, one pass per source</option>
+            <option value="thorough">Thorough — the whole text, part by part (long books: parts spread across it)</option>
           </select>
         </label>
         <label class="form-control sm:col-span-2">
@@ -102,7 +102,7 @@
           <div v-if="openId === b.id" class="px-3 pb-3 space-y-3 border-t border-base-300/60 pt-3">
             <ResearchBrief :brief="b" :collection-id="collectionId" />
             <div class="flex gap-2">
-              <button class="btn btn-xs btn-outline" @click="$emit('open', b.document_id)">Open paper</button>
+              <button class="btn btn-xs btn-outline" @click="$emit('open', b.document_id)">Open</button>
               <button class="btn btn-xs btn-ghost" @click="markRead(b, !b.read_at)">{{ b.read_at ? 'Mark unread' : 'Mark read' }}</button>
               <button v-if="canWrite" class="btn btn-xs btn-ghost text-error" @click="remove(b)">Delete</button>
             </div>
@@ -137,6 +137,11 @@ const unread = ref(0)
 const unreadOnly = ref(false)
 const openId = ref(null)
 const scope = ref('unreviewed')
+// A selection made in the Sources panel is the obvious target.
+watch(() => props.selectedIds.length, (n) => {
+  if (n) scope.value = 'selected'
+  else if (scope.value === 'selected') scope.value = 'unreviewed'
+}, { immediate: true })
 const depth = ref('brief')
 const question = ref('')
 const when = ref('now')
