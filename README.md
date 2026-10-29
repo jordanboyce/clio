@@ -14,7 +14,7 @@ default install needs no configuration at all.
 The name is Clio, the Muse of history: the record remembers.
 
 [Deployment](docs/DEPLOYMENT.md) · [Architecture](docs/ARCHITECTURE.md) ·
-[Roadmap](docs/ROADMAP.md) · [Agentic research guide](docs/AGENTIC_RESEARCH.md) ·
+[Roadmap](docs/ROADMAP.md) · [Agentic research guide](docs/AGENTIC_RESEARCH.md) · [Papers](docs/RESEARCH.md) ·
 [Product assessment](docs/PRODUCT_ASSESSMENT.md)
 
 ---
@@ -203,6 +203,7 @@ goes through the app's access checks.
 | **Research a multi-part question** | Ask, MCP | `research_documents` runs focused subqueries, reports coverage gaps and weak evidence, and spans collections. [Guide](docs/AGENTIC_RESEARCH.md). |
 | **Get a finished answer in one agent call** | MCP | `ask_documents` returns the grounded, cited answer the in-app chat would give, when the deployment runs a model of its own (`AI_PROVIDER`). For agents whose own model is small or busy, or automations that just need the answer. |
 | **Query spreadsheets, not just prose** | Ask, Find, MCP | CSV/XLSX become typed tables; counts, sums, filters, and rankings run as SQL, never as guessed passage search. Find returns the rows that contain every word you search for (a customer, an invoice number, a SKU), with no model needed. |
+| **Triage, organize and review research papers** | Papers (under More) | Screens papers against your question with verdicts backed by verified quotes, renames downloads to *year – authors – title*, downloads what a paper cites, maps citations between your papers, and prepares reviews overnight. Metadata comes from the paper or a registry, never a model. [Guide](docs/RESEARCH.md). |
 | **Turn a collection into a document** | Generate (under More) | Source-grounded briefings, summaries, and reports with citations to review before sharing. |
 | **Teach it your house style or domain** | Expertise (under More) | Expertise packs add instructions and terminology per collection, versioned alongside the corpus. |
 | **Give your AI assistant a private knowledge source** | Connect | Claude Desktop, claude.ai, ChatGPT, Grok and Claude Code sign in through your identity provider; Codex, VS Code, Cursor, Windsurf, AnythingLLM, Hermes Agent, Claude Code and any MCP SDK can also use a personal token. Agents can write notes and summaries back when a token allows it. |

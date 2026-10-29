@@ -59,7 +59,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { MessageSquare, Search, Plug, Ellipsis, FileText, BookOpen, Gauge, StickyNote } from 'lucide-vue-next'
+import { MessageSquare, Search, Plug, Ellipsis, FileText, BookOpen, Gauge, StickyNote, LibraryBig } from 'lucide-vue-next'
 
 const props = defineProps({
   activeTab: { type: String, required: true },
@@ -86,6 +86,7 @@ const looseTabs = computed(() => (props.mobile || modeTabs.value.length < 2)
   ? primaryTabs.value
   : primaryTabs.value.filter(tab => !modeTabs.value.includes(tab)))
 const secondaryTabs = computed(() => [
+  { id: 'research', label: 'Papers', icon: LibraryBig },
   { id: 'generate', label: 'Reports', icon: FileText },
   { id: 'expertise', label: 'Saved instructions', icon: BookOpen },
   ...(props.adminConsole ? [{ id: 'admin', label: 'Administration', icon: Gauge }] : []),
