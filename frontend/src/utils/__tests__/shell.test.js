@@ -63,10 +63,10 @@ describe('source tree', () => {
 
   it('shows a synced file under its own name, unless it was renamed', () => {
     const synced = [
-      { document_id: 's1', filename: 'Projects_Clio_plan.pdf', source_type: 'folder_sync', source_path: '/vault/Projects/Clio/plan.pdf' },
-      { document_id: 's2', filename: '2021 - Okafor - Roots.pdf', source_type: 'folder_sync', source_path: '/vault/Projects/roots.pdf' },
+      { document_id: 's1', filename: 'Projects_Clio_plan.pdf', source_type: 'folder_sync', source_path: '/lab/Projects/Clio/plan.pdf' },
+      { document_id: 's2', filename: '2021 - Okafor - Roots.pdf', source_type: 'folder_sync', source_path: '/lab/Projects/roots.pdf' },
     ]
-    const tree = buildTree(synced, [{ path: '/vault' }])
+    const tree = buildTree(synced, [{ path: '/lab' }])
     const projects = tree.folders[0].folders[0]
     expect(projects.name).toBe('Projects')
     expect(projects.folders[0].files[0].tree_label).toBe('plan.pdf')

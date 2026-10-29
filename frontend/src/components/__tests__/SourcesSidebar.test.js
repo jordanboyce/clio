@@ -12,12 +12,12 @@ import { useSelectionStore } from '../../stores/selectionStore'
 // setup-order mistake (a watcher reading state declared further down)
 // surfaces, which the tree's own unit tests cannot see.
 
-const docs = (n, root = '/vault') => Array.from({ length: n }, (_, i) => ({
+const docs = (n, root = '/lab') => Array.from({ length: n }, (_, i) => ({
   document_id: `d${i}`, filename: `F${i % 7}_doc${i}.pdf`, source_type: 'folder_sync',
   source_path: `${root}/F${i % 7}/doc${i}.pdf`, total_pages: 1, total_chunks: 1,
 }))
 
-function serve(all, { folders = [{ path: '/vault' }] } = {}) {
+function serve(all, { folders = [{ path: '/lab' }] } = {}) {
   http.get.mockImplementation(async (url, config = {}) => {
     const params = config.params || {}
     if (url === '/documents') {
@@ -59,9 +59,9 @@ describe('Sources panel', () => {
     // first page of 200, then the rest in steps of 1,000
     const offsets = http.get.mock.calls.filter(c => c[0] === '/documents').map(c => c[1].params.offset)
     expect(offsets).toEqual([0, 200, 1200])
-    // a big tree opens one level deep: the vault, its folders folded
+    // a big tree opens one level deep: the synced folder, its sub-folders folded
     const rows = w.findAll('[role="treeitem"]')
-    expect(rows[0].text()).toContain('vault')
+    expect(rows[0].text()).toContain('lab')
     expect(rows.length).toBe(1 + 7)
   })
 

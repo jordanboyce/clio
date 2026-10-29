@@ -1,12 +1,12 @@
-// The Sources panel as a tree, the way Obsidian's and VS Code's file
-// explorers show a vault: folders first, then files, by name.
+// The Sources panel as a tree, the way file explorers show a folder:
+// folders first, then files, by name.
 //
 // Clio's sources come from three places, and the tree follows them:
 //   * a synced folder or git repository — its own folder, keeping the
 //     sub-folders each file sits in (from the file's source path), each file
 //     under its own name rather than the flattened one it is stored as;
 //   * a link — under "Links", one folder per site;
-//   * an upload — at the top level, like a file dropped in a vault's root.
+//   * an upload — at the top level of the collection.
 // A file indexed in place from a folder that is not a remembered sync root
 // is grouped under its parent folder.
 
