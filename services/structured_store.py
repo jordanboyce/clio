@@ -994,6 +994,95 @@ class StructuredStore:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [entry for _, entry in scored[:limit]]
 
+    def find_rows(
+        self,
+        terms: List[str],
+        limit: int = 10,
+        document_ids: Optional[set] = None,
+    ) -> List[Dict[str, Any]]:
+        """Rows whose cells contain every search term, for keyword search.
+
+        Spreadsheets are never chunked or embedded (questions about them are
+        SQL), so without this a row is findable only through a model's table
+        tools. A term that names the table — a column header, the filename or
+        the sheet — is satisfied by the table itself ("copper kettle stock"
+        finds the kettle row of a sheet with a Stock column); every other
+        term must appear in some cell of the row, case-insensitively. A table
+        whose name alone covers every term returns nothing: that query is
+        about the table, not about a row of it.
+
+        Returns up to `limit` ``{document_id, filename, sheet_name,
+        row_number, columns, values}`` dicts in file then row order, with
+        ``values`` keyed by the original column names.
+        """
+        terms = [t.lower() for t in terms if t]
+        if not terms or limit <= 0:
+            return []
+
+        found: List[Dict[str, Any]] = []
+        for table in self.list_tables():
+            if document_ids is not None and table['document_id'] not in document_ids:
+                continue
+            schema = self.get_schema(table['table_name'], 'table_name') or {}
+            columns = schema.get('columns') or []
+            if not columns:
+                continue
+            names = set(re.findall(r'[^\W_]+', ' '.join(
+                [table['filename'] or '', table['sheet_name'] or '']
+                + [c['name'] for c in columns]
+            ).lower()))
+            cell_terms = [
+                t for t in terms
+                if t not in names and not (t.endswith('s') and t[:-1] in names)
+            ]
+            if not cell_terms:
+                continue
+
+            # The original text when the store kept it beside a typed column
+            # (dates, amounts), else the typed value itself.
+            cells = [c.get('raw_sql_name') or c['sql_name'] for c in columns]
+            clauses, params = [], []
+            for term in cell_terms:
+                # "kettles" should find "kettle": also try the singular.
+                variants = [term] + ([term[:-1]] if len(term) > 3 and term.endswith('s') else [])
+                ors = []
+                for variant in variants:
+                    pattern = '%' + variant.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+                    for cell in cells:
+                        ors.append(f'CAST("{cell}" AS TEXT) LIKE ? ESCAPE \'\\\'')
+                        params.append(pattern)
+                clauses.append('(' + ' OR '.join(ors) + ')')
+
+            select = ', '.join(['__row_number'] + [f'"{cell}"' for cell in cells])
+            try:
+                with sqlite_connect(self.db_path) as conn:
+                    matches = conn.execute(
+                        f'SELECT {select} FROM "{table["table_name"]}" '
+                        f'WHERE {" AND ".join(clauses)} '
+                        f'ORDER BY __row_number LIMIT ?',
+                        params + [limit - len(found)],
+                    ).fetchall()
+            except sqlite3.Error as e:
+                # A sheet too wide for one SQLite expression (hundreds of
+                # columns) is skipped, not allowed to hide every other table.
+                logger.warning(f"Row search skipped {table['filename']}: {e}")
+                continue
+            for row in matches:
+                found.append({
+                    'document_id': table['document_id'],
+                    'filename': table['filename'],
+                    'sheet_name': table['sheet_name'],
+                    'row_number': row[0],
+                    'columns': [c['name'] for c in columns],
+                    'values': {
+                        c['name']: ('' if v is None else v)
+                        for c, v in zip(columns, row[1:])
+                    },
+                })
+            if len(found) >= limit:
+                break
+        return found
+
     def get_schemas_for_document(self, document_id: str) -> List[Dict[str, Any]]:
         with sqlite_connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row

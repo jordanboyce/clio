@@ -434,6 +434,12 @@ onMounted(async () => {
   // re-run provider init once we know which providers the server covers.
   await providerStore.loadServerProviders()
   initializeProviders()
+
+  // A question handed over from Ask (no model connected) runs straight away.
+  if (searchStore.runOnOpen) {
+    searchStore.runOnOpen = false
+    search()
+  }
 })
 
 onBeforeUnmount(() => {

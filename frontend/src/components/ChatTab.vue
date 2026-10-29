@@ -740,6 +740,7 @@ import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useProviderStore } from '../stores/providerStore'
 import { useStatsStore } from '../stores/statsStore'
 import { useSelectionStore } from '../stores/selectionStore'
+import { useSearchStore } from '../stores/searchStore'
 import { useUiStore } from '../stores/uiStore'
 import { addSampleSources } from '../utils/sampleSources'
 import { locationLabel } from '../utils/fileTypes'
@@ -764,6 +765,7 @@ const backgroundJobsStore = useBackgroundJobsStore()
 const providerStore = useProviderStore()
 const statsStore = useStatsStore()
 const selectionStore = useSelectionStore()
+const searchStore = useSearchStore()
 const ui = useUiStore()
 // The sidebar selection scopes this conversation (see stores/selectionStore).
 const selectionActive = computed(() => selectionStore.active)
@@ -1268,9 +1270,20 @@ const sendMessage = async () => {
     return
   }
 
-  // Refuse to send if no provider is configured.
+  // No model to answer with: run the question as a search instead, so it
+  // still finds the passages rather than being dropped.
   if (!hasAnyProvider.value) {
-    error.value = 'Configure an AI provider in Settings to chat.'
+    // The deployment's own model arrives with the server's provider list;
+    // until then "none connected" is not known yet.
+    if (!providerStore.serverLoaded) {
+      inputMessage.value = userContent
+      error.value = 'Still checking which AI models are connected. Try again in a moment.'
+      return
+    }
+    searchStore.setQuery(userContent)
+    searchStore.runOnOpen = true
+    ui.notify('No AI model is connected, so here are the matching passages instead.', 'info')
+    emit('switch-tab', 'search')
     return
   }
 

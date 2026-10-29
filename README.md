@@ -202,7 +202,7 @@ goes through the app's access checks.
 | **Find the exact passage or identifier** | Find | Automatic hybrid search (meaning + keywords, balanced per query: codes, names and quotes lean on exact words) without any answer model, then a local cross-encoder reranks the best candidates — on by default, nothing leaves the machine; exact strings, numbers, and negation stay intact. |
 | **Research a multi-part question** | Ask, MCP | `research_documents` runs focused subqueries, reports coverage gaps and weak evidence, and spans collections. [Guide](docs/AGENTIC_RESEARCH.md). |
 | **Get a finished answer in one agent call** | MCP | `ask_documents` returns the grounded, cited answer the in-app chat would give, when the deployment runs a model of its own (`AI_PROVIDER`). For agents whose own model is small or busy, or automations that just need the answer. |
-| **Query spreadsheets, not just prose** | Ask, MCP | CSV/XLSX become typed tables; counts, sums, filters, and rankings run as SQL, never as guessed passage search. |
+| **Query spreadsheets, not just prose** | Ask, Find, MCP | CSV/XLSX become typed tables; counts, sums, filters, and rankings run as SQL, never as guessed passage search. Find returns the rows that contain every word you search for (a customer, an invoice number, a SKU), with no model needed. |
 | **Turn a collection into a document** | Generate (under More) | Source-grounded briefings, summaries, and reports with citations to review before sharing. |
 | **Teach it your house style or domain** | Expertise (under More) | Expertise packs add instructions and terminology per collection, versioned alongside the corpus. |
 | **Give your AI assistant a private knowledge source** | Connect | Claude Desktop, claude.ai, ChatGPT, Grok and Claude Code sign in through your identity provider; Codex, VS Code, Cursor, Windsurf, AnythingLLM, Hermes Agent, Claude Code and any MCP SDK can also use a personal token. Agents can write notes and summaries back when a token allows it. |
@@ -999,7 +999,7 @@ A: Yes, when the deployment has an identity provider. They add the `/mcp` URL as
 A: Yes, with a personal token minted with *Allow adding and updating sources*: the `write_document` tool creates, replaces or appends text sources, indexed and audited like an upload. There is deliberately no delete tool.
 
 **Q: Does it need a cloud AI provider?**
-A: No. Search works with no model at all. For answers, use any provider you trust — Anthropic, OpenAI, Gemini, OpenRouter, Ollama Cloud — or a model you run yourself (Ollama, vLLM, LM Studio, llama.cpp, any OpenAI-compatible endpoint), set once for the whole deployment with `AI_PROVIDER` ([docs/ONPREM.md](docs/ONPREM.md)).
+A: No. Without any model or API key you can add sources, search them with **Find** (passages and spreadsheet rows, with links to the page or row), and connect AI clients over MCP, whose own model then does the answering. Indexing, search and reranking run locally; only written answers (**Ask**, **Generate**, suggested questions) and describing pictures with a vision model need a model, and asking a question in Ask with none connected runs it in Find instead. For answers, use any provider you trust — Anthropic, OpenAI, Gemini, OpenRouter, Ollama Cloud — or a model you run yourself (Ollama, vLLM, LM Studio, llama.cpp, any OpenAI-compatible endpoint), set once for the whole deployment with `AI_PROVIDER` ([docs/ONPREM.md](docs/ONPREM.md)).
 
 ---
 
