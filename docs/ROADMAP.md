@@ -28,7 +28,7 @@ Clio owns the trustworthy data layer; the intelligence layer lives upstream in w
 - **Access without accounts** — Clio deliberately has no accounts: it is an open appliance by default, with `AUTH_PASSWORD` as the shared gate and a TLS proxy or private network in front; simplicity is a product requirement. Expiring, collection-limited personal MCP tokens shipped 2026-09-17. Pluggable identity shipped 2026-09-17: `IDENTITY_PROVIDER=oidc` (your own IdP) or `trusted_header` (an authenticating proxy), plus `MCP_AUDIT_TOOL_CALLS` for auditing agent reads. OAuth 2.1 on `/mcp` shipped 2026-09-17: RFC 9728 metadata and the Bearer challenge delegate to the site's IdP, so Claude Desktop, claude.ai, ChatGPT and `claude mcp login` attach with the endpoint URL alone (`MCP_PUBLIC_URL`, optional `MCP_OAUTH_SCOPE`, or `MCP_OAUTH_ISSUER` for a different IdP on `/mcp` only). ChatGPT `search`/`fetch` aliases shipped 2026-10-08. Next: per-tool token scopes, group-derived collection access for OIDC deployments, and an admin token fleet view.
 - **Per-collection storage cap** — shipped 2026-09-12 (5 GiB default, `COLLECTION_STORAGE_LIMIT_BYTES`). Next: per-user totals across collections, and an admin view of storage by collection.
 
-## From the September 2026 product assessment (docs/PRODUCT_ASSESSMENT.md)
+## From the September 2026 product assessment
 
 Shipped 2026-09-12: the answer cache keys on the whole request (corpus version, guide, attached instructions, provider/model, retrieval settings, source selection) and the source selection is enforced end-to-end (retrieval, tool calls, table queries, overview, citations, reports, cache). Still open, in priority order:
 

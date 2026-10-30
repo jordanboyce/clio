@@ -265,8 +265,7 @@ def test_store_then_lookup_roundtrip(chat_env, cache, monkeypatch):
     assert payload[0]["pdf_url"].startswith("http://x/documents/doc9/pdf?collection_id=default")
 
 
-# ── The request fingerprint (docs/PRODUCT_ASSESSMENT.md: "caching reflects
-# the entire request") ──────────────────────────────────────────────────
+# ── The request fingerprint: caching reflects the entire request ─────────
 
 
 def _key(chat_env, **kwargs):

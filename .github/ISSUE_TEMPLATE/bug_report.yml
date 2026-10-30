@@ -1,0 +1,56 @@
+name: Bug report
+description: Something does not work the way the documentation says it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Clio takes issues, not pull requests, so this is the right place.
+        Remove passwords, tokens and anything from your own documents before pasting.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Add a PDF to a collection
+        2. Ask "…"
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: From the About dialog, `GET /health`, or the image tag.
+      placeholder: "1.0.0"
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run it
+      options:
+        - docker compose (built from source)
+        - Prebuilt image (ghcr.io/jordanboyce/clio)
+        - Python (python main.py, run.sh, run.bat)
+        - A PaaS (Railway, Render, Fly.io, Coolify, …)
+        - Offline bundle / air-gapped
+        - Other (say which below)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and browser
+      placeholder: "Ubuntu 24.04, Firefox 130"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: "`docker compose logs clio`, or the terminal running `python main.py`. Secrets removed."
+      render: text
