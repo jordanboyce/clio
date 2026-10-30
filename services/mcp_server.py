@@ -21,7 +21,8 @@ from starlette.responses import JSONResponse
 
 from config import settings
 from models.schemas import SearchMode
-from services import authored_text
+from services import authored_text, pii_detector
+from services.prompt_injection_detector import mark_passage
 from services.app_database import app_db
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
@@ -167,7 +168,8 @@ _SERVER_INSTRUCTIONS = (
     "table tools, never passage search. Cite filename and page from the results "
     "and say what the sources do not establish. Responses carry a corpus_version "
     "per collection; if it changes between calls, evidence fetched earlier may be "
-    "stale. " + _RESEARCH_INSTRUCTIONS + " " + authored_text.MCP_RULE
+    "stale. " + _RESEARCH_INSTRUCTIONS + " " + authored_text.MCP_RULE + " "
+    + authored_text.MCP_DOCUMENT_TEXT_RULE
 )
 
 # The grounded-answer tool exists only when the deployment runs a model of
@@ -608,6 +610,11 @@ def _serialize_result(
     if duplicates:
         payload["duplicates"] = duplicates
         payload["duplicate_count"] = getattr(result, "duplicate_count", None) or len(duplicates)
+    # Wording aimed at an AI reader travels as a sibling label, so a client
+    # that honours fields sees it is quoted data (see MCP_DOCUMENT_TEXT_RULE).
+    mark = getattr(result, "instruction_text", None) or mark_passage(result.text_snippet)
+    if mark:
+        payload["instruction_text"] = mark
 
     return payload
 
@@ -1898,12 +1905,17 @@ def _document_context_payload(
         if running and running + len(text) + 1 > cap:
             truncated = True
             break
-        emitted.append({
+        text = pii_detector.redact_if_enabled(text)
+        entry = {
             "chunk_id": chunk.get("chunk_id"),
             "page_number": chunk.get("page_number"),
             "chunk_index": chunk.get("chunk_index"),
             "text": text,
-        })
+        }
+        mark = mark_passage(text)
+        if mark:
+            entry["instruction_text"] = mark
+        emitted.append(entry)
         running += len(text) + 1
 
     from services.governance import effective_sensitivity
@@ -2058,7 +2070,8 @@ def find_in_documents_sync(
                 from services.governance import effective_sensitivity
                 info = metadata_store.get_document_info(document_id) or {}
                 label_cache[document_id] = effective_sensitivity(collection, info.get("sensitivity"))
-            matches.append({
+            excerpt = pii_detector.redact_if_enabled(excerpt)
+            entry = {
                 "filename": filename,
                 "document_id": document_id,
                 "chunk_id": chunk_id,
@@ -2067,7 +2080,11 @@ def find_in_documents_sync(
                 "excerpt": excerpt,
                 "match": matched,
                 "sensitivity": label_cache[document_id],
-            })
+            }
+            mark = mark_passage(excerpt)
+            if mark:
+                entry["instruction_text"] = mark
+            matches.append(entry)
             if len(matches) >= capped:
                 break
         return matches, scanned
@@ -2998,6 +3015,8 @@ def ask_documents_sync(
         }
         if src.get("sensitivity"):
             entry["sensitivity"] = src["sensitivity"]
+        if src.get("instruction_text"):
+            entry["instruction_text"] = src["instruction_text"]
         sources.append(entry)
     usage = done.get("usage") or {}
     payload: dict[str, Any] = {

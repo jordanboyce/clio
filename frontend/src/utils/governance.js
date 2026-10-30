@@ -49,8 +49,37 @@ export function policyFlagPages(flags) {
   return Object.entries(flags.flagged_pages).map(([page, scan]) => ({ page: parseInt(page, 10), ...scan }))
 }
 
+// Plain words for scanner categories. Most read fine with the underscores
+// removed; a few have a name people actually use.
+const CATEGORY_LABELS = { pii: 'personal data', csae: 'child-safety indicators' }
+
 export function categoryLabel(cat) {
-  return String(cat || '').replace(/_/g, ' ')
+  const key = String(cat || '')
+  return CATEGORY_LABELS[key] || key.replace(/_/g, ' ')
+}
+
+// ── Passages that read as instructions to an AI ─────────────────────────────
+// Search results, chat sources and MCP excerpts carry `instruction_text` when
+// their wording addresses an AI assistant. The passage is shown, not hidden:
+// it is quoted data from the source, and the reader should know that is what
+// they are looking at.
+
+export function instructionTextNote(source) {
+  const mark = source?.instruction_text
+  if (!mark) return null
+  const cats = (mark.categories || []).map(categoryLabel)
+  const high = mark.level === 'high'
+  return {
+    level: mark.level || 'medium',
+    text: high ? 'Instruction-like text' : 'Possible instruction-like text',
+    cls: high ? 'badge-warning' : 'badge-warning badge-outline',
+    categories: cats,
+    excerpts: mark.excerpts || [],
+    title:
+      'This passage contains wording that addresses an AI assistant' +
+      (cats.length ? ` (${cats.join(', ')})` : '') +
+      '. It is quoted from the source and shown as data; nothing here is an instruction to you or to Clio.',
+  }
 }
 
 // ── Review queue ───────────────────────────────────────────────────────────

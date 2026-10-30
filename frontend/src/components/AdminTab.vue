@@ -19,6 +19,7 @@
         <span class="text-xs text-base-content/45">
           scanner: <span class="font-mono">{{ review.content_policy_action || '…' }}</span>
           · injection: <span class="font-mono">{{ review.injection_scan_action || '…' }}</span>
+          · personal data: <span class="font-mono">{{ review.pii_scan_action || '…' }}</span>
           · {{ review.blocked_hashes ?? 0 }} blocked hash{{ (review.blocked_hashes ?? 0) === 1 ? '' : 'es' }}
         </span>
       </div>
@@ -49,16 +50,52 @@
               :aria-pressed="reviewFilter === f.id"
               @click="reviewFilter = f.id"
             >{{ f.label }} <span class="tabular-nums opacity-70">{{ filterCount(f.id) }}</span></button>
+            <label v-if="visibleQueue.length > 1" class="ml-auto flex items-center gap-1.5 text-xs cursor-pointer select-none">
+              <input
+                type="checkbox"
+                class="checkbox checkbox-xs"
+                :checked="allShownSelected"
+                :indeterminate.prop="selectedShown.length > 0 && !allShownSelected"
+                aria-label="Select every document shown"
+                data-testid="select-all-shown"
+                @change="toggleSelectAllShown"
+              />
+              Select all shown
+            </label>
             <button
               v-if="visibleQueue.length > 1"
-              class="btn btn-xs btn-ghost ml-auto text-success"
-              :disabled="approvingAll"
+              class="btn btn-xs btn-ghost text-success"
+              :disabled="bulkBusy"
               title="Marks every document the current filter shows as reviewed and fine — same as clicking its green button on each."
               @click="approveAll"
             >
-              <span v-if="approvingAll" class="loading loading-spinner loading-xs"></span>
+              <span v-if="bulkBusy === 'approve-all'" class="loading loading-spinner loading-xs"></span>
               Approve all {{ visibleQueue.length }} shown
             </button>
+          </div>
+
+          <!-- Bulk decisions for the checked rows: approve (keep) or remove (deny). -->
+          <div
+            v-if="selectedShown.length"
+            class="mb-3 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 flex flex-wrap items-center gap-2 text-xs"
+            role="toolbar"
+            aria-label="Bulk actions for the selected documents"
+            data-testid="bulk-bar"
+          >
+            <span class="font-medium tabular-nums">{{ selectedShown.length }} selected</span>
+            <button class="btn btn-xs btn-success btn-outline" :disabled="!!bulkBusy" data-testid="bulk-approve" @click="approveSelected">
+              <span v-if="bulkBusy === 'approve'" class="loading loading-spinner loading-xs"></span>
+              Approve selected
+            </button>
+            <button class="btn btn-xs btn-error btn-outline" :disabled="!!bulkBusy" data-testid="bulk-remove-block" @click="removeSelected(true)">
+              <span v-if="bulkBusy === 'remove-block'" class="loading loading-spinner loading-xs"></span>
+              Remove &amp; block selected
+            </button>
+            <button class="btn btn-xs btn-ghost" :disabled="!!bulkBusy" data-testid="bulk-remove" @click="removeSelected(false)">
+              <span v-if="bulkBusy === 'remove'" class="loading loading-spinner loading-xs"></span>
+              Remove selected
+            </button>
+            <button class="btn btn-xs btn-ghost ml-auto" @click="clearSelection">Clear</button>
           </div>
 
           <ul class="space-y-2">
@@ -69,6 +106,14 @@
               :class="d.priority === 'critical' ? 'border-error/60' : 'border-base-300/60'"
             >
               <div class="p-3 flex flex-wrap items-start gap-x-4 gap-y-2">
+                <input
+                  type="checkbox"
+                  class="checkbox checkbox-sm mt-0.5"
+                  :checked="selected.has(key(d))"
+                  :aria-label="`Select ${d.filename}`"
+                  data-testid="row-select"
+                  @change="toggleSelected(d)"
+                />
                 <div class="min-w-0 flex-1 basis-64">
                   <div class="flex items-center gap-2 flex-wrap">
                     <span class="badge badge-sm" :class="priorityBadge(d.priority).cls">{{ priorityBadge(d.priority).text }}</span>
@@ -120,15 +165,32 @@
                     <span class="badge badge-xs ml-1" :class="d.injection.level === 'high' ? 'badge-error' : 'badge-warning'">{{ d.injection.level }}</span>
                     <span class="font-normal text-base-content/55 ml-1">on {{ d.injection.flagged_pages }} page{{ d.injection.flagged_pages === 1 ? '' : 's' }} · score {{ d.injection.max_score }}</span>
                   </div>
-                  <div v-for="(t, i) in injectionEvidence(d.injection)" :key="i" class="ml-2 mt-0.5">
+                  <div v-for="(t, i) in injectionEvidence(d.injection)" :key="i" class="ml-2 mt-0.5 flex flex-wrap items-center gap-x-1 gap-y-0.5">
                     <span class="capitalize">{{ t.category }}</span>
                     <span class="text-base-content/45"> · p.{{ t.page }}</span>
                     <span class="badge badge-xs ml-1" :class="t.severity === 'high' ? 'badge-error' : 'badge-warning'">{{ t.severity }}</span>
                     <code class="ml-1 text-[11px] text-base-content/70 break-all">{{ t.matched_text }}</code>
+                    <template v-if="t.pattern_name">
+                      <button
+                        class="btn btn-ghost btn-xs h-5 min-h-0 px-1.5 text-[11px]"
+                        :title="`Stop the rule '${t.pattern_name}' from flagging anything, everywhere. Reversible under Scanner tuning.`"
+                        data-testid="mute-pattern"
+                        @click="tune('mute', { pattern: t.pattern_name })"
+                      >Mute rule</button>
+                      <button
+                        v-if="t.matched_text"
+                        class="btn btn-ghost btn-xs h-5 min-h-0 px-1.5 text-[11px]"
+                        title="Never flag this exact wording again, in any document. Reversible under Scanner tuning."
+                        data-testid="allow-wording"
+                        @click="tune('allow', { phrase: t.matched_text })"
+                      >Allow wording</button>
+                    </template>
                   </div>
                   <p class="mt-1 text-base-content/50">
                     Text like this can steer an AI that reads the document. Approving keeps the warning on the
-                    source but takes it off this list; it does not hide the document.
+                    source but takes it off this list; it does not hide the document. Removing it counts as a
+                    confirmed hit for the rules above; approving counts as a miss — rules that are usually
+                    wrong are turned down automatically (see Scanner tuning below).
                   </p>
                 </div>
 
@@ -149,6 +211,111 @@
           </ul>
         </template>
       </template>
+    </section>
+
+    <!-- ═══ Scanner tuning ═══
+         Why the queue keeps filling, and the levers to stop it: muted rules,
+         allowed wordings, and what reviewers' decisions have taught the scanner. -->
+    <section aria-labelledby="admin-tuning">
+      <details class="rounded-lg border border-base-300/60 bg-base-100" @toggle="onTuningToggle">
+        <summary class="cursor-pointer px-4 py-3 flex items-center gap-2 flex-wrap">
+          <h2 id="admin-tuning" class="text-sm font-semibold uppercase tracking-wider text-base-content/60">Scanner tuning</h2>
+          <span class="text-xs text-base-content/45">
+            prompt injection ·
+            {{ (review.injection_tuning?.muted || []).length }} muted ·
+            {{ (review.injection_tuning?.allow_phrases || []).length }} allowed wording{{ (review.injection_tuning?.allow_phrases || []).length === 1 ? '' : 's' }} ·
+            {{ (review.injection_tuning?.noisy || []).length }} turned down
+          </span>
+        </summary>
+        <div class="px-4 pb-4 space-y-4 text-xs">
+          <p class="text-base-content/60">
+            The prompt-injection scan is wording-based. Every approve counts as a miss and every remove as a hit
+            for the rules that flagged the document; a rule dismissed at least {{ tuning.noisy_rule?.min_dismissals ?? 5 }} times and
+            right less than {{ Math.round((1 - (tuning.noisy_rule?.dismiss_ratio ?? 0.8)) * 100) }}% of the time is scanned one level
+            lower until you reset it. Muting a rule or allowing a wording applies everywhere at once, including
+            to warnings already on sources, and can be undone here.
+          </p>
+
+          <div v-if="tuningError" class="alert alert-error py-2"><span>{{ tuningError }}</span></div>
+          <div v-else-if="tuningLoading" class="text-base-content/50">Loading…</div>
+          <template v-else>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div class="space-y-2">
+                <div class="font-medium">Allowed wordings</div>
+                <div class="flex gap-2">
+                  <input
+                    v-model="newAllowPhrase"
+                    class="input input-bordered input-xs flex-1"
+                    placeholder="e.g. act as a fiduciary"
+                    aria-label="Wording to allow"
+                    data-testid="allow-input"
+                    @keyup.enter="addAllowPhrase"
+                  />
+                  <button class="btn btn-xs btn-outline" :disabled="newAllowPhrase.trim().length < 4 || tuningBusy" @click="addAllowPhrase">Allow</button>
+                </div>
+                <div v-if="!tuning.allow_phrases?.length" class="text-base-content/45">None. A match that contains an allowed wording (or sits inside it) is ignored.</div>
+                <ul v-else class="space-y-1 max-h-40 overflow-y-auto">
+                  <li v-for="p in tuning.allow_phrases" :key="p" class="flex items-center gap-2">
+                    <code class="text-[11px] truncate flex-1" :title="p">{{ p }}</code>
+                    <button class="btn btn-ghost btn-xs" :disabled="tuningBusy" @click="tune('disallow', { phrase: p })">Remove</button>
+                  </li>
+                </ul>
+              </div>
+              <div class="space-y-2">
+                <div class="font-medium">Muted rules</div>
+                <div v-if="!tuning.muted?.length" class="text-base-content/45">None. Mute a rule from a document's evidence, or from the table below.</div>
+                <ul v-else class="flex flex-wrap gap-1.5">
+                  <li v-for="m in tuning.muted" :key="m">
+                    <button class="badge badge-sm badge-ghost gap-1 font-mono" :disabled="tuningBusy" :title="`Unmute ${m}`" @click="tune('unmute', { pattern: m })">{{ m }} ✕</button>
+                  </li>
+                </ul>
+                <div class="font-medium pt-2">Turned down by feedback</div>
+                <div v-if="!tuning.noisy?.length" class="text-base-content/45">None yet.</div>
+                <ul v-else class="flex flex-wrap gap-1.5">
+                  <li v-for="m in tuning.noisy" :key="m">
+                    <button class="badge badge-sm badge-warning badge-outline gap-1 font-mono" :disabled="tuningBusy" :title="`Reset the statistics for ${m}`" @click="tune('reset_feedback', { pattern: m })">{{ m }} ↺</button>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="overflow-x-auto rounded-lg border border-base-300/60 max-h-80">
+              <table class="table table-xs" data-testid="tuning-table">
+                <thead>
+                  <tr class="text-[10px] uppercase tracking-wider text-base-content/45">
+                    <th>Rule</th>
+                    <th>Category</th>
+                    <th>Severity</th>
+                    <th class="text-right">Misses</th>
+                    <th class="text-right">Hits</th>
+                    <th>State</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="p in tuning.patterns" :key="p.name">
+                    <td class="font-mono">{{ p.name }}</td>
+                    <td class="capitalize">{{ categoryLabel(p.category) }}</td>
+                    <td>{{ p.severity }}</td>
+                    <td class="text-right tabular-nums">{{ p.dismissed }}</td>
+                    <td class="text-right tabular-nums">{{ p.confirmed }}</td>
+                    <td>
+                      <span v-if="p.muted" class="badge badge-xs badge-ghost">muted</span>
+                      <span v-else-if="p.noisy" class="badge badge-xs badge-warning badge-outline">turned down</span>
+                      <span v-else class="text-base-content/40">—</span>
+                    </td>
+                    <td class="text-right whitespace-nowrap">
+                      <button v-if="p.muted" class="btn btn-ghost btn-xs" :disabled="tuningBusy" @click="tune('unmute', { pattern: p.name })">Unmute</button>
+                      <button v-else class="btn btn-ghost btn-xs" :disabled="tuningBusy" @click="tune('mute', { pattern: p.name })">Mute</button>
+                      <button v-if="p.dismissed || p.confirmed" class="btn btn-ghost btn-xs" :disabled="tuningBusy" @click="tune('reset_feedback', { pattern: p.name })">Reset</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </div>
+      </details>
     </section>
 
     <!-- ═══ Live system card ═══ -->
@@ -302,6 +469,41 @@
             <p class="text-[11px] text-base-content/50 mt-1">
               Wording-based, so ordinary prose can trip it. "Badge only" keeps the warning on the source without making it your to-do.
             </p>
+          </div>
+          <div class="form-control">
+            <label class="label pb-1" for="pii-action"><span class="label-text font-medium">Personal data in sources</span></label>
+            <select id="pii-action" v-model="policyForm.pii_scan_action" class="select select-bordered select-sm" data-testid="pii-action">
+              <option value="label">Label — default the source to confidential, no queue</option>
+              <option value="flag">Flag — label it and queue it here</option>
+              <option value="quarantine">Quarantine — hide it until approved</option>
+              <option value="off">Off — do not scan</option>
+            </select>
+            <div class="flex items-center gap-2 mt-2">
+              <span class="text-xs">Counts as personal data from</span>
+              <input v-model.number="policyForm.pii_flag_threshold" type="number" min="1" max="1000" class="input input-bordered input-xs w-20" aria-label="Personal-data threshold per page" />
+              <span class="text-[11px] text-base-content/45">items on one page</span>
+            </div>
+            <p class="text-[11px] text-base-content/50 mt-1">
+              <template v-if="review.pii_engine?.engine === 'presidio'">
+                Microsoft Presidio<template v-if="review.pii_engine?.model"> ({{ review.pii_engine.model }})</template>: names, addresses, ids, bank and card numbers, emails, phones.
+              </template>
+              <template v-else>
+                Built-in patterns: emails, phones, card numbers, IBANs, SSNs, IP addresses. Install Presidio
+                (<code>requirements-pii.txt</code>) for names, addresses and national ids.
+                <template v-if="review.pii_engine?.error"> Presidio failed to load: {{ review.pii_engine.error }}</template>
+              </template>
+              Only counts and masked previews are stored, never the data.
+            </p>
+          </div>
+          <div class="form-control">
+            <label class="label pb-1 cursor-pointer justify-start gap-2">
+              <input v-model="policyForm.pii_redact_outputs" type="checkbox" class="checkbox checkbox-sm" data-testid="pii-redact" />
+              <span class="label-text font-medium">Mask personal data in results</span>
+            </label>
+            <p class="text-[11px] text-base-content/50">
+              Replaces each item with its type (&lt;EMAIL_ADDRESS&gt;) in search results, chat context and sources, MCP excerpts and chunk views. The original file is unchanged.
+            </p>
+            <input v-model="policyForm.pii_entities" class="input input-bordered input-xs mt-2" placeholder="entity types (blank = default set, e.g. add PERSON,LOCATION)" aria-label="Personal-data entity types" />
           </div>
           <div class="form-control">
             <label class="label pb-1 cursor-pointer justify-start gap-2">
@@ -477,6 +679,26 @@ const filterCount = (id) => filterReviewItems(reviewQueue.value, id).length
 const key = (d) => `${d.collection_id}:${d.document_id}`
 const toggleDetails = (d) => { expanded.value = expanded.value === key(d) ? '' : key(d) }
 
+// ── Selection for bulk decisions ───────────────────────────────────────
+// Keyed by collection:document so a selection survives a reload of the queue;
+// rows that left the queue simply stop counting.
+const selected = ref(new Set())
+const selectedShown = computed(() => visibleQueue.value.filter((d) => selected.value.has(key(d))))
+const allShownSelected = computed(() => visibleQueue.value.length > 0 && selectedShown.value.length === visibleQueue.value.length)
+const toggleSelected = (d) => {
+  const next = new Set(selected.value)
+  if (next.has(key(d))) next.delete(key(d))
+  else next.add(key(d))
+  selected.value = next
+}
+const toggleSelectAllShown = () => {
+  const next = new Set(selected.value)
+  if (allShownSelected.value) visibleQueue.value.forEach((d) => next.delete(key(d)))
+  else visibleQueue.value.forEach((d) => next.add(key(d)))
+  selected.value = next
+}
+const clearSelection = () => { selected.value = new Set() }
+
 // What the green button does depends on why the document is here.
 const approveLabel = (d) => {
   if (d.policy_status === 'quarantined') return 'Release'
@@ -518,24 +740,108 @@ const approve = async (d) => {
   }
 }
 
-// One decision for the whole filtered view: a re-index or a tuning change can
-// queue dozens of rows at once, and clicking them away one by one is a chore.
-const approvingAll = ref(false)
-const approveAll = async () => {
-  const items = visibleQueue.value.map((d) => ({ collection_id: d.collection_id, document_id: d.document_id }))
+// One decision for many rows: a re-index or a tuning change can queue dozens
+// of documents at once, and clicking them away one by one is a chore.
+const bulkBusy = ref('')
+const refs = (rows) => rows.map((d) => ({ collection_id: d.collection_id, document_id: d.document_id }))
+
+const bulkApprove = async (rows, label) => {
+  const items = refs(rows)
   if (!items.length) return
-  if (!window.confirm(`Mark all ${items.length} shown documents as reviewed and fine? Held documents become visible again.`)) return
-  approvingAll.value = true
+  if (!window.confirm(`Mark ${items.length === 1 ? 'this document' : `these ${items.length} documents`} as reviewed and fine? Held documents become visible again.`)) return
+  bulkBusy.value = label
   try {
     const resp = await http.post('/api/admin/review/resolve', { items, note: '' })
     const n = resp.data?.resolved ?? items.length
-    ui.notify(`Marked ${n} document${n === 1 ? '' : 's'} as reviewed.`, 'success')
+    const skipped = resp.data?.skipped?.length || 0
+    ui.notify(`Marked ${n} document${n === 1 ? '' : 's'} as reviewed.` + (skipped ? ` ${skipped} had already gone.` : ''), 'success')
+    clearSelection()
     await Promise.all([loadReview(), loadAudit()])
   } catch (err) {
     ui.toastError(err, 'Could not approve the documents')
   } finally {
-    approvingAll.value = false
+    bulkBusy.value = ''
   }
+}
+const approveAll = () => bulkApprove(visibleQueue.value, 'approve-all')
+const approveSelected = () => bulkApprove(selectedShown.value, 'approve')
+
+const removeSelected = async (block) => {
+  const items = refs(selectedShown.value)
+  if (!items.length) return
+  const what = items.length === 1 ? `"${selectedShown.value[0].filename}"` : `these ${items.length} documents`
+  if (!window.confirm(block
+    ? `Remove ${what} and block the file${items.length === 1 ? '' : 's'} from being re-added?`
+    : `Remove ${what}?`)) return
+  bulkBusy.value = block ? 'remove-block' : 'remove'
+  try {
+    const resp = await http.post('/api/admin/review/remove', { items, block, reason: '' })
+    const n = resp.data?.removed ?? items.length
+    const skipped = resp.data?.skipped?.length || 0
+    ui.notify(
+      (block ? `Removed and blocked ${n} document${n === 1 ? '' : 's'}.` : `Removed ${n} document${n === 1 ? '' : 's'}.`) +
+      (skipped ? ` ${skipped} had already gone.` : ''),
+      'success',
+    )
+    clearSelection()
+    await Promise.all([loadReview(), loadAudit(), loadBlocked()])
+  } catch (err) {
+    ui.toastError(err, 'Could not remove the documents')
+  } finally {
+    bulkBusy.value = ''
+  }
+}
+
+// ── Scanner tuning ─────────────────────────────────────────────────────
+const tuning = ref({ muted: [], allow_phrases: [], noisy: [], patterns: [], noisy_rule: null })
+const tuningLoading = ref(false)
+const tuningLoaded = ref(false)
+const tuningError = ref('')
+const tuningBusy = ref(false)
+const newAllowPhrase = ref('')
+
+const loadTuning = async () => {
+  tuningLoading.value = !tuningLoaded.value
+  tuningError.value = ''
+  try {
+    tuning.value = (await http.get('/api/admin/injection-tuning')).data
+    tuningLoaded.value = true
+  } catch (err) {
+    tuningError.value = err.message || 'Could not load the scanner tuning'
+  } finally {
+    tuningLoading.value = false
+  }
+}
+const onTuningToggle = (event) => { if (event.target.open && !tuningLoaded.value) loadTuning() }
+
+// One call for every lever; the server answers with the whole tuning, and the
+// queue is reloaded because muting a rule can empty it.
+const tune = async (action, body = {}) => {
+  tuningBusy.value = true
+  try {
+    const resp = await http.post('/api/admin/injection-tuning', { action, ...body })
+    tuning.value = resp.data
+    tuningLoaded.value = true
+    const said = {
+      mute: `Muted ${body.pattern}. Warnings from it are no longer counted anywhere.`,
+      unmute: `Unmuted ${body.pattern}.`,
+      allow: 'Allowed that wording everywhere.',
+      disallow: 'Removed the allowed wording.',
+      reset_feedback: body.pattern ? `Reset the statistics for ${body.pattern}.` : 'Reset all rule statistics.',
+    }
+    ui.notify(said[action] || 'Tuning updated.', 'success')
+    await Promise.all([loadReview(), loadAudit()])
+  } catch (err) {
+    ui.toastError(err, 'Could not change the scanner tuning')
+  } finally {
+    tuningBusy.value = false
+  }
+}
+const addAllowPhrase = async () => {
+  const phrase = newAllowPhrase.value.trim()
+  if (phrase.length < 4) return
+  await tune('allow', { phrase })
+  newAllowPhrase.value = ''
 }
 
 const remove = async (d, block) => {
@@ -560,6 +866,10 @@ const policyForm = reactive({
   content_policy_llm_review: false,
   content_policy_llm_provider: '',
   content_policy_llm_model: '',
+  pii_scan_action: 'label',
+  pii_flag_threshold: 10,
+  pii_entities: '',
+  pii_redact_outputs: false,
   aup_required: false,
   aup_version: '1',
   aup_text: '',

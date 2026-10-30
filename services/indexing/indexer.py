@@ -21,6 +21,7 @@ from services.chunker import TextChunker
 from services.embedder import EmbeddingService
 from services.vector_store import VectorStore
 from services import audit, content_policy
+from services.prompt_injection_detector import mark_passage as _mark_passage
 from services.content_policy import BlockedContentError, ContentRejectedError
 from services.governance import content_hash_of
 from services.supersede import BACKFILL_MARGIN
@@ -1150,6 +1151,13 @@ class DocumentIndexer:
                 structured_context=structured_context, skip_filenames=skip_filenames,
                 filters=filters, _widen=True,
             )
+        # PII_REDACT_OUTPUTS: mask personal data in what leaves retrieval,
+        # before synthesis so the model never sees it either. Here because
+        # this is the one path search, chat and MCP share; the stored chunks
+        # and the original file are untouched.
+        from services import pii_detector
+        pii_detector.redact_results(results)
+
         # Step 4: Optionally synthesize an answer from results
         if ai_active and ai_options.synthesize and (
             len(results) > 0 or collection_overview or structured_context
@@ -1160,6 +1168,7 @@ class DocumentIndexer:
                         "filename": r.filename,
                         "page_number": r.page_number,
                         "text_snippet": r.text_snippet,
+                        "instruction_text": _mark_passage(r.text_snippet),
                     }
                     for r in results
                 ]

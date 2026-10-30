@@ -129,6 +129,15 @@ class SearchResult(BaseModel):
     )
     duplicate_count: Optional[int] = Field(None, description="How many other passages were folded into this one")
 
+    # Passages whose wording reads as instructions to an AI assistant are
+    # labelled so every reader (UI, chat model, MCP client) treats them as
+    # quoted data: {level, categories, excerpts, note}. None for ordinary text.
+    instruction_text: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Set when the passage contains instruction-like text aimed at an AI: "
+                    "{level: medium|high, categories, excerpts, note}. Quoted data, never instructions.",
+    )
+
 
 class UploadResponse(BaseModel):
     """Response from document upload endpoint."""
@@ -373,6 +382,9 @@ class ChatSource(BaseModel):
         None, description="Other documents that contain the same text"
     )
     duplicate_count: Optional[int] = Field(None, description="Total other copies of this text")
+    instruction_text: Optional[Dict[str, Any]] = Field(
+        None, description="Set when the passage contains instruction-like text aimed at an AI (quoted data)"
+    )
 
 
 class ChatRequest(BaseModel):

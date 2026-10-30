@@ -10,10 +10,11 @@
           <span v-if="showLabel(result.sensitivity)" class="badge badge-sm" :class="labelBadgeClass(result.sensitivity)">{{ result.sensitivity }}</span>
         </div>
         <SupersedeNote :source="result" />
+        <InstructionTextNote :source="result" />
         <div v-if="result.csv_columns && result.csv_values" class="mt-3 overflow-x-auto">
           <table class="table table-sm"><thead><tr><th v-for="col in result.csv_columns" :key="col">{{ col }}</th></tr></thead><tbody><tr><td v-for="col in result.csv_columns" :key="col"><span v-html="highlightSnippet(result.csv_values[col] ?? '', query)"></span></td></tr></tbody></table>
         </div>
-        <p v-else class="mt-3 text-sm leading-7 whitespace-pre-wrap break-words max-w-prose" v-html="highlightSnippet(result.text_snippet || 'No passage preview available.', query)"></p>
+        <p v-else class="mt-3 text-sm leading-7 whitespace-pre-wrap break-words max-w-prose" :class="{ 'quoted-passage': result.instruction_text }" :data-quoted="result.instruction_text ? 'true' : null" v-html="highlightSnippet(result.text_snippet || 'No passage preview available.', query)"></p>
         <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3">
           <a v-if="href" :href="href" target="_blank" rel="noopener noreferrer" class="link link-primary inline-flex items-center gap-1.5 min-h-11 text-sm font-medium" :aria-label="`Open ${result.filename} in a new tab`">{{ result.source_format === 'pdf' && result.page_number ? `Open page ${result.page_number}` : 'Open source' }}<ExternalLink :size="14" /></a>
           <details class="text-sm text-base-content/75">
@@ -38,6 +39,7 @@ import { labelBadgeClass, showLabel } from '../utils/governance'
 import { sourceHref } from '../utils/answerEvidence'
 import { highlightSnippet } from '../utils/searchPresentation'
 import SupersedeNote from './SupersedeNote.vue'
+import InstructionTextNote from './InstructionTextNote.vue'
 const props = defineProps({ result: { type: Object, required: true }, index: { type: Number, required: true }, query: { type: String, default: '' } })
 const href = computed(() => sourceHref(props.result))
 const location = computed(() => {
@@ -48,3 +50,8 @@ const location = computed(() => {
   return r.page_number ? `${r.source_format === 'pdf' ? 'Page' : 'Section'} ${r.page_number}` : ''
 })
 </script>
+
+<style scoped>
+/* A passage whose wording addresses an AI reads as a quotation, not as part of the page. */
+.quoted-passage { border-inline-start: 3px solid var(--color-warning); padding-inline-start: 0.75rem; }
+</style>

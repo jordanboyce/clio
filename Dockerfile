@@ -81,9 +81,14 @@ ENV PATH="/opt/venv/bin:$PATH"
 # catalog, Tesseract/Docling OCR of scanned PDFs and Whisper transcription.
 # About 40% of the size (1.6 GB vs 3.9 GB); the right image for a knowledge base that
 # serves agents:   docker compose build --build-arg SLIM=1
+# WITH_PII=1 adds Microsoft Presidio and the small English spaCy model for
+# personal-data detection (names, addresses, ids). Without it the built-in
+# regex set still finds emails, phones, cards, IBANs, SSNs and IPs:
+#   docker compose build --build-arg WITH_PII=1
 ARG WITH_DOCLING=0
+ARG WITH_PII=0
 ARG SLIM=0
-COPY requirements.txt requirements-torch.txt requirements-ocr.txt requirements-audio.txt requirements-docling.txt ./
+COPY requirements.txt requirements-torch.txt requirements-ocr.txt requirements-audio.txt requirements-docling.txt requirements-pii.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
     && if [ "$SLIM" = "1" ]; then \
          pip install --no-cache-dir -r requirements.txt; \
@@ -94,6 +99,10 @@ RUN pip install --no-cache-dir --upgrade pip \
     && if [ "$WITH_DOCLING" = "1" ] && [ "$SLIM" != "1" ]; then \
          pip install --no-cache-dir torchvision --index-url https://download.pytorch.org/whl/cpu \
          && pip install --no-cache-dir -r requirements-docling.txt; \
+       fi \
+    && if [ "$WITH_PII" = "1" ]; then \
+         pip install --no-cache-dir -r requirements-pii.txt \
+         && python -m spacy download en_core_web_sm; \
        fi
 
 # ── Stage 3: runtime ──

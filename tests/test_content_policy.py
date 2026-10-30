@@ -191,3 +191,11 @@ def test_scan_result_to_dict_caps_findings():
     assert d["is_flagged"] is True
     assert len(d["findings"]) <= 40
     assert d["categories"]["credential_dump"] >= 8
+
+
+def test_digits_inside_a_card_number_are_not_a_slogan():
+    """"1488" in "4539 1488 0343 6467" is a number, not the slogan."""
+    page = cp.scan_pages({1: "Card 4539 1488 0343 6467 expires 03/27. Ref 1488-22."})[1]
+    assert "violent_extremism" not in page.categories
+    slogans = cp.scan_pages({1: "They chant 1488 at every rally; 1488 is painted on the wall."})[1]
+    assert slogans.categories.get("violent_extremism") == 2

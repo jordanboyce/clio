@@ -46,3 +46,32 @@ describe('review queue helpers', () => {
     expect(injectionEvidence(null)).toEqual([])
   })
 })
+
+import { categoryLabel, instructionTextNote } from '../governance'
+
+describe('scanner category labels', () => {
+  it('names personal data and keeps the rest readable', () => {
+    expect(categoryLabel('pii')).toBe('personal data')
+    expect(categoryLabel('instruction_override')).toBe('instruction override')
+    expect(categoryLabel('')).toBe('')
+  })
+})
+
+describe('instruction-like passages', () => {
+  it('is quiet for ordinary passages', () => {
+    expect(instructionTextNote({ text_snippet: 'The trustee shall act as a fiduciary.' })).toBeNull()
+    expect(instructionTextNote(null)).toBeNull()
+  })
+
+  it('labels a marked passage as quoted data, strongest first', () => {
+    const note = instructionTextNote({
+      instruction_text: { level: 'high', categories: ['instruction_override', 'exfiltration'], excerpts: ['ignore all previous instructions'], note: 'x' },
+    })
+    expect(note.text).toBe('Instruction-like text')
+    expect(note.cls).toBe('badge-warning')
+    expect(note.categories).toEqual(['instruction override', 'exfiltration'])
+    expect(note.title).toContain('quoted from the source')
+    expect(note.excerpts).toEqual(['ignore all previous instructions'])
+    expect(instructionTextNote({ instruction_text: { level: 'medium', categories: [] } }).text).toBe('Possible instruction-like text')
+  })
+})

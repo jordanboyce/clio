@@ -43,6 +43,7 @@ VALID_CONFIG_FIELDS = {
     "content_policy_action", "injection_scan_action", "content_policy_llm_review",
     "content_policy_llm_provider", "content_policy_llm_model",
     "content_policy_llm_sample_pages",
+    "pii_scan_action", "pii_flag_threshold", "pii_entities", "pii_redact_outputs",
     "aup_required", "aup_version", "aup_text",
 }
 
@@ -133,6 +134,10 @@ class ConfigManager:
             "content_policy_llm_provider": settings.content_policy_llm_provider,
             "content_policy_llm_model": settings.content_policy_llm_model,
             "content_policy_llm_sample_pages": settings.content_policy_llm_sample_pages,
+            "pii_scan_action": settings.pii_scan_action,
+            "pii_flag_threshold": settings.pii_flag_threshold,
+            "pii_entities": settings.pii_entities,
+            "pii_redact_outputs": settings.pii_redact_outputs,
             "aup_required": settings.aup_required,
             "aup_version": settings.aup_version,
             "aup_text": settings.aup_text,
@@ -251,6 +256,25 @@ class ConfigManager:
                 )
                 result["success"] = False
                 return result
+
+        if "pii_scan_action" in updates:
+            if updates["pii_scan_action"] not in ("off", "label", "flag", "quarantine"):
+                result["errors"].append(
+                    "pii_scan_action must be one of: off, label, flag, quarantine"
+                )
+                result["success"] = False
+                return result
+
+        if "pii_flag_threshold" in updates:
+            try:
+                threshold = int(updates["pii_flag_threshold"])
+            except (TypeError, ValueError):
+                threshold = 0
+            if threshold < 1 or threshold > 1000:
+                result["errors"].append("pii_flag_threshold must be between 1 and 1000")
+                result["success"] = False
+                return result
+            updates["pii_flag_threshold"] = threshold
 
         # Validate updates
         for key in updates.keys():

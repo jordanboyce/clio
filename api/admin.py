@@ -45,11 +45,22 @@ def get_review_queue():
     require_admin("review flagged content")
     from services.app_database import app_db
 
+    from services import pii_detector
+    from services.prompt_injection_detector import current_tuning
+
     queue = governance.review_queue()
     governance.invalidate_review_summary()
+    tuning = current_tuning(max_age=0)
     return {
         "content_policy_action": settings.content_policy_action,
         "injection_scan_action": settings.injection_scan_action,
+        "pii_scan_action": pii_detector.action(),
+        "pii_engine": pii_detector.engine_status(),
+        "injection_tuning": {
+            "muted": sorted(tuning["muted"]),
+            "allow_phrases": list(tuning["allow"]),
+            "noisy": sorted(tuning["noisy"]),
+        },
         "items": queue,
         "summary": governance.summarize_queue(queue),
         "quarantined": [d for d in queue if d.get("policy_status") == "quarantined"],
@@ -81,6 +92,18 @@ class ReviewItemRef(BaseModel):
 class BulkResolveRequest(BaseModel):
     items: list[ReviewItemRef]
     note: str = ""
+    # "" closes everything open on each document; "injection" dismisses only
+    # the wording warnings and leaves holds and reports alone.
+    scope: str = ""
+
+
+class BulkRemoveRequest(BaseModel):
+    items: list[ReviewItemRef]
+    block: bool = True
+    reason: str = ""
+
+
+_BULK_LIMIT = 500
 
 
 @router.post(
@@ -94,14 +117,17 @@ async def bulk_resolve_documents(body: BulkResolveRequest):
     closed, all audited per document). Items that have vanished in the meantime
     are skipped and reported, not fatal — the queue moves, that is the point."""
     require_admin("approve documents")
-    if len(body.items) > 500:
-        raise HTTPException(status_code=400, detail="At most 500 items per call")
+    if len(body.items) > _BULK_LIMIT:
+        raise HTTPException(status_code=400, detail=f"At most {_BULK_LIMIT} items per call")
+    if body.scope not in ("", "injection"):
+        raise HTTPException(status_code=400, detail="scope must be empty or 'injection'")
 
     def _resolve_all():
         resolved, skipped = [], []
         for ref in body.items:
             try:
-                governance.resolve_document(ref.collection_id, ref.document_id, note=body.note)
+                governance.resolve_document(ref.collection_id, ref.document_id, note=body.note,
+                                            scope=body.scope)
                 resolved.append(ref.document_id)
             except KeyError:
                 skipped.append(ref.document_id)
@@ -114,6 +140,100 @@ async def bulk_resolve_documents(body: BulkResolveRequest):
 
     resolved, skipped = await asyncio.to_thread(_resolve_all)
     return {"resolved": len(resolved), "skipped": skipped}
+
+
+@router.post(
+    "/api/admin/review/remove",
+    summary="Remove several documents, optionally blocking their hashes",
+    tags=["admin"],
+)
+async def bulk_remove_documents(body: BulkRemoveRequest):
+    """The deny side of the queue: every item is removed the way the single
+    remove endpoint does it (index, tracking and file; hash blocked when
+    ``block`` is on; audited per document). Unknown items are skipped and
+    reported. Open injection warnings on a removed document count as
+    confirmed for the pattern-tuning statistics."""
+    require_admin("remove documents")
+    if len(body.items) > _BULK_LIMIT:
+        raise HTTPException(status_code=400, detail=f"At most {_BULK_LIMIT} items per call")
+
+    def _remove_all():
+        removed, skipped, blocked = [], [], 0
+        for ref in body.items:
+            try:
+                out = governance.remove_document(
+                    ref.collection_id, ref.document_id, block=body.block, reason=body.reason,
+                    action="admin.remove_document",
+                )
+                removed.append(ref.document_id)
+                blocked += 1 if out.get("blocked") else 0
+            except KeyError:
+                skipped.append(ref.document_id)
+            except Exception as e:
+                logger.warning(f"Bulk remove failed for {ref.document_id}: {e}")
+                skipped.append(ref.document_id)
+        return removed, skipped, blocked
+
+    import asyncio
+
+    removed, skipped, blocked = await asyncio.to_thread(_remove_all)
+    return {"removed": len(removed), "blocked": blocked, "skipped": skipped}
+
+
+# ── Prompt-injection tuning ────────────────────────────────────────────
+# What the scanner keeps getting wrong, and the levers to fix it without a
+# code change: mute a pattern, allow a phrase, reset the learned statistics.
+
+
+class TuningChange(BaseModel):
+    action: str            # mute | unmute | allow | disallow | reset_feedback
+    pattern: str = ""      # for mute / unmute / reset_feedback (empty = all)
+    phrase: str = ""       # for allow / disallow
+
+
+@router.get("/api/admin/injection-tuning", summary="Prompt-injection pattern tuning", tags=["admin"])
+async def get_injection_tuning():
+    """Every detector pattern with its reviewer statistics (how often a
+    document it flagged was dismissed vs. removed), which ones are muted or
+    auto-downgraded as noisy, and the admin allow phrases."""
+    require_admin("tune the injection scanner")
+    from services.prompt_injection_detector import tuning_summary
+
+    return tuning_summary()
+
+
+@router.post("/api/admin/injection-tuning", summary="Change prompt-injection tuning", tags=["admin"])
+async def change_injection_tuning(body: TuningChange):
+    """Apply one change and return the new tuning. Muting a pattern or
+    allowing a phrase takes effect immediately for new scans and for the
+    verdicts already stored (the queue re-reads them), and is reversible."""
+    require_admin("tune the injection scanner")
+    from middleware.user_context import get_request_user
+    from services import prompt_injection_detector as pid
+
+    actor = get_request_user()
+    try:
+        if body.action == "mute":
+            pid.mute_pattern(body.pattern)
+        elif body.action == "unmute":
+            pid.unmute_pattern(body.pattern)
+        elif body.action == "allow":
+            pid.add_allow_phrase(body.phrase)
+        elif body.action == "disallow":
+            pid.remove_allow_phrase(body.phrase)
+        elif body.action == "reset_feedback":
+            pid.reset_feedback(body.pattern or None)
+        else:
+            raise HTTPException(status_code=400, detail="action must be mute, unmute, allow, disallow or reset_feedback")
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown pattern: {body.pattern}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    audit.record("admin.injection_tuning", actor=actor,
+                 detail={"action": body.action, "pattern": body.pattern or None,
+                         "phrase": body.phrase or None})
+    governance.invalidate_review_summary()
+    return pid.tuning_summary()
 
 
 @router.post(
