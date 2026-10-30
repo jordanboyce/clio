@@ -842,6 +842,13 @@ git pull
 docker compose up -d --build      # `up -d` alone does not rebuild
 ```
 
+If `up` fails with `The container name "/clio" is already in use`, a container
+from an older install (or another checkout) holds the name. Remove it with
+`docker rm -f clio` and re-run; its data is not deleted with it. An install
+from before the project was called Clio may hold the name `asymptote` instead
+(`docker ps -a` shows it); remove that one the same way. `./data` and named
+volumes are kept either way.
+
 The data directory is untouched by an upgrade, and schema changes are
 applied at start. Take a backup first if the data matters. Downgrading to an
 older version is not supported once a newer one has migrated the data.

@@ -9,6 +9,11 @@
 # No .env required to start; drop one next to this file to override defaults
 # (see .env.example). Documents and indexes persist in ./data.
 
+# Pin the project name. Without it Compose derives one from the directory
+# name, so a renamed or differently-named checkout becomes a *different*
+# project that collides with the fixed container_name below.
+name: clio
+
 services:
   clio:
     # A fixed name, so the image can be saved, carried and loaded elsewhere
