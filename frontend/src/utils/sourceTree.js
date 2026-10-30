@@ -68,6 +68,10 @@ export function buildTree(documents, roots = []) {
     .sort((a, b) => splitPath(b.path).length - splitPath(a.path).length)
 
   for (const doc of documents || []) {
+    if (doc.source_type === 'text') {
+      ensure(top, 'Pasted text', 'notes:', { group: 'notes' }).files.push(doc)
+      continue
+    }
     if (doc.source_type === 'url' && /^https?:\/\//i.test(doc.source_path || '')) {
       const links = ensure(top, 'Links', 'links:', { group: 'links' })
       ensure(links, host(doc.source_path), `links:${host(doc.source_path)}`, { group: 'site' }).files.push(doc)
@@ -108,10 +112,12 @@ function byName(a, b) {
     { numeric: true, sensitivity: 'base' })
 }
 
+const groupRank = (node) => (node.group === 'links' ? 2 : node.group === 'notes' ? 1 : 0)
+
 function finish(node) {
   const folders = [...node.folders.values()].map(finish).sort((a, b) => {
-    // "Links" sits after the folders a person made.
-    if ((a.group === 'links') !== (b.group === 'links')) return a.group === 'links' ? 1 : -1
+    // "Pasted text" and then "Links" sit after the folders a person made.
+    if (groupRank(a) !== groupRank(b)) return groupRank(a) - groupRank(b)
     return byName(a, b)
   })
   const files = [...node.files].sort(byName)

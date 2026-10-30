@@ -27,6 +27,16 @@
         <Link :size="15" />
       </button>
       <button
+        v-if="collectionStore.canEditCurrent"
+        class="side-icon-btn text-base-content/55 hover:text-base-content"
+        :class="{ 'is-active': textPanelOpen }"
+        @click="openAddText"
+        title="Paste text"
+        aria-label="Paste text"
+      >
+        <ClipboardPaste :size="15" />
+      </button>
+      <button
         class="side-icon-btn text-base-content/55 hover:text-base-content"
         :class="{ 'is-active': filterOpen || docSearch }"
         :aria-pressed="filterOpen || !!docSearch"
@@ -184,8 +194,8 @@
             <template v-else-if="userStore.privateCollections">Sources are recorded against your identity</template>.
             <button v-if="userStore.aup.enabled" type="button" class="link link-hover" @click="userStore.openAup()">Acceptable use</button>
           </p>
-          <!-- File/folder/record buttons -->
-          <div class="flex gap-1.5">
+          <!-- File/folder/link/text/record buttons -->
+          <div class="flex flex-wrap gap-1.5">
             <template v-if="capabilities.native_file_picker === false">
               <!-- Headless/Docker: labels directly trigger hidden inputs (no JS click chain needed) -->
               <label
@@ -220,7 +230,7 @@
             </template>
             <button
               v-if="webLinksAvailable || gitAvailable"
-              @click="linkPanelOpen = !linkPanelOpen"
+              @click="toggleLinkPanel"
               class="btn btn-xs flex-1 gap-1"
               :class="linkPanelOpen ? 'btn-secondary' : 'btn-outline'"
               :disabled="indexing || isRecording"
@@ -229,6 +239,17 @@
             >
               <Link :size="12" />
               Link
+            </button>
+            <button
+              @click="toggleTextPanel"
+              class="btn btn-xs flex-1 gap-1"
+              :class="textPanelOpen ? 'btn-secondary' : 'btn-outline'"
+              :disabled="indexing || isRecording"
+              :aria-expanded="textPanelOpen"
+              title="Type or paste text as a source"
+            >
+              <ClipboardPaste :size="12" />
+              Text
             </button>
             <button
               @click="toggleRecording"
@@ -324,6 +345,15 @@
               </button>
             </div>
           </div>
+
+          <!-- Text panel: type or paste; the server keeps the formatting that
+               matters and indexes the note like an uploaded HTML file -->
+          <PastedTextEditor
+            v-if="textPanelOpen"
+            ref="textEditor"
+            :busy="textSubmitting"
+            @submit="addPastedText"
+          />
 
           <!-- Folder enumeration hint: the browser walks the whole directory
                before the change event fires, which takes a while on huge trees -->
@@ -721,7 +751,7 @@
 
           <!-- Info -->
           <div class="flex-1 min-w-0">
-            <div class="text-xs font-semibold truncate leading-tight" :title="isLinkDoc(doc) ? doc.source_path : doc.filename">{{ doc.filename }}</div>
+            <div class="text-xs font-semibold truncate leading-tight" :title="isLinkDoc(doc) ? doc.source_path : doc.filename">{{ isNoteDoc(doc) ? noteTitle(doc) : doc.filename }}</div>
             <div class="flex items-center gap-1 mt-0.5 flex-wrap">
               <span
                 v-if="fileInfo(doc).label"
@@ -743,6 +773,11 @@
                 class="text-xs text-base-content/50"
                 title="Read in place from a folder on the server. Clio keeps a reference, not a copy."
               >· folder</span>
+              <span
+                v-if="isNoteDoc(doc)"
+                class="text-xs text-base-content/50"
+                title="Typed or pasted into this collection. Click the eye to read it."
+              >· pasted</span>
               <span
                 v-if="isTabularFile(doc.filename)"
                 class="badge badge-xs badge-success gap-0.5"
@@ -809,7 +844,17 @@
             >
               <FileSearch :size="12" />
             </button>
+            <button
+              v-if="isNoteDoc(doc)"
+              class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content"
+              @click="openNote(doc)"
+              title="Read the text"
+              :aria-label="`Read ${noteTitle(doc)}`"
+            >
+              <Eye :size="12" />
+            </button>
             <a
+              v-else
               :href="isLinkDoc(doc) ? doc.source_path : `/documents/${doc.document_id}/pdf?collection_id=${collectionStore.currentCollectionId}`"
               target="_blank"
               rel="noopener noreferrer"
@@ -1126,6 +1171,26 @@
       <form method="dialog" class="modal-backdrop"><button @click="closeReportModal">close</button></form>
     </dialog>
 
+    <!-- Note reader: pasted text is stored as HTML and served as plain text
+         (nothing from a source may run on this origin), so it is fetched and
+         drawn here, cleaned, instead of opening as tags in a new tab. -->
+    <dialog ref="noteModal" class="modal" aria-labelledby="sidebar-note-title">
+      <div class="modal-box max-w-3xl">
+        <h3 id="sidebar-note-title" class="font-bold text-lg">{{ noteDocument ? noteTitle(noteDocument) : 'Pasted text' }}</h3>
+        <p v-if="noteDocument" class="text-xs text-base-content/60 mt-1">
+          Pasted text<template v-if="noteDocument.indexed_at"> · added {{ new Date(noteDocument.indexed_at).toLocaleDateString() }}</template><template v-if="noteDocument.uploaded_by"> by {{ noteDocument.uploaded_by }}</template>
+        </p>
+        <div v-if="noteLoading" class="flex justify-center py-10"><span class="loading loading-spinner loading-lg"></span></div>
+        <div v-else-if="noteError" class="alert alert-error mt-4"><XCircle :size="20" /><span>{{ noteError }}</span></div>
+        <!-- eslint-disable-next-line vue/no-v-html -- cleaned by noteBodyHtml (DOMPurify allowlist) -->
+        <div v-else class="rich-text mt-4 max-h-[65vh] overflow-y-auto pr-1 text-sm" data-testid="note-body" v-html="noteHtml"></div>
+        <div class="modal-action">
+          <button class="btn" @click="closeNote">Close</button>
+        </div>
+      </div>
+      <form method="dialog" class="modal-backdrop"><button @click="closeNote">close</button></form>
+    </dialog>
+
     <SupersedeDialog
       v-if="collectionStore.currentCollectionId"
       :doc="supersedeDoc"
@@ -1144,9 +1209,11 @@ import EmbeddingMismatchNotice from './EmbeddingMismatchNotice.vue'
 import SupersedeDialog from './SupersedeDialog.vue'
 import SupersedeSuggestions from './SupersedeSuggestions.vue'
 import SourcesTree from './SourcesTree.vue'
+import PastedTextEditor from './PastedTextEditor.vue'
+import { noteBodyHtml } from '../utils/richText'
 import { buildTree, folderPaths, sortFiles } from '../utils/sourceTree.js'
 import { replacedBadge } from '../utils/supersede'
-import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync, GitBranch, EyeOff, Replace, FilePlus, ArrowUpDown, ChevronsDownUp, ChevronsUpDown, Rows3, FolderTree } from 'lucide-vue-next'
+import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync, GitBranch, EyeOff, Replace, FilePlus, ArrowUpDown, ChevronsDownUp, ChevronsUpDown, Rows3, FolderTree, ClipboardPaste } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useUiStore } from '../stores/uiStore'
 import { useUserStore } from '../stores/userStore'
@@ -1220,6 +1287,20 @@ const gitWatch = ref(true)
 const gitSubmitting = ref(false)
 const parsedLinks = computed(() => [...new Set(linkInput.value.split(/\s+/).map(s => s.trim()).filter(Boolean))])
 const isLinkDoc = (doc) => doc?.source_type === 'url' && /^https?:\/\//i.test(doc.source_path || '')
+
+// Text panel: a note typed or pasted in, posted as HTML and indexed in the
+// background like a link. The stored file is "<title>.html"; the list shows
+// the title.
+const textPanelOpen = ref(false)
+const textSubmitting = ref(false)
+const textEditor = ref(null)
+const isNoteDoc = (doc) => doc?.source_type === 'text'
+const noteTitle = (doc) => String(doc?.filename || '').replace(/\.html?$/i, '').replace(/_(\d+)$/, ' ($1)')
+const noteModal = ref(null)
+const noteDocument = ref(null)
+const noteLoading = ref(false)
+const noteError = ref('')
+const noteHtml = ref('')
 
 // Document management state
 const documents = ref([])
@@ -1871,6 +1952,55 @@ const indexLinks = async () => {
   }
 }
 
+const addPastedText = async ({ title, html }) => {
+  if (textSubmitting.value) return
+  const collectionId = collectionStore.currentCollectionId
+  textSubmitting.value = true
+  indexSuccess.value = false
+  indexError.value = ''
+  try {
+    const { data } = await http.post('/documents/text', { title, html, collection_id: collectionId })
+    backgroundJobsStore.addUploadJob(data)
+    indexSuccess.value = true
+    indexResult.value = { count: 1, jobs: 1, background: true, noun: 'note' }
+    justIndexed.value = true
+    textEditor.value?.clear()
+    textPanelOpen.value = false
+    addSectionOpen.value = false
+    loadDocuments()
+    emit('document-deleted')
+  } catch (err) {
+    // The text stays in the editor: nobody should have to paste it twice.
+    indexError.value = err?.message || 'Could not add the text'
+  } finally {
+    textSubmitting.value = false
+  }
+}
+
+const openNote = async (doc) => {
+  noteDocument.value = doc
+  noteLoading.value = true
+  noteError.value = ''
+  noteHtml.value = ''
+  noteModal.value?.showModal()
+  try {
+    const { data } = await http.get(`/documents/${doc.document_id}/pdf`, {
+      params: { collection_id: collectionStore.currentCollectionId },
+      responseType: 'text',
+      transformResponse: [(d) => d],
+    })
+    noteHtml.value = noteBodyHtml(data)
+  } catch (err) {
+    noteError.value = err?.message || 'Could not load the text'
+  } finally {
+    noteLoading.value = false
+  }
+}
+const closeNote = () => {
+  noteModal.value?.close()
+  noteDocument.value = null
+}
+
 const indexGit = async () => {
   const url = gitUrl.value.trim()
   if (!url || gitSubmitting.value) return
@@ -2017,6 +2147,7 @@ const selectMany = (ids, select) => {
   selectedDocuments.value = [...current]
 }
 const openOriginal = (doc) => {
+  if (isNoteDoc(doc)) return openNote(doc)
   const url = isLinkDoc(doc)
     ? doc.source_path
     : `/documents/${doc.document_id}/pdf?collection_id=${encodeURIComponent(collectionStore.currentCollectionId)}`
@@ -2156,6 +2287,21 @@ const toggleAddSection = () => {
 const openAddLink = () => {
   openAddSources()
   linkPanelOpen.value = true
+  textPanelOpen.value = false
+}
+const openAddText = () => {
+  openAddSources()
+  textPanelOpen.value = true
+  linkPanelOpen.value = false
+}
+// One panel at a time under the buttons: the sidebar is narrow.
+const toggleLinkPanel = () => {
+  linkPanelOpen.value = !linkPanelOpen.value
+  if (linkPanelOpen.value) textPanelOpen.value = false
+}
+const toggleTextPanel = () => {
+  textPanelOpen.value = !textPanelOpen.value
+  if (textPanelOpen.value) linkPanelOpen.value = false
 }
 const refreshAll = () => {
   loadDocuments()
@@ -2260,7 +2406,7 @@ function nudgeChunkBoost(chunk, delta) {
 
 // What each source is, for the tile and the type chips. The family
 // boundaries are the server's (services/file_kinds.py); this only draws.
-const fileInfo = (doc) => describeFile(doc?.filename, { isWeb: isLinkDoc(doc) })
+const fileInfo = (doc) => describeFile(doc?.filename, { isWeb: isLinkDoc(doc), isNote: isNoteDoc(doc) })
 
 // What the extractor calls a "page" is only a page for PDFs: a Markdown or
 // text file is split at headings, a deck by slide, a spreadsheet by row

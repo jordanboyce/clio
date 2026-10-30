@@ -5,7 +5,7 @@
 import { shallowRef } from 'vue'
 import {
   FileText, FileCode, Table2, Braces, Image, Mic, Globe, Terminal, Database,
-  FileJson, Settings2, FileType, Hash, Layers,
+  FileJson, Settings2, FileType, Hash, Layers, StickyNote,
 } from 'lucide-vue-next'
 
 // Types an administrator registered (Settings → Custom file types), keyed by
@@ -81,9 +81,12 @@ export const extOf = (name) => {
   return i > 0 ? b.slice(i + 1) : ''
 }
 
-// { family, label, icon, tile } for any filename; web sources pass isWeb.
-export function describeFile(name, { isWeb = false } = {}) {
+// { family, label, icon, tile } for any filename; web sources pass isWeb,
+// text typed or pasted into the app passes isNote (it is stored as .html,
+// but nobody uploaded a file).
+export function describeFile(name, { isWeb = false, isNote = false } = {}) {
   if (isWeb) return { family: 'web', label: 'web', icon: Globe, tile: FAMILIES.web.tile }
+  if (isNote) return { family: 'docs', label: 'text', icon: StickyNote, tile: 'bg-warning/15 text-warning' }
   const b = baseName(name)
   const ext = extOf(name)
   const named = NAMED[b]

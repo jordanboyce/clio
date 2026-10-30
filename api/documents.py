@@ -41,7 +41,7 @@ from services.form_field_extractor import (
     estimate_form_likelihood,
     is_form_like_text,
 )
-from services import audit, git_source, governance, source_changes, source_watcher, storage_quota
+from services import audit, git_source, governance, pasted_text, source_changes, source_watcher, storage_quota
 from services.content_policy import BlockedContentError, ContentRejectedError
 from services.storage_quota import StorageLimitExceeded
 from services.link_fetcher import LinkError, LinkRefused, link_indexing_available, validate_link
@@ -1298,6 +1298,73 @@ async def index_links_async(request: IndexLinksRequest) -> UploadJobResponse:
         job_type="index",
         queue_position=upload_service.queue_position(job_id),
         skipped_files=skipped,
+    )
+
+
+class PastedTextRequest(BaseModel):
+    """Text typed or pasted into the Sources panel's editor."""
+    title: Optional[str] = Field(None, description="Name for the note; the first line of the text when blank")
+    html: Optional[str] = Field(None, description="The editor's markup; cleaned to headings, lists, emphasis, links and tables")
+    text: Optional[str] = Field(None, description="Plain text, used when html is empty; blank lines separate paragraphs")
+    collection_id: str = "default"
+
+
+@router.post(
+    "/documents/text",
+    response_model=UploadJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Add typed or pasted text as a source",
+    tags=["documents"],
+)
+async def index_pasted_text(request: PastedTextRequest) -> UploadJobResponse:
+    """
+    Save a note written in the app as a document and index it in the background.
+
+    The text is kept as a small HTML file named after its title (headings,
+    lists, emphasis, quotes, code, tables and links survive; everything else
+    is reduced to text) and indexed like an uploaded .html, so a long note
+    is cited by section. The document carries source_type='text'. Progress
+    is tracked like any other index job via /documents/upload/{job_id}/status.
+    """
+    _require_ingest(request.collection_id)
+    try:
+        get_indexer(request.collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    try:
+        document = pasted_text.build_document(request.title, html=request.html, text=request.text)
+    except pasted_text.PastedTextError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    try:
+        storage_quota.check(request.collection_id, len(document.body), document.filename)
+    except StorageLimitExceeded as e:
+        raise _storage_error(e)
+
+    try:
+        job_id = upload_service.start_text_index(
+            document, collection_id=request.collection_id, uploaded_by=get_request_user(),
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to start text index job: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start indexing: {str(e)}",
+        )
+
+    return UploadJobResponse(
+        job_id=job_id,
+        collection_id=request.collection_id,
+        status="pending",
+        total_files=1,
+        processed_files=0,
+        progress_percent=0.0,
+        job_type="index",
+        current_file=document.title,
+        queue_position=upload_service.queue_position(job_id),
     )
 
 

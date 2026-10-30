@@ -23,7 +23,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 
 from config import settings
-from services import audit, git_source, source_changes, storage_quota
+from services import audit, git_source, pasted_text, source_changes, storage_quota
 from services.app_database import app_db
 from services.indexer_manager import indexer_manager
 from services.collection_service import collection_service
@@ -727,6 +727,81 @@ class UploadService:
         logger.info(f"Starting link index job {job_id}: {len(urls)} links")
         works = [make_work(url) for url in urls]
         self._process_bulk_job(job_id, works, collection_id, uploaded_by=uploaded_by)
+
+    def start_text_index(
+        self,
+        document: pasted_text.PastedDocument,
+        collection_id: str = "default",
+        uploaded_by: Optional[str] = None,
+    ) -> int:
+        """Start a background job that indexes text typed or pasted into the app.
+
+        The note arrives already assembled by services.pasted_text (a clean
+        HTML file named after its title). It is saved into the collection's
+        documents directory and indexed exactly like an uploaded .html, and
+        the document is marked source_type='text' so the Sources panel shows
+        it as a note rather than a file somebody uploaded. One job per note:
+        a paste is a single document, but the job queue is what gives it
+        progress, cancellation and its place behind a running folder index.
+        """
+        self._check_queue_capacity()
+        job_id = app_db.create_upload_job(collection_id, 1, job_type="index")
+        audit.record("document.index_job", actor=uploaded_by, collection_id=collection_id,
+                     target=str(job_id),
+                     detail={"kind": "text", "files": 1, "title": document.title,
+                             "chars": document.chars})
+        self._submit(_QueuedJob(
+            job_id=job_id,
+            collection_id=collection_id,
+            target=self._run_text_index,
+            args=(job_id, document, collection_id, uploaded_by),
+        ))
+        logger.info(f"Submitted text index job {job_id}: {document.filename!r}, {document.chars} chars")
+        return job_id
+
+    def _run_text_index(
+        self,
+        job_id: int,
+        document: pasted_text.PastedDocument,
+        collection_id: str,
+        uploaded_by: Optional[str] = None,
+    ):
+        """Save the note and run it through the bulk pipeline."""
+        documents_dir = indexer_manager.get_documents_path(collection_id)
+        documents_dir.mkdir(parents=True, exist_ok=True)
+        saved: Dict[str, Path] = {}
+        work = _BulkFileWork(display_name=document.title, stage=lambda: None,
+                             size_bytes=len(document.body))
+
+        def stage() -> Path:
+            # The pipeline has already held size_bytes against the storage cap.
+            final_path = documents_dir / document.filename
+            stem, suffix = final_path.stem, final_path.suffix
+            counter = 1
+            while final_path.exists():
+                final_path = documents_dir / f"{stem}_{counter}{suffix}"
+                counter += 1
+            final_path.write_bytes(document.body)
+            saved["path"] = final_path
+            return final_path
+
+        def finalize(indexer, doc_metadata):
+            indexer.vector_store.metadata_store.update_document_source(
+                doc_metadata.document_id, source_path=None, source_type=pasted_text.SOURCE_TYPE,
+            )
+            doc_metadata.source_path = None
+            doc_metadata.source_type = pasted_text.SOURCE_TYPE
+
+        def cleanup():
+            path = saved.pop("path", None)
+            if path is not None:
+                path.unlink(missing_ok=True)
+
+        work.stage = stage
+        work.finalize = finalize
+        work.cleanup = cleanup
+        logger.info(f"Starting text index job {job_id}: {document.filename!r}")
+        self._process_bulk_job(job_id, [work], collection_id, uploaded_by=uploaded_by)
 
     # Folder-synced documents carry this source_type so a later sync of the
     # same folder can tell its own documents apart from uploads and from

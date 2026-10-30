@@ -117,7 +117,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   CheckSquare, ChevronRight, ChevronsDownUp, ExternalLink, FileSearch, Flag, Focus, Folder, FolderGit2, FolderOpen,
-  Globe, Lock, MoreHorizontal, Replace, ShieldAlert, Trash2,
+  Globe, Lock, MoreHorizontal, Replace, ShieldAlert, StickyNote, Trash2,
 } from 'lucide-vue-next'
 import { describeFile } from '../utils/fileTypes'
 import { injectionBadge, policyBadge, showLabel } from '../utils/governance'
@@ -142,7 +142,7 @@ const rows = computed(() => visibleRows(props.tree, props.collapsed))
 const focusIndex = ref(0)
 watch(rows, (r) => { if (focusIndex.value >= r.length) focusIndex.value = Math.max(0, r.length - 1) })
 
-const fileInfo = (doc) => describeFile(doc?.filename, { isWeb: doc?.source_type === 'url' })
+const fileInfo = (doc) => describeFile(doc?.filename, { isWeb: doc?.source_type === 'url', isNote: doc?.source_type === 'text' })
 const iconTone = (doc) => (fileInfo(doc).tile.split(' ').find(c => c.startsWith('text-')) || 'text-base-content/60')
 const folderState = (node) => folderSelection(node, selected.value)
 const stem = (name) => {
@@ -153,6 +153,7 @@ const stem = (name) => {
 function folderIcon(row) {
   if (row.node.group === 'git') return FolderGit2
   if (row.node.group === 'links' || row.node.group === 'site') return Globe
+  if (row.node.group === 'notes') return StickyNote
   return row.open ? FolderOpen : Folder
 }
 function tooltip(doc) {

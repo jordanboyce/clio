@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { locationLabel } from '../fileTypes'
+import { describeFile, locationLabel } from '../fileTypes'
 
 describe('locationLabel', () => {
   it('names the unit a reader would look for', () => {
@@ -12,5 +12,13 @@ describe('locationLabel', () => {
   it('says nothing without a location', () => {
     expect(locationLabel('report.pdf', 0)).toBe('')
     expect(locationLabel('report.pdf', null)).toBe('')
+  })
+})
+
+describe('describeFile', () => {
+  it('draws pasted text as a note, whatever file it is stored as', () => {
+    expect(describeFile('Travel policy.html')).toMatchObject({ family: 'docs', label: 'html' })
+    expect(describeFile('Travel policy.html', { isNote: true })).toMatchObject({ family: 'docs', label: 'text' })
+    expect(describeFile('page.html', { isWeb: true })).toMatchObject({ family: 'web', label: 'web' })
   })
 })

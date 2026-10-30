@@ -3,7 +3,7 @@
     <div class="flex items-start gap-3">
       <span class="text-sm text-base-content/70 tabular-nums pt-0.5 shrink-0">{{ index + 1 }}.</span>
       <div class="min-w-0 flex-1">
-        <h4 class="font-semibold text-base break-words">{{ result.filename || 'Untitled source' }}</h4>
+        <h4 class="font-semibold text-base break-words">{{ displayName }}</h4>
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-sm text-base-content/75">
           <span v-if="location">{{ location }}</span>
           <span v-if="result.source_format" class="uppercase text-xs">{{ result.source_format }}</span>
@@ -42,6 +42,11 @@ import SupersedeNote from './SupersedeNote.vue'
 import InstructionTextNote from './InstructionTextNote.vue'
 const props = defineProps({ result: { type: Object, required: true }, index: { type: Number, required: true }, query: { type: String, default: '' } })
 const href = computed(() => sourceHref(props.result))
+// Text pasted into the collection is stored as "<title>.html"; show the title.
+const displayName = computed(() => {
+  const name = props.result.filename || 'Untitled source'
+  return props.result.source_type === 'text' ? name.replace(/\.html?$/i, '') : name
+})
 const location = computed(() => {
   const r = props.result
   if (r.csv_row_number != null) return `Row ${r.csv_row_number}`

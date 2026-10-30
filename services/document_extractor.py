@@ -1360,7 +1360,15 @@ class DocumentExtractor:
             heading.insert_before(NavigableString(marker))
 
         body = soup.body or soup
-        text = "\n".join(line.strip() for line in body.get_text("\n").splitlines())
+        # Line breaks follow the document's blocks, not its tags: a bold
+        # phrase or a link inside a sentence stays on the sentence's line,
+        # while paragraphs, list items and headings each start a new one.
+        for tag in body.find_all(self._HTML_BLOCK_TAGS):
+            tag.insert_before(NavigableString("\n"))
+            tag.insert_after(NavigableString("\n"))
+        for br in body.find_all("br"):
+            br.replace_with(NavigableString("\n"))
+        text = "\n".join(line.strip() for line in body.get_text("").splitlines())
 
         sections = []
         for part in text.split(marker):
@@ -1377,6 +1385,13 @@ class DocumentExtractor:
             sections[0] = f"{title}\n\n{sections[0]}"
 
         return {i: section for i, section in enumerate(sections, start=1)}
+
+    # Elements that start a new line of extracted text (see _extract_html).
+    _HTML_BLOCK_TAGS = frozenset({
+        "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "ul", "ol", "dl", "dt", "dd",
+        "blockquote", "pre", "hr", "table", "tr", "section", "article", "header", "footer",
+        "main", "aside", "nav", "figure", "figcaption", "address", "details", "summary",
+    })
 
     @staticmethod
     def _strip_html_boilerplate(soup) -> None:

@@ -92,7 +92,8 @@ pip install -r requirements-postgres.txt  # PostgreSQL for the app database
 
 **Then, in the browser**
 
-1. **Add sources** — files, a folder, a git repository, or links. PDF, Office,
+1. **Add sources** — files, a folder, a git repository, links, or text you
+   type or paste in. PDF, Office,
    Markdown, text, HTML, JSON, CSV/XLSX, sixty-plus programming languages,
    audio (transcribed) and images (described by a vision model). A folder or
    repository can be kept in sync.

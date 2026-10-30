@@ -99,6 +99,19 @@ describe('source tree', () => {
     expect(collapsed.find(r => r.node?.name === 'papers').open).toBe(false)
   })
 
+  it('keeps pasted text in its own group, after the folders and before Links', () => {
+    const notes = [
+      { document_id: 't1', filename: 'Travel policy.html', source_type: 'text', source_path: null },
+      { document_id: 't2', filename: 'Agenda.html', source_type: 'text', source_path: null },
+    ]
+    const tree = buildTree([...docs, ...notes], roots)
+    expect(tree.folders.map(f => f.name)).toEqual(['inbox', 'notes', 'papers', 'Pasted text', 'Links'])
+    const group = tree.folders.find(f => f.name === 'Pasted text')
+    expect(group.group).toBe('notes')
+    expect(group.files.map(f => f.filename)).toEqual(['Agenda.html', 'Travel policy.html'])
+    expect(tree.count).toBe(9)
+  })
+
   it('selects a folder as its files and sorts by recency on request', () => {
     const tree = buildTree(docs, roots)
     const papers = tree.folders.find(f => f.name === 'papers')
