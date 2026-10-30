@@ -649,10 +649,22 @@ class SyncFolderRecord(BaseModel):
     git: bool = Field(False, description="The folder is a git work tree (listed by git, HEAD tracked)")
     git_url: Optional[str] = Field(None, description="Remote address for a managed clone")
     git_branch: Optional[str] = None
-    git_head: Optional[str] = None
+    git_head: Optional[str] = Field(None, description="HEAD of the checkout when it was last synced")
+    upstream_head: Optional[str] = Field(
+        None, description="Tip of the remote branch when it was last checked (managed clones)"
+    )
+    current_head: Optional[str] = Field(None, description="HEAD of a local checkout right now")
+    new_commits: Optional[int] = Field(None, description="Commits a local checkout gained since the last sync")
+    out_of_date: bool = Field(
+        False,
+        description="The source changed since it was last synced (HEAD moved, files edited, remote ahead), "
+                    "or the last indexing run did not finish",
+    )
+    stale_reason: Optional[str] = Field(None, description="Why it is out of date, in one line")
+    indexing: bool = Field(False, description="The last sync's indexing job is still running")
     watch: bool = False
     interval_minutes: Optional[int] = None
-    last_checked_at: Optional[str] = None
+    last_checked_at: Optional[str] = Field(None, description="When the source was last checked (synced or probed)")
     last_error: Optional[str] = None
     label: Optional[str] = Field(None, description="Display name (the repository name for a remote clone)")
 

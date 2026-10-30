@@ -1107,6 +1107,9 @@ class UploadService:
             (e for e in self.list_sync_folders(collection_id) if e.get("path") == str(root)), None
         )
         git_info = git_source.head_info(root)
+        # Taken before the scan: anything edited from here on makes the next
+        # freshness check say "changed", never the other way round.
+        git_fingerprint = git_source.worktree_fingerprint(root, head=git_info["head"]) if git_info else None
 
         scan = self._scan_folder(root, recursive, file_extensions, exclude_patterns)
         files_found = scan.files
@@ -1179,7 +1182,12 @@ class UploadService:
                 git=bool(git_info),
                 git_head=git_info["head"] if git_info else None,
                 git_branch=git_info["branch"] if git_info else None,
+                git_fingerprint=git_fingerprint,
                 last_checked_at=datetime.utcnow().isoformat(), last_error=None,
+                # A managed clone now holds what the remote had: a probe that
+                # found the remote ahead is answered by this sync.
+                **({"upstream_head": git_info["head"]} if git_info and (
+                    (remember or {}).get("git_url") or (previous_entry or {}).get("git_url")) else {}),
                 **(remember or {}),
             )
         except Exception as e:

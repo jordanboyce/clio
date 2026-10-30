@@ -7,7 +7,7 @@
           Search your sources from Claude Desktop, claude.ai, ChatGPT, Claude Code, Codex, AnythingLLM, or VS Code using MCP.
         </template>
         <template v-else>
-          Search your sources from Claude, Cursor, VS Code, Codex, AnythingLLM and other MCP clients. Pick yours under Connect a client below.
+          Search your sources from Claude Code, Codex, Cursor, VS Code, Gemini CLI, the agent SDKs and forty other MCP clients. Pick yours under Connect a client below.
         </template>
         Your client receives retrieved passages, so choose a client you trust with this data.
       </p>
@@ -242,39 +242,88 @@
           <div>
             <h3 class="card-title text-base">Connect a client</h3>
             <p class="mt-1 text-sm text-base-content/60">
-              Pick a default collection, then copy the configuration into your client.
-              This selects where searches start; it does not restrict the token to that collection.
+              Take exactly what your client needs: one value, the server entry to merge into a file you already have,
+              or a whole file or command in the client's own format. Nothing here changes the server.
             </p>
           </div>
 
-          <div v-if="activeTokens.length" class="form-control max-w-xs">
-            <label class="label p-0 pb-1" for="mcp-export-token"><span class="label-text font-medium">Token</span></label>
-            <select id="mcp-export-token" v-model="exportTokenId" class="select select-bordered select-sm w-full">
-              <option v-for="t in activeTokens" :key="t.id" :value="t.id">{{ t.name }}</option>
-            </select>
-          </div>
-          <div v-else-if="openDeployment" class="alert py-2">
-            <span class="text-sm">
-              This server is open, so a client can connect without a token: leave out the Authorization header.
-              A token is still worth making when you want to keep one client read-only, limit it to some collections, or see its calls in the audit trail.
-            </span>
-          </div>
-          <div v-else class="alert py-2">
-            <span class="text-sm">Generate a token above first. The snippets below need one to authenticate.</span>
+          <!-- Every connection fact on its own, so a person can copy one value -->
+          <div class="rounded-lg border border-base-300 bg-base-100 p-3" data-testid="mcp-connection-details">
+            <div class="mb-2 text-xs font-medium text-base-content/60">Connection details</div>
+            <dl class="space-y-1 text-xs">
+              <div v-for="fact in connectionFacts" :key="fact.label" class="flex items-center gap-2 min-w-0">
+                <dt class="w-36 shrink-0 text-base-content/50">{{ fact.label }}</dt>
+                <dd class="flex-1 min-w-0 truncate font-mono" :title="fact.value">{{ fact.value }}</dd>
+                <button type="button" class="btn btn-ghost btn-xs" :aria-label="`Copy ${fact.label}`" @click="copyText(fact.value, fact.label)">Copy</button>
+              </div>
+            </dl>
           </div>
 
-          <div class="form-control max-w-xs">
-            <label class="label p-0 pb-1" for="mcp-export-collection"><span class="label-text font-medium">Collection</span></label>
-            <select id="mcp-export-collection" v-model="exportCollectionId" class="select select-bordered select-sm w-full">
-              <option v-for="c in mcpCollections" :key="c.id" :value="c.id">{{ c.name }}</option>
-            </select>
+          <!-- Choices that shape every recipe -->
+          <div class="grid gap-3 sm:grid-cols-2" data-testid="mcp-export-options">
+            <div class="space-y-2">
+              <div class="form-control">
+                <label class="label p-0 pb-1" for="mcp-export-credential"><span class="label-text font-medium">Credential</span></label>
+                <select id="mcp-export-credential" v-model="credentialMode" class="select select-bordered select-sm w-full">
+                  <option value="token">Token written into the config</option>
+                  <option value="env">Token from an environment variable</option>
+                  <option value="none">No credential (open server, or sign in with OAuth)</option>
+                </select>
+              </div>
+              <div v-if="credentialMode !== 'none' && activeTokens.length" class="form-control">
+                <label class="label p-0 pb-1" for="mcp-export-token"><span class="label-text text-xs">Token</span></label>
+                <select id="mcp-export-token" v-model="exportTokenId" class="select select-bordered select-sm w-full">
+                  <option v-for="t in activeTokens" :key="t.id" :value="t.id">{{ t.name }}</option>
+                </select>
+              </div>
+              <div v-if="credentialMode === 'env'" class="form-control">
+                <label class="label p-0 pb-1" for="mcp-export-envvar"><span class="label-text text-xs">Variable name</span></label>
+                <input id="mcp-export-envvar" v-model.trim="envVarName" class="input input-bordered input-sm w-full font-mono" spellcheck="false" />
+              </div>
+              <p v-if="credentialMode !== 'none' && !activeTokens.length && openDeployment" class="text-xs text-base-content/50">
+                This server is open, so a client can connect without a token. One is still worth making to keep a client read-only,
+                limit it to some collections, or see its calls in the audit trail.
+              </p>
+              <p v-else-if="credentialMode !== 'none' && !activeTokens.length" class="text-xs text-warning">
+                Generate a token above first; until then the recipes carry a placeholder.
+              </p>
+            </div>
+            <div class="space-y-2">
+              <div class="form-control">
+                <label class="label p-0 pb-1" for="mcp-export-name"><span class="label-text font-medium">Server name</span></label>
+                <input id="mcp-export-name" v-model.trim="serverNameInput" class="input input-bordered input-sm w-full font-mono" :placeholder="defaultServerName" spellcheck="false" />
+              </div>
+              <div class="form-control">
+                <label class="label p-0 pb-1" for="mcp-export-transport"><span class="label-text font-medium">Transport</span></label>
+                <select id="mcp-export-transport" v-model="transport" class="select select-bordered select-sm w-full">
+                  <option value="http">Streamable HTTP (the standard)</option>
+                  <option value="sse">Legacy HTTP+SSE (older clients)</option>
+                </select>
+              </div>
+            </div>
           </div>
+
+          <fieldset class="rounded-lg border border-base-300 bg-base-100 p-3" data-testid="mcp-export-collections">
+            <legend class="px-1 text-xs font-medium text-base-content/60">Collections</legend>
+            <p class="mb-2 text-xs text-base-content/50">
+              Tick none and the agent picks collections itself with list_collections. Tick one to start searches there.
+              Tick several to get one server entry per collection. This only sets where searches start; the token decides what is visible.
+            </p>
+            <div class="flex flex-wrap gap-x-4 gap-y-1">
+              <label v-for="c in mcpCollections" :key="c.id" class="label cursor-pointer gap-2 p-0">
+                <input v-model="exportCollectionIds" type="checkbox" class="checkbox checkbox-xs" :value="c.id" :aria-label="`Collection ${c.name}`" />
+                <span class="label-text text-xs">{{ c.name }}</span>
+              </label>
+            </div>
+          </fieldset>
 
           <div class="rounded-lg border border-base-300 bg-base-100 overflow-hidden">
-            <!-- Client picker: one row per group, every client a small button -->
-            <div class="border-b border-base-300 bg-base-200/30 px-3 py-2 space-y-1.5">
+            <!-- Client picker: one row per group, every client a small button.
+                 Which clients are listed is this browser's own preference
+                 (layoutStore.hiddenMcpClients), edited right here. -->
+            <div class="border-b border-base-300 bg-base-200/30 px-3 py-2 space-y-1.5" data-testid="mcp-client-picker">
               <div
-                v-for="group in MCP_CLIENT_GROUPS"
+                v-for="group in visibleClientGroups"
                 :key="group.title"
                 class="flex flex-wrap items-center gap-1"
               >
@@ -293,13 +342,76 @@
                   {{ client.label }}
                 </button>
               </div>
+              <div class="flex items-center justify-between gap-2 pt-1 text-[11px] text-base-content/50">
+                <span v-if="hiddenClientCount">{{ hiddenClientCount }} of {{ MCP_CLIENTS.length }} clients hidden</span>
+                <span v-else>Showing all {{ MCP_CLIENTS.length }} clients</span>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs"
+                  :aria-expanded="chooseClientsOpen"
+                  aria-controls="mcp-choose-clients"
+                  @click="chooseClientsOpen = !chooseClientsOpen"
+                >{{ chooseClientsOpen ? 'Done' : 'Choose clients…' }}</button>
+              </div>
             </div>
 
-            <!-- Config content -->
+            <!-- Which clients to list: a preference of this browser, so the
+                 row above holds the two or three tools a person actually uses -->
+            <div v-if="chooseClientsOpen" id="mcp-choose-clients" class="border-b border-base-300 bg-base-100 px-3 py-3 space-y-3" data-testid="mcp-choose-clients">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <p class="text-xs text-base-content/60">
+                  Tick the clients you use. Hidden ones are only hidden from this list, in this browser; a client added in a later release shows by default.
+                </p>
+                <div class="join">
+                  <button type="button" class="btn btn-xs join-item" @click="setAllClientsHidden(false)">Show all</button>
+                  <button type="button" class="btn btn-xs join-item" @click="setAllClientsHidden(true)">Hide all</button>
+                </div>
+              </div>
+              <div v-for="group in MCP_CLIENT_GROUPS" :key="group.title" class="space-y-1">
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] uppercase tracking-wide text-base-content/40">{{ group.title }}</span>
+                  <button type="button" class="btn btn-ghost btn-xs h-5 min-h-0 px-1 text-[11px]" @click="setGroupHidden(group, false)">all</button>
+                  <button type="button" class="btn btn-ghost btn-xs h-5 min-h-0 px-1 text-[11px]" @click="setGroupHidden(group, true)">none</button>
+                </div>
+                <div class="flex flex-wrap gap-x-4 gap-y-1">
+                  <label v-for="client in group.clients" :key="client.key" class="label cursor-pointer gap-1.5 p-0">
+                    <input
+                      type="checkbox"
+                      class="checkbox checkbox-xs"
+                      :checked="!isClientHidden(client.key)"
+                      :aria-label="`Show ${client.label}`"
+                      @change="layoutStore.setMcpClientHidden(client.key, !$event.target.checked)"
+                    />
+                    <span class="label-text text-xs">{{ client.label }}</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- The client's documented formats, and how much of one to take -->
             <div class="p-3 space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-base-content/50">{{ activeTabMeta.filename }}</span>
+              <div class="flex flex-wrap items-center gap-2" data-testid="mcp-export-formats">
+                <div v-if="activeTabMeta.formats.length > 1" class="join" role="tablist" aria-label="Format">
+                  <button
+                    v-for="f in activeTabMeta.formats"
+                    :key="f.key"
+                    type="button"
+                    role="tab"
+                    class="btn btn-xs join-item"
+                    :class="activeTabMeta.format === f.key ? 'btn-active' : ''"
+                    :aria-selected="activeTabMeta.format === f.key"
+                    @click="activeFormat = f.key"
+                  >{{ f.label }}</button>
+                </div>
+                <label v-if="activeTabMeta.entryOnlySupported" class="label cursor-pointer gap-2 p-0">
+                  <input id="mcp-export-entry-only" v-model="entryOnly" type="checkbox" class="toggle toggle-xs" />
+                  <span class="label-text text-xs">Server entry only (to merge into an existing file)</span>
+                </label>
+              </div>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs text-base-content/50 truncate">{{ activeTabMeta.filename }}</span>
                 <div class="flex items-center gap-1">
+                  <a v-if="activeTabMeta.docs" :href="activeTabMeta.docs" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-ghost">Docs</a>
                   <button
                     class="btn btn-xs btn-ghost gap-1"
                     @click="copyText(activeTabMeta.content, activeTabMeta.label)"
@@ -311,7 +423,7 @@
                   </button>
                   <button
                     class="btn btn-xs btn-ghost gap-1"
-                    @click="downloadText(activeTabMeta.content, activeTabMeta.filename)"
+                    @click="downloadText(activeTabMeta.content, downloadName(activeTabMeta))"
                   >
                     <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -323,6 +435,7 @@
               <pre
                 class="bg-neutral text-neutral-content rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre select-all leading-relaxed"
               >{{ activeTabMeta.content }}</pre>
+              <p v-if="activeTabMeta.note" class="text-xs text-warning">{{ activeTabMeta.note }}</p>
               <p class="text-xs text-base-content/40">{{ activeTabMeta.hint }}</p>
             </div>
           </div>
@@ -454,8 +567,10 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { ShieldAlert } from 'lucide-vue-next'
 import http from '../utils/http'
 import { useUserStore } from '../stores/userStore'
-import { MCP_CLIENT_GROUPS, buildClientConfig } from '../utils/mcpClients'
+import { useLayoutStore } from '../stores/layoutStore'
+import { MCP_CLIENT_GROUPS, MCP_CLIENTS, buildClientConfig } from '../utils/mcpClients'
 const userStore = useUserStore()
+const layoutStore = useLayoutStore()
 
 // MCP state
 const mcpLoading = ref(false)
@@ -463,8 +578,17 @@ const mcpSaving = ref(false)
 const mcpError = ref('')
 const mcpStatus = ref('')
 const mcpCollections = ref([])
-const exportCollectionId = ref('default')
+// What the recipes are built from. Collections ticked (none = the agent
+// chooses), how the credential is written, the transport, the server name,
+// and which of the client's documented formats to show.
+const exportCollectionIds = ref([])
+const credentialMode = ref('token')
+const envVarName = ref('CLIO_TOKEN')
+const serverNameInput = ref('')
+const transport = ref('http')
 const activeTab = ref('claude')
+const activeFormat = ref('')
+const entryOnly = ref(false)
 
 // Personal access tokens
 const tokens = ref([])
@@ -531,15 +655,30 @@ watch(newTokenAllowlist, (on) => {
   }
 })
 
-const serverId = computed(() => sanitizeServerId(`clio-${exportCollectionId.value}`))
+const defaultServerName = computed(() => {
+  const ids = exportCollectionIds.value
+  return ids.length === 1 ? sanitizeServerId(`clio-${ids[0]}`) : 'clio'
+})
+const serverName = computed(() => sanitizeServerId(serverNameInput.value || defaultServerName.value))
+
 // Bare /mcp is served directly (no redirect), which is the form every client
-// documents; the legacy SSE transport lives beside it at /mcp/sse.
-const serverUrl = computed(() =>
-  `${window.location.origin}/mcp?collection_id=${encodeURIComponent(exportCollectionId.value)}`
-)
-const sseUrl = computed(() =>
-  `${window.location.origin}/mcp/sse?collection_id=${encodeURIComponent(exportCollectionId.value)}`
-)
+// documents; the legacy SSE transport lives beside it at /mcp/sse. A
+// collection_id query parameter says where searches start.
+const mcpBase = computed(() => `${window.location.origin}/mcp`)
+const urlFor = (path, collectionId) =>
+  collectionId ? `${window.location.origin}${path}?collection_id=${encodeURIComponent(collectionId)}` : `${window.location.origin}${path}`
+
+// One server per ticked collection; a single unscoped server when none is.
+const exportServers = computed(() => {
+  const ids = exportCollectionIds.value
+  if (!ids.length) return [{ id: serverName.value, collectionId: null, url: urlFor('/mcp'), sseUrl: urlFor('/mcp/sse') }]
+  return ids.map((cid) => ({
+    id: ids.length === 1 ? serverName.value : sanitizeServerId(`${serverName.value}-${cid}`),
+    collectionId: cid,
+    url: urlFor('/mcp', cid),
+    sseUrl: urlFor('/mcp/sse', cid),
+  }))
+})
 
 // The selected token's plaintext is only ever known right after creation.
 // Once a page reload happens the server has only the hash, so snippets for
@@ -552,17 +691,81 @@ const selectedTokenPlaintext = computed(() => {
   return ''
 })
 
-const authHeaderValue = computed(() =>
-  selectedTokenPlaintext.value || '<PASTE_YOUR_TOKEN — shown once, right after you generate it>'
-)
+const TOKEN_PLACEHOLDER = '<PASTE_YOUR_TOKEN — shown once, right after you generate it>'
+const tokenForConfig = computed(() => selectedTokenPlaintext.value || TOKEN_PLACEHOLDER)
 
-const activeTabMeta = computed(() => buildClientConfig(activeTab.value, {
-  id: serverId.value,
-  url: serverUrl.value,
-  sseUrl: sseUrl.value,
-  token: authHeaderValue.value,
+const exportContext = computed(() => ({
+  servers: exportServers.value,
+  transport: transport.value,
+  credential: {
+    mode: credentialMode.value,
+    token: tokenForConfig.value,
+    envVar: (envVarName.value || 'CLIO_TOKEN').replace(/[^A-Za-z0-9_]/g, '_'),
+  },
   oauthEnabled: Boolean(oauth.value.enabled),
 }))
+
+// The client list, less the ones this browser chose to hide. The picker never
+// goes empty: with everything hidden it shows the generic entry, so there is
+// always a recipe on screen.
+const chooseClientsOpen = ref(false)
+const hiddenClientSet = computed(() => new Set(layoutStore.hiddenMcpClients))
+const isClientHidden = (key) => hiddenClientSet.value.has(key)
+const hiddenClientCount = computed(() => MCP_CLIENTS.filter((c) => isClientHidden(c.key)).length)
+const visibleClientGroups = computed(() => {
+  const groups = MCP_CLIENT_GROUPS
+    .map((g) => ({ title: g.title, clients: g.clients.filter((c) => !isClientHidden(c.key)) }))
+    .filter((g) => g.clients.length)
+  if (groups.length) return groups
+  const generic = MCP_CLIENTS.find((c) => c.key === 'generic') || MCP_CLIENTS[0]
+  return [{ title: 'Any MCP client', clients: [generic] }]
+})
+const setAllClientsHidden = (hidden) => layoutStore.setHiddenMcpClients(hidden ? MCP_CLIENTS.map((c) => c.key) : [])
+const setGroupHidden = (group, hidden) => {
+  const keys = new Set(group.clients.map((c) => c.key))
+  const rest = layoutStore.hiddenMcpClients.filter((k) => !keys.has(k))
+  layoutStore.setHiddenMcpClients(hidden ? [...rest, ...keys] : rest)
+}
+// Hiding the selected client moves the selection to the first one still shown.
+watch(visibleClientGroups, (groups) => {
+  const shown = groups.flatMap((g) => g.clients.map((c) => c.key))
+  if (!shown.includes(activeTab.value)) activeTab.value = shown[0]
+}, { immediate: true })
+
+const activeTabMeta = computed(() => buildClientConfig(activeTab.value, exportContext.value, {
+  format: activeFormat.value,
+  entryOnly: entryOnly.value,
+}))
+// A new client starts on its first documented format.
+watch(activeTab, () => { activeFormat.value = '' })
+
+// The facts a person copies one at a time: the URL(s), the header, the ids.
+const connectionFacts = computed(() => {
+  const facts = []
+  const servers = exportServers.value
+  if (servers.length === 1) {
+    facts.push({ label: 'Server URL', value: servers[0].url })
+    facts.push({ label: 'Legacy SSE URL', value: servers[0].sseUrl })
+  } else {
+    facts.push({ label: 'Server URL (unscoped)', value: mcpBase.value })
+    for (const s of servers) facts.push({ label: `URL · ${collectionName(s.collectionId)}`, value: s.url })
+  }
+  if (credentialMode.value !== 'none') {
+    facts.push({ label: 'Authorization header', value: `Authorization: Bearer ${tokenForConfig.value}` })
+    if (selectedTokenPlaintext.value) facts.push({ label: 'Token', value: selectedTokenPlaintext.value })
+  }
+  if (exportCollectionIds.value.length) facts.push({ label: 'Collection id' + (exportCollectionIds.value.length > 1 ? 's' : ''), value: exportCollectionIds.value.join(', ') })
+  facts.push({ label: 'Tool catalog', value: `${window.location.origin}/api/mcp/catalog` })
+  return facts
+})
+
+// A download needs a real file name; "connector" or "terminal" is not one.
+const downloadName = (meta) => {
+  const base = meta.filename.split('/').pop()
+  if (/\.[a-z0-9]+$/i.test(base)) return base
+  const ext = { json: 'json', toml: 'toml', yaml: 'yaml', bash: 'sh', python: 'py', typescript: 'ts' }[meta.language] || 'txt'
+  return `clio-${meta.key}.${ext}`
+}
 
 // Live tool catalog from the server. Grouped by what an agent is trying to
 // do rather than by implementation, so a reader can scan it.
@@ -599,11 +802,14 @@ const loadMcpCollections = async () => {
   try {
     const response = await http.get('/api/collections')
     mcpCollections.value = response.data.collections || []
-    if (mcpCollections.value.length > 0 && !mcpCollections.value.find(c => c.id === exportCollectionId.value)) {
-      exportCollectionId.value = mcpCollections.value[0].id
+    const known = new Set(mcpCollections.value.map((c) => c.id))
+    exportCollectionIds.value = exportCollectionIds.value.filter((cid) => known.has(cid))
+    if (!exportCollectionIds.value.length && mcpCollections.value.length) {
+      exportCollectionIds.value = [mcpCollections.value[0].id]
     }
   } catch {
     mcpCollections.value = [{ id: 'default', name: 'Default' }]
+    exportCollectionIds.value = ['default']
   }
 }
 
@@ -628,6 +834,7 @@ const loadAuthMode = async () => {
   try {
     const { data } = await http.get('/api/me')
     openDeployment.value = data?.authenticated_via === 'open'
+    if (openDeployment.value && !activeTokens.value.length) credentialMode.value = 'none'
   } catch { /* keep the stricter wording */ }
 }
 

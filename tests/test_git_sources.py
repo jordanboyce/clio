@@ -17,6 +17,7 @@ import pytest
 
 from config import settings
 from services import git_source, source_changes, source_watcher
+from services.app_database import app_db
 from tests.test_folder_sync import (  # noqa: F401 - fixtures
     COLLECTION, _docs, _text, _wait_for_job, client, env, folder, service,
 )
@@ -59,6 +60,19 @@ def repo(tmp_path):
 
 def _names(env):
     return {Path(d["source_path"]).name for d in _docs(env)}
+
+
+def _counts(**outcomes):
+    """The watcher's pass summary: every outcome zero but the ones given."""
+    return {**{k: 0 for k in source_watcher.OUTCOMES}, **outcomes}
+
+
+def _entry(service):
+    return service.list_sync_folders(COLLECTION)[0]
+
+
+def _fresh(service):
+    return source_watcher.freshness(_entry(service))
 
 
 # ── Listing ──────────────────────────────────────────────────────────────
@@ -163,11 +177,11 @@ def test_watcher_syncs_due_sources_and_records_the_change(env, service, repo, mo
     # Not due yet: nothing happens even though a file changed.
     (repo / "readme.txt").write_text(_text("readme", salt=4), encoding="utf-8")
     _commit(repo, "Tweak readme")
-    assert source_watcher.run_due() == {"synced": 0, "unchanged": 0, "error": 0}
+    assert source_watcher.run_due() == _counts()
     assert source_changes.list_events(COLLECTION)["events"] == []
 
     later = datetime.utcnow() + timedelta(minutes=11)
-    assert source_watcher.run_due(now=later) == {"synced": 1, "unchanged": 0, "error": 0}
+    assert source_watcher.run_due(now=later) == _counts(synced=1)
     event = source_changes.list_events(COLLECTION)["events"][0]
     assert event["trigger"] == "watch" and event["changed"] == ["readme.txt"]
     assert [c["subject"] for c in event["commits"]] == ["Tweak readme"]
@@ -180,8 +194,7 @@ def test_watcher_ignores_unwatched_sources(env, service, folder, monkeypatch):
 
     monkeypatch.setattr(us, "upload_service", service)
     service.sync_folder(str(folder), COLLECTION)
-    assert source_watcher.run_due(now=datetime.utcnow() + timedelta(days=2)) == \
-        {"synced": 0, "unchanged": 0, "error": 0}
+    assert source_watcher.run_due(now=datetime.utcnow() + timedelta(days=2)) == _counts()
 
 
 def test_a_failing_source_is_reported_not_fatal(env, service, folder, monkeypatch):
@@ -421,14 +434,240 @@ def test_watcher_pulls_a_remote_only_when_it_moved(env, service, remote, monkeyp
                         remember={"git_url": remote["url"], "git_ref": "main", "watch": True})
     later = datetime.utcnow() + timedelta(hours=1)
 
-    assert source_watcher.run_due(now=later) == {"synced": 0, "unchanged": 1, "error": 0}
+    assert source_watcher.run_due(now=later) == _counts(unchanged=1)
     assert source_changes.list_events(COLLECTION)["events"] == []
 
     (remote["work"] / "b.txt").write_text(_text("b"), encoding="utf-8")
     (remote["work"] / "a.txt").unlink()
     _commit(remote["work"], "swap files")
-    assert source_watcher.run_due(now=later + timedelta(hours=1)) == {"synced": 1, "unchanged": 0, "error": 0}
+    assert source_watcher.run_due(now=later + timedelta(hours=1)) == _counts(synced=1)
     event = source_changes.list_events(COLLECTION)["events"][0]
     assert event["added"] == ["b.txt"] and event["removed"] == ["a.txt"]
     assert event["label"] == "upstream"
     assert [c["subject"] for c in event["commits"]] == ["swap files"]
+
+
+# ── Knowing a source is out of date ──────────────────────────────────────
+
+def test_a_fresh_checkout_reads_as_current(env, service, repo):
+    service.sync_folder(str(repo), COLLECTION)
+    state = _fresh(service)
+    assert state["out_of_date"] is False and state["stale_reason"] is None
+    assert state["current_head"] == _git(repo, "rev-parse", "HEAD")
+    assert _entry(service)["git_fingerprint"]
+
+
+def test_new_commits_make_a_checkout_out_of_date_until_synced(env, service, repo):
+    service.sync_folder(str(repo), COLLECTION)
+    (repo / "readme.txt").write_text(_text("readme", salt=2), encoding="utf-8")
+    _commit(repo, "one")
+    (repo / "notes.md").write_text(_text("notes", salt=2), encoding="utf-8")
+    _commit(repo, "two")
+
+    state = _fresh(service)
+    assert state["out_of_date"] is True
+    assert state["new_commits"] == 2
+    assert state["stale_reason"] == "2 new commits since the last sync"
+    assert state["current_head"] == _git(repo, "rev-parse", "HEAD")
+
+    service.sync_folder(str(repo), COLLECTION)
+    assert _fresh(service)["out_of_date"] is False
+
+
+def test_uncommitted_edits_make_a_checkout_out_of_date_without_hashing(env, service, repo):
+    service.sync_folder(str(repo), COLLECTION)
+    assert _fresh(service)["out_of_date"] is False
+
+    (repo / "readme.txt").write_text(_text("readme", salt=3), encoding="utf-8")
+    # Nothing is read: the verdict comes from `git status` and stat alone.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("services.governance.content_hash_of",
+                   lambda p: pytest.fail("freshness must not hash files"))
+        state = _fresh(service)
+    assert state["out_of_date"] is True
+    assert state["stale_reason"] == "Files changed since the last sync"
+
+    (repo / "scratch.txt").write_text(_text("scratch"), encoding="utf-8")  # untracked counts too
+    service.sync_folder(str(repo), COLLECTION)
+    assert _fresh(service)["out_of_date"] is False
+    assert "scratch.txt" in _names(env)
+
+
+def test_fingerprint_ignores_what_git_ignores(repo):
+    before = git_source.worktree_fingerprint(repo)
+    (repo / "ignored.txt").write_text("changed, but .gitignore says no", encoding="utf-8")
+    assert git_source.worktree_fingerprint(repo) == before
+    (repo / "readme.txt").write_text("edited", encoding="utf-8")
+    assert git_source.worktree_fingerprint(repo) != before
+
+
+def test_an_empty_repository_is_not_a_checkout(tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    _git(empty, "init", "-q", "-b", "main")
+    assert git_source.head_info(empty) is None
+    assert git_source.worktree_fingerprint(empty) is None
+
+
+def test_an_unfinished_indexing_run_is_out_of_date(env, service, repo):
+    service.sync_folder(str(repo), COLLECTION)
+    job_id = _entry(service)["job_id"]
+    assert job_id
+    app_db.update_upload_job(job_id, status="failed", error="the server restarted")
+    state = _fresh(service)
+    assert state["out_of_date"] is True
+    assert state["stale_reason"] == "The last indexing run did not finish"
+
+    app_db.update_upload_job(job_id, status="running")
+    state = _fresh(service)
+    assert state["indexing"] is True and state["out_of_date"] is False
+
+
+def test_a_plain_folder_has_no_cheap_verdict(env, service, folder):
+    service.sync_folder(str(folder), COLLECTION)
+    (folder / "readme.txt").write_text(_text("readme", salt=9), encoding="utf-8")
+    assert _fresh(service)["out_of_date"] is False  # Sync tells; nothing is hashed here
+
+
+def test_watcher_leaves_a_source_alone_while_its_job_is_running(env, service, repo, monkeypatch):
+    import services.upload_service as us
+
+    monkeypatch.setattr(us, "upload_service", service)
+    service.sync_folder(str(repo), COLLECTION, remember={"watch": True})
+    app_db.update_upload_job(_entry(service)["job_id"], status="running")
+    (repo / "readme.txt").write_text(_text("readme", salt=5), encoding="utf-8")
+    _commit(repo, "while indexing")
+    assert source_watcher.run_due(now=datetime.utcnow() + timedelta(hours=1)) == _counts(busy=1)
+    assert source_changes.list_events(COLLECTION)["events"] == []
+    assert _entry(service)["last_error"] is None
+
+
+def test_watcher_repeats_a_sync_whose_job_failed_even_when_the_tip_stood_still(env, service, remote, monkeypatch):
+    import services.upload_service as us
+
+    monkeypatch.setattr(us, "upload_service", service)
+    dest = git_source.ensure_clone(remote["url"], "main")
+    service.sync_folder(str(dest), COLLECTION, prune_missing=True,
+                        remember={"git_url": remote["url"], "git_ref": "main", "watch": True})
+    later = datetime.utcnow() + timedelta(hours=1)
+    assert source_watcher.run_due(now=later) == _counts(unchanged=1)
+
+    app_db.update_upload_job(_entry(service)["job_id"], status="failed", error="embedder down")
+    assert _fresh(service)["out_of_date"] is True
+    assert source_watcher.run_due(now=later + timedelta(hours=1)) == _counts(synced=1)
+    assert _fresh(service)["out_of_date"] is False
+
+
+def test_watcher_makes_a_lost_clone_again(env, service, remote, monkeypatch):
+    import shutil
+
+    import services.upload_service as us
+
+    monkeypatch.setattr(us, "upload_service", service)
+    dest = git_source.ensure_clone(remote["url"], "main")
+    service.sync_folder(str(dest), COLLECTION, prune_missing=True,
+                        remember={"git_url": remote["url"], "git_ref": "main", "watch": True})
+    shutil.rmtree(dest)
+    assert _fresh(service)["stale_reason"] == "The clone is gone; Sync makes it again"
+    assert source_watcher.run_due(now=datetime.utcnow() + timedelta(hours=1)) == _counts(synced=1)
+    assert (dest / "a.txt").exists()
+    assert _fresh(service)["out_of_date"] is False
+
+
+def test_an_unwatched_remote_is_probed_so_the_panel_can_say_it_is_behind(env, service, remote, monkeypatch):
+    import services.upload_service as us
+
+    monkeypatch.setattr(us, "upload_service", service)
+    dest = git_source.ensure_clone(remote["url"], "main")
+    service.sync_folder(str(dest), COLLECTION, prune_missing=True,
+                        remember={"git_url": remote["url"], "git_ref": "main", "watch": False})
+    first = git_source.head_info(dest)["head"]
+    later = datetime.utcnow() + timedelta(hours=1)
+    assert source_watcher.run_due(now=later) == _counts(probed=1)
+    assert _entry(service)["upstream_head"] == first
+    assert _fresh(service)["out_of_date"] is False
+
+    (remote["work"] / "b.txt").write_text(_text("b"), encoding="utf-8")
+    _commit(remote["work"], "second")
+    tip = _git(remote["work"], "rev-parse", "HEAD")
+    assert source_watcher.run_due(now=later + timedelta(hours=1)) == _counts(probed=1)
+    entry = _entry(service)
+    assert entry["upstream_head"] == tip and entry["git_head"] == first  # noted, not pulled
+    assert "b.txt" not in _names(env)
+    assert source_changes.list_events(COLLECTION)["events"] == []
+    assert _fresh(service)["stale_reason"] == "New commits upstream"
+
+    # Not due again before the interval (the probe stamped the real clock),
+    # and never synced on its own.
+    assert source_watcher.run_due(now=datetime.utcnow() + timedelta(minutes=5)) == _counts()
+
+
+def test_sync_folder_endpoint_fetches_a_managed_clone_first(client, env, remote):
+    r = client.post("/documents/sync-git", json={"url": remote["url"], "branch": "main", "collection_id": COLLECTION})
+    assert r.status_code in (200, 202), r.text
+    assert _wait_for_job(client, r.json()["job_id"])["status"] == "completed"
+    clone = r.json()["path"]
+
+    (remote["work"] / "b.txt").write_text(_text("b"), encoding="utf-8")
+    (remote["work"] / "a.txt").unlink()
+    _commit(remote["work"], "swap files")
+    tip = _git(remote["work"], "rev-parse", "HEAD")
+
+    # The Sync button posts the clone's path, exactly like a folder.
+    r = client.post("/documents/sync-folder", json={"path": clone, "collection_id": COLLECTION})
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["queued"] == 1 and body["pruned"] == ["a.txt"]  # deleted upstream: always pruned from a clone
+    assert _wait_for_job(client, body["job_id"])["status"] == "completed"
+    names = {Path(d["source_path"]).name for d in env["indexer"].list_documents()}
+    assert "b.txt" in names and "a.txt" not in names
+
+    folder = client.get("/documents/sync-folders", params={"collection_id": COLLECTION}).json()["folders"][0]
+    assert folder["git_head"] == tip and folder["upstream_head"] == tip
+    assert folder["out_of_date"] is False
+    event = client.get("/documents/changes", params={"collection_id": COLLECTION}).json()["events"][-1]
+    assert [c["subject"] for c in event["commits"]] == ["swap files"]
+
+
+def test_sync_folder_endpoint_makes_a_lost_clone_again(client, env, remote):
+    import shutil
+
+    r = client.post("/documents/sync-git", json={"url": remote["url"], "branch": "main", "collection_id": COLLECTION})
+    assert r.status_code in (200, 202), r.text
+    assert _wait_for_job(client, r.json()["job_id"])["status"] == "completed"
+    clone = Path(r.json()["path"])
+    shutil.rmtree(clone)
+
+    listed = client.get("/documents/sync-folders", params={"collection_id": COLLECTION}).json()["folders"][0]
+    assert listed["exists"] is False and listed["out_of_date"] is True
+
+    r = client.post("/documents/sync-folder", json={"path": str(clone), "collection_id": COLLECTION})
+    assert r.status_code == 200, r.text  # same bytes, already indexed
+    assert clone.is_dir()
+    listed = client.get("/documents/sync-folders", params={"collection_id": COLLECTION}).json()["folders"][0]
+    assert listed["exists"] is True and listed["out_of_date"] is False
+
+
+def test_sync_folders_listing_reports_freshness(client, env, repo):
+    body = {"path": str(repo), "collection_id": COLLECTION}
+    first = client.post("/documents/sync-folder", json=body)
+    assert first.status_code in (200, 202)
+    if first.json()["job_id"]:
+        assert _wait_for_job(client, first.json()["job_id"])["status"] == "completed"
+
+    listed = client.get("/documents/sync-folders", params={"collection_id": COLLECTION}).json()["folders"][0]
+    assert listed["git"] is True and listed["out_of_date"] is False and listed["current_head"] == listed["git_head"]
+
+    (repo / "readme.txt").write_text(_text("readme", salt=7), encoding="utf-8")
+    _commit(repo, "edit")
+    listed = client.get("/documents/sync-folders", params={"collection_id": COLLECTION}).json()["folders"][0]
+    assert listed["out_of_date"] is True
+    assert listed["stale_reason"] == "1 new commit since the last sync"
+    assert listed["new_commits"] == 1
+    assert listed["current_head"] == _git(repo, "rev-parse", "HEAD") != listed["git_head"]
+
+
+def test_clone_lock_is_shared_per_clone(tmp_path):
+    a = git_source.clone_lock(tmp_path / "x")
+    assert a is git_source.clone_lock(tmp_path / "x")
+    assert a is not git_source.clone_lock(tmp_path / "y")

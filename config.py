@@ -593,11 +593,14 @@ class Settings(BaseSettings):
     git_timeout_seconds: int = 300
 
     # Change alerts. A watched source (Sources panel, "Watch") is re-synced on
-    # its own and every real change is recorded in the Updates feed. When
-    # ALERT_WEBHOOK_URL is set each change is also POSTed there as JSON
-    # (Slack/Teams/ntfy/any internal endpoint); ALERT_WEBHOOK_SECRET signs the
-    # body (HMAC-SHA256 in X-Clio-Signature). Set by the operator, never by
-    # an API caller, so it may point at an internal host. 0 disables the loop.
+    # its own and every real change is recorded in the Updates feed. A remote
+    # repository nobody watches is still asked for its tip (`git ls-remote`,
+    # nothing downloaded) on the default interval, so the Sources panel can
+    # say it is behind. When ALERT_WEBHOOK_URL is set each change is also
+    # POSTed there as JSON (Slack/Teams/ntfy/any internal endpoint);
+    # ALERT_WEBHOOK_SECRET signs the body (HMAC-SHA256 in X-Clio-Signature).
+    # Set by the operator, never by an API caller, so it may point at an
+    # internal host. 0 disables the loop, probes included.
     source_watch_tick_seconds: int = 60
     source_watch_default_minutes: int = 15
     alert_webhook_url: str = ""

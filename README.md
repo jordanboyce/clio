@@ -109,15 +109,28 @@ call), so many agents can be connected at once. From the **Connect** tab:
    and can be limited to specific collections; revoke one from the same
    screen when a machine is retired. Tick *Allow adding and updating sources*
    to let that agent save notes and summaries back into a collection.
-2. **Pick your client and copy the snippet.** Coding agents and IDEs:
-   Claude Code, Codex, Pi, Gemini CLI, Cursor, VS Code, Copilot CLI,
-   Windsurf, Zed, Cline, Roo Code, Kiro, OpenCode. Desktop and chat apps: Claude
-   Desktop, claude.ai, ChatGPT, Grok, Hermes Agent, Goose, AnythingLLM,
-   LibreChat, Open WebUI. Automation and APIs: n8n, LangChain, the Python
-   and TypeScript MCP SDKs, the OpenAI Responses API, the Anthropic MCP
-   connector, the xAI API, and a generic entry (URL, bearer header, first
-   call to make) for everything else. Clients that only speak the older
-   HTTP+SSE transport use `/mcp/sse` with the same header.
+2. **Pick your client and take what you need.** Every connection fact
+   (server URL, legacy SSE URL, header, collection id) can be copied on its
+   own, and the recipes are shaped by your choices: which collections to
+   scope to (none, one, or one server entry per collection), whether the
+   token is written into the file, read from an environment variable in the
+   client's own syntax, or left out for an open server or OAuth sign-in, the
+   transport, and the server name. Each client then offers its documented
+   formats (config file, CLI command, install link or secret prompt where
+   one exists), as a whole file or as just the server entry to merge into a
+   file you already have. Coding agents and IDEs: Claude Code, Codex, Pi,
+   Gemini CLI, Qwen Code, Cursor, VS Code, Copilot CLI, Windsurf, Zed,
+   Cline, Roo Code, Kiro, OpenCode, Amp, Factory Droid, Crush, Mistral Vibe,
+   JetBrains, Continue. Desktop and chat apps: Claude Desktop, claude.ai,
+   ChatGPT, Grok, Hermes Agent, Goose, AnythingLLM, LibreChat, LM Studio,
+   Warp, Open WebUI. Automation and APIs: n8n, LangChain, the Python and
+   TypeScript MCP SDKs, the Claude Agent SDK, the OpenAI Agents SDK, the
+   Vercel AI SDK, Pydantic AI, Google ADK, the OpenAI Responses API, the
+   Anthropic MCP connector, the xAI API, and a generic entry (connection
+   facts plus an mcp-remote bridge) for everything else. *Choose clients…*
+   under the list hides the ones you do not use (a per-browser preference;
+   new clients show by default). Clients that only speak the older HTTP+SSE
+   transport use `/mcp/sse` with the same header.
 3. Hosted assistants — claude.ai, ChatGPT, Grok — add the URL as a custom
    connector from their own settings. They connect from the vendor's servers,
    so the endpoint must be reachable from the internet; with an identity
@@ -213,7 +226,7 @@ goes through the app's access checks.
 | **Give your AI assistant a private knowledge source** | Connect | Claude Desktop, claude.ai, ChatGPT, Grok and Claude Code sign in through your identity provider; Codex, VS Code, Cursor, Windsurf, AnythingLLM, Hermes Agent, Claude Code and any MCP SDK can also use a personal token. Agents can write notes and summaries back when a token allows it. |
 | **Index scanned pages, photos, audio, code** | Add sources | OCR (local Tesseract/Docling or a vision model), Whisper transcription, code-aware chunking, image description. |
 | **Index a whole source tree** | Add sources | Sixty-plus languages and config formats chunk by symbol (functions, classes, SQL objects, Terraform resources, shell functions, Vue/Svelte scripts), with `Makefile`, `Dockerfile` and friends recognised by name. Parsing is lenient: syntax errors, odd encodings and minified files still index; binaries, lockfiles, build output and vendored dependencies are skipped. Every passage keeps its symbol name and line range. |
-| **Keep a folder or repository in sync** | Add sources | Point Clio at a folder or a git repository once; every later sync hashes the tree, skips unchanged files, re-indexes changed ones, and can prune documents whose file was deleted. *Watch* re-syncs on an interval and every real change lands in the Updates feed (and an optional signed webhook). |
+| **Keep a folder or repository in sync** | Add sources | Point Clio at a folder or a git repository once; every later sync hashes the tree, skips unchanged files, re-indexes changed ones, and can prune documents whose file was deleted. *Sync* on a remote repository fetches first. The Sources panel says when a source is out of date and why (new commits, edited files, the remote ahead, an indexing run that did not finish); *Watch* re-syncs on an interval and every real change lands in the Updates feed (and an optional signed webhook). |
 | **Share an indexed collection with another Clio** | Collections | *Export* writes one `.clio.zip` (extracted text, pages, tables, vectors, and which embedding model made them); *Import* previews it and reuses the vectors when the model matches. |
 | **Arrange it your way** | Everywhere | A ribbon down the left edge holds every destination and action, grouped by purpose; hide, show or reorder items, show names beside the icons, or drag them (Settings → Layout, or right-click it). The Sources panel is a folder tree that follows where sources came from — a synced folder or repository keeps its structure, with labels and review flags on every row — and ticking a folder selects everything in it. `⌘K` / `Ctrl+K` opens a command palette for every destination, collection, recent chat, theme and action; `?` shows the shortcuts. |
 | **Keep a shared corpus accountable** | Administration | Attribution on every document, an append-only audit trail (including agent reads if enabled), content-policy scanning with flag/quarantine/reject, sensitivity labels, blocklists, an acceptable-use gate. |

@@ -348,11 +348,13 @@
               <FolderSync v-else :size="12" class="flex-shrink-0 text-base-content/45" aria-hidden="true" />
               <span class="flex-1 min-w-0">
                 <span class="block truncate text-base-content/80" :title="folder.git_url || folder.path">{{ folder.label || folderLabel(folder.path) }}</span>
-                <span class="block text-[10px] text-base-content/45 truncate">
-                  <template v-if="!folder.exists">Folder not found</template>
+                <span class="block text-[10px] text-base-content/45 truncate" data-testid="source-state">
+                  <template v-if="!folder.exists && !folder.git_url">Folder not found</template>
                   <template v-else-if="folder.last_error"><span class="text-error" :title="folder.last_error">Check failed: {{ folder.last_error }}</span></template>
+                  <template v-else-if="folder.indexing">Indexing…</template>
+                  <template v-else-if="folder.out_of_date"><span class="text-warning" :title="`${folder.stale_reason}. Sync brings the index up to date.`">Out of date: {{ folder.stale_reason }}</span><template v-if="folder.last_synced_at"> · synced {{ formatSyncTime(folder.last_synced_at) }}</template></template>
                   <template v-else-if="folder.last_synced_at">
-                    <template v-if="folder.git && folder.git_branch">{{ folder.git_branch }}<template v-if="folder.git_head"> @ {{ folder.git_head.slice(0, 7) }}</template> · </template>Synced {{ formatSyncTime(folder.last_synced_at) }}<template v-if="folder.pruned_count"> · {{ folder.pruned_count }} pruned</template>
+                    <template v-if="folder.git && folder.git_branch">{{ folder.git_branch }}<template v-if="folder.git_head"> @ {{ folder.git_head.slice(0, 7) }}</template> · </template>Synced {{ formatSyncTime(folder.last_synced_at) }}<template v-if="checkedAfterSync(folder)"> · checked {{ formatSyncTime(folder.last_checked_at) }}</template><template v-if="folder.pruned_count"> · {{ folder.pruned_count }} pruned</template>
                   </template>
                 </span>
               </span>
@@ -369,15 +371,18 @@
                 <EyeOff v-else :size="12" />
               </button>
               <button
-                class="btn btn-ghost btn-xs h-6 min-h-0 px-1.5 hover-reveal"
-                :disabled="indexing || syncingPath === folder.path || !folder.exists"
-                :title="`Index new and changed files in ${folder.path}`"
+                class="btn btn-ghost btn-xs h-6 min-h-0 px-1.5"
+                :class="folder.out_of_date ? 'text-warning' : 'hover-reveal'"
+                :disabled="indexing || syncingPath === folder.path || (!folder.exists && !folder.git_url)"
+                :title="folder.git_url ? 'Fetch the latest commits and index what changed' : `Index new and changed files in ${folder.path}`"
+                data-testid="source-sync"
                 @click="runFolderSync(folder, false)"
               >
                 <span v-if="syncingPath === folder.path" class="loading loading-spinner loading-xs"></span>
                 <template v-else>Sync</template>
               </button>
               <button
+                v-if="!folder.git_url"
                 class="btn btn-ghost btn-xs h-6 min-h-0 px-1.5 hover-reveal text-base-content/60"
                 :disabled="indexing || syncingPath === folder.path || !folder.exists"
                 title="Sync, and remove documents whose file was deleted from this folder"
@@ -2355,6 +2360,12 @@ const formatSyncTime = (iso) => {
   if (hrs < 24) return `${hrs}h ago`
   const days = Math.floor(hrs / 24)
   return days < 7 ? `${days}d ago` : new Date(ts).toLocaleDateString()
+}
+// A watched source is checked more often than it changes: say so, so a row
+// that reads "synced 3d ago" is not mistaken for one nobody looked at.
+const checkedAfterSync = (folder) => {
+  if (!folder.watch || !folder.last_checked_at || !folder.last_synced_at) return false
+  return new Date(folder.last_checked_at).getTime() - new Date(folder.last_synced_at).getTime() > 60_000
 }
 const loadSyncFolders = async () => {
   if (!collectionStore.canEditCurrent) { syncFolders.value = []; return }

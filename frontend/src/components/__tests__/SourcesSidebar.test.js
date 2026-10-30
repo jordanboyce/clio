@@ -81,3 +81,45 @@ describe('Sources panel', () => {
     expect(localStorage.getItem('clio_sources_view')).toBe('list')
   })
 })
+
+describe('Synced sources', () => {
+  const synced = (extra) => ({
+    path: '/lab', exists: true, git: true, git_branch: 'main', git_head: 'abcdef0123456789',
+    last_synced_at: new Date(Date.now() - 3 * 3600_000).toISOString(), ...extra,
+  })
+
+  it('says why a checkout is out of date and highlights Sync', async () => {
+    serve(docs(3), { folders: [synced({ out_of_date: true, stale_reason: '2 new commits since the last sync' })] })
+    const w = await mountPanel()
+    const state = w.get('[data-testid="synced-folders"] [data-testid="source-state"]')
+    expect(state.text()).toContain('Out of date: 2 new commits since the last sync')
+    expect(state.text()).toContain('synced 3h ago')
+    expect(w.get('[data-testid="source-sync"]').classes()).toContain('text-warning')
+  })
+
+  it('reads as current, with the last check, when nothing changed', async () => {
+    const folder = synced({ watch: true, last_checked_at: new Date(Date.now() - 5 * 60_000).toISOString() })
+    serve(docs(3), { folders: [folder] })
+    const w = await mountPanel()
+    const text = w.get('[data-testid="synced-folders"] [data-testid="source-state"]').text()
+    expect(text).toContain('main @ abcdef0')
+    expect(text).toContain('Synced 3h ago')
+    expect(text).toContain('checked 5m ago')
+    expect(text).not.toContain('Out of date')
+  })
+
+  it('lets Sync remake a remote clone whose directory is gone', async () => {
+    serve(docs(3), { folders: [synced({
+      exists: false, git_url: 'https://git.example/team/repo.git', label: 'repo',
+      out_of_date: true, stale_reason: 'The clone is gone; Sync makes it again',
+    })] })
+    const w = await mountPanel()
+    const row = w.get('[data-testid="synced-folders"]')
+    expect(row.text()).not.toContain('Folder not found')
+    expect(row.text()).toContain('The clone is gone')
+    const sync = row.get('[data-testid="source-sync"]')
+    expect(sync.attributes('disabled')).toBeUndefined()
+    expect(sync.attributes('title')).toContain('Fetch the latest commits')
+    expect(row.findAll('button').some(b => b.text() === 'Prune')).toBe(false) // a clone always prunes
+  })
+})

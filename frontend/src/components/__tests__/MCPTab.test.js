@@ -10,6 +10,7 @@ const existingToken = { id: 'existing', name: 'Other device' }
 
 beforeEach(() => {
   vi.resetAllMocks()
+  localStorage.clear()
   http.get.mockImplementation(async (path) => ({ data: {
     '/api/collections': { collections: [{ id: 'research & notes', name: 'Research' }] },
     '/api/mcp/config': { enable_mcp: true },
@@ -55,6 +56,113 @@ describe('MCP client setup', () => {
     await wrapper.get('#mcp-export-token').setValue('existing')
     expect(wrapper.get('pre').text()).not.toContain('test-only-secret')
     expect(exportedServer(wrapper).headers.Authorization).toContain('Bearer <PASTE_YOUR_TOKEN')
+    wrapper.unmount()
+  })
+
+  it('lists every connection fact on its own with a copy button', async () => {
+    const wrapper = await openAnythingLLM()
+    const details = wrapper.get('[data-testid="mcp-connection-details"]')
+    const labels = details.findAll('dt').map((d) => d.text())
+    expect(labels).toEqual(expect.arrayContaining(['Server URL', 'Legacy SSE URL', 'Authorization header', 'Collection id', 'Tool catalog']))
+    expect(details.find('[aria-label="Copy Server URL"]').exists()).toBe(true)
+    expect(details.text()).toContain('/mcp?collection_id=research%20%26%20notes')
+    wrapper.unmount()
+  })
+
+  it('hands over just the server entry when asked, and whole files otherwise', async () => {
+    const wrapper = await openAnythingLLM()
+    expect(JSON.parse(wrapper.get('pre').text())).toHaveProperty('mcpServers')
+    await wrapper.get('#mcp-export-entry-only').setValue(true)
+    const entry = wrapper.get('pre').text()
+    expect(entry.startsWith('"clio-research-notes": {')).toBe(true)
+    expect(entry).not.toContain('mcpServers')
+    wrapper.unmount()
+  })
+
+  it('writes the token as an environment reference, in the client\'s syntax, when asked', async () => {
+    const wrapper = await openAnythingLLM()
+    await wrapper.findAll('button').find(button => button.text() === 'Cursor').trigger('click')
+    await wrapper.get('#mcp-export-credential').setValue('env')
+    await wrapper.get('#mcp-export-envvar').setValue('MY_CLIO_TOKEN')
+    expect(exportedServer(wrapper).headers.Authorization).toBe('Bearer ${env:MY_CLIO_TOKEN}')
+    await wrapper.get('#mcp-export-credential').setValue('none')
+    expect(exportedServer(wrapper).headers).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('offers each client\'s documented formats and switches between them', async () => {
+    const wrapper = await openAnythingLLM()
+    await wrapper.findAll('button').find(button => button.text() === 'Claude Code').trigger('click')
+    const tabs = wrapper.get('[data-testid="mcp-export-formats"]').findAll('[role="tab"]')
+    expect(tabs.map((t) => t.text())).toEqual(['.mcp.json', 'Command line'])
+    await tabs[1].trigger('click')
+    expect(wrapper.get('pre').text()).toContain('claude mcp add --transport http')
+    expect(wrapper.text()).toContain('terminal')
+    // Picking another client goes back to its first format.
+    await wrapper.findAll('button').find(button => button.text() === 'Codex').trigger('click')
+    expect(wrapper.get('pre').text()).toContain('[mcp_servers.clio-research-notes]')
+    wrapper.unmount()
+  })
+
+  it('lets the person hide clients they do not use, remembers it in this browser, and never empties the list', async () => {
+    const wrapper = await openAnythingLLM()
+    const picker = () => wrapper.get('[data-testid="mcp-client-picker"]')
+    const shown = () => picker().findAll('button[aria-pressed]').map((b) => b.text())
+    expect(shown()).toContain('Codex')
+    expect(picker().text()).toContain('Showing all')
+
+    await picker().findAll('button').find((b) => b.text() === 'Choose clients…').trigger('click')
+    const chooser = wrapper.get('[data-testid="mcp-choose-clients"]')
+    await chooser.get('[aria-label="Show Codex"]').setValue(false)
+    expect(shown()).not.toContain('Codex')
+    expect(picker().text()).toContain('1 of')
+    expect(JSON.parse(localStorage.getItem('clio_mcp_hidden_clients'))).toEqual(['codex'])
+
+    // Hiding the selected client moves the selection to one still shown.
+    await chooser.get('[aria-label="Show AnythingLLM"]').setValue(false)
+    expect(wrapper.text()).not.toContain('anythingllm_mcp_servers.json')
+    expect(picker().find('button[aria-pressed="true"]').text()).toBe('Claude Code')
+
+    // Everything hidden still leaves the generic entry on screen.
+    await chooser.findAll('button').find((b) => b.text() === 'Hide all').trigger('click')
+    expect(shown()).toEqual(['Any MCP client'])
+    expect(wrapper.get('pre').text()).toContain('Endpoint:')
+    await chooser.findAll('button').find((b) => b.text() === 'Show all').trigger('click')
+    expect(shown().length).toBeGreaterThan(40)
+    expect(localStorage.getItem('clio_mcp_hidden_clients')).toBe('[]')
+    wrapper.unmount()
+  })
+
+  it('starts from the hidden list this browser saved', async () => {
+    localStorage.setItem('clio_mcp_hidden_clients', JSON.stringify(['cursor', 'zed', 'not-a-client']))
+    const wrapper = await openAnythingLLM()
+    const shown = wrapper.get('[data-testid="mcp-client-picker"]').findAll('button[aria-pressed]').map((b) => b.text())
+    expect(shown).not.toContain('Cursor')
+    expect(shown).not.toContain('Zed')
+    expect(shown).toContain('Claude Code')
+    expect(wrapper.get('[data-testid="mcp-client-picker"]').text()).toContain('2 of')
+    wrapper.unmount()
+  })
+
+  it('names the server after the typed name and makes one entry per ticked collection', async () => {
+    http.get.mockImplementation(async (path) => ({ data: {
+      '/api/collections': { collections: [{ id: 'research', name: 'Research' }, { id: 'runbooks', name: 'Runbooks' }] },
+      '/api/mcp/config': { enable_mcp: true },
+      '/api/mcp/tokens': { tokens: [existingToken] },
+    }[path] }))
+    const wrapper = mount(MCPTab, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'Claude Code').trigger('click')
+    await wrapper.get('#mcp-export-name').setValue('kb')
+    expect(Object.keys(JSON.parse(wrapper.get('pre').text()).mcpServers)).toEqual(['kb'])
+    await wrapper.get('[aria-label="Collection Runbooks"]').setValue(true)
+    const servers = JSON.parse(wrapper.get('pre').text()).mcpServers
+    expect(Object.keys(servers)).toEqual(['kb-research', 'kb-runbooks'])
+    expect(servers['kb-runbooks'].url).toContain('collection_id=runbooks')
+    // Nothing ticked: a single unscoped server the agent scopes itself.
+    await wrapper.get('[aria-label="Collection Research"]').setValue(false)
+    await wrapper.get('[aria-label="Collection Runbooks"]').setValue(false)
+    expect(JSON.parse(wrapper.get('pre').text()).mcpServers.kb.url).toMatch(/\/mcp$/)
     wrapper.unmount()
   })
 })
