@@ -172,6 +172,15 @@ def remove_document(
                 f"Cannot block {document_id}: no content hash recorded (indexed before governance)"
             )
 
+    # An admin removing a document that carried an open injection warning
+    # confirms the warning; a person deleting their own file says nothing.
+    confirmed_patterns: List[str] = []
+    if action == "admin.remove_document" and doc_info.get("injection_warnings") \
+            and not doc_info.get("injection_review"):
+        from services.prompt_injection_detector import record_feedback
+
+        confirmed_patterns = record_feedback(doc_info.get("injection_warnings"), "confirmed")
+
     num_deleted = indexer.delete_document(document_id)
     collection_service.remove_document(collection_id, document_id)
     invalidate_review_summary()
@@ -189,7 +198,8 @@ def remove_document(
     audit.record(action, actor=actor, collection_id=collection_id, document_id=document_id,
                  detail={"filename": doc_info.get("filename"), "chunks_deleted": num_deleted,
                          "blocked": blocked, "reason": reason or None,
-                         "uploaded_by": doc_info.get("uploaded_by")})
+                         "uploaded_by": doc_info.get("uploaded_by"),
+                         **({"injection_confirmed": confirmed_patterns} if confirmed_patterns else {})})
     return {
         "filename": doc_info["filename"],
         "chunks_deleted": num_deleted,
@@ -338,7 +348,8 @@ def _policy_reason(doc: Dict[str, Any]) -> str:
     flags = doc.get("policy_flags") or {}
     cats = flags.get("categories") or {}
     parts = [
-        f"{str(c).replace('_', ' ')}" + (f" ×{n}" if n and n > 1 else "")
+        (f"personal data ({n} item{'s' if n != 1 else ''})" if c == "pii"
+         else f"{str(c).replace('_', ' ')}" + (f" ×{n}" if n and n > 1 else ""))
         for c, n in sorted(cats.items(), key=lambda kv: -kv[1])
         if c not in ("secrets",)
     ]
@@ -544,10 +555,16 @@ def resolve_document(
         resolved.append("policy")
 
     if doc_info.get("injection_warnings") and not doc_info.get("injection_review"):
+        from services.prompt_injection_detector import record_feedback
+
         store.set_document_governance(document_id, injection_review="dismissed")
+        # The reviewer says the wording was fine: that is one false positive
+        # against every pattern that flagged it (see pattern_stats).
+        patterns = record_feedback(doc_info.get("injection_warnings"), "dismissed")
         audit.record("document.injection_dismissed", actor=actor, collection_id=collection_id,
                      document_id=document_id,
-                     detail={"filename": doc_info.get("filename"), "note": note or None})
+                     detail={"filename": doc_info.get("filename"), "note": note or None,
+                             "patterns": patterns})
         resolved.append("injection")
 
     if not only and had_reports:

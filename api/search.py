@@ -176,10 +176,13 @@ async def search_documents(
         from services.governance import effective_sensitivity
         collection = collection_service.get_collection(collection_id)
         base_url = str(request.base_url).rstrip('/')
+        from services.prompt_injection_detector import mark_passage
         for result in results:
             result.pdf_url = f"{base_url}/documents/{result.document_id}/pdf?collection_id={collection_id}"
             result.page_url = f"{base_url}/documents/{result.document_id}/pdf?collection_id={collection_id}#page={result.page_number}"
             result.sensitivity = effective_sensitivity(collection, result.sensitivity)
+            # Wording that addresses an AI is shown as quoted data, not hidden.
+            result.instruction_text = mark_passage(result.text_snippet)
 
         execution_time_ms = int((time.time() - start_time) * 1000)
 

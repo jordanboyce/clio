@@ -474,6 +474,30 @@ class Settings(BaseSettings):
     # the document but never queues it, "off" skips the scan entirely.
     injection_scan_action: Literal["review", "warn", "off"] = "review"
 
+    # Personal data (PII) in sources. Detected by Microsoft Presidio when it
+    # is installed (pip install -r requirements-pii.txt) and by a built-in
+    # regex set (emails, phone numbers, card numbers, IBANs, SSNs, IP
+    # addresses) otherwise; nothing leaves the machine either way. A page
+    # counts as personal data when it holds at least PII_FLAG_THRESHOLD
+    # entities — a signature block is not a customer list. "label" records
+    # the finding and defaults the document to confidential without making
+    # it anyone's task; "flag" also queues it for review like a content-
+    # policy finding; "quarantine" hides it until an admin approves; "off"
+    # skips the scan. Only the summary (counts and masked previews) is
+    # stored, never the personal data itself.
+    pii_scan_action: Literal["off", "label", "flag", "quarantine"] = "label"
+    pii_flag_threshold: int = 10
+    # Comma-separated Presidio entity types to look for; empty = the default
+    # set (EMAIL_ADDRESS, PHONE_NUMBER, CREDIT_CARD, IBAN_CODE, US_SSN,
+    # US_PASSPORT, US_DRIVER_LICENSE, US_BANK_NUMBER, UK_NHS, IP_ADDRESS).
+    # Add PERSON or LOCATION for names and addresses (noisier; Presidio only).
+    pii_entities: str = ""
+    # Mask personal data in everything retrieval hands out: search results,
+    # chat context and sources, MCP excerpts, chunk views. Each entity is
+    # replaced by its type in angle brackets. The stored file is untouched,
+    # so downloading the original still shows the data.
+    pii_redact_outputs: bool = False
+
     # Second opinion from an LLM: a sample of pages is classified against
     # the same categories through the provider named here (or, when empty,
     # the deployment's default chat provider). Sends content to a provider

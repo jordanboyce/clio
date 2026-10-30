@@ -28,9 +28,15 @@ Design constraints, in order:
    the real controls; this is the tripwire.
 
 Two secondary outputs ride along: ``suggested_sensitivity`` (a document
-that contains private keys or a credential dump should default to
-"confidential" regardless of policy status) and a per-category hit count
-the admin review queue displays.
+that contains private keys, a credential dump or dense personal data should
+default to "confidential" regardless of policy status) and a per-category
+hit count the admin review queue displays.
+
+Personal data is the ``pii`` category (``services/pii_detector.py``:
+Presidio when installed, built-in regexes otherwise). It has its own knob,
+``PII_SCAN_ACTION``: ``label`` records it and suggests "confidential" without
+flagging, ``flag`` and ``quarantine`` make a dense page a policy finding
+with that status even when ``CONTENT_POLICY_ACTION`` is milder.
 """
 
 from __future__ import annotations
@@ -39,6 +45,8 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from services import pii_detector
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +69,8 @@ CRITICAL_CATEGORIES = frozenset({"csae", "violent_extremism"})
 # status on their own, they suggest a label. A credential dump is both —
 # it suggests "confidential" AND is unacceptable content.
 SENSITIVITY_ONLY_CATEGORIES = frozenset({"secrets"})
-SENSITIVITY_HINT_CATEGORIES = frozenset({"secrets", "credential_dump"})
+SENSITIVITY_HINT_CATEGORIES = frozenset({"secrets", "credential_dump", "pii"})
+PII_CATEGORY = "pii"
 
 _SEVERITY_WEIGHTS = {"low": 0.15, "medium": 0.35, "high": 0.60, "critical": 1.0}
 
@@ -121,7 +130,12 @@ _PROTECTED_GROUPS = r"(?:jews?|jewish|muslims?|christians?|blacks?|whites?|asian
 _EXPLOSIVE = r"(?:pipe\s+bomb|nail\s+bomb|car\s+bomb|ied|improvised\s+explosive|explosive\s+device|thermite\s+charge|pressure\s+cooker\s+bomb|detonator)"
 _SELL = r"(?:buy|buying|sell|selling|for\s+sale|order|ordering|ship|shipping|vendor|supplier|wholesale|price\s+list|menu)"
 _DRUGS = r"(?:cocaine|coke|heroin|fentanyl|fent|meth(?:amphetamine)?|crystal|mdma|molly|ecstasy|lsd|acid\s+tabs|ketamine|xanax|alprazolam|oxycontin|oxycodone|oxy|percocet|adderall|carfentanil|dmt)"
-_EXPLICIT_TERMS = r"(?:cock|dick|pussy|cum(?:ming|shot)?|blowjob|handjob|anal\s+sex|gangbang|creampie|deepthroat|hardcore\s+porn|xxx|porn(?:o|star)?|nude[sz]?|tits)"
+_EXPLICIT_TERMS = r"(?:cock|dick|pussy|cum(?:ming|shot)?|blowjob|handjob|anal\s+sex|gangbang|creampie|deepthroat|hardcore\s+porn|porn(?:o|star)?|nude[sz]?|tits)"
+
+# Explicit terms with an everyday reading: a name (Dick, Cock), an animal
+# (pussy, tits), Latin (cum laude). Title case marks the name; variety marks
+# the pornography. See _explicit_matches.
+_AMBIGUOUS_EXPLICIT = frozenset({"dick", "cock", "pussy", "tits", "cum"})
 
 _RULES: List[Tuple[str, str, str, str, int]] = [
     # ── Child sexual abuse material indicators ─────────────────────────
@@ -153,7 +167,7 @@ _RULES: List[Tuple[str, str, str, str, int]] = [
      r"\b(?:join|joining|support(?:ing)?|pledge(?:d)?\s+(?:allegiance|bay'?ah)\s+to|fight(?:ing)?\s+for)\s+(?:the\s+)?(?:isis|isil|daesh|islamic\s+state|al[-\s]?qa[ie]da|the\s+caliphate|atomwaffen|the\s+base|boogaloo)\b",
      "high", 1),
     ("violent_extremism", "extremist_slogans",
-     r"\b(?:race\s+war|white\s+genocide|great\s+replacement|day\s+of\s+the\s+rope|total\s+(?:war|extermination)|accelerationis[mt]|siege\s+culture|1488|14\s+words)\b",
+     r"\b(?:race\s+war|white\s+genocide|great\s+replacement|day\s+of\s+the\s+rope|total\s+(?:war|extermination)|accelerationis[mt]|siege\s+culture|(?<![\d.-]\s)(?<![\d.-])1488(?!\s?[\d.-])|14\s+words)\b",
      "medium", 2),
 
     # ── Weapons trafficking ────────────────────────────────────────────
@@ -232,6 +246,27 @@ def _luhn_ok(digits: str) -> bool:
     return total % 10 == 0
 
 
+def _explicit_matches(matches: List[re.Match]) -> List[re.Match]:
+    """Keep the explicit-terms hits that read as pornography, not as a name.
+
+    The author called Dick, the cat, the bird book and "summa cum laude" all
+    repeat one word; explicit text uses several. So a Title-case hit on an
+    ambiguous term is dropped (a name mid-sentence; at a sentence start the
+    other hits still carry the page), and a page needs at least two distinct
+    terms before any of them count.
+    """
+    kept = []
+    for m in matches:
+        raw = m.group(0)
+        low = raw.lower()
+        if low in _AMBIGUOUS_EXPLICIT and raw[:1].isupper() and raw[1:] == raw[1:].lower():
+            continue
+        kept.append(m)
+    if len({m.group(0).lower().split()[0] for m in kept}) < 2:
+        return []
+    return kept
+
+
 class ContentPolicyScanner:
     """Scans plain text for content-policy signals. Stateless; reuse freely."""
 
@@ -241,11 +276,16 @@ class ContentPolicyScanner:
 
         findings: List[PolicyFinding] = []
         categories: Dict[str, int] = {}
+        rules_on = rule_packs_enabled()
 
         for category, name, pattern, severity, min_hits in _COMPILED:
+            if not rules_on:
+                break
             if code and category not in _CODE_CATEGORIES:
                 continue
             matches = list(pattern.finditer(text))
+            if name == "explicit_terms":
+                matches = _explicit_matches(matches)
             if len(matches) < min_hits:
                 continue
             categories[category] = categories.get(category, 0) + len(matches)
@@ -264,7 +304,7 @@ class ContentPolicyScanner:
 
         # Card numbers: Luhn-valid runs, 5+ per page → a dump, not an invoice.
         cards = [m for m in _CARD_RE.finditer(text)
-                 if _luhn_ok(re.sub(r"[ -]", "", m.group(0)))]
+                 if _luhn_ok(re.sub(r"[ -]", "", m.group(0)))] if rules_on else []
         if len(cards) >= 5:
             categories["credential_dump"] = categories.get("credential_dump", 0) + len(cards)
             findings.append(PolicyFinding(
@@ -275,13 +315,40 @@ class ContentPolicyScanner:
                 char_offset=cards[0].start(),
             ))
 
+        # Personal data: a *dense* page (PII_FLAG_THRESHOLD entities) is a
+        # finding; a letterhead with one phone number is not recorded at all.
+        # Code only gets the sensitivity packs, and identifiers in code are
+        # not people, so it is skipped there.
+        pii_dense = False
+        if not code and pii_detector.scanning_enabled():
+            try:
+                pii = pii_detector.scan(text)
+            except Exception as e:  # noqa: BLE001 - never let the tripwire break ingest
+                logger.warning(f"PII scan failed for {source_label or 'page'}: {e}")
+                pii = None
+            if pii is not None and pii.dense:
+                pii_dense = True
+                categories[PII_CATEGORY] = pii.total
+                previews = ", ".join(p["preview"] for p in pii.previews[:3])
+                findings.append(PolicyFinding(
+                    category=PII_CATEGORY,
+                    pattern_name=f"personal_data:{pii.engine}",
+                    matched_text=pii.describe() + (f" ({previews})" if previews else ""),
+                    severity="high" if pii_detector.queues_for_review() else "medium",
+                    char_offset=pii.first_offset,
+                ))
+
         risk_score = self._score(findings)
         has_critical = any(f.severity == "critical" for f in findings)
-        # Sensitivity-only categories never flag a document on their own.
-        acceptability = [f for f in findings if f.category not in SENSITIVITY_ONLY_CATEGORIES]
+        # Sensitivity-only categories never flag a document on their own; the
+        # pii category joins them unless PII_SCAN_ACTION says to flag/hold.
+        sensitivity_only = set(SENSITIVITY_ONLY_CATEGORIES)
+        if not pii_detector.queues_for_review():
+            sensitivity_only.add(PII_CATEGORY)
+        acceptability = [f for f in findings if f.category not in sensitivity_only]
         is_flagged = has_critical or any(f.severity == "high" for f in acceptability) or (
             self._score(acceptability) >= 0.5
-        )
+        ) or (pii_dense and pii_detector.queues_for_review())
         summary = self._summary(findings, risk_score)
 
         if is_flagged and source_label:
@@ -347,10 +414,15 @@ def scan_pages(page_texts: Dict[int, str], filename: str = "", code: bool = Fals
     return _scanner.scan_pages(page_texts, filename=filename, code=code)
 
 
-def scanning_enabled() -> bool:
+def rule_packs_enabled() -> bool:
     from config import settings
 
     return settings.content_policy_action != "off"
+
+
+def scanning_enabled() -> bool:
+    """Whether ingest runs the policy scan at all: rule packs or the PII scan."""
+    return rule_packs_enabled() or pii_detector.scanning_enabled()
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +566,12 @@ def decide(
     llm_flagged = bool(llm and llm.get("categories") and (llm.get("confidence") or 0) >= 0.5)
     llm_critical = bool(llm and any(c in CRITICAL_CATEGORIES for c in llm.get("categories", []))
                         and (llm.get("confidence") or 0) >= 0.7)
+    # Flagged only for personal data: PII_SCAN_ACTION decides, not the
+    # general knob, so a customer list can be held while a swear word is not.
+    pii_only = bool(flagged_pages) and not llm_flagged and all(
+        not (set(r.categories) - SENSITIVITY_ONLY_CATEGORIES - {PII_CATEGORY})
+        for r in flagged_pages.values()
+    )
 
     flags: Dict[str, Any] = {
         "action": action,
@@ -506,13 +584,18 @@ def decide(
     if llm is not None:
         flags["llm"] = llm
 
-    if action == "off":
-        return "clear", None, suggested
-
     if not flagged_pages and not llm_flagged:
         # Nothing objectionable; keep sensitivity hints so the label suggestion
         # survives, but no policy flags.
         return "clear", (flags if categories else None), suggested
+
+    if pii_only:
+        flags["action"] = pii_detector.action()
+        status = "quarantined" if pii_detector.action() == "quarantine" else "flagged"
+        return status, flags, suggested
+
+    if action == "off":
+        return "clear", None, suggested
 
     if has_critical or llm_critical:
         status = "rejected" if action == "reject" else "quarantined"

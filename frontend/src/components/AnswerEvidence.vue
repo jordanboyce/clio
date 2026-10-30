@@ -40,7 +40,8 @@
             <span v-if="source.sensitivity && source.sensitivity !== 'public'" class="badge badge-outline badge-sm">{{ source.sensitivity }}</span>
           </div>
           <SupersedeNote :source="source" />
-          <p class="text-sm leading-relaxed whitespace-pre-wrap break-words mt-2 max-w-prose">{{ source.text_snippet || 'No passage preview available.' }}</p>
+          <InstructionTextNote :source="source" />
+          <p class="text-sm leading-relaxed whitespace-pre-wrap break-words mt-2 max-w-prose" :class="{ 'quoted-passage': source.instruction_text }">{{ source.text_snippet || 'No passage preview available.' }}</p>
           <a v-if="sourceHref(source)" :href="sourceHref(source)" target="_blank" rel="noopener noreferrer"
             class="link link-primary inline-flex items-center min-h-9 text-sm mt-1"
             :aria-label="`Open ${source.filename}, page or section ${source.page_number || 1}, in a new tab`">Open original ↗</a>
@@ -58,6 +59,7 @@ import { computed, nextTick, ref, useId } from 'vue'
 import { renderEvidenceMarkdown, sourceHref } from '../utils/answerEvidence'
 import { locationLabel } from '../utils/fileTypes'
 import SupersedeNote from './SupersedeNote.vue'
+import InstructionTextNote from './InstructionTextNote.vue'
 
 const props = defineProps({
   content: { type: String, default: '' },
@@ -76,7 +78,8 @@ const MAX_CHIPS = 8
 const visibleSources = computed(() => props.sources.slice(0, MAX_CHIPS))
 const chipTitle = (source) => {
   const snippet = String(source.text_snippet || '').replace(/\s+/g, ' ').trim()
-  const prefix = source.superseded_by ? 'Older version. ' : ''
+  const prefix = (source.superseded_by ? 'Older version. ' : '') +
+    (source.instruction_text ? 'Contains instruction-like text (quoted as data). ' : '')
   return snippet ? prefix + (snippet.length > 220 ? snippet.slice(0, 217) + '…' : snippet) : source.filename
 }
 
@@ -116,4 +119,5 @@ async function reviewCitation(event) {
 .chat-markdown :deep(table) { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin-block: 0.75rem; }
 .chat-markdown :deep(th),
 .chat-markdown :deep(td) { padding: 0.5rem; border: 1px solid var(--color-base-300); text-align: start; }
+.quoted-passage { border-inline-start: 3px solid var(--color-warning); padding-inline-start: 0.75rem; }
 </style>

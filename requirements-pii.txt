@@ -1,0 +1,14 @@
+# Personal-data (PII) detection with Microsoft Presidio.
+#
+# Optional: without it Clio falls back to a built-in regex set (emails, phone
+# numbers, card numbers, IBANs, US SSNs, IP addresses). Presidio adds names,
+# addresses, passports, driver licences, bank account numbers and context-
+# aware scoring. Runs locally; nothing leaves the machine.
+#
+#   pip install -r requirements-pii.txt
+#   python -m spacy download en_core_web_lg     # or en_core_web_sm (smaller, less accurate)
+#
+# Clio picks the largest installed English spaCy model (lg > md > sm). Set
+# PII_SCAN_ACTION / PII_ENTITIES / PII_REDACT_OUTPUTS in .env (see .env.example).
+presidio-analyzer>=2.2.350
+spacy>=3.7

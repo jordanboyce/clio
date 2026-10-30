@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field
 
 import config
 from services.document_extractor import is_supported_filename
+from services import pii_detector
+from services.prompt_injection_detector import apply_suppressions
 from services.custom_file_types import registry as custom_types
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
@@ -1529,7 +1531,7 @@ async def list_documents(
                 source_type=source_type,
                 source_path=source_path,
                 source_format=doc.get("source_format"),
-                injection_warnings=doc.get("injection_warnings"),
+                injection_warnings=apply_suppressions(doc.get("injection_warnings")),
                 injection_review=doc.get("injection_review"),
                 uploaded_by=doc.get("uploaded_by"),
                 content_hash=doc.get("content_hash"),
@@ -1778,7 +1780,7 @@ async def get_document_chunks(
                     chunk_id=chunk["chunk_id"],
                     page_number=chunk["page_number"],
                     chunk_index=chunk["chunk_index"],
-                    text=chunk["text"],
+                    text=pii_detector.redact_if_enabled(chunk["text"]),
                     source_format=chunk.get("source_format"),
                     extraction_method=chunk_method,
                     language=chunk.get("language"),

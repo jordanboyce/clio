@@ -415,8 +415,69 @@ the source; it never hides or rejects it. `review` also queues a medium or
 high verdict for an admin. `warn` keeps the badge and skips the queue — the
 right setting when ordinary prose is filling the list. `off` skips the scan.
 Low-confidence matches stay on the source and are not a task. Approving a
-document (one row, or **Approve all shown**) dismisses the warning; re-indexing
-the same file does not put it back.
+document (one row, the checked rows, or **Approve all shown**) dismisses the
+warning; re-indexing the same file does not put it back.
+
+The scan is tuned from what reviewers decide, and from the Admin tab directly:
+
+- **Feedback.** Approving a document counts one miss against every rule that
+  flagged it; removing it counts one hit. A rule dismissed at least five times
+  and right less than 20% of the time is *turned down*: scanned one severity
+  level lower (so it badges but no longer queues on its own) until an admin
+  resets its statistics. The counts are visible under **Scanner tuning**.
+- **Mute a rule.** From a document's evidence (*Mute rule*) or the tuning
+  table. A muted rule produces nothing, and warnings already stored are
+  re-read without it, so the queue empties at once. Reversible.
+- **Allow a wording.** *Allow wording* on an excerpt, or type a phrase. A
+  match that contains the phrase, or sits inside it, is ignored everywhere
+  ("act as a fiduciary", a house boilerplate line). Reversible.
+- **Fewer trips to begin with.** Text inside Markdown code fences or
+  blockquotes, and text introduced as an example, a definition or training
+  material, is read as a quotation of an attack rather than one. Markdown
+  `<s>` strikethrough and "New task:" headings no longer count as model tokens
+  or instruction overrides.
+
+Every tuning change is audited (`admin.injection_tuning`). Tuning is stored in
+the app database (no migration) and applies to every collection.
+
+**Instruction-like passages in results.** A passage that still reads as
+instructions to an AI is never hidden — it is evidence — but it is labelled
+wherever retrieval hands it out. Search results and chat sources carry
+`instruction_text` (`{level, categories, excerpts, note}`), the Find and Ask
+tabs show it as a quoted passage with a badge, chat and search synthesis put
+it in a fenced `<<<DOCUMENT-TEXT>>>` block headed *INSTRUCTION-LIKE TEXT* with
+a system-prompt rule saying it is quoted content, and MCP results
+(`search_collection`, `find_in_documents`, `get_document_context`, `ask`)
+carry the same field beside the excerpt, with the rule in the server
+instructions. The label follows the same tuning as the ingest scan.
+
+**Personal data** (`PII_SCAN_ACTION`, default `label`)
+
+A local scan for personal data: Microsoft Presidio when it is installed
+(`pip install -r requirements-pii.txt` and a spaCy English model; in Docker,
+`--build-arg WITH_PII=1`), otherwise a built-in set of patterns (email
+addresses, phone numbers, Luhn-valid card numbers, IBANs, US SSNs, IP
+addresses). Presidio adds names, addresses, passports, driver licences, bank
+numbers and context-aware scoring; `PII_ENTITIES` chooses the entity types
+(blank = a default set without `PERSON` and `LOCATION`, which are noisy). The
+Admin tab's Policy card says which engine is answering.
+
+A page counts as personal data when it holds at least `PII_FLAG_THRESHOLD`
+entities (default 10): a signature block is not a customer export. Only
+counts and masked previews (`j*******@a****com`) are ever stored. A dense page
+is the `pii` category of the content scan, and `PII_SCAN_ACTION` decides what
+it does regardless of `CONTENT_POLICY_ACTION`: `label` records it and
+defaults the document's sensitivity to `confidential` without queueing it;
+`flag` also queues it for review ("Flagged by the content scan: personal data
+(18 items)"); `quarantine` hides it until an admin approves; `off` skips the
+scan. Code files are not scanned for personal data.
+
+`PII_REDACT_OUTPUTS=true` masks personal data in everything retrieval hands
+out — search results, chat context and sources, MCP excerpts, chunk views —
+replacing each item with its type (`<EMAIL_ADDRESS>`). The stored file is
+untouched, so downloading the original still shows the data; the switch is
+for deployments where agents and people should see the document but not the
+people in it. All of this is editable live in Admin tab → *Policy*.
 
 Be honest about coverage. This detects **text signals**. It cannot detect
 abuse imagery (that needs licensed hash databases that are not available
@@ -442,6 +503,14 @@ Approve a held or flagged document, remove it with or without blocking its
 hash, act on user reports, and suspend an identity — which revokes every
 MCP token it holds. Suspension leaves the person's documents in place; removal
 is a separate, reviewable decision.
+
+Decisions can be made in bulk: check rows (or *Select all shown* under the
+current filter) and **Approve selected**, **Remove & block selected** or
+**Remove selected** act on all of them in one call
+(`POST /api/admin/review/resolve`, `POST /api/admin/review/remove`, at most
+500 items each, every document audited individually). *Approve all shown*
+stays for the whole filtered view. Removing counts as confirming any open
+prompt-injection warning on the document; approving counts as dismissing it.
 
 ## Old versions and duplicate text
 

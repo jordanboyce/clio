@@ -613,7 +613,15 @@ drug trade, explicit content, credential dumps, secrets); `CONTENT_POLICY_ACTION
 decides whether a finding flags, quarantines (hides until approved) or rejects
 the document. A separate wording scan badges possible prompt injection;
 `INJECTION_SCAN_ACTION` chooses whether that also queues an admin task
-(`review`, the default), only badges the source (`warn`), or is off.
+(`review`, the default), only badges the source (`warn`), or is off. Reviewer
+decisions tune that scan (rules that are usually wrong are turned down, and
+admins can mute a rule or allow a wording), the queue takes bulk approve and
+remove, and a passage that still reads as instructions to an AI is labelled
+as quoted data in search, chat and MCP results rather than hidden. Personal
+data is found locally too — Microsoft Presidio when installed
+(`requirements-pii.txt`), built-in patterns otherwise — and `PII_SCAN_ACTION`
+decides whether a dense page is labelled confidential, queued or held;
+`PII_REDACT_OUTPUTS` masks it in results.
 Collections carry a sensitivity label — `restricted` ones cannot
 be shared and are invisible to MCP clients without an explicitly scoped token —
 and `AUP_REQUIRED=true` makes each identity accept an acceptable-use policy
