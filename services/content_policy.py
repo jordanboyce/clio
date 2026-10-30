@@ -130,7 +130,12 @@ _PROTECTED_GROUPS = r"(?:jews?|jewish|muslims?|christians?|blacks?|whites?|asian
 _EXPLOSIVE = r"(?:pipe\s+bomb|nail\s+bomb|car\s+bomb|ied|improvised\s+explosive|explosive\s+device|thermite\s+charge|pressure\s+cooker\s+bomb|detonator)"
 _SELL = r"(?:buy|buying|sell|selling|for\s+sale|order|ordering|ship|shipping|vendor|supplier|wholesale|price\s+list|menu)"
 _DRUGS = r"(?:cocaine|coke|heroin|fentanyl|fent|meth(?:amphetamine)?|crystal|mdma|molly|ecstasy|lsd|acid\s+tabs|ketamine|xanax|alprazolam|oxycontin|oxycodone|oxy|percocet|adderall|carfentanil|dmt)"
-_EXPLICIT_TERMS = r"(?:cock|dick|pussy|cum(?:ming|shot)?|blowjob|handjob|anal\s+sex|gangbang|creampie|deepthroat|hardcore\s+porn|xxx|porn(?:o|star)?|nude[sz]?|tits)"
+_EXPLICIT_TERMS = r"(?:cock|dick|pussy|cum(?:ming|shot)?|blowjob|handjob|anal\s+sex|gangbang|creampie|deepthroat|hardcore\s+porn|porn(?:o|star)?|nude[sz]?|tits)"
+
+# Explicit terms with an everyday reading: a name (Dick, Cock), an animal
+# (pussy, tits), Latin (cum laude). Title case marks the name; variety marks
+# the pornography. See _explicit_matches.
+_AMBIGUOUS_EXPLICIT = frozenset({"dick", "cock", "pussy", "tits", "cum"})
 
 _RULES: List[Tuple[str, str, str, str, int]] = [
     # ── Child sexual abuse material indicators ─────────────────────────
@@ -241,6 +246,27 @@ def _luhn_ok(digits: str) -> bool:
     return total % 10 == 0
 
 
+def _explicit_matches(matches: List[re.Match]) -> List[re.Match]:
+    """Keep the explicit-terms hits that read as pornography, not as a name.
+
+    The author called Dick, the cat, the bird book and "summa cum laude" all
+    repeat one word; explicit text uses several. So a Title-case hit on an
+    ambiguous term is dropped (a name mid-sentence; at a sentence start the
+    other hits still carry the page), and a page needs at least two distinct
+    terms before any of them count.
+    """
+    kept = []
+    for m in matches:
+        raw = m.group(0)
+        low = raw.lower()
+        if low in _AMBIGUOUS_EXPLICIT and raw[:1].isupper() and raw[1:] == raw[1:].lower():
+            continue
+        kept.append(m)
+    if len({m.group(0).lower().split()[0] for m in kept}) < 2:
+        return []
+    return kept
+
+
 class ContentPolicyScanner:
     """Scans plain text for content-policy signals. Stateless; reuse freely."""
 
@@ -258,6 +284,8 @@ class ContentPolicyScanner:
             if code and category not in _CODE_CATEGORIES:
                 continue
             matches = list(pattern.finditer(text))
+            if name == "explicit_terms":
+                matches = _explicit_matches(matches)
             if len(matches) < min_hits:
                 continue
             categories[category] = categories.get(category, 0) + len(matches)

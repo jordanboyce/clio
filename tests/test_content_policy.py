@@ -199,3 +199,28 @@ def test_digits_inside_a_card_number_are_not_a_slogan():
     assert "violent_extremism" not in page.categories
     slogans = cp.scan_pages({1: "They chant 1488 at every rally; 1488 is painted on the wall."})[1]
     assert slogans.categories.get("violent_extremism") == 2
+
+
+def test_a_person_called_dick_is_not_explicit_content():
+    biography = (
+        "Dick joined the firm in 1998. Dick led the audit practice, and Dick's team "
+        "grew to forty. Colleagues remember Dick for his patience. Author: Dick Francis."
+    )
+    page = cp.scan_pages({1: biography})[1]
+    assert "sexual_explicit" not in page.categories and not page.is_flagged
+
+
+def test_one_innocent_word_repeated_is_not_explicit_content():
+    for text in (
+        "The cat: our pussy sleeps all day. The pussy eats at six. A pussy needs a vet. Pussy cats purr.",
+        "Blue tits, great tits and coal tits visit the feeder; tits nest in the box; tits are common garden birds.",
+        "She graduated summa cum laude; he graduated magna cum laude; both cum laude honours; cum laude again.",
+        "Phone: xxx-xxx-xxxx. Account: xxx. Ref xxx. Code xxx. Fill in xxx where shown.",
+    ):
+        page = cp.scan_pages({1: text})[1]
+        assert "sexual_explicit" not in page.categories, text
+
+
+def test_explicit_text_still_flags():
+    page = cp.scan_pages({1: EXPLICIT})[1]
+    assert page.is_flagged and "sexual_explicit" in page.categories
