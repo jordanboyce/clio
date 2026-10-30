@@ -10,6 +10,7 @@ const existingToken = { id: 'existing', name: 'Other device' }
 
 beforeEach(() => {
   vi.resetAllMocks()
+  localStorage.clear()
   http.get.mockImplementation(async (path) => ({ data: {
     '/api/collections': { collections: [{ id: 'research & notes', name: 'Research' }] },
     '/api/mcp/config': { enable_mcp: true },
@@ -100,6 +101,46 @@ describe('MCP client setup', () => {
     // Picking another client goes back to its first format.
     await wrapper.findAll('button').find(button => button.text() === 'Codex').trigger('click')
     expect(wrapper.get('pre').text()).toContain('[mcp_servers.clio-research-notes]')
+    wrapper.unmount()
+  })
+
+  it('lets the person hide clients they do not use, remembers it in this browser, and never empties the list', async () => {
+    const wrapper = await openAnythingLLM()
+    const picker = () => wrapper.get('[data-testid="mcp-client-picker"]')
+    const shown = () => picker().findAll('button[aria-pressed]').map((b) => b.text())
+    expect(shown()).toContain('Codex')
+    expect(picker().text()).toContain('Showing all')
+
+    await picker().findAll('button').find((b) => b.text() === 'Choose clients…').trigger('click')
+    const chooser = wrapper.get('[data-testid="mcp-choose-clients"]')
+    await chooser.get('[aria-label="Show Codex"]').setValue(false)
+    expect(shown()).not.toContain('Codex')
+    expect(picker().text()).toContain('1 of')
+    expect(JSON.parse(localStorage.getItem('clio_mcp_hidden_clients'))).toEqual(['codex'])
+
+    // Hiding the selected client moves the selection to one still shown.
+    await chooser.get('[aria-label="Show AnythingLLM"]').setValue(false)
+    expect(wrapper.text()).not.toContain('anythingllm_mcp_servers.json')
+    expect(picker().find('button[aria-pressed="true"]').text()).toBe('Claude Code')
+
+    // Everything hidden still leaves the generic entry on screen.
+    await chooser.findAll('button').find((b) => b.text() === 'Hide all').trigger('click')
+    expect(shown()).toEqual(['Any MCP client'])
+    expect(wrapper.get('pre').text()).toContain('Endpoint:')
+    await chooser.findAll('button').find((b) => b.text() === 'Show all').trigger('click')
+    expect(shown().length).toBeGreaterThan(40)
+    expect(localStorage.getItem('clio_mcp_hidden_clients')).toBe('[]')
+    wrapper.unmount()
+  })
+
+  it('starts from the hidden list this browser saved', async () => {
+    localStorage.setItem('clio_mcp_hidden_clients', JSON.stringify(['cursor', 'zed', 'not-a-client']))
+    const wrapper = await openAnythingLLM()
+    const shown = wrapper.get('[data-testid="mcp-client-picker"]').findAll('button[aria-pressed]').map((b) => b.text())
+    expect(shown).not.toContain('Cursor')
+    expect(shown).not.toContain('Zed')
+    expect(shown).toContain('Claude Code')
+    expect(wrapper.get('[data-testid="mcp-client-picker"]').text()).toContain('2 of')
     wrapper.unmount()
   })
 

@@ -127,8 +127,10 @@ call), so many agents can be connected at once. From the **Connect** tab:
    TypeScript MCP SDKs, the Claude Agent SDK, the OpenAI Agents SDK, the
    Vercel AI SDK, Pydantic AI, Google ADK, the OpenAI Responses API, the
    Anthropic MCP connector, the xAI API, and a generic entry (connection
-   facts plus an mcp-remote bridge) for everything else. Clients that only
-   speak the older HTTP+SSE transport use `/mcp/sse` with the same header.
+   facts plus an mcp-remote bridge) for everything else. *Choose clients…*
+   under the list hides the ones you do not use (a per-browser preference;
+   new clients show by default). Clients that only speak the older HTTP+SSE
+   transport use `/mcp/sse` with the same header.
 3. Hosted assistants — claude.ai, ChatGPT, Grok — add the URL as a custom
    connector from their own settings. They connect from the vendor's servers,
    so the endpoint must be reachable from the internet; with an identity

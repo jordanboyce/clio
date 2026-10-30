@@ -318,10 +318,12 @@
           </fieldset>
 
           <div class="rounded-lg border border-base-300 bg-base-100 overflow-hidden">
-            <!-- Client picker: one row per group, every client a small button -->
-            <div class="border-b border-base-300 bg-base-200/30 px-3 py-2 space-y-1.5">
+            <!-- Client picker: one row per group, every client a small button.
+                 Which clients are listed is this browser's own preference
+                 (layoutStore.hiddenMcpClients), edited right here. -->
+            <div class="border-b border-base-300 bg-base-200/30 px-3 py-2 space-y-1.5" data-testid="mcp-client-picker">
               <div
-                v-for="group in MCP_CLIENT_GROUPS"
+                v-for="group in visibleClientGroups"
                 :key="group.title"
                 class="flex flex-wrap items-center gap-1"
               >
@@ -339,6 +341,50 @@
                 >
                   {{ client.label }}
                 </button>
+              </div>
+              <div class="flex items-center justify-between gap-2 pt-1 text-[11px] text-base-content/50">
+                <span v-if="hiddenClientCount">{{ hiddenClientCount }} of {{ MCP_CLIENTS.length }} clients hidden</span>
+                <span v-else>Showing all {{ MCP_CLIENTS.length }} clients</span>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs"
+                  :aria-expanded="chooseClientsOpen"
+                  aria-controls="mcp-choose-clients"
+                  @click="chooseClientsOpen = !chooseClientsOpen"
+                >{{ chooseClientsOpen ? 'Done' : 'Choose clients…' }}</button>
+              </div>
+            </div>
+
+            <!-- Which clients to list: a preference of this browser, so the
+                 row above holds the two or three tools a person actually uses -->
+            <div v-if="chooseClientsOpen" id="mcp-choose-clients" class="border-b border-base-300 bg-base-100 px-3 py-3 space-y-3" data-testid="mcp-choose-clients">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <p class="text-xs text-base-content/60">
+                  Tick the clients you use. Hidden ones are only hidden from this list, in this browser; a client added in a later release shows by default.
+                </p>
+                <div class="join">
+                  <button type="button" class="btn btn-xs join-item" @click="setAllClientsHidden(false)">Show all</button>
+                  <button type="button" class="btn btn-xs join-item" @click="setAllClientsHidden(true)">Hide all</button>
+                </div>
+              </div>
+              <div v-for="group in MCP_CLIENT_GROUPS" :key="group.title" class="space-y-1">
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] uppercase tracking-wide text-base-content/40">{{ group.title }}</span>
+                  <button type="button" class="btn btn-ghost btn-xs h-5 min-h-0 px-1 text-[11px]" @click="setGroupHidden(group, false)">all</button>
+                  <button type="button" class="btn btn-ghost btn-xs h-5 min-h-0 px-1 text-[11px]" @click="setGroupHidden(group, true)">none</button>
+                </div>
+                <div class="flex flex-wrap gap-x-4 gap-y-1">
+                  <label v-for="client in group.clients" :key="client.key" class="label cursor-pointer gap-1.5 p-0">
+                    <input
+                      type="checkbox"
+                      class="checkbox checkbox-xs"
+                      :checked="!isClientHidden(client.key)"
+                      :aria-label="`Show ${client.label}`"
+                      @change="layoutStore.setMcpClientHidden(client.key, !$event.target.checked)"
+                    />
+                    <span class="label-text text-xs">{{ client.label }}</span>
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -521,8 +567,10 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { ShieldAlert } from 'lucide-vue-next'
 import http from '../utils/http'
 import { useUserStore } from '../stores/userStore'
-import { MCP_CLIENT_GROUPS, buildClientConfig } from '../utils/mcpClients'
+import { useLayoutStore } from '../stores/layoutStore'
+import { MCP_CLIENT_GROUPS, MCP_CLIENTS, buildClientConfig } from '../utils/mcpClients'
 const userStore = useUserStore()
+const layoutStore = useLayoutStore()
 
 // MCP state
 const mcpLoading = ref(false)
@@ -656,6 +704,33 @@ const exportContext = computed(() => ({
   },
   oauthEnabled: Boolean(oauth.value.enabled),
 }))
+
+// The client list, less the ones this browser chose to hide. The picker never
+// goes empty: with everything hidden it shows the generic entry, so there is
+// always a recipe on screen.
+const chooseClientsOpen = ref(false)
+const hiddenClientSet = computed(() => new Set(layoutStore.hiddenMcpClients))
+const isClientHidden = (key) => hiddenClientSet.value.has(key)
+const hiddenClientCount = computed(() => MCP_CLIENTS.filter((c) => isClientHidden(c.key)).length)
+const visibleClientGroups = computed(() => {
+  const groups = MCP_CLIENT_GROUPS
+    .map((g) => ({ title: g.title, clients: g.clients.filter((c) => !isClientHidden(c.key)) }))
+    .filter((g) => g.clients.length)
+  if (groups.length) return groups
+  const generic = MCP_CLIENTS.find((c) => c.key === 'generic') || MCP_CLIENTS[0]
+  return [{ title: 'Any MCP client', clients: [generic] }]
+})
+const setAllClientsHidden = (hidden) => layoutStore.setHiddenMcpClients(hidden ? MCP_CLIENTS.map((c) => c.key) : [])
+const setGroupHidden = (group, hidden) => {
+  const keys = new Set(group.clients.map((c) => c.key))
+  const rest = layoutStore.hiddenMcpClients.filter((k) => !keys.has(k))
+  layoutStore.setHiddenMcpClients(hidden ? [...rest, ...keys] : rest)
+}
+// Hiding the selected client moves the selection to the first one still shown.
+watch(visibleClientGroups, (groups) => {
+  const shown = groups.flatMap((g) => g.clients.map((c) => c.key))
+  if (!shown.includes(activeTab.value)) activeTab.value = shown[0]
+}, { immediate: true })
 
 const activeTabMeta = computed(() => buildClientConfig(activeTab.value, exportContext.value, {
   format: activeFormat.value,
