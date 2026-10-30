@@ -1,7 +1,7 @@
 ## Design Context
 
 ### Users
-Mixed audience — solo researchers, developers exploring their own notes and code, and small teams in regulated environments all share the same surface. They come from different contexts but want the same thing: fast, trustworthy answers grounded in documents they already own. Clio is deployed as a web app, a Windows desktop app with tray integration, and in Docker/enterprise configurations, so the UI has to feel at home whether it's opened in a browser tab next to other tools or running as a dedicated desktop companion.
+Mixed audience — solo researchers, developers exploring their own notes and code, and small teams in regulated environments all share the same surface. They come from different contexts but want the same thing: fast, trustworthy answers grounded in documents they already own. Clio runs as a web app, from a local Python install or Docker through to on-prem and air-gapped deployments, so the UI has to feel at home in a browser tab next to other tools as well as on a locked-down shared server.
 
 ### Job To Be Done
 Get answers from your own resources, faster. The product is measured by time-to-answer, not time-on-task. Every interaction should either (a) advance the user toward a specific passage, citation, or synthesized answer, or (b) get out of the way. Secondary jobs — managing collections, tuning OCR, inspecting tokenization — are tools in service of that primary goal and should be discoverable without competing with it.

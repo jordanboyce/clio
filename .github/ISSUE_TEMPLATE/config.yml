@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security problem
+    url: https://github.com/jordanboyce/clio/security/advisories/new
+    about: Report a vulnerability privately instead of in a public issue (see SECURITY.md).
+  - name: Documentation
+    url: https://github.com/jordanboyce/clio/tree/master/docs
+    about: Deployment, identity, air-gap, research and architecture guides. Check here before asking a how-do-I question.

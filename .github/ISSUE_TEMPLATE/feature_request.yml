@@ -1,0 +1,28 @@
+name: Feature request
+description: Something Clio should do, or do differently.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Clio takes issues, not pull requests. A clear description of the problem is what gets a change built;
+        a proposed design, or even a patch pasted below, is welcome too.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The task, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like instead
+      description: The behaviour you want. If you have a design or a patch in mind, put it here.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Where it matters
+      description: Which deployment shape (solo, LAN, team, on-prem, air-gapped), which clients (browser, MCP), and how often it comes up.

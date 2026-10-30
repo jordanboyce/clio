@@ -1,0 +1,39 @@
+# Clio accepts issues, not pull requests (CONTRIBUTING.md).
+#
+# A pull request whose head lives in another repository (a fork) is closed as
+# soon as it is opened, with a comment pointing at the issue tracker. Pull
+# requests between branches of this repository are left alone, so the
+# maintainer's own workflow is unaffected.
+#
+# pull_request_target runs in the context of the base repository, which is
+# what lets it comment on and close a fork's pull request. It never checks out
+# or runs the pull request's code.
+name: Close external pull requests
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  close:
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const number = context.payload.pull_request.number;
+            const base = `https://github.com/${owner}/${repo}`;
+            const body = [
+              "Thanks for taking the time to work on Clio.",
+              "",
+              "This repository does not accept pull requests, so this one is being closed automatically. Clio is a single-maintainer project and every change goes through the maintainer's own branches.",
+              "",
+              `What helps instead: open an [issue](${base}/issues/new/choose) describing the bug or the change you want, with steps to reproduce or the reasoning behind it. Pointing at the lines you would have changed is welcome, and a patch pasted into the issue may well be used. See [CONTRIBUTING.md](${base}/blob/master/CONTRIBUTING.md).`,
+            ].join("\n");
+            await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
+            await github.rest.pulls.update({ owner, repo, pull_number: number, state: "closed" });

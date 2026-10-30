@@ -2,6 +2,10 @@
 
 **Ask your sources. Check the evidence. Connect your AI tools.**
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Container image](https://img.shields.io/badge/ghcr.io-jordanboyce%2Fclio-24292f?logo=docker&logoColor=white)](https://github.com/jordanboyce/clio/pkgs/container/clio)
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776ab?logo=python&logoColor=white)
+
 Clio is a self-hosted knowledge base for people and for the AI agents they
 use. Add documents to a collection, ask questions that are answered with
 citations, find the exact passage you need, and hand the same knowledge to
@@ -33,15 +37,24 @@ The name is Clio, the Muse of history: the record remembers.
 - [Advanced topics](#advanced-topics)
 - [Development](#development)
 - [FAQ](#faq)
+- [License](#license)
+- [Contributing](#contributing)
 
 ---
 
 ## Quick start
 
-Pick one. Either way you get http://localhost:8473, reachable from this
+Pick one. Every route ends at http://localhost:8473, reachable from this
 machine only, with nothing to configure and no sign-in.
 
-**Docker**
+**Docker, prebuilt image** (nothing to build; the models are already inside)
+
+```bash
+docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 \
+  -v clio-data:/app/data ghcr.io/jordanboyce/clio:latest
+```
+
+**Docker, built from source**
 
 ```bash
 docker compose up -d
@@ -118,19 +131,17 @@ call), so many agents can be connected at once. From the **Connect** tab:
    transport, and the server name. Each client then offers its documented
    formats (config file, CLI command, install link or secret prompt where
    one exists), as a whole file or as just the server entry to merge into a
-   file you already have. Coding agents and IDEs: Claude Code, Codex, Pi,
-   Gemini CLI, Qwen Code, Cursor, VS Code, Copilot CLI, Windsurf, Zed,
-   Cline, Roo Code, Kiro, OpenCode, Amp, Factory Droid, Crush, Mistral Vibe,
-   JetBrains, Continue. Desktop and chat apps: Claude Desktop, claude.ai,
-   ChatGPT, Grok, Hermes Agent, Goose, AnythingLLM, LibreChat, LM Studio,
-   Warp, Open WebUI. Automation and APIs: n8n, LangChain, the Python and
-   TypeScript MCP SDKs, the Claude Agent SDK, the OpenAI Agents SDK, the
-   Vercel AI SDK, Pydantic AI, Google ADK, the OpenAI Responses API, the
-   Anthropic MCP connector, the xAI API, and a generic entry (connection
-   facts plus an mcp-remote bridge) for everything else. *Choose clients…*
-   under the list hides the ones you do not use (a per-browser preference;
-   new clients show by default). Clients that only speak the older HTTP+SSE
-   transport use `/mcp/sse` with the same header.
+   file you already have. *Choose clients…* under the list hides the ones
+   you do not use (a per-browser preference; new clients show by default).
+   Clients that only speak the older HTTP+SSE transport use `/mcp/sse` with
+   the same header.
+
+   | Kind | Clients with a recipe |
+   |---|---|
+   | Coding agents and IDEs | Claude Code, Codex, Pi, Gemini CLI, Qwen Code, Cursor, VS Code, Copilot CLI, Windsurf, Zed, Cline, Roo Code, Kiro, OpenCode, Amp, Factory Droid, Crush, Mistral Vibe, JetBrains, Continue |
+   | Desktop and chat apps | Claude Desktop, claude.ai, ChatGPT, Grok, Hermes Agent, Goose, AnythingLLM, LibreChat, LM Studio, Warp, Open WebUI |
+   | Automation and SDKs | n8n, LangChain, the Python and TypeScript MCP SDKs, the Claude Agent SDK, the OpenAI Agents SDK, the Vercel AI SDK, Pydantic AI, Google ADK, the OpenAI Responses API, the Anthropic MCP connector, the xAI API, and a generic entry (connection facts plus an mcp-remote bridge) for everything else |
+
 3. Hosted assistants — claude.ai, ChatGPT, Grok — add the URL as a custom
    connector from their own settings. They connect from the vendor's servers,
    so the endpoint must be reachable from the internet; with an identity
@@ -223,7 +234,7 @@ goes through the app's access checks.
 | **Triage, organize and review papers and books** | Research | Screens sources against your question with verdicts backed by verified quotes, renames downloads to *year – authors – title*, downloads what a source cites, maps citations between your sources, and prepares reviews overnight; works on the sources you select. Metadata comes from the source or a catalogue (OpenAlex, Crossref, arXiv, Open Library), never a model. [Guide](docs/RESEARCH.md). |
 | **Turn a collection into a document** | Reports | Source-grounded briefings, summaries, and reports with citations to review before sharing. |
 | **Teach it your house style or domain** | Saved instructions | Expertise packs add instructions and terminology per collection, versioned alongside the corpus. |
-| **Give your AI assistant a private knowledge source** | Connect | Claude Desktop, claude.ai, ChatGPT, Grok and Claude Code sign in through your identity provider; Codex, VS Code, Cursor, Windsurf, AnythingLLM, Hermes Agent, Claude Code and any MCP SDK can also use a personal token. Agents can write notes and summaries back when a token allows it. |
+| **Give your AI assistant a private knowledge source** | Connect | Claude Desktop, claude.ai, ChatGPT, Grok and Claude Code sign in through your identity provider; every client, including Codex, VS Code, Cursor, Windsurf, AnythingLLM, Hermes Agent and any MCP SDK, can also use a personal token. Agents can write notes and summaries back when a token allows it. |
 | **Index scanned pages, photos, audio, code** | Add sources | OCR (local Tesseract/Docling or a vision model), Whisper transcription, code-aware chunking, image description. |
 | **Index a whole source tree** | Add sources | Sixty-plus languages and config formats chunk by symbol (functions, classes, SQL objects, Terraform resources, shell functions, Vue/Svelte scripts), with `Makefile`, `Dockerfile` and friends recognised by name. Parsing is lenient: syntax errors, odd encodings and minified files still index; binaries, lockfiles, build output and vendored dependencies are skipped. Every passage keeps its symbol name and line range. |
 | **Keep a folder or repository in sync** | Add sources | Point Clio at a folder or a git repository once; every later sync hashes the tree, skips unchanged files, re-indexes changed ones, and can prune documents whose file was deleted. *Sync* on a remote repository fetches first. The Sources panel says when a source is out of date and why (new commits, edited files, the remote ahead, an indexing run that did not finish); *Watch* re-syncs on an interval and every real change lands in the Updates feed (and an optional signed webhook). |
@@ -580,9 +591,7 @@ visible only to its owner until shared (read or readwrite share links),
 enforcement covers every entry point — search, documents, chat, research and
 the `/mcp` tools — and everything created before the flag stays in a team
 tier everyone sees. The mode refuses to start without an identity source it
-can enforce. (The old `ENABLE_MULTI_USER` flag also refuses to start: it
-filtered the collection list without enforcing anything.) Details:
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+can enforce. Details: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 **MCP clients are the same people.** A personal token only ever works on
 `/mcp`; under an identity provider it carries the identity of whoever minted
@@ -672,8 +681,9 @@ cd frontend && npm test && npm run lint       # frontend tests and lint
 cd frontend && npm run build                  # production build into frontend/dist (served by FastAPI)
 ```
 
-The backend is FastAPI; the frontend Vue 3 + Vite + Pinia + Tailwind/DaisyUI,
-built into `frontend/dist` (gitignored) and served with immutable cache
+The backend is FastAPI on Python 3.12 or newer; the frontend is Vue 3 +
+Vite + Pinia + Tailwind/DaisyUI on Node 20.19 or 22.12 and newer, built into
+`frontend/dist` (gitignored) and served with immutable cache
 headers for hashed assets. Docker builds it in a dedicated stage, and
 `run.sh` / `run.bat` build it on first run. How the pieces fit — retrieval,
 chat, MCP, governance, the research workspace — is in
@@ -769,15 +779,22 @@ again on the next start, with progress shown in the app.
 
 ## License
 
-Licensed under the [MIT License](LICENSE). You're free to use, modify, and
-deploy this anywhere — including commercially and inside internal systems —
-provided the copyright notice and the license text travel with the software.
+Clio is open source under the [MIT License](LICENSE), copyright Jordan Boyce.
+Use it, change it and deploy it anywhere, including commercially and inside
+internal systems, as long as the copyright notice and the license text travel
+with the software. The license covers Clio's own code; the models it downloads
+(embedding, reranker, Whisper, Docling) and the Python and npm packages it
+depends on carry their own licenses.
 
 ## Contributing
 
-Issues and pull requests are welcome. Run the backend and frontend tests
-([Development](#development)) before opening a pull request, and keep the
-docs in step with the change.
+Clio is a single-maintainer project and **does not accept pull requests**.
+Issues are welcome and read: bug reports, feature requests, questions about a
+deployment and documentation mistakes all belong in
+[GitHub Issues](https://github.com/jordanboyce/clio/issues/new/choose). A pull
+request opened from a fork is closed automatically with a note pointing there.
+What makes a report easy to act on is in [CONTRIBUTING.md](CONTRIBUTING.md);
+security problems go through [SECURITY.md](SECURITY.md), not a public issue.
 
 ---
 

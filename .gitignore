@@ -88,7 +88,7 @@ desktop.ini
 # Docker
 .docker/
 
-# SSL Certificates. certs/ holds the dev self-signed pair (generate-cert.sh);
+# SSL Certificates. certs/ holds a dev self-signed pair if you generate one;
 # certs/ca/ is the drop-zone for corporate CA bundles that the Docker build
 # installs into the system trust store. Both dir markers stay tracked so the
 # Dockerfile's COPY always has something to copy.

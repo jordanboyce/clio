@@ -1,4 +1,4 @@
-"""Selected sources are enforced end-to-end (docs/PRODUCT_ASSESSMENT.md):
+"""Selected sources are enforced end-to-end:
 initial retrieval, inlined tables, the overview, and every tool the agent can
 call all stay inside the selection."""
 
