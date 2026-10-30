@@ -81,4 +81,4 @@ The in-app chat is the primary surface; the MCP endpoint is secondary.
 
 ## Design language
 
-The UI follows the principles in [.impeccable.md](../.impeccable.md): the document is the subject, the app is the room. NotebookLM as reference, generic SaaS dashboard as anti-reference. Components stay theme-agnostic — use DaisyUI semantic tokens, never hard-coded colors.
+The UI follows the principles in [.impeccable.md](../.impeccable.md): the document is the subject, the app is the room. NotebookLM as reference, generic SaaS dashboard as anti-reference. Components stay theme-agnostic — use DaisyUI semantic tokens, never hard-coded colors. The name, the Muse's symbols and how they map onto the product are in [BRAND.md](BRAND.md).
