@@ -15,6 +15,9 @@ Three words: **Capable. Simple. Intelligent.**
 
 Emotional target: trust, focus, quiet confidence. The user should feel like they have a capable collaborator, not a product demo.
 
+### The Name
+Clio is the Muse of history: daughter of Zeus and of Mnemosyne, the Titaness of memory; at home on Mount Helicon (or Parnassos) with her eight sisters; shown with an open scroll, a chest of books, tablets and a stylus, or a clarion. Her role was to inspire writers and historians to record great deeds and events so they would not be forgotten. Tagline: *The record remembers.* The product is the keeper of the record, not an oracle: it says what the sources establish and says when they do not. Iconography, when it is needed, draws on her symbols (scroll, tablet, stylus, chest of books), never on robots, brains or sparkles; the Muse herself is not drawn, and the mythology is explained in one sentence where the name is introduced (README, About dialog), not narrated in working surfaces. Full notes: `docs/BRAND.md`.
+
 ### Aesthetic Direction
 **Reference**: NotebookLM — a study/research companion, not a SaaS dashboard. What to borrow from NotebookLM specifically: the document is the center of attention; source citations are first-class and always reachable; chrome recedes; the product feels like a reading room with tools on the wall rather than an admin console.
 

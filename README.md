@@ -15,11 +15,15 @@ whatever model you trust, hosted or on your own hardware. Nothing in the
 product depends on a cloud service, there are no accounts to create, and the
 default install needs no configuration at all.
 
-The name is Clio, the Muse of history: the record remembers.
+Clio is named for the Muse of history: daughter of Zeus and of Mnemosyne,
+memory itself, who kept the record on Mount Helicon with her eight sisters.
+Her symbols are an open scroll, a chest of books, tablets and a stylus, and
+her work was to see that deeds and events were written down so they would not
+be forgotten. That is the job here too. The record remembers.
 
 [Deployment](docs/DEPLOYMENT.md) · [Architecture](docs/ARCHITECTURE.md) ·
 [Research workspace](docs/RESEARCH.md) · [Agentic research](docs/AGENTIC_RESEARCH.md) ·
-[On-prem](docs/ONPREM.md) · [Roadmap](docs/ROADMAP.md)
+[On-prem](docs/ONPREM.md) · [Roadmap](docs/ROADMAP.md) · [The name](docs/BRAND.md)
 
 ---
 

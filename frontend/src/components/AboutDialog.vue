@@ -76,6 +76,11 @@
             <li>Git repositories and watched folders, with an updates bell and optional webhook when sources change.</li>
           </ul>
         </div>
+
+        <p class="mt-5 text-xs text-base-content/50 leading-relaxed" data-testid="about-name">
+          Named for the Muse of history, daughter of Memory, whose symbol is the open scroll:
+          she saw that what mattered was written down and not forgotten.
+        </p>
       </div>
       <div class="flex items-center gap-2 px-6 py-3 border-t border-base-300/60 bg-base-200/40 text-xs">
         <a href="https://github.com/jordanboyce/clio#readme" target="_blank" rel="noopener" class="link link-hover text-base-content/70">Documentation</a>

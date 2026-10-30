@@ -273,7 +273,11 @@ _check_security_posture()
 
 app = FastAPI(
     title="Clio API",
-    description="Privacy-focused document indexing, grounded chat, and MCP access",
+    description=(
+        "Clio, named for the Muse of history: index your own documents and data, "
+        "ask questions answered with citations, and give the same knowledge to AI "
+        "agents over MCP. The record remembers."
+    ),
     version="0.1.0",
     lifespan=lifespan,
 )
