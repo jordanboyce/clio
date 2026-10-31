@@ -17,7 +17,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from api.deps import require_admin
 from config import settings
@@ -78,7 +78,7 @@ async def get_review_summary():
 
 
 class ReviewNote(BaseModel):
-    note: str = ""
+    note: str = Field("", max_length=1000)
     # Empty closes everything open on the document. "injection" dismisses only
     # the wording warning, so a content hold or a user report is left alone.
     scope: str = ""
@@ -91,7 +91,7 @@ class ReviewItemRef(BaseModel):
 
 class BulkResolveRequest(BaseModel):
     items: list[ReviewItemRef]
-    note: str = ""
+    note: str = Field("", max_length=1000)
     # "" closes everything open on each document; "injection" dismisses only
     # the wording warnings and leaves holds and reports alone.
     scope: str = ""
@@ -100,7 +100,7 @@ class BulkResolveRequest(BaseModel):
 class BulkRemoveRequest(BaseModel):
     items: list[ReviewItemRef]
     block: bool = True
-    reason: str = ""
+    reason: str = Field("", max_length=1000)
 
 
 _BULK_LIMIT = 500
@@ -260,7 +260,7 @@ async def approve_document(collection_id: str, document_id: str, body: Optional[
 
 class RemoveRequest(BaseModel):
     block: bool = True
-    reason: str = ""
+    reason: str = Field("", max_length=1000)
 
 
 @router.post(
@@ -323,7 +323,7 @@ async def list_blocked_hashes():
 
 class BlockHashRequest(BaseModel):
     content_hash: str
-    reason: str = ""
+    reason: str = Field("", max_length=1000)
     filename: Optional[str] = None
 
 
@@ -367,7 +367,7 @@ async def list_aup_acknowledgements():
 
 
 class SuspendRequest(BaseModel):
-    reason: str = ""
+    reason: str = Field("", max_length=1000)
 
 
 @router.post("/api/admin/users/{email}/suspend", summary="Suspend an identity", tags=["admin"])
@@ -376,7 +376,7 @@ async def suspend_user(email: str, body: Optional[SuspendRequest] = None):
     stay put — removal is a separate, reviewable action."""
     admin = require_admin("suspend a user")
     if admin and email.strip().lower() == admin.strip().lower():
-        raise HTTPException(status_code=400, detail="You cannot suspend yourself from inside the app.")
+        raise HTTPException(status_code=409, detail="You cannot suspend yourself from inside the app.")
     try:
         return governance.suspend_user(email, reason=(body.reason if body else ""))
     except ValueError as e:

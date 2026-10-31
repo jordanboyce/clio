@@ -136,9 +136,9 @@ def test_saving_unchanged_embedding_settings_needs_no_reindex(client):
 
 
 def test_saving_unknown_provider_is_refused(client):
-    body = client.post("/api/config", json={"embedding_provider": "carrier-pigeon"}).json()
-    assert body["success"] is False
-    assert "Unknown embedding provider" in " ".join(body["errors"])
+    resp = client.post("/api/config", json={"embedding_provider": "carrier-pigeon"})
+    assert resp.status_code == 422
+    assert "Unknown embedding provider" in resp.json()["detail"]
 
 
 def test_legacy_ollama_model_key_maps_to_remote_model(client, fresh_db):

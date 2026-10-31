@@ -29,6 +29,6 @@ async def accept_aup(user_id: str = Depends(get_current_user_id)):
     identity. Anonymous (password-only) callers have nothing to record
     against, and are never gated on the policy in the first place."""
     if not user_id:
-        raise HTTPException(status_code=400, detail="Sign in to acknowledge the policy.")
+        raise HTTPException(status_code=403, detail="Sign in to acknowledge the policy.")
     ack = governance.accept_aup(user_id)
     return {**governance.aup_payload(user_id), "accepted_at": ack["accepted_at"]}

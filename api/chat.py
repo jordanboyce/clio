@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from middleware.user_context import get_request_user
 from services.usage_service import check_daily_budget, record_chat_usage
 
-from services.ai_service import AIService, AnthropicProvider, create_provider
+from services.ai_service import AIService, AnthropicProvider, DEFAULT_OLLAMA_MODEL, create_provider
 from services import authored_text
 from services.agent_tools import anthropic_tools, openai_tools
 from services.collection_overview import build_collection_overview as _build_collection_overview
@@ -88,7 +88,7 @@ def _requested_model(chat_request: ChatRequest, x_ai_model=None, x_ollama_model=
     resolves it — folded into the cache key so a switch of model or
     endpoint never serves the other one's answer."""
     if chat_request.provider == "ollama":
-        model = x_ai_model or x_ollama_model or "llama3.2"
+        model = x_ai_model or x_ollama_model or DEFAULT_OLLAMA_MODEL
     else:
         model = x_ai_model or x_anthropic_model or x_openai_model or ""
     return f"{model}@{x_ai_base_url or ''}"
@@ -1191,6 +1191,40 @@ def starter_questions_endpoint(  # sync: provider round-trip runs in the threadp
     return StarterQuestionsResponse(questions=questions, cached=False)
 
 
+class _ProviderHeaderError(ValueError):
+    """The headers cannot be turned into a provider; the message is for the caller."""
+
+
+def _provider_from_headers(x_ai_provider: str, api_key, x_ai_base_url, model=None):
+    """Build the provider /api/ai/validate-key and /api/ai/models both need
+    from the request headers. ``model`` is only passed on when given."""
+    if x_ai_provider == "ollama":
+        extra: dict = {}
+        if model:
+            extra["model"] = model
+        if x_ai_base_url:
+            extra["base_url"] = x_ai_base_url
+        return create_provider("ollama", **extra)
+    if x_ai_provider == "openai_compatible":
+        from config import settings
+        if not x_ai_base_url and not (
+            settings.ai_provider == "openai_compatible" and settings.ai_base_url
+        ):
+            raise _ProviderHeaderError("base_url required for openai_compatible provider")
+        return create_provider(
+            "openai_compatible",
+            api_key=api_key,
+            **({"base_url": x_ai_base_url} if x_ai_base_url else {}),
+            **({"model": model} if model else {}),
+        )
+    if not api_key:
+        raise _ProviderHeaderError("API key is required for cloud providers")
+    extra = {}
+    if model:
+        extra["model"] = model
+    return create_provider(x_ai_provider, api_key, **extra)
+
+
 # Local File Reference endpoints (v3.1 feature)
 
 @router.post(
@@ -1226,30 +1260,13 @@ def validate_api_key(  # sync: provider round-trip runs in the threadpool
             }
 
         if x_ai_provider == "ollama":
-            model = x_ai_model or x_ollama_model or "llama3.2"
-            extra: dict = {"model": model}
-            if x_ai_base_url:
-                extra["base_url"] = x_ai_base_url
-            provider = create_provider("ollama", **extra)
-        elif x_ai_provider == "openai_compatible":
-            from config import settings
-            if not x_ai_base_url and not (
-                settings.ai_provider == "openai_compatible" and settings.ai_base_url
-            ):
-                return {"valid": False, "error": "base_url required for openai_compatible provider"}
-            provider = create_provider(
-                "openai_compatible",
-                api_key=x_ai_key,
-                **({"base_url": x_ai_base_url} if x_ai_base_url else {}),
-                **({"model": x_ai_model} if x_ai_model else {}),
-            )
+            model = x_ai_model or x_ollama_model or DEFAULT_OLLAMA_MODEL
         else:
-            if not x_ai_key:
-                return {"valid": False, "error": "API key is required for cloud providers"}
-            extra = {}
-            if x_ai_model:
-                extra["model"] = x_ai_model
-            provider = create_provider(x_ai_provider, x_ai_key, **extra)
+            model = x_ai_model
+        try:
+            provider = _provider_from_headers(x_ai_provider, x_ai_key, x_ai_base_url, model)
+        except _ProviderHeaderError as e:
+            return {"valid": False, "error": str(e)}
 
         valid = provider.validate()
         if not valid:
@@ -1318,26 +1335,10 @@ def list_provider_models(  # sync: provider round-trip runs in the threadpool
             from services.app_database import app_db
             api_key = app_db.get_agent_api_key(x_ai_provider) or None
 
-        if x_ai_provider == "ollama":
-            extra: dict = {}
-            if x_ai_base_url:
-                extra["base_url"] = x_ai_base_url
-            provider = create_provider("ollama", **extra)
-        elif x_ai_provider == "openai_compatible":
-            from config import settings
-            if not x_ai_base_url and not (
-                settings.ai_provider == "openai_compatible" and settings.ai_base_url
-            ):
-                return {"models": [], "error": "base_url required for openai_compatible provider"}
-            provider = create_provider(
-                "openai_compatible",
-                api_key=api_key or "",
-                **({"base_url": x_ai_base_url} if x_ai_base_url else {}),
-            )
-        else:
-            if not api_key:
-                return {"models": [], "error": "API key is required for cloud providers"}
-            provider = create_provider(x_ai_provider, api_key)
+        try:
+            provider = _provider_from_headers(x_ai_provider, api_key or "", x_ai_base_url)
+        except _ProviderHeaderError as e:
+            return {"models": [], "error": str(e)}
 
         return {"models": provider.list_models(), "error": None}
     except Exception as e:
@@ -1447,7 +1448,8 @@ async def set_agent_config(
             detail=f"Invalid provider: {provider}. Use one of {', '.join(CLOUD_AI_PROVIDERS)}.",
         )
 
-    # Validate the key before storing
+    # Validate the key before storing: 400 when the provider rejects it,
+    # 502 when the provider could not be reached or errored.
     try:
         test_provider = create_provider(provider, api_key)
         valid = test_provider.validate()
@@ -1456,9 +1458,11 @@ async def set_agent_config(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"API key validation failed for {provider}",
             )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"API key validation failed: {e}",
         )
 

@@ -24,7 +24,7 @@ be forgotten. That is the job here too. The record remembers.
 [Deployment](docs/DEPLOYMENT.md) · [Architecture](docs/ARCHITECTURE.md) ·
 [Research workspace](docs/RESEARCH.md) · [Agentic research](docs/AGENTIC_RESEARCH.md) ·
 [On-prem](docs/ONPREM.md) · [Roadmap](docs/ROADMAP.md) · [The name](docs/BRAND.md) ·
-[Provenance](docs/PROVENANCE.md)
+[Provenance](docs/PROVENANCE.md) · [Engineering conventions](docs/ENGINEERING.md)
 
 ---
 

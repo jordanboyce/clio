@@ -13,9 +13,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from api.deps import get_indexer, require_collection_access
@@ -75,10 +75,10 @@ class AssessRequest(BaseModel):
 
 
 class JobRequest(BaseModel):
-    kind: str = Field(..., description="assess | brief")
+    kind: Literal["assess", "brief"] = Field(..., description="assess | brief")
     document_ids: Optional[List[str]] = Field(None, description="Papers to cover; omit for all")
     question: Optional[str] = Field(None, max_length=1000)
-    depth: str = Field("brief", description="brief | thorough (brief jobs)")
+    depth: Literal["brief", "thorough"] = Field("brief", description="brief | thorough (brief jobs)")
     provider: str = Field(..., description="AI provider the job runs on")
     not_before: Optional[str] = Field(None, description="ISO time to start at (e.g. tonight)")
     skip_reviewed: bool = Field(True, description="Brief jobs: skip papers that already have a review at this depth")
@@ -275,7 +275,9 @@ def analyze_paper(document_id: str, body: AnalyzeOneRequest = AnalyzeOneRequest(
 
 @router.post("/api/research/analyze", tags=["research"], status_code=status.HTTP_202_ACCEPTED,
              summary="Analyze many papers in the background (no model involved)")
-def analyze_many(body: AnalyzeRequest, collection_id: str = "default") -> dict:
+def analyze_many(body: AnalyzeRequest, response: Response, collection_id: str = "default") -> dict:
+    """202 with a job when something was queued; 200 with ``job: null``
+    when every selected paper is already analyzed."""
     indexer = _indexer(collection_id)
     _require_write(collection_id)
     store = library.research_store(indexer)
@@ -284,6 +286,7 @@ def analyze_many(body: AnalyzeRequest, collection_id: str = "default") -> dict:
         done = store.get_papers([d["document_id"] for d in docs])
         docs = [d for d in docs if not (done.get(d["document_id"]) or {}).get("analyzed_at")]
     if not docs:
+        response.status_code = status.HTTP_200_OK
         return {"job": None, "message": "Every selected source is already analyzed."}
     job = jobs_service.start_job(
         collection_id=collection_id, store=store, kind="analyze", documents=docs,
@@ -400,7 +403,7 @@ async def resolve_references(body: ResolveRequest, collection_id: str = "default
 
 @router.post("/api/research/references/download", tags=["research"], status_code=status.HTTP_202_ACCEPTED,
              summary="Fetch and index a paper's references and links into the collection")
-async def download_references(body: DownloadRequest, collection_id: str = "default") -> dict:
+async def download_references(body: DownloadRequest, response: Response, collection_id: str = "default") -> dict:
     from services.link_fetcher import LinkError, LinkRefused, link_indexing_available, validate_link
     from services.upload_service import upload_service
 
@@ -446,6 +449,8 @@ async def download_references(body: DownloadRequest, collection_id: str = "defau
                             "reason": f"over the {MAX_REFERENCES_PER_DOWNLOAD}-link limit for one download; run it again"})
             valid.pop(ref_id)
     if not valid:
+        # Nothing to fetch, so nothing was accepted for later: plain 200.
+        response.status_code = status.HTTP_200_OK
         return {"job_id": None, "queued": [], "skipped": skipped}
 
     try:
@@ -556,12 +561,9 @@ def start_research_job(
     x_ai_key: str = Header(None), x_ollama_model: str = Header(None), x_anthropic_model: str = Header(None),
     x_openai_model: str = Header(None), x_ai_model: str = Header(None), x_ai_base_url: str = Header(None),
 ) -> dict:
-    if body.kind not in ("assess", "brief"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="kind must be 'assess' or 'brief'")
+    # kind and depth are Literals on JobRequest (422 on anything else).
     if body.kind == "assess" and not (body.question or "").strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="An assessment job needs a question")
-    if body.depth not in briefs_service.DEPTHS:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="depth must be 'brief' or 'thorough'")
     indexer = _indexer(collection_id)
     _require_write(collection_id)
     user = get_request_user()

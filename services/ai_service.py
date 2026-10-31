@@ -16,6 +16,9 @@ from typing import Any, List, Optional, Dict
 
 logger = logging.getLogger(__name__)
 
+# The Ollama model used when neither the request nor the deployment names one.
+DEFAULT_OLLAMA_MODEL = "llama3.2"
+
 
 def detect_ollama(base_url: str = "http://localhost:11434") -> Dict:
     """Detect if Ollama is running and list available models.
@@ -444,7 +447,7 @@ class OpenAIProvider(AIProvider):
 class OllamaProvider(AIProvider):
     """Ollama provider for local LLM inference."""
 
-    def __init__(self, base_url: str = "http://localhost:11434", model: str = "llama3.2",
+    def __init__(self, base_url: str = "http://localhost:11434", model: str = DEFAULT_OLLAMA_MODEL,
                  num_ctx: Optional[int] = None):
         """Initialize Ollama provider.
 
@@ -899,7 +902,7 @@ def create_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProv
         # its own loopback here.
         return OllamaProvider(
             base_url=kwargs.get("base_url") or settings.ollama_base_url,
-            model=kwargs.get("model", "llama3.2"),
+            model=kwargs.get("model", DEFAULT_OLLAMA_MODEL),
             num_ctx=kwargs.get("num_ctx"),
         )
     elif provider_name == "ollama_cloud":
@@ -957,7 +960,7 @@ def resolve_default_provider(provider: str = "", model: str = None, purpose: str
         kwargs["model"] = model
     if provider == "ollama":
         kwargs["base_url"] = settings.ollama_base_url
-        kwargs["model"] = model or settings.mcp_ollama_model or "llama3.2"
+        kwargs["model"] = model or settings.mcp_ollama_model or DEFAULT_OLLAMA_MODEL
     try:
         return create_provider(provider, api_key or None, **kwargs), kwargs.get("model")
     except Exception as e:

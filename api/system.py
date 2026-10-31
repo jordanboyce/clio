@@ -349,13 +349,19 @@ async def update_config(updates: dict):
 
     Returns:
         Object with success status, whether restart/reindex needed,
-        and list of updated fields.
+        and list of updated fields. 422 when a value is rejected.
 
     Note: Some changes (like embedding model) require server restart
     and re-indexing all documents.
     """
     require_admin("change deployment settings")
     result = config_manager.update_config(updates)
+    if not result.get("success"):
+        # Rejected values are a client error, not a 200 with success=false.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="; ".join(result.get("errors") or ["could not save"]),
+        )
     return result
 
 
