@@ -81,10 +81,9 @@ class MetadataStore:
                 ON chunks(document_id)
             """)
 
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_chunk_id
-                ON chunks(chunk_id)
-            """)
+            # chunk_id is UNIQUE, so SQLite already keeps an index on it; the
+            # explicit one was a duplicate. Drop it from databases that have it.
+            conn.execute("DROP INDEX IF EXISTS idx_chunk_id")
 
             # Note: idx_source_format is created in _migrate_schema after columns are added
 
@@ -174,6 +173,15 @@ class MetadataStore:
                     superseded_note TEXT DEFAULT NULL
                 )
             """)
+
+            # Duplicate detection looks documents up by content_hash. Guarded
+            # because a pre-v3.3 database gains the column (and this index) in
+            # _migrate_to_v3_3, which runs after this method.
+            if "content_hash" in self._get_table_columns(conn, "documents"):
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_documents_content_hash
+                    ON documents(content_hash)
+                """)
 
             # Check if this is a new database by looking for v3.0 columns
             # Only set schema version to 3.0 if the table was just created with new columns
@@ -371,6 +379,10 @@ class MetadataStore:
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_documents_policy_status
             ON documents(policy_status)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_content_hash
+            ON documents(content_hash)
         """)
 
     def _migrate_to_v3_4(self, conn: sqlite3.Connection):
@@ -611,14 +623,6 @@ class MetadataStore:
             )
         return result
 
-    def get_total_entity_chunks(self) -> int:
-        """Chunks carrying at least one entity row."""
-        with sqlite_connect(self.db_path) as conn:
-            row = conn.execute(
-                "SELECT COUNT(DISTINCT chunk_id) FROM chunk_entities"
-            ).fetchone()
-        return row[0] if row else 0
-
     def get_entities_for_chunks(self, chunk_ids: List[str]) -> Dict[str, List[str]]:
         """Batch-fetch normalized entities for chunks, in insertion order.
 
@@ -724,19 +728,6 @@ class MetadataStore:
                 f"WHERE COALESCE(d.policy_status, 'clear') NOT IN ({marks}) "
                 "ORDER BY c.document_id, c.id", list(HIDDEN_STATUSES)).fetchall()
         return [(r[0], r[1]) for r in rows]
-
-    def newest_servable_upload(self) -> Optional[str]:
-        """Timestamp of the newest servable document (None when empty)."""
-        from services.content_policy import HIDDEN_STATUSES
-
-        marks = ", ".join("?" for _ in HIDDEN_STATUSES)
-        with sqlite_connect(self.db_path) as conn:
-            self._ensure_v3_1_columns(conn)
-            row = conn.execute(
-                "SELECT MAX(upload_timestamp) FROM documents "
-                f"WHERE COALESCE(policy_status, 'clear') NOT IN ({marks})",
-                list(HIDDEN_STATUSES)).fetchone()
-        return row[0] if row and row[0] else None
 
     def save_coverage_report(self, report: Dict[str, Any]) -> None:
         """Keep ``report`` as this collection's latest (replacing the last)."""
@@ -2001,22 +1992,6 @@ class MetadataStore:
             if row:
                 return self._document_row_to_dict(row)
             return None
-
-    def document_exists(self, document_id: str) -> bool:
-        """
-        Check if a document exists in the store.
-
-        Args:
-            document_id: Document identifier
-
-        Returns:
-            True if document exists
-        """
-        with sqlite_connect(self.db_path) as conn:
-            cursor = conn.execute("""
-                SELECT 1 FROM chunks WHERE document_id = ? LIMIT 1
-            """, (document_id,))
-            return cursor.fetchone() is not None
 
     def update_document_source(self, document_id: str, source_path: str,
                                 source_type: str = "local_reference"):

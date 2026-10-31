@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from config import DEFAULT_SEMANTIC_WEIGHT
 from models.schemas import SearchMode
 
 # Weight on the embedding side of the hybrid blend (1 - weight goes to BM25).
@@ -73,7 +74,7 @@ class RetrievalPlan:
     reason: str
 
 
-def plan_retrieval(query: str, base_weight: float = 0.7) -> RetrievalPlan:
+def plan_retrieval(query: str, base_weight: float = DEFAULT_SEMANTIC_WEIGHT) -> RetrievalPlan:
     """Pick the hybrid balance for ``query``. Always returns HYBRID."""
     base = max(0.0, min(float(base_weight), 1.0))
     text = (query or "").strip()

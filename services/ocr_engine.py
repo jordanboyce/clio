@@ -157,22 +157,6 @@ class OCREngine(ABC):
         """
         pass
 
-    def extract_text_by_page(self, pdf_path: str) -> Dict[int, str]:
-        """
-        Extract text from a PDF, returning a dict mapping page numbers to text.
-
-        This is a convenience method that wraps extract_text().
-
-        Args:
-            pdf_path: Path to the PDF file
-
-        Returns:
-            Dictionary mapping page numbers (1-indexed) to extracted text
-        """
-        result = self.extract_text(pdf_path)
-        return result.to_page_dict()
-
-
 class DoclingOCREngine(OCREngine):
     """
     OCR engine using IBM's Docling toolkit.
@@ -732,42 +716,3 @@ def create_ocr_engine(
 
     logger.error(f"OCR engine '{engine_name}' not available")
     return None
-
-
-def is_scanned_pdf(pdf_path: str, threshold: int = 100) -> bool:
-    """
-    Check if a PDF is likely scanned (image-only) by attempting text extraction.
-
-    Args:
-        pdf_path: Path to the PDF file
-        threshold: Minimum average characters per page to consider as text-based
-
-    Returns:
-        True if the PDF appears to be scanned/image-only
-    """
-    import pdfplumber
-
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            if not pdf.pages:
-                return False
-
-            total_chars = 0
-            for page in pdf.pages:
-                text = page.extract_text() or ""
-                total_chars += len(text.strip())
-
-            avg_chars_per_page = total_chars / len(pdf.pages)
-            is_scanned = avg_chars_per_page < threshold
-
-            if is_scanned:
-                logger.info(
-                    f"PDF '{pdf_path}' detected as scanned "
-                    f"({avg_chars_per_page:.0f} avg chars/page < {threshold} threshold)"
-                )
-
-            return is_scanned
-
-    except Exception as e:
-        logger.warning(f"Error checking if PDF is scanned: {e}")
-        return False

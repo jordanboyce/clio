@@ -330,13 +330,5 @@ class CollectionService:
     def get_collection_document_ids(self, collection_id: str) -> List[str]:
         return app_db.get_collection_documents(collection_id)
 
-    def clear_collection_index(self, collection_id: str):
-        indexes_dir = self._get_indexes_dir(collection_id)
-        if indexes_dir.exists():
-            shutil.rmtree(indexes_dir)
-            indexes_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Cleared index for collection: {collection_id}")
-
-
 # Global instance
 collection_service = CollectionService()

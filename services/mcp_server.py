@@ -40,6 +40,22 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_INLINE_ROW_THRESHOLD = 150
 
+# MCP result caps. Deliberately lower than the API's settings.max_top_k (50):
+# an MCP client pastes every passage into a model context, so a tighter cap
+# keeps one tool call from flooding it.
+MCP_MAX_TOP_K = 20
+MCP_MAX_PER_COLLECTION_K = 10
+
+
+def _clamp_top_k(value: Any, cap: int) -> int:
+    """Clamp a requested result count into 1..cap."""
+    return max(1, min(int(value), cap))
+
+
+def _clamp_weight(value: Any) -> float:
+    """Clamp a semantic weight into 0.0..1.0."""
+    return max(0.0, min(float(value), 1.0))
+
 MCP_PROFILE_FIELDS = (
     "collection_id",
     "top_k",
@@ -221,6 +237,30 @@ _AUDIT_DOC_KEYS = ("filename", "source", "document_id", "id")
 # listed, so a wide research call stays a readable row.
 _AUDIT_DOC_LIMIT = 25
 
+# Most collection ids named in one audit row for a multi-collection call.
+_AUDIT_COLLECTION_LIMIT = 25
+
+
+def _collect_document_names(response: dict[str, Any]) -> tuple[list[str], dict[str, int]]:
+    """Distinct document names found in the response's list values, plus each list's length."""
+    documents: list[str] = []
+    counts: dict[str, int] = {}
+    for key, value in response.items():
+        if not isinstance(value, list):
+            continue
+        counts[key] = len(value)
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            for doc_key in _AUDIT_DOC_KEYS:
+                name = item.get(doc_key)
+                if not name:
+                    continue
+                if str(name) not in documents:
+                    documents.append(str(name))
+                break
+    return documents, counts
+
 
 def _audit_tool_call(tool_name: str, response: dict[str, Any]) -> None:
     """Record one MCP tool call. Metadata only — never passage text.
@@ -237,18 +277,7 @@ def _audit_tool_call(tool_name: str, response: dict[str, Any]) -> None:
         if token_id:
             detail["token_id"] = token_id
 
-        documents: list[str] = []
-        counts: dict[str, int] = {}
-        for key, value in response.items():
-            if isinstance(value, list):
-                counts[key] = len(value)
-                for item in value:
-                    if isinstance(item, dict):
-                        for doc_key in _AUDIT_DOC_KEYS:
-                            name = item.get(doc_key)
-                            if name and str(name) not in documents:
-                                documents.append(str(name))
-                                break
+        documents, counts = _collect_document_names(response)
         if counts:
             detail["counts"] = counts
         if documents:
@@ -261,7 +290,7 @@ def _audit_tool_call(tool_name: str, response: dict[str, Any]) -> None:
         if not collection_id:
             ids = response.get("collection_ids")
             if isinstance(ids, list) and ids:
-                detail["collection_ids"] = [str(c) for c in ids[:25]]
+                detail["collection_ids"] = [str(c) for c in ids[:_AUDIT_COLLECTION_LIMIT]]
 
         from services import audit
 
@@ -355,9 +384,9 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
 def _normalize_profile(profile: dict[str, Any]) -> dict[str, Any]:
     normalized = {
         "collection_id": profile.get("collection_id") or settings.mcp_default_collection,
-        "top_k": max(1, min(int(profile.get("top_k", settings.mcp_top_k)), 20)),
+        "top_k": _clamp_top_k(profile.get("top_k", settings.mcp_top_k), MCP_MAX_TOP_K),
         "mode": str(profile.get("mode", settings.mcp_mode) or settings.mcp_mode),
-        "semantic_weight": max(0.0, min(float(profile.get("semantic_weight", settings.mcp_semantic_weight)), 1.0)),
+        "semantic_weight": _clamp_weight(profile.get("semantic_weight", settings.mcp_semantic_weight)),
         "include_sources": _coerce_bool(profile.get("include_sources"), settings.mcp_include_sources),
         "max_source_length": max(100, min(int(profile.get("max_source_length", settings.mcp_max_source_length)), 2000)),
         "inline_row_threshold": max(0, min(int(profile.get("inline_row_threshold", _DEFAULT_INLINE_ROW_THRESHOLD)), 2000)),
@@ -1071,15 +1100,13 @@ def search_all_collections_sync(
         raise ValueError("No collections available to search.")
 
     request_profile = get_request_mcp_profile()
-    per_k = max(1, min(int(top_k_per_collection), 10))
+    per_k = _clamp_top_k(top_k_per_collection, MCP_MAX_PER_COLLECTION_K)
     mode_source = mode or request_profile.get("mode") or settings.mcp_mode
     try:
         resolved_mode = SearchMode(mode_source)
     except ValueError:
         resolved_mode = SearchMode(settings.mcp_mode)
-    resolved_weight = max(0.0, min(
-        float(request_profile.get("semantic_weight", settings.mcp_semantic_weight)), 1.0
-    ))
+    resolved_weight = _clamp_weight(request_profile.get("semantic_weight", settings.mcp_semantic_weight))
     resolved_max_len = max(100, min(
         int(request_profile.get("max_source_length") or settings.mcp_max_source_length), 2000
     ))
@@ -1373,7 +1400,7 @@ def _research_documents_impl(
     def search_branch(text, mode):
         per = _per_collection(lambda cid, indexer, collection: [
             {**_serialize_result(r, 0, excerpt_limit, collection), "collection_id": cid}
-            for r in indexer.search(query=text, mode=SearchMode(mode), top_k=20,
+            for r in indexer.search(query=text, mode=SearchMode(mode), top_k=MCP_MAX_TOP_K,
                                     filters=resolved_filters).get("results", [])])
         merged = [hit for _, hits in per for hit in hits]
         if multi:
@@ -1512,7 +1539,7 @@ def search_collection_sync(
     request_profile = get_request_mcp_profile()
     resolved_collection = _resolve_collection_id(collection_id)
     top_k_source = top_k if top_k is not None else (request_profile.get("top_k") or settings.mcp_top_k)
-    resolved_top_k = max(1, min(int(top_k_source), 20))
+    resolved_top_k = _clamp_top_k(top_k_source, MCP_MAX_TOP_K)
     mode_source = mode if mode is not None else (request_profile.get("mode") or settings.mcp_mode)
     try:
         resolved_mode = SearchMode(mode_source)
@@ -1520,7 +1547,7 @@ def search_collection_sync(
         raise ValueError(
             f"Invalid mode '{mode_source}'. Must be one of: auto, semantic, keyword, hybrid."
         )
-    resolved_weight = max(0.0, min(float(request_profile.get("semantic_weight", settings.mcp_semantic_weight)), 1.0))
+    resolved_weight = _clamp_weight(request_profile.get("semantic_weight", settings.mcp_semantic_weight))
     resolved_include_sources = request_profile.get("include_sources", settings.mcp_include_sources)
     resolved_max_source_length = max(100, min(int(request_profile.get("max_source_length") or settings.mcp_max_source_length), 2000))
     resolved_inline_row_threshold = max(0, min(int(request_profile.get("inline_row_threshold") or _DEFAULT_INLINE_ROW_THRESHOLD), 2000))
@@ -2507,6 +2534,15 @@ def aggregate_table(
     if not schema:
         raise _no_table_error(store, identifier, resolved_collection)
     table_name = schema["table_name"]
+    # Column names land inside quoted SQL identifiers, so only accept names the
+    # schema actually declares; anything else would be injected verbatim.
+    known_cols = {c["sql_name"] for c in schema.get("columns", [])}
+    for col in (aggregate_col, group_by):
+        if col and col not in known_cols:
+            raise ValueError(
+                f"Unknown column '{col}' in table '{table_name}'. "
+                f"Use a sql_name from get_table_schema: {sorted(known_cols)}"
+            )
     sql_fn = _AGG_FN_SQL[agg_fn]
     agg_expr = f'{sql_fn}("{aggregate_col}")'
 
@@ -2973,7 +3009,7 @@ def ask_documents_sync(
         messages=[ChatMessage(role="user", content=normalized)],
         provider=provider_name,
         depth=depth,
-        top_k=max(1, min(int(top_k), 20)),
+        top_k=_clamp_top_k(top_k, MCP_MAX_TOP_K),
         document_ids=ids,
         use_cache=bool(use_cache),
         related=False,
@@ -3173,9 +3209,7 @@ def search_sync(query: str) -> dict[str, Any]:
         resolved_mode = SearchMode(profile.get("mode") or settings.mcp_mode)
     except ValueError:
         resolved_mode = SearchMode.HYBRID
-    resolved_weight = max(0.0, min(
-        float(profile.get("semantic_weight", settings.mcp_semantic_weight)), 1.0
-    ))
+    resolved_weight = _clamp_weight(profile.get("semantic_weight", settings.mcp_semantic_weight))
     snippet_len = max(100, min(
         int(profile.get("max_source_length") or settings.mcp_max_source_length), 2000
     ))

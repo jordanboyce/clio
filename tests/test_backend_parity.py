@@ -17,7 +17,15 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 
 
-def _methods(path: Path, class_name: str) -> dict:
+def _is_abstract(func: ast.FunctionDef) -> bool:
+    return any(
+        (isinstance(d, ast.Name) and d.id == "abstractmethod")
+        or (isinstance(d, ast.Attribute) and d.attr == "abstractmethod")
+        for d in func.decorator_list
+    )
+
+
+def _methods(path: Path, class_name: str, abstract_only: bool = False) -> dict:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == class_name:
@@ -25,12 +33,15 @@ def _methods(path: Path, class_name: str) -> dict:
                 f.name: [a.arg for a in f.args.args]
                 for f in node.body
                 if isinstance(f, ast.FunctionDef) and not f.name.startswith("__")
+                and (not abstract_only or _is_abstract(f))
             }
     raise AssertionError(f"class {class_name} not found in {path}")
 
 
 def test_backends_implement_full_abstract_surface():
-    base = _methods(ROOT / "services" / "db_backend.py", "DatabaseBackend")
+    # Concrete methods on the base (shared by both backends) are inherited,
+    # so only the abstract ones must be re-implemented.
+    base = _methods(ROOT / "services" / "db_backend.py", "DatabaseBackend", abstract_only=True)
     sqlite = _methods(ROOT / "services" / "app_database.py", "SQLiteBackend")
     postgres = _methods(ROOT / "services" / "db_postgres.py", "PostgresBackend")
 

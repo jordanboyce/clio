@@ -20,8 +20,8 @@ from services import provenance
 
 logger = logging.getLogger(__name__)
 
-# Reuse the same helper for document counts (reads per-collection SQLite metadata.db)
-from services.app_database import _get_document_count_from_metadata, _get_storage_bytes_from_metadata
+# Document counts / storage bytes are read from per-collection SQLite metadata.db
+from services.db_helpers import _get_document_count_from_metadata, _get_storage_bytes_from_metadata
 
 
 class PostgresBackend(DatabaseBackend):
@@ -197,6 +197,8 @@ class PostgresBackend(DatabaseBackend):
                         job_type TEXT DEFAULT 'upload'
                     )
                 """)
+                # Active-job lookups filter on status, then collection.
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_upload_jobs_status_collection ON upload_jobs(status, collection_id)")
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS collection_shares (
                         id TEXT PRIMARY KEY,
@@ -1156,22 +1158,6 @@ class PostgresBackend(DatabaseBackend):
 
     # ── Personal MCP access tokens ────────────────────────────
 
-    @staticmethod
-    def _decode_scope(row: Dict[str, Any]) -> Dict[str, Any]:
-        raw = row.get("collection_scope")
-        if isinstance(raw, str) and raw:
-            try:
-                row["collection_scope"] = json.loads(raw)
-            except json.JSONDecodeError:
-                row["collection_scope"] = None
-        elif not raw:
-            row["collection_scope"] = None
-        row["can_write"] = bool(row.get("can_write"))
-        row["allowlist"] = bool(row.get("allowlist"))
-        row["use_count"] = int(row.get("use_count") or 0)
-        row.setdefault("expires_at", None)
-        return row
-
     def create_mcp_token(
         self, user_id: Optional[str], name: str, token_hash: str, token_prefix: str,
         collection_scope: Optional[List[str]] = None,
@@ -1439,12 +1425,6 @@ class PostgresBackend(DatabaseBackend):
 
     # ── Agent API Keys ───────────────────────────────────────
 
-    def set_agent_api_key(self, provider: str, api_key: str):
-        self.set_user_preference(f"agent_api_key_{provider}", api_key)
-
-    def get_agent_api_key(self, provider: str) -> Optional[str]:
-        return self.get_user_preference(f"agent_api_key_{provider}")
-
     def delete_agent_api_key(self, provider: str):
         conn = self._conn()
         try:
@@ -1453,18 +1433,6 @@ class PostgresBackend(DatabaseBackend):
             conn.commit()
         finally:
             self._put(conn)
-
-    def get_agent_config(self) -> Dict[str, Any]:
-        from config import CLOUD_AI_PROVIDERS
-        config = {"providers": {}}
-        for provider in CLOUD_AI_PROVIDERS:
-            key = self.get_agent_api_key(provider)
-            if key:
-                masked = key[:8] + "..." + key[-4:] if len(key) > 12 else "***"
-                config["providers"][provider] = {"configured": True, "key_preview": masked}
-            else:
-                config["providers"][provider] = {"configured": False, "key_preview": None}
-        return config
 
     # ── MCP Resources ────────────────────────────────────────
 

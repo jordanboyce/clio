@@ -455,17 +455,6 @@ class ResearchStore:
                                 (int(limit),)).fetchall()
         return [self._job_row(r) for r in rows]
 
-    def fail_unfinished_jobs(self, reason: str) -> int:
-        """Jobs do not survive the process that ran them (like index jobs)."""
-        with self._connect() as conn:
-            cur = conn.execute(
-                "UPDATE research_jobs SET status = 'failed', finished_at = ?, current = ? "
-                "WHERE status IN ('queued', 'running')",
-                (now_iso(), reason),
-            )
-            conn.commit()
-            return cur.rowcount
-
     # ── housekeeping ────────────────────────────────────────────────────
 
     def prune_orphans(self) -> int:

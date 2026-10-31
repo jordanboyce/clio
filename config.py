@@ -23,6 +23,11 @@ SECURE_PROFILE_DEFAULTS = {
 }
 
 
+# Default hybrid-search balance (semantic vs keyword). Shared by the vector
+# store, the indexer and the retrieval planner so the three cannot drift.
+DEFAULT_SEMANTIC_WEIGHT = 0.7
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables or .env file."""
 

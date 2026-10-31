@@ -4,6 +4,7 @@ Defines the contract that both SQLite and PostgreSQL backends implement.
 This allows the application to switch database backends via configuration.
 """
 
+import json
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List
 
@@ -165,6 +166,24 @@ class DatabaseBackend(ABC):
     # Self-serve bearer credentials for headless MCP clients (Claude Code,
     # Codex, ...): a user mints one from the app instead of hand-editing
     # config files. Scoped to /mcp only by the auth middleware.
+
+    # Shared by both backends: the row shape is the same whichever store
+    # produced it, so decoding lives here rather than in each backend.
+    @staticmethod
+    def _decode_scope(row: Dict[str, Any]) -> Dict[str, Any]:
+        raw = row.get("collection_scope")
+        if isinstance(raw, str) and raw:
+            try:
+                row["collection_scope"] = json.loads(raw)
+            except json.JSONDecodeError:
+                row["collection_scope"] = None
+        elif not raw:
+            row["collection_scope"] = None
+        row["can_write"] = bool(row.get("can_write"))
+        row["allowlist"] = bool(row.get("allowlist"))
+        row["use_count"] = int(row.get("use_count") or 0)
+        row.setdefault("expires_at", None)
+        return row
 
     @abstractmethod
     def create_mcp_token(
@@ -398,18 +417,26 @@ class DatabaseBackend(ABC):
 
     # ── Agent API Keys ───────────────────────────────────────
 
-    @abstractmethod
+    # Agent keys are plain user preferences, so these are concrete and shared;
+    # only the delete (raw SQL) differs per backend.
     def set_agent_api_key(self, provider: str, api_key: str):
-        ...
+        self.set_user_preference(f"agent_api_key_{provider}", api_key)
 
-    @abstractmethod
     def get_agent_api_key(self, provider: str) -> Optional[str]:
-        ...
+        return self.get_user_preference(f"agent_api_key_{provider}")
 
     @abstractmethod
     def delete_agent_api_key(self, provider: str):
         ...
 
-    @abstractmethod
     def get_agent_config(self) -> Dict[str, Any]:
-        ...
+        from config import CLOUD_AI_PROVIDERS
+        config = {"providers": {}}
+        for provider in CLOUD_AI_PROVIDERS:
+            key = self.get_agent_api_key(provider)
+            if key:
+                masked = key[:8] + "..." + key[-4:] if len(key) > 12 else "***"
+                config["providers"][provider] = {"configured": True, "key_preview": masked}
+            else:
+                config["providers"][provider] = {"configured": False, "key_preview": None}
+        return config
