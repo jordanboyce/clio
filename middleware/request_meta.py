@@ -19,6 +19,8 @@ import threading
 import time
 import uuid
 
+from services.provenance import LINEAGE_HEADER, LINEAGE_ID
+
 logger = logging.getLogger("clio.access")
 
 _lock = threading.Lock()
@@ -82,4 +84,8 @@ async def track_request(request, call_next):
             getattr(request.state, "auth_identity", None) or "-", request_id,
         )
     response.headers["X-Request-ID"] = request_id
+    # Lineage marker (services/provenance.py): says which project this
+    # server descends from, on every response, so a derived product is
+    # recognisable from the wire alone.
+    response.headers[LINEAGE_HEADER] = LINEAGE_ID
     return response

@@ -31,7 +31,10 @@ ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
-RUN npm run build
+# The bundle banner records the build it came from (frontend/vite.config.js).
+ARG APP_VERSION=dev
+ARG VCS_REF=unknown
+RUN CLIO_VERSION=${APP_VERSION} CLIO_VCS_REF=${VCS_REF} npm run build
 
 # ── Stage 2: build Python dependencies ──
 # Compilers live here and never reach the runtime image. Everything installs
@@ -247,8 +250,9 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # version and commit go in as labels rather than living in a build log.
 ARG APP_VERSION=dev
 ARG VCS_REF=unknown
-LABEL org.opencontainers.image.title="Clio"       org.opencontainers.image.description="Private document indexing, grounded chat and MCP access"       org.opencontainers.image.source="https://github.com/jordanboyce/clio"       org.opencontainers.image.licenses="MIT"       org.opencontainers.image.version="${APP_VERSION}"       org.opencontainers.image.revision="${VCS_REF}"
-ENV CLIO_VERSION=${APP_VERSION}
+LABEL org.opencontainers.image.title="Clio"       org.opencontainers.image.description="Private document indexing, grounded chat and MCP access"       org.opencontainers.image.source="https://github.com/jordanboyce/clio"       org.opencontainers.image.licenses="MIT"       org.opencontainers.image.authors="Jordan Boyce"       dev.clio.lineage="clio.helicon.58a48ab52f51"       org.opencontainers.image.version="${APP_VERSION}"       org.opencontainers.image.revision="${VCS_REF}"
+ENV CLIO_VERSION=${APP_VERSION} \
+    CLIO_VCS_REF=${VCS_REF}
 
 EXPOSE 8473
 

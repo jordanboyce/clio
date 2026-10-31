@@ -16,6 +16,7 @@ from psycopg2.pool import ThreadedConnectionPool
 
 from config import settings
 from services.db_backend import DatabaseBackend
+from services import provenance
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,20 @@ class PostgresBackend(DatabaseBackend):
                         updated_at TEXT NOT NULL
                     )
                 """)
+                # Lineage marker, see services/app_database.py.
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS clio_lineage (
+                        lineage_id TEXT PRIMARY KEY,
+                        source TEXT NOT NULL,
+                        created_by_version TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                """)
+                cur.execute(
+                    "INSERT INTO clio_lineage VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                    (provenance.LINEAGE_ID, provenance.SOURCE_URL,
+                     provenance.version(), datetime.now().isoformat()),
+                )
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS reindex_jobs (
                         id SERIAL PRIMARY KEY,

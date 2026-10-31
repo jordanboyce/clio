@@ -5,6 +5,9 @@ const nodeMajor = Number(process.versions.node.split('.')[0])
 
 export default defineConfig({
   plugins: [vue()],
+  define: {
+    __CLIO_BUILD__: JSON.stringify({ version: 'test', commit: 'test', lineage: 'clio.helicon.58a48ab52f51', source: 'https://github.com/jordanboyce/clio' }),
+  },
   test: {
     environment: 'jsdom',
     globals: false,

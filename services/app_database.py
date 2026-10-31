@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from config import settings
 from services.db_backend import DatabaseBackend
 from services.sqlite_utils import sqlite_connect
+from services import provenance
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,23 @@ class SQLiteBackend(DatabaseBackend):
                     updated_at TEXT NOT NULL
                 )
             """)
+
+            # Lineage marker: which project created this database, written
+            # once on first start and never updated. Travels with the data
+            # when the code around it is forked (services/provenance.py).
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS clio_lineage (
+                    lineage_id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    created_by_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute(
+                "INSERT OR IGNORE INTO clio_lineage VALUES (?, ?, ?, ?)",
+                (provenance.LINEAGE_ID, provenance.SOURCE_URL,
+                 provenance.version(), datetime.now().isoformat()),
+            )
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS reindex_jobs (

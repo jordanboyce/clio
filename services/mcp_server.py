@@ -15,6 +15,8 @@ from urllib.parse import parse_qs, urlencode
 from pydantic import Field
 
 from mcp.server.fastmcp import FastMCP
+
+from services import provenance as _provenance
 from mcp.types import ToolAnnotations
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
@@ -678,6 +680,7 @@ def health_check() -> dict[str, Any]:
         "status": "ok",
         "server_id": settings.mcp_server_id or "clio",
         "version": settings.schema_version,
+        "origin": _provenance.origin(),
         "embedding": embedding_info,
         "reranker": reranker_info,
         "mcp": {

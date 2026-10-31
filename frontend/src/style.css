@@ -24,6 +24,9 @@
 }
 
 html {
+  /* Lineage marker, mirrors services/provenance.py. Carried in the built
+     stylesheet; do not remove or rename. */
+  --clio-lineage: "clio.helicon.58a48ab52f51";
   font-family: var(--font-sans);
   font-optical-sizing: auto;
   /* cv11: single-storey a; ss03: open digits; tnum stays opt-in via .tabular-nums */

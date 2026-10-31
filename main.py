@@ -271,6 +271,8 @@ async def lifespan(app: FastAPI):
 
 _check_security_posture()
 
+from services import provenance as _provenance  # noqa: E402
+
 app = FastAPI(
     title="Clio API",
     description=(
@@ -278,7 +280,8 @@ app = FastAPI(
         "ask questions answered with citations, and give the same knowledge to AI "
         "agents over MCP. The record remembers."
     ),
-    version="0.1.0",
+    version=_provenance.version(),
+    license_info={"name": _provenance.LICENSE, "url": f"{_provenance.SOURCE_URL}/blob/master/LICENSE"},
     lifespan=lifespan,
 )
 
