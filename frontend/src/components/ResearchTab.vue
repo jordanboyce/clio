@@ -298,10 +298,16 @@ async function loadPapers() {
   }
 }
 
+// Runs on question edits (debounced) and on collection switches; only the
+// newest reply may land, or a slow one would show another question's
+// verdicts under this one.
+let verdictsSeq = 0
 async function loadVerdicts() {
   const q = question.value.trim()
+  const mine = ++verdictsSeq
   try {
     const data = await researchApi.readingList(collectionId.value, q || null)
+    if (mine !== verdictsSeq) return
     pastQuestions.value = data.questions || []
     verdicts.value = q ? Object.fromEntries((data.items || []).map(i => [i.document_id, i])) : {}
     if (q && Object.keys(verdicts.value).length) sort.value = 'verdict'
@@ -457,16 +463,20 @@ const renameError = ref('')
 
 // The server builds the names (one implementation of the rules); the
 // dialog asks it for a dry run whenever the pattern changes.
+let previewSeq = 0
 async function refreshPreview({ checkAll = false } = {}) {
   const ids = renameCandidates.value.map(p => p.document_id)
   if (!ids.length) { renamePreview.value = []; return }
+  const mine = ++previewSeq
   try {
     const out = await researchApi.renameMany(collectionId.value, ids, pattern.value, true)
+    if (mine !== previewSeq) return
     renameError.value = ''
     renamePreview.value = out.renamed.map(r => ({ document_id: r.document_id, filename: r.previous_filename, newName: r.filename }))
     const valid = new Set(renamePreview.value.map(p => p.document_id))
     renameChecked.value = checkAll ? [...valid] : renameChecked.value.filter(id => valid.has(id))
   } catch (err) {
+    if (mine !== previewSeq) return
     renameError.value = err?.message || 'That pattern cannot be used'
     renamePreview.value = []
   }

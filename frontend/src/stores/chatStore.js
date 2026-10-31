@@ -9,6 +9,23 @@ const MAX_SESSIONS_PER_COLLECTION = 50
 const newSessionId = () =>
   `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 
+// Every message carries an id so lists can be keyed by identity rather than
+// position (messages are cut, replaced and swapped between sessions), and so
+// a stream can keep writing to the message it started, wherever the user
+// navigates meanwhile.
+const newMessageId = () =>
+  `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+
+const ensureMessageIds = (conversations) => {
+  for (const conv of Object.values(conversations || {})) {
+    for (const session of conv?.sessions || []) {
+      for (const msg of session?.messages || []) {
+        if (msg && !msg.id) msg.id = newMessageId()
+      }
+    }
+  }
+}
+
 const makeSession = (overrides = {}) => ({
   id: newSessionId(),
   title: 'New chat',
@@ -32,7 +49,9 @@ export const useChatStore = defineStore('chat', () => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
       if (saved) {
-        conversations.value = JSON.parse(saved)
+        const parsed = JSON.parse(saved)
+        ensureMessageIds(parsed)
+        conversations.value = parsed
         return
       }
       // Migrate from v1 format: { collectionId: { messages: [...] } }
@@ -42,6 +61,7 @@ export const useChatStore = defineStore('chat', () => {
         const migrated = {}
         for (const [colId, conv] of Object.entries(parsed)) {
           const msgs = conv?.messages || []
+          for (const m of msgs) if (m && !m.id) m.id = newMessageId()
           const session = makeSession({
             messages: msgs,
             title: deriveTitle(msgs.find((m) => m.role === 'user')?.content),
@@ -106,7 +126,7 @@ export const useChatStore = defineStore('chat', () => {
 
   const addMessage = (collectionId, message) => {
     const session = getActiveSession(collectionId)
-    session.messages.push({ ...message, timestamp: Date.now() })
+    session.messages.push({ id: newMessageId(), ...message, timestamp: Date.now() })
     if (session.messages.length > MAX_MESSAGES_PER_SESSION) {
       session.messages = session.messages.slice(session.messages.length - MAX_MESSAGES_PER_SESSION)
     }
@@ -121,6 +141,7 @@ export const useChatStore = defineStore('chat', () => {
   const addAssistantMessage = (collectionId, message, sources, aiUsage, structuredResults) => {
     const session = getActiveSession(collectionId)
     session.messages.push({
+      id: newMessageId(),
       ...message,
       sources: sources || [],
       aiUsage: aiUsage || null,
@@ -132,10 +153,16 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // --- Streaming support ---
-  // Add a blank in-flight assistant message that will be mutated by SSE events.
+  // The stream is bound to the session and message that started it, not to
+  // "whatever is active now": while an answer streams the user may open
+  // another chat or start a new one, and the text must still land in the
+  // right place. addStreamingMessage returns that binding; every other
+  // streaming call takes it.
   const addStreamingMessage = (collectionId) => {
     const session = getActiveSession(collectionId)
+    const id = newMessageId()
     session.messages.push({
+      id,
       role: 'assistant',
       content: '',
       streaming: true,
@@ -146,31 +173,35 @@ export const useChatStore = defineStore('chat', () => {
     })
     session.updatedAt = Date.now()
     // Don't persist to storage while streaming — wait for finalizeStreamingMessage
+    return { collectionId, sessionId: session.id, messageId: id }
   }
 
-  const _lastAssistantMsg = (collectionId) => {
-    const msgs = getActiveSession(collectionId)?.messages || []
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === 'assistant') return msgs[i]
-    }
-    return null
+  const _streamSession = (stream) => {
+    if (!stream) return null
+    const conv = conversations.value[stream.collectionId]
+    return conv?.sessions.find((s) => s.id === stream.sessionId) || null
   }
 
-  const appendStreamingText = (collectionId, delta) => {
-    const msg = _lastAssistantMsg(collectionId)
+  const getStreamingMessage = (stream) => {
+    const session = _streamSession(stream)
+    return session?.messages.find((m) => m.id === stream.messageId) || null
+  }
+
+  const appendStreamingText = (stream, delta) => {
+    const msg = getStreamingMessage(stream)
     if (msg) msg.content += delta
   }
 
-  const addStreamingToolCall = (collectionId, tool, args) => {
-    const msg = _lastAssistantMsg(collectionId)
+  const addStreamingToolCall = (stream, tool, args) => {
+    const msg = getStreamingMessage(stream)
     if (msg) {
       if (!msg.structuredResults) msg.structuredResults = []
       msg.structuredResults.push({ tool, args, result: null, pending: true })
     }
   }
 
-  const resolveStreamingToolCall = (collectionId, tool, result) => {
-    const msg = _lastAssistantMsg(collectionId)
+  const resolveStreamingToolCall = (stream, tool, result) => {
+    const msg = getStreamingMessage(stream)
     if (!msg || !msg.structuredResults) return
     // Find the most recent pending entry for this tool and resolve it
     for (let i = msg.structuredResults.length - 1; i >= 0; i--) {
@@ -182,8 +213,8 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  const addStreamingThinking = (collectionId, text) => {
-    const msg = _lastAssistantMsg(collectionId)
+  const addStreamingThinking = (stream, text) => {
+    const msg = getStreamingMessage(stream)
     if (msg) {
       if (!msg.structuredResults) msg.structuredResults = []
       msg.structuredResults.push({ tool: '_thinking', args: {}, result: { text }, pending: false })
@@ -191,18 +222,20 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // Suggested follow-ups arrive as their own event after the answer text.
-  const setStreamingRelated = (collectionId, questions) => {
-    const msg = _lastAssistantMsg(collectionId)
+  const setStreamingRelated = (stream, questions) => {
+    const msg = getStreamingMessage(stream)
     if (msg) msg.relatedQuestions = Array.isArray(questions) ? questions : []
   }
 
-  const finalizeStreamingMessage = (collectionId, { sources, usage, structuredResults, cached, cachedQuestion, cachedSimilarity, relatedQuestions, depth } = {}) => {
-    const msg = _lastAssistantMsg(collectionId)
+  const finalizeStreamingMessage = (stream, { sources, usage, structuredResults, cached, cachedQuestion, cachedSimilarity, relatedQuestions, depth, provider, scope } = {}) => {
+    const msg = getStreamingMessage(stream)
     if (!msg) return
     msg.streaming = false
     if (sources) msg.sources = sources
     if (Array.isArray(relatedQuestions)) msg.relatedQuestions = relatedQuestions
     if (depth) msg.depth = depth
+    if (provider) msg.provider = provider
+    if (scope) msg.scope = scope
     if (usage) msg.aiUsage = { synthesis: { ...usage }, total_input_tokens: usage.input_tokens || 0, total_output_tokens: usage.output_tokens || 0 }
     if (cached) {
       msg.cached = true
@@ -211,21 +244,16 @@ export const useChatStore = defineStore('chat', () => {
     }
     // Replace structuredResults with the server's authoritative list if provided
     if (structuredResults && structuredResults.length > 0) msg.structuredResults = structuredResults
-    const session = getActiveSession(collectionId)
+    const session = _streamSession(stream)
     if (session) session.updatedAt = Date.now()
     saveToStorage()
   }
 
-  const removeLastStreamingMessage = (collectionId) => {
-    const session = getActiveSession(collectionId)
+  const removeStreamingMessage = (stream) => {
+    const session = _streamSession(stream)
     if (!session) return
-    const msgs = session.messages
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === 'assistant' && msgs[i].streaming) {
-        msgs.splice(i, 1)
-        break
-      }
-    }
+    const i = session.messages.findIndex((m) => m.id === stream.messageId)
+    if (i !== -1) session.messages.splice(i, 1)
     session.updatedAt = Date.now()
   }
 
@@ -320,12 +348,13 @@ export const useChatStore = defineStore('chat', () => {
     clearCollectionChat,
     // Streaming
     addStreamingMessage,
+    getStreamingMessage,
     appendStreamingText,
     addStreamingToolCall,
     resolveStreamingToolCall,
     addStreamingThinking,
     setStreamingRelated,
     finalizeStreamingMessage,
-    removeLastStreamingMessage,
+    removeStreamingMessage,
   }
 })

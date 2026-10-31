@@ -28,11 +28,13 @@
       <input
         v-model="focus"
         type="text"
+        aria-label="Focus for the artifact"
         placeholder="Optional focus (e.g. a topic or a specific document)"
         class="input input-bordered input-sm w-full"
       />
       <textarea
         v-model="customInstructions"
+        aria-label="Custom instructions for the artifact"
         rows="2"
         placeholder="Optional extra instructions"
         class="textarea textarea-bordered textarea-sm w-full"

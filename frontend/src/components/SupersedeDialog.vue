@@ -52,7 +52,7 @@
 // Owner-facing picker: say that another document in this collection is the
 // current version of `doc`. The server validates both documents, rejects
 // self-reference and loops, and audits the change.
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
 import { Replace, Search } from 'lucide-vue-next'
 import http from '../utils/http'
 
@@ -71,21 +71,28 @@ const loading = ref(false)
 const busy = ref(false)
 const error = ref('')
 let timer = null
+// Typeahead: only the newest request may write, or a slow earlier reply
+// would overwrite the list for what the user has since typed.
+let candidatesSeq = 0
 
 async function loadCandidates() {
   if (!props.doc) return
+  const mine = ++candidatesSeq
   loading.value = true
   try {
     const { data } = await http.get('/documents', {
       params: { collection_id: props.collectionId, limit: 30, ...(query.value ? { q: query.value } : {}) },
     })
+    if (mine !== candidatesSeq) return
     candidates.value = (data.documents || []).filter(d => d.document_id !== props.doc.document_id)
   } catch {
-    candidates.value = []
+    if (mine === candidatesSeq) candidates.value = []
   } finally {
-    loading.value = false
+    if (mine === candidatesSeq) loading.value = false
   }
 }
+
+onBeforeUnmount(() => clearTimeout(timer))
 
 watch(() => props.doc, async (doc) => {
   error.value = ''

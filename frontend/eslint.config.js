@@ -21,6 +21,10 @@ export default [
       // No router, no DOM custom-element ambiguity — single-word component
       // names (Toaster) conflict with nothing here.
       'vue/multi-word-component-names': 'off',
+      // Keep the codebase where it is: strict equality (the `== null`
+      // null-or-undefined idiom excepted) and block-scoped declarations.
+      eqeqeq: ['error', 'always', { null: 'ignore' }],
+      'no-var': 'error',
     },
   },
   {
