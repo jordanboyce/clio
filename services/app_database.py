@@ -18,68 +18,11 @@ from datetime import datetime, timedelta
 from config import settings
 from services.db_backend import DatabaseBackend
 from services.sqlite_utils import sqlite_connect
+from services import provenance
+# Re-exported: both backends (and tests) import these from here.
+from services.db_helpers import _get_document_count_from_metadata, _get_storage_bytes_from_metadata  # noqa: F401
 
 logger = logging.getLogger(__name__)
-
-
-def _get_document_count_from_metadata(collection_id: str, data_dir: Path = None) -> int:
-    """Get the actual document count from the collection's metadata.db.
-
-    This is the source of truth for document counts, avoiding sync issues
-    between app.db and the actual indexed data.
-
-    Args:
-        collection_id: Collection ID
-        data_dir: Base data directory
-
-    Returns:
-        Number of unique documents in the collection's index
-    """
-    if data_dir is None:
-        data_dir = settings.data_dir
-    metadata_db_path = data_dir / "collections" / collection_id / "indexes" / "metadata.db"
-
-    if not metadata_db_path.exists():
-        return 0
-
-    try:
-        with sqlite_connect(metadata_db_path) as conn:
-            try:
-                # documents table is authoritative: counts zero-chunk docs
-                # (CSV/XLSX live in the structured store) and avoids a
-                # COUNT(DISTINCT) scan over millions of chunk rows.
-                cursor = conn.execute("SELECT COUNT(*) FROM documents")
-            except sqlite3.OperationalError:
-                # Legacy metadata.db without a documents table
-                cursor = conn.execute("SELECT COUNT(DISTINCT document_id) FROM chunks")
-            return cursor.fetchone()[0]
-    except Exception as e:
-        logger.warning(f"Could not read metadata.db for collection {collection_id}: {e}")
-        return 0
-
-
-def _get_storage_bytes_from_metadata(collection_id: str, data_dir: Path = None) -> int:
-    """Bytes of source files in a collection, read straight from metadata.db.
-
-    Same shape as the document count above: a single aggregate over the
-    documents table, without loading the collection's vector index, so the
-    collections list can show usage against the storage cap for free.
-    """
-    if data_dir is None:
-        data_dir = settings.data_dir
-    metadata_db_path = data_dir / "collections" / collection_id / "indexes" / "metadata.db"
-    if not metadata_db_path.exists():
-        return 0
-    try:
-        with sqlite_connect(metadata_db_path) as conn:
-            try:
-                row = conn.execute("SELECT COALESCE(SUM(file_size), 0) FROM documents").fetchone()
-            except sqlite3.OperationalError:
-                return 0  # pre-v3.4 metadata.db; migrates on first open
-            return int(row[0] or 0)
-    except Exception as e:
-        logger.warning(f"Could not read storage for collection {collection_id}: {e}")
-        return 0
 
 
 class SQLiteBackend(DatabaseBackend):
@@ -100,6 +43,23 @@ class SQLiteBackend(DatabaseBackend):
                     updated_at TEXT NOT NULL
                 )
             """)
+
+            # Lineage marker: which project created this database, written
+            # once on first start and never updated. Travels with the data
+            # when the code around it is forked (services/provenance.py).
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS clio_lineage (
+                    lineage_id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    created_by_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute(
+                "INSERT OR IGNORE INTO clio_lineage VALUES (?, ?, ?, ?)",
+                (provenance.LINEAGE_ID, provenance.SOURCE_URL,
+                 provenance.version(), datetime.now().isoformat()),
+            )
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS reindex_jobs (
@@ -208,6 +168,11 @@ class SQLiteBackend(DatabaseBackend):
                     chunks_total INTEGER DEFAULT 0,
                     job_type TEXT DEFAULT 'upload'
                 )
+            """)
+            # Active-job lookups filter on status, then collection.
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_upload_jobs_status_collection
+                ON upload_jobs(status, collection_id)
             """)
 
             # ── v4: Users table ──────────────────────────────
@@ -1261,22 +1226,6 @@ class SQLiteBackend(DatabaseBackend):
 
     # ── Personal MCP access tokens ────────────────────────────
 
-    @staticmethod
-    def _decode_scope(row: Dict[str, Any]) -> Dict[str, Any]:
-        raw = row.get("collection_scope")
-        if isinstance(raw, str) and raw:
-            try:
-                row["collection_scope"] = json.loads(raw)
-            except json.JSONDecodeError:
-                row["collection_scope"] = None
-        elif not raw:
-            row["collection_scope"] = None
-        row["can_write"] = bool(row.get("can_write"))
-        row["allowlist"] = bool(row.get("allowlist"))
-        row["use_count"] = int(row.get("use_count") or 0)
-        row.setdefault("expires_at", None)
-        return row
-
     def create_mcp_token(
         self, user_id: Optional[str], name: str, token_hash: str, token_prefix: str,
         collection_scope: Optional[List[str]] = None,
@@ -1515,28 +1464,10 @@ class SQLiteBackend(DatabaseBackend):
 
     # ── Agent API Keys ───────────────────────────────────────
 
-    def set_agent_api_key(self, provider: str, api_key: str):
-        self.set_user_preference(f"agent_api_key_{provider}", api_key)
-
-    def get_agent_api_key(self, provider: str) -> Optional[str]:
-        return self.get_user_preference(f"agent_api_key_{provider}")
-
     def delete_agent_api_key(self, provider: str):
         with sqlite_connect(self.db_path) as conn:
             conn.execute("DELETE FROM user_preferences WHERE key = ?", (f"agent_api_key_{provider}",))
             conn.commit()
-
-    def get_agent_config(self) -> Dict[str, Any]:
-        from config import CLOUD_AI_PROVIDERS
-        config = {"providers": {}}
-        for provider in CLOUD_AI_PROVIDERS:
-            key = self.get_agent_api_key(provider)
-            if key:
-                masked = key[:8] + "..." + key[-4:] if len(key) > 12 else "***"
-                config["providers"][provider] = {"configured": True, "key_preview": masked}
-            else:
-                config["providers"][provider] = {"configured": False, "key_preview": None}
-        return config
 
     # ── MCP Resources ────────────────────────────────────────
 

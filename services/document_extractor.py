@@ -1616,23 +1616,6 @@ class DocumentExtractor:
 
         return ExtractionResult(page_texts, method="whisper")
 
-    def get_page_count(self, file_path: Path) -> int:
-        """
-        Get the number of pages/sections in a document.
-
-        Args:
-            file_path: Path to the document file
-
-        Returns:
-            Number of pages/sections
-        """
-        try:
-            page_texts = self.extract_text(file_path)
-            return len(page_texts)
-        except Exception as e:
-            logger.error(f"Failed to get page count for {file_path.name}: {e}")
-            return 0
-
     def _extract_code(self, code_path: Path) -> ExtractionResult:
         """
         Extract text from code files (Pascal/Delphi/Modula-2/Assembly).

@@ -13,7 +13,7 @@
     aria-modal="true"
     aria-labelledby="aup-title"
   >
-    <div class="w-full max-w-2xl my-auto rounded-box bg-base-100 border border-base-300 shadow-xl">
+    <div ref="panelRef" tabindex="-1" class="w-full max-w-2xl my-auto rounded-box bg-base-100 border border-base-300 shadow-xl outline-none">
       <div class="px-6 pt-6 pb-4 border-b border-base-300/60 flex items-start gap-3">
         <ShieldCheck :size="22" class="text-primary mt-0.5 flex-shrink-0" aria-hidden="true" />
         <div class="flex-1 min-w-0">
@@ -76,6 +76,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { useOverlayFocus } from '../composables/useOverlayFocus'
 import { ShieldCheck, X } from 'lucide-vue-next'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -94,6 +95,12 @@ const agreed = ref(false)
 const accepting = ref(false)
 
 const visible = computed(() => userStore.mustAcceptAup || userStore.aupOpen)
+// Focus moves into the panel and stays there. Escape closes only the
+// voluntary mode: the required takeover cannot be dismissed.
+const panelRef = ref(null)
+useOverlayFocus(visible, panelRef, {
+  onEscape: () => { if (!userStore.mustAcceptAup) close() },
+})
 const rendered = computed(() => DOMPurify.sanitize(marked.parse(text.value || '')))
 
 const formatDate = (iso) => {

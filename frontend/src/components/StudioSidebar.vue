@@ -103,6 +103,7 @@
           </p>
           <textarea
             v-model="notes"
+            aria-label="Collection notes"
             class="textarea textarea-bordered textarea-xs w-full text-xs leading-snug min-h-[120px]"
             placeholder="Jot down findings, hypotheses, follow-ups…"
           ></textarea>

@@ -8,6 +8,7 @@ import logging
 import numpy as np
 import faiss
 
+from config import DEFAULT_SEMANTIC_WEIGHT
 from models.schemas import ChunkMetadata, SearchResult
 from services.metadata_store import MetadataStore
 from services.bm25_service import BM25Index
@@ -338,7 +339,7 @@ class VectorStore:
         query: str,
         query_embedding: np.ndarray,
         top_k: int = 10,
-        semantic_weight: float = 0.7,
+        semantic_weight: float = DEFAULT_SEMANTIC_WEIGHT,
         allowed_chunk_ids: Optional[set] = None,
     ) -> List[SearchResult]:
         """

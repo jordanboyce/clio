@@ -15,6 +15,29 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
+# Typed reasons a share cannot be accepted, so the API can answer with the
+# right status instead of a blanket 400. All stay ValueErrors for callers
+# that only catch that.
+class ShareError(ValueError):
+    pass
+
+
+class ShareNoIdentity(ShareError):
+    pass
+
+
+class ShareNotFound(ShareError):
+    pass
+
+
+class ShareRevoked(ShareError):
+    pass
+
+
+class ShareOwnCollection(ShareError):
+    pass
+
+
 class SharingService:
     """Manages collection sharing between users."""
 
@@ -90,17 +113,17 @@ class SharingService:
             Accepted share details
         """
         if not user_id:
-            raise ValueError(
+            raise ShareNoIdentity(
                 "Accepting a share needs an identity — sign in with your "
                 "account rather than the shared password."
             )
         share = app_db.get_share(share_token)
         if not share:
-            raise ValueError("Share link not found")
+            raise ShareNotFound("Share link not found")
         if not share.get("is_active"):
-            raise ValueError("Share link has expired or been revoked")
+            raise ShareRevoked("Share link has expired or been revoked")
         if share["owner_id"] == user_id:
-            raise ValueError("Cannot accept your own share")
+            raise ShareOwnCollection("Cannot accept your own share")
 
         # Auto-provision user
         app_db.upsert_user(user_id)
@@ -108,7 +131,8 @@ class SharingService:
         app_db.accept_share(share_token, user_id)
 
         collection = app_db.get_collection(share["collection_id"])
-        logger.info(f"User {user_id} accepted share {share_token} for collection {share['collection_id']}")
+        # Only a prefix: the token is the credential.
+        logger.info(f"User {user_id} accepted share {share_token[:6]}… for collection {share['collection_id']}")
 
         return {
             "share_id": share_token,

@@ -29,6 +29,7 @@ import json
 import logging
 import re
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -486,6 +487,8 @@ def _should_preserve_raw(values: List[Any], inferred_type: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _DEFAULT_MAX_QUERY_ROWS = 1000
+# Wall-clock cap on one model/MCP-written SELECT.
+_QUERY_TIMEOUT_SECONDS = 5.0
 
 
 class StructuredStore:
@@ -1098,25 +1101,80 @@ class StructuredStore:
         sql: str,
         max_rows: int = _DEFAULT_MAX_QUERY_ROWS,
     ) -> Dict[str, Any]:
-        """Run a validated SELECT and return {columns, rows, row_count, truncated}."""
+        """Run a validated SELECT and return {columns, rows, row_count, truncated}.
+
+        The SQL comes from the model or an MCP client, and the database it
+        runs on is the collection's metadata.db, which also holds documents
+        and chunks. An authorizer therefore confines the statement to the
+        ``csv_data_*`` tables (so quarantine and source selection cannot be
+        sidestepped by reading other tables), and a progress handler stops
+        it after :data:`_QUERY_TIMEOUT_SECONDS`. Both surface as
+        :class:`SQLValidationError` with a message the caller can show.
+        """
         cleaned = validate_select(sql)
+        prefix = self.META_TABLE_PREFIX
+        # Every real table/view that is not structured data, plus SQLite's own
+        # catalog names. CTE names also arrive as SQLITE_READ, so the rule is
+        # "deny reads of these" rather than "allow only the prefix".
+        protected = {
+            'sqlite_master', 'sqlite_schema', 'sqlite_temp_master',
+            'sqlite_temp_schema', 'sqlite_sequence',
+        }
+
+        def _authorize(action, arg1, arg2, dbname, source):
+            if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE):
+                return sqlite3.SQLITE_OK
+            if action == sqlite3.SQLITE_READ:
+                name = (arg1 or '').lower()
+                if name.startswith(prefix) or (name not in protected and not name.startswith('sqlite_')):
+                    return sqlite3.SQLITE_OK
+            return sqlite3.SQLITE_DENY
+
+        deadline = time.monotonic() + _QUERY_TIMEOUT_SECONDS
+
+        def _check_deadline():
+            # Non-zero aborts the statement ("interrupted").
+            return 1 if time.monotonic() > deadline else 0
+
+        def _translate(e: sqlite3.Error) -> SQLValidationError:
+            msg = str(e)
+            if 'not authorized' in msg or 'prohibited' in msg:
+                return SQLValidationError(
+                    'Query refused: only the structured data tables '
+                    f'("{prefix}...") can be read.'
+                )
+            if 'interrupted' in msg:
+                return SQLValidationError(
+                    f'Query stopped after {_QUERY_TIMEOUT_SECONDS:g} seconds; '
+                    'narrow it with WHERE or LIMIT.'
+                )
+            return SQLValidationError(f'SQL error: {e}')
 
         uri = f'file:{self.db_path}?mode=ro'
         with sqlite_connect(uri, uri=True) as conn:
             conn.row_factory = sqlite3.Row
+            protected.update(
+                r[0].lower() for r in conn.execute('SELECT name FROM sqlite_master')
+                if not r[0].lower().startswith(prefix)
+            )
+            conn.set_authorizer(_authorize)
+            conn.set_progress_handler(_check_deadline, 10000)
             try:
                 cursor = conn.execute(cleaned)
             except sqlite3.Error as e:
-                raise SQLValidationError(f'SQL error: {e}')
+                raise _translate(e)
 
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows: List[List[Any]] = []
             truncated = False
-            for i, row in enumerate(cursor):
-                if i >= max_rows:
-                    truncated = True
-                    break
-                rows.append([row[col] for col in columns])
+            try:
+                for i, row in enumerate(cursor):
+                    if i >= max_rows:
+                        truncated = True
+                        break
+                    rows.append([row[col] for col in columns])
+            except sqlite3.Error as e:
+                raise _translate(e)
 
         return {
             'columns': columns,

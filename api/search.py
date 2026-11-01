@@ -8,7 +8,7 @@ from services.embedder import EmbeddingUnavailable
 from fastapi import Header, HTTPException, status, Request
 
 from services import table_row_search
-from services.ai_service import AIService, create_provider
+from services.ai_service import AIService, create_provider, DEFAULT_OLLAMA_MODEL
 from services.collection_overview import build_collection_overview as _build_collection_overview
 from services.structured_chat import (
     build_structured_context,
@@ -88,7 +88,7 @@ async def search_documents(
         if ai_options:
             try:
                 if ai_options.provider == "ollama":
-                    model = x_ai_model or x_ollama_model or "llama3.2"
+                    model = x_ai_model or x_ollama_model or DEFAULT_OLLAMA_MODEL
                     extra: dict = {"model": model}
                     if x_ai_base_url:
                         extra["base_url"] = x_ai_base_url
@@ -227,6 +227,10 @@ async def search_documents(
     except EmbeddingUnavailable:
         # The model is not here yet (firewall, missing backend): 503 with the
         # reason via the app-level handler, not a 500.
+        raise
+    except HTTPException:
+        # 404 (unknown collection), 403 and friends are deliberate; do not
+        # fold them into the 500 below.
         raise
     except Exception as e:
         logger.error(f"Search failed: {e}")

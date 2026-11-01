@@ -7,7 +7,7 @@ import hashlib
 import logging
 from datetime import datetime
 
-from config import settings
+from config import DEFAULT_SEMANTIC_WEIGHT, settings
 from models.schemas import (
     ChunkMetadata,
     DocumentMetadata,
@@ -885,11 +885,11 @@ class DocumentIndexer:
     def search(
         self,
         query: str,
-        top_k: int = 10,
+        top_k: int = settings.default_top_k,
         ai_service=None,
         ai_options: Optional[AIOptions] = None,
         mode: SearchMode = SearchMode.AUTO,
-        semantic_weight: float = 0.7,
+        semantic_weight: float = DEFAULT_SEMANTIC_WEIGHT,
         collection_overview: Optional[str] = None,
         structured_context: Optional[str] = None,
         skip_filenames: Optional[set] = None,
@@ -1440,18 +1440,6 @@ class DocumentIndexer:
             return float(np.dot(q, v / n))
         except Exception:
             return 0.0
-
-    def _generate_document_id(self, document_path: Path) -> str:
-        """
-        Generate a unique document ID based on file content.
-
-        Args:
-            document_path: Path to the document file
-
-        Returns:
-            Document ID (first 16 hex chars of the file's SHA256)
-        """
-        return content_hash_of(document_path)[:16]
 
     def _bm25_to_search_results(self, bm25_results: list) -> list:
         """

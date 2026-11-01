@@ -295,10 +295,11 @@
 
         <!-- Messages: the reading room. A question is a quiet block on the
              right; the answer is prose on the page with no bubble, no avatar.
-             New turns rise in; the list is keyed by position because it is
-             append-only until it is cleared. -->
+             New turns rise in. Keyed by message id: turns are cut on rerun
+             and the whole list swaps when the session changes, so a position
+             key would hand one answer's evidence state to another. -->
         <TransitionGroup name="rise" tag="div" class="space-y-7 max-w-3xl mx-auto w-full">
-        <div v-for="(msg, index) in messages" :key="index">
+        <div v-for="(msg, index) in messages" :key="msg.id ?? index">
 
           <!-- User message -->
           <div v-if="msg.role === 'user'" class="flex justify-end">
@@ -1294,7 +1295,9 @@ const sendMessage = async () => {
   loading.value = true
 
   // Add the in-flight placeholder message immediately so the UI shows it.
-  chatStore.addStreamingMessage(collectionId)
+  // `stream` binds every later write to this session and this message:
+  // the user may open another chat while the answer arrives.
+  const stream = chatStore.addStreamingMessage(collectionId)
   await scrollToBottom()
 
   try {
@@ -1370,19 +1373,19 @@ const sendMessage = async () => {
         // Scrolling during streaming is handled by the throttled deep watch
         // on messages — no per-event scroll calls here.
         if (event.type === 'tool_start') {
-          chatStore.addStreamingToolCall(collectionId, event.tool, event.args || {})
+          chatStore.addStreamingToolCall(stream, event.tool, event.args || {})
         } else if (event.type === 'tool_end') {
-          chatStore.resolveStreamingToolCall(collectionId, event.tool, event.result || {})
+          chatStore.resolveStreamingToolCall(stream, event.tool, event.result || {})
         } else if (event.type === 'thinking') {
-          chatStore.addStreamingThinking(collectionId, event.text || '')
+          chatStore.addStreamingThinking(stream, event.text || '')
         } else if (event.type === 'text_delta') {
-          chatStore.appendStreamingText(collectionId, event.delta || '')
+          chatStore.appendStreamingText(stream, event.delta || '')
         } else if (event.type === 'sources') {
           // Sources will be committed in 'done'
         } else if (event.type === 'related') {
-          chatStore.setStreamingRelated(collectionId, event.questions || [])
+          chatStore.setStreamingRelated(stream, event.questions || [])
         } else if (event.type === 'done') {
-          chatStore.finalizeStreamingMessage(collectionId, {
+          chatStore.finalizeStreamingMessage(stream, {
             sources: event.sources || [],
             usage: event.usage || {},
             structuredResults: event.structured_results || [],
@@ -1391,18 +1394,12 @@ const sendMessage = async () => {
             cachedSimilarity: typeof event.cached_similarity === 'number' ? event.cached_similarity : null,
             relatedQuestions: event.related_questions || [],
             depth: event.depth || (depthOverride.value || depth.value),
+            // Provider and scope stamp the answer for its badge.
+            provider: selectedProvider.value,
+            scope: scope.value,
           })
-          // Stamp the last assistant message with provider/scope for the badge
-          const msgs = messages.value
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            if (msgs[i].role === 'assistant') {
-              msgs[i].provider = selectedProvider.value
-              msgs[i].scope = scope.value
-              break
-            }
-          }
         } else if (event.type === 'error') {
-          chatStore.removeLastStreamingMessage(collectionId)
+          chatStore.removeStreamingMessage(stream)
           setChatError(event.message)
         }
       }
@@ -1410,11 +1407,11 @@ const sendMessage = async () => {
   } catch (err) {
     if (err?.name === 'AbortError') {
       // The reader stopped: keep whatever prose arrived, drop an empty turn.
-      const partial = messages.value.find(m => m.streaming)
-      if (partial?.content) chatStore.finalizeStreamingMessage(collectionId, { depth: depthOverride.value || depth.value })
-      else chatStore.removeLastStreamingMessage(collectionId)
+      const partial = chatStore.getStreamingMessage(stream)
+      if (partial?.content) chatStore.finalizeStreamingMessage(stream, { depth: depthOverride.value || depth.value, provider: selectedProvider.value, scope: scope.value })
+      else chatStore.removeStreamingMessage(stream)
     } else {
-      chatStore.removeLastStreamingMessage(collectionId)
+      chatStore.removeStreamingMessage(stream)
       setChatError(err.message)
     }
   } finally {
@@ -1494,6 +1491,9 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  // Nothing is left to render the answer into; stopping the fetch also
+  // tells the server to stop the provider call.
+  abortController?.abort()
   window.removeEventListener('clio:prefill-chat', handlePrefill)
   if (autoScrollTimer) {
     clearTimeout(autoScrollTimer)

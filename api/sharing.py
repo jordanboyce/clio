@@ -1,11 +1,19 @@
 """User and collection-sharing endpoints."""
 
 import logging
+from typing import Literal, Optional
 
 from fastapi import Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
 
 from config import settings
-from services.sharing_service import sharing_service
+from services.sharing_service import (
+    ShareNoIdentity,
+    ShareNotFound,
+    ShareOwnCollection,
+    ShareRevoked,
+    sharing_service,
+)
 from middleware.user_context import get_current_user_id
 
 from fastapi import APIRouter
@@ -13,6 +21,17 @@ from fastapi import APIRouter
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class ShareCreateRequest(BaseModel):
+    permission: Literal["read", "readwrite"] = "read"
+    # Days until the link stops working; null = never.
+    expires_days: Optional[int] = Field(None, ge=1, le=365)
+    notify_email: Optional[str] = Field(None, max_length=320)
+
+
+class ShareBulkRequest(ShareCreateRequest):
+    emails: list[str] = Field(default_factory=list)
 
 
 @router.get("/api/user/me", summary="Get current user info", tags=["users"])
@@ -61,7 +80,7 @@ async def get_current_user(
     tags=["sharing"],
     status_code=status.HTTP_201_CREATED,
 )
-async def create_share(collection_id: str, body: dict, request: Request, user_id: str = Depends(get_current_user_id)):
+async def create_share(collection_id: str, body: ShareCreateRequest, request: Request, user_id: str = Depends(get_current_user_id)):
     """
     Generate a shareable link for a collection.
 
@@ -73,13 +92,13 @@ async def create_share(collection_id: str, body: dict, request: Request, user_id
             either way; the response reports email_sent / email_error.
 
     """
-    notify_email = (body.get("notify_email") or "").strip()
+    notify_email = (body.notify_email or "").strip()
     try:
         share = sharing_service.create_share(
             collection_id=collection_id,
             owner_id=user_id,
-            permission=body.get("permission", "read"),
-            expires_days=body.get("expires_days"),
+            permission=body.permission,
+            expires_days=body.expires_days,
             invited_email=notify_email or None,
         )
     except ValueError as e:
@@ -122,7 +141,7 @@ async def create_share(collection_id: str, body: dict, request: Request, user_id
     tags=["sharing"],
     status_code=status.HTTP_201_CREATED,
 )
-async def create_shares_bulk(collection_id: str, body: dict, request: Request, user_id: str = Depends(get_current_user_id)):
+async def create_shares_bulk(collection_id: str, body: ShareBulkRequest, request: Request, user_id: str = Depends(get_current_user_id)):
     """
     One share + emailed invitation per address, with per-address results.
 
@@ -135,7 +154,7 @@ async def create_shares_bulk(collection_id: str, body: dict, request: Request, u
     from services.app_database import app_db
     from services.share_email import send_share_email
 
-    raw = body.get("emails") or []
+    raw = body.emails
     emails, seen = [], set()
     for e in raw:
         addr = (e or "").strip().lower()
@@ -147,8 +166,8 @@ async def create_shares_bulk(collection_id: str, body: dict, request: Request, u
     if len(emails) > 100:
         raise HTTPException(status_code=400, detail="At most 100 invitations per call")
 
-    permission = body.get("permission", "read")
-    expires_days = body.get("expires_days")
+    permission = body.permission
+    expires_days = body.expires_days
 
     # Verify ownership once up front (create_share would also catch it, but
     # failing before any work keeps the batch all-or-nothing on auth).
@@ -215,9 +234,21 @@ async def list_collection_shares(collection_id: str, user_id: str = Depends(get_
     tags=["sharing"],
 )
 async def accept_share(share_token: str, user_id: str = Depends(get_current_user_id)):
-    """Accept a share link to gain access to a collection."""
+    """Accept a share link to gain access to a collection.
+
+    403 without a signed-in identity, 404 for an unknown link, 410 once it
+    has expired or been revoked, 409 for your own share.
+    """
     try:
         result = sharing_service.accept_share(share_token, user_id)
+    except ShareNoIdentity as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ShareNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ShareRevoked as e:
+        raise HTTPException(status_code=410, detail=str(e))
+    except ShareOwnCollection as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     from services import audit

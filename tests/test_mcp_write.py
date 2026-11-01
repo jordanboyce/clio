@@ -292,7 +292,7 @@ def open_client(indexer):
 
 def test_token_api_accepts_can_write(open_client, fresh_db):
     r = open_client.post("/api/mcp/tokens", json={"name": "agent", "can_write": True})
-    assert r.status_code == 200, r.text
+    assert r.status_code == 201, r.text
     assert r.json()["can_write"] is True
     listed = open_client.get("/api/mcp/tokens").json()["tokens"]
     assert listed[0]["can_write"] is True

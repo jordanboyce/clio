@@ -431,11 +431,11 @@
             <!-- compact path list. Only a preview renders: a 75k-file folder
                  selection must not become 75k DOM rows. -->
             <div class="max-h-24 overflow-y-auto space-y-0.5">
-              <div v-for="(item, idx) in visibleSelectedPaths" :key="idx" class="flex items-center gap-1 text-xs">
+              <div v-for="item in visibleSelectedPaths" :key="item.path" class="flex items-center gap-1 text-xs">
                 <span class="flex-1 truncate text-base-content/70" :title="item.path">{{ item.name }}</span>
                 <button
                   class="btn btn-ghost btn-xs btn-circle p-0 w-5 h-5 min-h-0"
-                  @click="removePath(idx)"
+                  @click="removePath(item.path)"
                   :disabled="indexing"
                   :aria-label="`Remove ${item.name} from selection`"
                 >
@@ -1738,8 +1738,12 @@ const openFolderPicker = async () => {
   }
 }
 
-const removePath = (index) => {
-  selectedPaths.value.splice(index, 1)
+const removePath = (path) => {
+  // By path, not position: the list is a preview of a larger selection and
+  // rows are removed from the middle, so an index key would hand the next
+  // row's DOM node (and focus) to the wrong item.
+  const index = selectedPaths.value.findIndex((p) => p.path === path)
+  if (index !== -1) selectedPaths.value.splice(index, 1)
 }
 
 const clearAllPaths = () => {

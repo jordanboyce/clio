@@ -725,7 +725,7 @@ def test_team_collections_cannot_be_published(private_client):
     resp = private_client.put(
         "/api/collections/default", json={"published": True}, headers=_as(ALICE)
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 409
     assert "team collection" in resp.json()["detail"].lower()
 
 

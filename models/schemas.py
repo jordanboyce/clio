@@ -240,7 +240,7 @@ class SearchFilters(BaseModel):
 class SearchRequest(BaseModel):
     """Request body for search endpoint."""
 
-    query: str = Field(..., description="Search query text", min_length=1)
+    query: str = Field(..., description="Search query text", min_length=1, max_length=2000)
     top_k: int = Field(10, description="Number of results to return", ge=1, le=50)
     mode: SearchMode = Field(
         SearchMode.AUTO,
@@ -360,8 +360,8 @@ class DocumentChunksResponse(BaseModel):
 class ChatMessage(BaseModel):
     """A single message in a chat conversation."""
 
-    role: str = Field(..., description="Message role: 'user' or 'assistant'")
-    content: str = Field(..., description="Message content")
+    role: Literal["user", "assistant"] = Field(..., description="Message role: 'user' or 'assistant'")
+    content: str = Field(..., max_length=32000, description="Message content")
 
 
 class ChatSource(BaseModel):
@@ -390,10 +390,10 @@ class ChatSource(BaseModel):
 class ChatRequest(BaseModel):
     """Request body for the chat endpoint."""
 
-    messages: List[ChatMessage] = Field(..., description="Conversation history including the latest user message")
+    messages: List[ChatMessage] = Field(..., max_length=100, description="Conversation history including the latest user message")
     provider: str = Field("anthropic", description="AI provider: 'anthropic', 'openai', or 'ollama'")
     mode: SearchMode = Field(SearchMode.AUTO, description="Search mode for context retrieval ('auto' picks per query)")
-    scope: str = Field("current", description="Collection scope: 'current' (single collection) or 'all' (search across all collections)")
+    scope: Literal["current", "all"] = Field("current", description="Collection scope: 'current' (single collection) or 'all' (search across all collections)")
     rerank: bool = Field(False, description="Rerank retrieved context chunks using AI before generating a response")
     top_k: int = Field(5, description="Number of source chunks to consider", ge=1, le=20)
     use_cache: bool = Field(
@@ -469,13 +469,16 @@ class StarterQuestionsResponse(BaseModel):
 class ArtifactRequest(BaseModel):
     """Request body for generating a collection artifact."""
 
-    artifact_type: str = Field(..., description="Artifact type, e.g. 'summary', 'faq', 'timeline', 'briefing', 'study_guide'")
+    # Mirrors services.artifacts.ARTIFACT_TYPES.
+    artifact_type: Literal["summary", "faq", "timeline", "briefing", "study_guide"] = Field(
+        ..., description="Artifact type: 'summary', 'faq', 'timeline', 'briefing' or 'study_guide'"
+    )
     provider: str = Field("anthropic", description="AI provider")
-    scope: str = Field("current", description="'current' (this collection) or 'all'")
+    scope: Literal["current", "all"] = Field("current", description="'current' (this collection) or 'all'")
     mode: SearchMode = Field(SearchMode.AUTO, description="Search mode for context retrieval ('auto' picks per query)")
     top_k: int = Field(8, description="Chunks per retrieval call during generation", ge=1, le=20)
-    focus: Optional[str] = Field(None, description="Optional subject to narrow the artifact to")
-    custom_instructions: Optional[str] = Field(None, description="Optional extra freeform guidance")
+    focus: Optional[str] = Field(None, max_length=4000, description="Optional subject to narrow the artifact to")
+    custom_instructions: Optional[str] = Field(None, max_length=4000, description="Optional extra freeform guidance")
     document_ids: Optional[List[str]] = Field(
         None, description="Limit the artifact to these sources (document ids in the current collection)"
     )

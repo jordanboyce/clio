@@ -67,7 +67,7 @@
           <div class="pb-8">
             <div class="text-sm font-medium">Theme</div>
             <p class="text-xs text-base-content/55 mt-1 mb-4">System matches your device's light or dark setting.</p>
-            <div class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); max-width: 42rem;">
+            <div class="grid gap-2 grid-cols-[repeat(auto-fill,minmax(104px,1fr))] max-w-2xl">
               <button
                 v-for="t in THEMES"
                 :key="t.id"
@@ -1666,8 +1666,9 @@ const saveChunkSettings = async () => {
   }
 }
 
-watch(() => collectionStore.currentCollectionId, loadChunkSettings, { immediate: true })
-watch(() => collectionStore.currentCollection, loadChunkSettings)
+// One watcher: the collection object changes whenever its id does (and
+// also when its settings are refreshed), so watching both ran this twice.
+watch(() => collectionStore.currentCollection, loadChunkSettings, { immediate: true })
 
 // Surface reindex completion inline (sidebar refreshes independently)
 watch(() => backgroundJobsStore.reindexJob?.status, (newStatus, oldStatus) => {

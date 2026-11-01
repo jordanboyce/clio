@@ -206,22 +206,16 @@ async def get_capabilities():
 async def get_about():
     """What the About dialog shows: the running version (the image's
     CLIO_VERSION, or the git describe of a source checkout, or "dev"), the
-    embedding model in use, and whether MCP and offline mode are on. No
+    commit and origin it was built from, the embedding model in use, and
+    whether MCP and offline mode are on. No
     secrets, no paths — it is readable by anyone who can open the app."""
-    import os
-    import subprocess
-    version = os.environ.get("CLIO_VERSION", "").strip()
-    if not version:
-        try:
-            version = subprocess.run(
-                ["git", "describe", "--tags", "--always", "--dirty"],
-                capture_output=True, text=True, timeout=2,
-                cwd=str(Path(__file__).resolve().parent.parent),
-            ).stdout.strip() or "dev"
-        except Exception:
-            version = "dev"
+    from services import provenance
+    build = provenance.build_info()
     return {
-        "version": version,
+        "version": build["version"],
+        "commit": build["commit"],
+        # Lineage: the project this server descends from (services/provenance.py).
+        "origin": build["origin"],
         "embedding_model": settings.embedding_model,
         "mcp_enabled": settings.enable_mcp,
         "offline_mode": settings.offline_mode,
@@ -355,13 +349,19 @@ async def update_config(updates: dict):
 
     Returns:
         Object with success status, whether restart/reindex needed,
-        and list of updated fields.
+        and list of updated fields. 422 when a value is rejected.
 
     Note: Some changes (like embedding model) require server restart
     and re-indexing all documents.
     """
     require_admin("change deployment settings")
     result = config_manager.update_config(updates)
+    if not result.get("success"):
+        # Rejected values are a client error, not a 200 with success=false.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="; ".join(result.get("errors") or ["could not save"]),
+        )
     return result
 
 

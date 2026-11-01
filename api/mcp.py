@@ -77,7 +77,13 @@ async def update_mcp_config(updates: dict):
             detail="No MCP configuration fields were provided.",
         )
 
-    return config_manager.update_config(filtered_updates)
+    result = config_manager.update_config(filtered_updates)
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="; ".join(result.get("errors") or ["could not save"]),
+        )
+    return result
 
 
 # ── Personal MCP access tokens ──────────────────────────────────────────────
@@ -91,6 +97,7 @@ async def update_mcp_config(updates: dict):
     "/api/mcp/tokens",
     summary="Create a personal MCP access token",
     tags=["mcp"],
+    status_code=status.HTTP_201_CREATED,
 )
 async def create_mcp_token(body: MCPTokenRequest, user_id: Optional[str] = Depends(get_current_user_id)):
     """Mint a token. The plaintext is returned once and cannot be recovered.

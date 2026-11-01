@@ -473,8 +473,7 @@
               <!-- Card view -->
               <div
                 v-else
-                class="grid gap-3"
-                style="grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));"
+                class="grid gap-3 grid-cols-[repeat(auto-fill,minmax(260px,1fr))]"
               >
                 <div
                   v-for="collection in filteredCollections"
@@ -1147,7 +1146,7 @@
       <div class="absolute inset-0 bg-base-content/20" @click="showJobsDrawer = false" aria-hidden="true"></div>
 
       <!-- Drawer Panel -->
-      <div class="absolute right-0 top-0 h-full w-96 max-w-[90vw] bg-base-100 shadow-2xl flex flex-col">
+      <div ref="jobsDrawerPanel" tabindex="-1" class="absolute right-0 top-0 h-full w-96 max-w-[90vw] bg-base-100 shadow-2xl flex flex-col outline-none">
         <!-- Header -->
         <div class="flex items-center justify-between p-4 border-b border-base-300">
           <h3 id="jobs-drawer-title" class="text-lg font-bold">Background Jobs</h3>
@@ -1297,6 +1296,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
+import { useOverlayFocus } from './composables/useOverlayFocus'
 import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig, Network, SlidersHorizontal } from 'lucide-vue-next'
 import CommandPalette from './components/CommandPalette.vue'
 import EmbeddingMismatchNotice from './components/EmbeddingMismatchNotice.vue'
@@ -1729,6 +1729,10 @@ const shareInitialToken = ref('')
 
 // Background jobs drawer state
 const showJobsDrawer = ref(false)
+// The drawer is a div, not a <dialog>: give it the focus behaviour the
+// role="dialog" promises (focus in, Tab kept inside, Escape, focus back).
+const jobsDrawerPanel = ref(null)
+useOverlayFocus(showJobsDrawer, jobsDrawerPanel, { onEscape: () => { showJobsDrawer.value = false } })
 
 // Embedding-model-missing banner: the flag comes from /health (via
 // statsStore), but dismissal is a per-session UI concern, not persisted.

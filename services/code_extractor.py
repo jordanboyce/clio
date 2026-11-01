@@ -2492,26 +2492,6 @@ class CodeExtractor:
 
         return chunks
 
-    def _split_text_chunk(
-        self,
-        text: str,
-        line_start: int,
-        document_id: str,
-        filename: str,
-        language: CodeLanguage,
-        unit_name: Optional[str],
-    ) -> List[CodeChunk]:
-        """Split a large text block into smaller chunks."""
-        pieces = self._split_lines_by_size(text.split('\n'), line_start)
-        chunks = self._chunks_from_pieces(
-            pieces, document_id, filename, language, unit_name,
-            symbol_type="code_block", metadata={}, start_index=0,
-        )
-        for chunk in chunks:
-            chunk.chunk_id = ""  # set by caller
-        return chunks
-
-
 # Supported file extensions for easy checking (every key of EXTENSION_MAP).
 SUPPORTED_CODE_EXTENSIONS = frozenset(CodeExtractor.EXTENSION_MAP)
 

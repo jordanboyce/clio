@@ -645,7 +645,8 @@ async def cancel_upload_job(job_id: int):
         job_id: The job ID to cancel
 
     Returns:
-        Cancellation status
+        Cancellation status. 404 for an unknown job, 409 when it has
+        already finished.
     """
     # Check job exists and is active
     job_status = upload_service.get_job_status(job_id)
@@ -656,8 +657,10 @@ async def cancel_upload_job(job_id: int):
         )
 
     if job_status["status"] not in ("pending", "running"):
+        # The job exists but is already finished: a state conflict, not a
+        # malformed request.
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT,
             detail=f"Job {job_id} is not active (status: {job_status['status']})",
         )
 
@@ -736,6 +739,18 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
     Returns:
         Response with job_id for tracking progress
     """
+    # Verify collection exists and the caller can write to it - before any
+    # filesystem probing, so an unauthorised caller learns nothing about
+    # which paths exist on the server.
+    _require_ingest(request.collection_id)
+    try:
+        get_indexer(request.collection_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
     repo_path = Path(request.path)
 
     if not repo_path.exists():
@@ -748,16 +763,6 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Path is not a directory: {request.path}",
-        )
-
-    # Verify collection exists and the caller can write to it
-    _require_ingest(request.collection_id)
-    try:
-        get_indexer(request.collection_id)
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e),
         )
 
     # Build file extensions list from include_patterns or use defaults
@@ -1092,9 +1097,14 @@ def list_sync_folders(collection_id: str = "default") -> SyncFoldersResponse:
     return SyncFoldersResponse(collection_id=collection_id, folders=folders)
 
 
+# A folder drop sends every path in one request, so this is a ceiling on
+# the body rather than a batch size (links have MAX_LINKS_PER_REQUEST).
+MAX_LOCAL_FILES_PER_REQUEST = 10000
+
+
 class IndexLocalAsyncRequest(BaseModel):
     """Request body for async local file indexing."""
-    file_paths: List[str]
+    file_paths: List[str] = Field(..., max_length=MAX_LOCAL_FILES_PER_REQUEST)
     collection_id: str = "default"
     copy_to_library: bool = False
 
@@ -1119,7 +1129,9 @@ async def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobR
     Returns:
         UploadJobResponse with job_id for tracking progress
     """
-
+    # Gate before touching the filesystem, so the path checks below cannot
+    # be used to probe the server by someone who may not ingest here.
+    _require_ingest(request.collection_id)
 
     # Sort the batch rather than refusing it. One unreadable path used to
     # abort the whole submission, which on a folder drop of thousands of
@@ -1154,7 +1166,6 @@ async def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobR
             detail=detail,
         )
 
-    _require_ingest(request.collection_id)
     try:
         storage_quota.check(
             request.collection_id,
@@ -1305,7 +1316,10 @@ class PastedTextRequest(BaseModel):
     """Text typed or pasted into the Sources panel's editor."""
     title: Optional[str] = Field(None, description="Name for the note; the first line of the text when blank")
     html: Optional[str] = Field(None, description="The editor's markup; cleaned to headings, lists, emphasis, links and tables")
-    text: Optional[str] = Field(None, description="Plain text, used when html is empty; blank lines separate paragraphs")
+    text: Optional[str] = Field(
+        None, max_length=pasted_text.MAX_TEXT_CHARS * 2,
+        description="Plain text, used when html is empty; blank lines separate paragraphs",
+    )
     collection_id: str = "default"
 
 

@@ -165,7 +165,7 @@
         <p class="w-full text-sm text-base-content/75 break-words">Results for “{{ searchStore.lastQuery }}”</p>
       </div>
       <div class="divide-y divide-base-300">
-        <SearchResult v-for="(result, index) in searchStore.results" :key="index" :result="result" :index="index" :query="searchStore.lastQuery" />
+        <SearchResult v-for="(result, index) in searchStore.results" :key="result.chunk_id ?? index" :result="result" :index="index" :query="searchStore.lastQuery" />
       </div>
     </section>
 
@@ -183,7 +183,7 @@
         <h3 id="search-history-title" class="font-bold text-lg mb-4">Search History</h3>
 
         <div class="space-y-2 max-h-96 overflow-y-auto">
-          <div v-for="(entry, index) in historyEntries" :key="index"
+          <div v-for="entry in historyEntries" :key="`${entry.query}|${entry.topK}`"
             class="rounded-lg bg-base-200">
             <div class="card-body p-4">
               <div class="flex items-start justify-between gap-4">

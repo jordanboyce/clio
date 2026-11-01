@@ -540,7 +540,7 @@ def test_mcp_token_scope_must_be_visible_collection(open_client, fresh_db):
     assert r.status_code == 404
     cid = app_db.create_collection(name="vault", owner_id="default")
     r = open_client.post("/api/mcp/tokens", json={"name": "x", "collection_scope": [cid]})
-    assert r.status_code == 200 and r.json()["collection_scope"] == [cid]
+    assert r.status_code == 201 and r.json()["collection_scope"] == [cid]
     from services import audit
 
     assert audit.list_events(action="mcp_token.create")[0]["detail"]["collection_scope"] == [cid]
@@ -608,7 +608,7 @@ def test_admin_governance_endpoints_are_admin_only(private_client):
     assert private_client.post("/api/admin/users/x@y.z/suspend", headers=_as(USER)).status_code == 403
     r = private_client.post(f"/api/admin/users/{USER}/suspend", json={"reason": "abuse"}, headers=_as(ADMIN))
     assert r.status_code == 200 and r.json()["tokens_revoked"] == 0
-    assert private_client.post(f"/api/admin/users/{ADMIN}/suspend", headers=_as(ADMIN)).status_code == 400
+    assert private_client.post(f"/api/admin/users/{ADMIN}/suspend", headers=_as(ADMIN)).status_code == 409
     assert app_db.list_audit_events(action="admin.suspend_user")[0]["target"] == USER
 
 

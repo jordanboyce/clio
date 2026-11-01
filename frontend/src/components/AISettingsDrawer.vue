@@ -11,7 +11,7 @@
     <div class="absolute inset-0 bg-base-content/20" @click="close" aria-hidden="true"></div>
 
     <!-- Drawer Panel -->
-    <div class="absolute right-0 top-0 h-full w-80 max-w-[85vw] bg-base-100 shadow-2xl flex flex-col">
+    <div ref="panelRef" tabindex="-1" class="absolute right-0 top-0 h-full w-80 max-w-[85vw] bg-base-100 shadow-2xl flex flex-col outline-none">
       <!-- Header -->
       <div class="flex items-center justify-between p-4 border-b border-base-300">
         <h3 :id="titleId" class="text-sm font-bold">{{ title }}</h3>
@@ -162,7 +162,8 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { useOverlayFocus } from '../composables/useOverlayFocus'
 import { Sparkles, X } from 'lucide-vue-next'
 import { useProviderStore } from '../stores/providerStore'
 import { getProviderDisplayName, isLocalProvider } from '../utils/aiProviders.js'
@@ -202,6 +203,9 @@ const cacheThresholdLabel = computed(() =>
 )
 
 const close = () => { open.value = false }
+// A div overlay: supply the focus behaviour its role="dialog" promises.
+const panelRef = ref(null)
+useOverlayFocus(open, panelRef, { onEscape: close })
 
 const displayName = getProviderDisplayName
 

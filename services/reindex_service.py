@@ -908,14 +908,5 @@ class ReindexService:
         """
         return app_db.get_reindex_job(job_id)
 
-    def get_current_job(self) -> Optional[dict]:
-        """Get currently active re-indexing job.
-
-        Returns:
-            Active job details or None
-        """
-        return app_db.get_active_reindex_job()
-
-
 # Global instance
 reindex_service = ReindexService()

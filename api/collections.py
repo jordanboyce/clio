@@ -226,7 +226,8 @@ async def get_reindex_status(job_id: int = None):
     Get status of a re-indexing job.
 
     Args:
-        job_id: Optional job ID. If not provided, returns latest job.
+        job_id: Optional job ID. If not provided, returns latest job
+            (null when none has run). 404 for an unknown job_id.
 
     Returns:
         Job details including:
@@ -243,11 +244,17 @@ async def get_reindex_status(job_id: int = None):
 
     if job_id:
         job = reindex_service.get_job_status(job_id)
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Re-index job {job_id} not found",
+            )
     else:
         # Get latest job (including completed ones), not just currently active
         job = app_db.get_latest_reindex_job()
 
     if not job:
+        # No job has ever run: nothing to report, but not an error.
         return None
 
     # Calculate progress percentage
@@ -527,7 +534,7 @@ async def update_collection(collection_id: str, updates: dict, user_id: str = De
             owner = (collection_row.get("owner_id") or "").strip()
             if owner in ("", settings.default_user_id):
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=status.HTTP_409_CONFLICT,
                     detail=(
                         "This is a team collection — everyone can already reach it, and it "
                         "has no single owner to keep control of how it is built. Publishing "
