@@ -30,6 +30,7 @@ be forgotten. That is the job here too. The record remembers.
 
 ## Table of Contents
 
+- [Try it in two minutes](#try-it-in-two-minutes)
 - [Quick start](#quick-start)
 - [Connect an AI client](#connect-an-ai-client)
 - [If others can reach it](#if-others-can-reach-it)
@@ -47,6 +48,55 @@ be forgotten. That is the job here too. The record remembers.
 
 ---
 
+## Try it in two minutes
+
+No documents, model or API key needed.
+
+```bash
+docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 \
+  -v clio-data:/app/data ghcr.io/jordanboyce/clio:slim
+```
+
+1. Open http://localhost:8473 and choose **Explore with sample documents**.
+   Four short fictional records land in a collection of their own, already
+   searchable: a policy, an amendment that changes it for one group, an older
+   desk note that disagrees with the amendment, and a checkout register.
+2. Pick one of the suggested questions. With no model connected, each one
+   runs as a **Find** search and shows the passages that answer it. Connect a
+   model (an API key, or Ollama on this machine) and the same questions get
+   written answers that cite their passages. Two of them ask about facts the
+   records leave out (who approved the amendment, the late fee), to show an
+   answer saying so rather than guessing.
+3. Hand the same records to your agent. Claude Code, for example:
+
+   ```bash
+   claude mcp add --transport http clio http://localhost:8473/mcp
+   ```
+
+   Then type `/mcp__clio__try_clio` in Claude Code, or paste this:
+
+   > Using the clio tools, audit the equipment register in the "Sample:
+   > equipment policy" collection against EQ-17 and its amendment. For each
+   > checkout, say which rule applied and whether it was on time, late,
+   > covered by an approved extension, or is still out past its due date.
+   > Cite the document behind each rule, and tell me what the records can't
+   > settle. Write the result to audit.md.
+
+   This is a task that needs an agent rather than a chat box. It has to take
+   the rules from two documents, read every row of the register, and apply
+   the right rule to each one. The records have a definite answer: four
+   checkouts came back late with no extension, three were late but covered
+   by one, and one is still out. Leave the **Connect** tab open under
+   **Try it** while it works and you'll see each call arrive: the client
+   connecting, then `research_documents`, `query_table` and the rest.
+
+   No token is needed while Clio is reachable from this machine only; read
+   [If others can reach it](#if-others-can-reach-it) before that changes.
+   Every other client's setup is on the **Connect** tab too.
+
+When you are done, delete the *Sample: equipment policy* collection and add
+your own sources.
+
 ## Quick start
 
 Pick one. Every route ends at http://localhost:8473, reachable from this
@@ -58,6 +108,11 @@ machine only, with nothing to configure and no sign-in.
 docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 \
   -v clio-data:/app/data ghcr.io/jordanboyce/clio:latest
 ```
+
+`:latest` is the full image (3.9 GB). `:slim` (1.6 GB) leaves out PyTorch,
+OCR for scanned PDFs and audio transcription, and keeps everything else:
+search, reranking, chat, research and every MCP tool. Both carry the version
+tags too (`:1.2.3`, `:1.2.3-slim`).
 
 **Docker, built from source**
 
@@ -169,7 +224,19 @@ may see:
 | `search`, `fetch` | The two tools a ChatGPT custom connector requires, over the same scoping |
 
 *What agents can do here* on the Connect tab lists the live catalog
-(`GET /api/mcp/catalog`). To see how many agents a host can serve, run
+(`GET /api/mcp/catalog`).
+
+**Checking a connection.** **Try it** on the Connect tab suggests a first
+task and lists the last 50 calls agents made to `/mcp` as they arrive: which
+client (named from its MCP `initialize`), which tool, prompt or resource, which
+collection, and whether it failed. If nothing shows up, the client is not
+reaching the server. The list is metadata only: no queries and no returned
+text. It is held in memory and empties on restart, and with private
+collections each person sees only calls made with their own credentials
+(`GET /api/mcp/activity`; the durable record is `MCP_AUDIT_TOOL_CALLS`). The
+same first task is the MCP prompt `try_clio`. With the sample documents
+loaded it audits the register; otherwise it tours your collections and
+answers one question with citations. To see how many agents a host can serve, run
 `python scripts/mcp_load.py --url http://localhost:8473/mcp --sessions 32`
 ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#capacity--scaling)).
 

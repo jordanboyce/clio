@@ -229,8 +229,9 @@
                 Ask a question, then open its citations to check the evidence.
               </p>
               <div class="mt-6" aria-live="polite">
-                <p v-if="starters.length || startersLoading" class="side-label text-base-content/45 mb-1.5">From your sources</p>
-                <template v-if="startersLoading && !starters.length">
+                <p v-if="isSampleCollection" class="side-label text-base-content/45 mb-1.5">Try a question</p>
+                <p v-else-if="starters.length || startersLoading" class="side-label text-base-content/45 mb-1.5">From your sources</p>
+                <template v-if="startersLoading && !starters.length && !isSampleCollection">
                   <div class="space-y-2">
                     <div v-for="n in 3" :key="n" class="skeleton h-9 w-full rounded-lg" aria-hidden="true"></div>
                   </div>
@@ -258,6 +259,34 @@
             <!-- Nothing indexed yet: one quiet invitation, not a warning. Waits
                  for the first stats load, or every visit opened on "is empty"
                  before the real count arrived. -->
+            <!-- Sources but no model: still something to do. The questions run
+                 as Find searches (sendMessage's no-model path), and the notice
+                 above offers to connect a model for cited answers. -->
+            <div v-else-if="providerStore.serverLoaded && !hasAnyProvider && documentCount > 0" class="w-full max-w-xl">
+              <h3 class="text-[22px] leading-tight font-semibold tracking-tight text-base-content/90">
+                {{ collectionStore.currentCollection?.name || 'Your collection' }}
+              </h3>
+              <p class="mt-1 text-sm text-base-content/55">
+                <span class="tabular-nums">{{ documentCount.toLocaleString() }}</span> {{ documentCount === 1 ? 'source' : 'sources' }} ready.
+                Without a model, a question runs as a Find search and shows the passages that answer it. Connect a model for a written, cited answer.
+              </p>
+              <div v-if="isSampleCollection" class="mt-6">
+                <p class="side-label text-base-content/45 mb-1.5">Try a question</p>
+                <ul class="divide-y divide-base-300/50">
+                  <li v-for="suggestion in SAMPLE_QUESTIONS" :key="suggestion">
+                    <button
+                      type="button"
+                      class="group w-full text-left py-2.5 flex items-start gap-3 text-[15px] leading-snug text-base-content/80 hover:text-base-content disabled:opacity-50"
+                      :disabled="loading"
+                      @click="askQuestion(suggestion)"
+                    >
+                      <Search :size="14" class="mt-1 flex-shrink-0 text-base-content/30 group-hover:text-primary transition-colors" aria-hidden="true" />
+                      <span>{{ suggestion }}</span>
+                    </button>
+                  </li>
+                </ul>
+              </div>
+            </div>
             <div v-else-if="statsStore.loaded && documentCount === 0 && !indexingActive" class="w-full max-w-md text-center">
               <div class="mx-auto w-12 h-12 rounded-2xl bg-base-content/[0.06] flex items-center justify-center">
                 <FileText :size="20" class="text-base-content/45" aria-hidden="true" />
@@ -743,7 +772,7 @@ import { useStatsStore } from '../stores/statsStore'
 import { useSelectionStore } from '../stores/selectionStore'
 import { useSearchStore } from '../stores/searchStore'
 import { useUiStore } from '../stores/uiStore'
-import { addSampleSources } from '../utils/sampleSources'
+import { addSampleSources, isSampleSet, SAMPLE_FILES, SAMPLE_QUESTIONS } from '../utils/sampleSources'
 import { locationLabel } from '../utils/fileTypes'
 import SlashCommandPicker from './SlashCommandPicker.vue'
 import AISettingsDrawer from './AISettingsDrawer.vue'
@@ -982,10 +1011,39 @@ const FALLBACK_SUGGESTIONS = [
   'Which deadlines and responsibilities are stated? Cite each source.',
   'What is missing from these documents that I should verify?',
 ]
+// The collection holds exactly the bundled sample set: use its hand-written
+// questions instead of asking a model to write some. Checked only when the
+// count matches, so an ordinary collection costs no extra request.
+// loadStarters waits on the pending check so a sample collection never
+// spends a model call on starters it will not show.
+const isSampleCollection = ref(false)
+let sampleCheck = Promise.resolve(false)
+let sampleCheckKey = ''
+watch(
+  () => [collectionStore.currentCollectionId, documentCount.value],
+  ([collectionId, count]) => {
+    const key = `${collectionId}|${count}`
+    sampleCheckKey = key
+    if (count !== SAMPLE_FILES.length) {
+      isSampleCollection.value = false
+      sampleCheck = Promise.resolve(false)
+      return
+    }
+    sampleCheck = isSampleSet(collectionId).catch(() => false).then((match) => {
+      if (sampleCheckKey === key) isSampleCollection.value = match
+      return match
+    })
+  },
+  { immediate: true },
+)
+
 const starters = ref([])
 const startersLoading = ref(false)
 let startersKey = ''
-const starterList = computed(() => (starters.value.length ? starters.value : FALLBACK_SUGGESTIONS))
+const starterList = computed(() => {
+  if (isSampleCollection.value) return SAMPLE_QUESTIONS
+  return starters.value.length ? starters.value : FALLBACK_SUGGESTIONS
+})
 const startersKeyNow = () => [
   collectionStore.currentCollectionId,
   documentCount.value,
@@ -995,6 +1053,7 @@ const startersKeyNow = () => [
 
 const loadStarters = async () => {
   if (!hasAnyProvider.value || documentCount.value === 0 || messages.value.length > 0) return
+  if (await sampleCheck) return
   const key = startersKeyNow()
   if (key === startersKey) return
   startersKey = key
@@ -1017,7 +1076,7 @@ const loadStarters = async () => {
   }
 }
 watch(
-  () => [startersKeyNow(), hasAnyProvider.value, messages.value.length === 0],
+  () => [startersKeyNow(), hasAnyProvider.value, messages.value.length === 0, isSampleCollection.value],
   ([key]) => {
     if (key !== startersKey) starters.value = []
     loadStarters()

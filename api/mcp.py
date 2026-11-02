@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 from pydantic import BaseModel, Field, StrictBool
 
-from fastapi import Depends, HTTPException, status, Request
+from fastapi import Depends, HTTPException, Query, status, Request
 
 from middleware.user_context import get_current_user_id
 from services.config_manager import config_manager
@@ -56,6 +56,29 @@ async def get_mcp_catalog(user_id: Optional[str] = Depends(get_current_user_id))
     from services.mcp_server import mcp_catalog
 
     return await mcp_catalog()
+
+
+@router.get(
+    "/api/mcp/activity",
+    summary="Recent MCP calls, for checking that a client is connected",
+    tags=["mcp"],
+)
+async def get_mcp_activity(
+    after: int = Query(0, ge=0, description="Return only entries newer than this sequence number"),
+    user_id: Optional[str] = Depends(get_current_user_id),
+):
+    """The last few dozen calls agents made to /mcp: which client, which tool,
+    prompt or resource, which collection it targeted, when, and whether it
+    failed. Metadata only and held in memory (see services/mcp_activity.py).
+    With private collections a person sees only the calls made with their own
+    credentials."""
+    from config import settings
+    from services import mcp_activity
+
+    feed = mcp_activity.recent(
+        after=after, identity=user_id, only_own=bool(settings.private_collections),
+    )
+    return {**feed, "enabled": bool(settings.enable_mcp)}
 
 
 @router.post(

@@ -44,6 +44,33 @@
       <!-- Stage 2: embeddings -->
       <EmbeddingSetup v-if="stage === 'embeddings'" @done="finish" @skip="finish" />
 
+      <!-- Fastest way in: the bundled fictional sample set in a collection of
+           its own. Needs no model and no key; search works on it at once and
+           the hand-written questions are waiting in the chat. -->
+      <div v-if="stage === 'provider'" class="mb-5">
+        <button
+          type="button"
+          class="w-full rounded-box border border-primary/40 bg-primary/5 hover:border-primary text-left p-3 flex items-start gap-3 transition-colors disabled:opacity-60"
+          :disabled="busy || loadingSamples"
+          @click="trySamples"
+        >
+          <span class="mt-0.5 flex-shrink-0 text-primary" aria-hidden="true">
+            <span v-if="loadingSamples" class="loading loading-spinner loading-xs"></span>
+            <Sparkles v-else :size="16" />
+          </span>
+          <span class="min-w-0">
+            <span class="block font-medium text-sm">{{ loadingSamples ? 'Adding the sample documents…' : 'Explore with sample documents' }}</span>
+            <span class="block text-xs text-base-content/60 mt-0.5 leading-snug">
+              Four short fictional records, ready to search in seconds. No model or API key needed; connect one later for cited answers.
+            </span>
+          </span>
+        </button>
+        <div v-if="samplesError" class="alert alert-error text-sm py-2 mt-2" role="alert">
+          <span>{{ samplesError }}</span>
+        </div>
+        <p class="text-center text-[11px] uppercase tracking-[0.18em] text-base-content/40 mt-5">or connect a model for answers</p>
+      </div>
+
       <!-- Step 1: choose how to connect -->
       <div v-if="stage === 'provider'" class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Choose a provider">
         <button
@@ -221,10 +248,12 @@
 
 <script setup>
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
-import { Check } from 'lucide-vue-next'
+import { Check, Sparkles } from 'lucide-vue-next'
 import http from '../utils/http'
 import EmbeddingSetup from './EmbeddingSetup.vue'
 import { useUserStore } from '../stores/userStore'
+import { useCollectionStore } from '../stores/collectionStore'
+import { loadSampleCollection } from '../utils/sampleSources'
 import {
   PROVIDER_DEFS,
   CUSTOM_ENDPOINT_PRESETS,
@@ -239,7 +268,7 @@ const props = defineProps({
   show: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['complete', 'skip'])
+const emit = defineEmits(['complete', 'skip', 'samples'])
 
 // Two stages: the answer model, then the search index. The index step is
 // skipped when it is already ready (the baked Docker image) or when this
@@ -266,6 +295,26 @@ const advance = async (kind) => {
 }
 const finish = () => emit(outcome)
 const skipProvider = () => advance('skip')
+
+// Samples skip both setup steps on purpose: the default search index is
+// already on its way (baked into the image, or downloading in the
+// background), and the point is to see Clio work before configuring it.
+const collectionStore = useCollectionStore()
+const loadingSamples = ref(false)
+const samplesError = ref('')
+const trySamples = async () => {
+  if (loadingSamples.value) return
+  loadingSamples.value = true
+  samplesError.value = ''
+  try {
+    const collection = await loadSampleCollection(collectionStore)
+    emit('samples', collection.id)
+  } catch (err) {
+    samplesError.value = err?.message || 'Could not add the sample documents.'
+  } finally {
+    loadingSamples.value = false
+  }
+}
 
 const CARDS = [
   { id: 'anthropic', title: 'Anthropic', desc: 'Claude models' },

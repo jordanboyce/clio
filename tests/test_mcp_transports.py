@@ -59,3 +59,26 @@ def test_sse_routes_keep_dns_rebinding_protection(client):
     r = client.post("/mcp/sse/messages/?session_id=0123456789abcdef0123456789abcdef",
                     content=b"{}", headers={"Content-Type": "application/json", "Host": "evil.example"})
     assert r.status_code == 421
+
+
+def test_calls_over_http_show_up_in_the_connect_tab_activity(client):
+    # End to end: a client connects and calls a tool over real HTTP, and the
+    # Connect tab's feed names the client from its initialize.
+    from services import mcp_activity
+
+    mcp_activity.clear()
+    headers = {"Accept": "application/json, text/event-stream", "User-Agent": "claude-code/9.9.9"}
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "claude-code", "version": "9.9.9"}}}
+    call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "health_check", "arguments": {}}}
+    assert client.post("/mcp", json=init, headers=headers).status_code == 200
+    assert client.post("/mcp", json=call, headers=headers).status_code == 200
+
+    feed = client.get("/api/mcp/activity").json()
+    assert [(e["kind"], e["name"], e["client"], e["ok"]) for e in feed["entries"]] == [
+        ("connect", None, "claude-code 9.9.9", True),
+        ("tool", "health_check", "claude-code 9.9.9", True),
+    ]
+    assert client.get("/api/mcp/activity", params={"after": feed["latest"]}).json()["entries"] == []

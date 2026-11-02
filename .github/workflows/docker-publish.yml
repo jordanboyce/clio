@@ -6,6 +6,13 @@
 #
 # Runs on a version tag (v1.2.3) and on demand. Not on every push: the build
 # compiles a torch/faiss dependency set and takes tens of minutes.
+#
+# Two variants build side by side from the same Dockerfile:
+#   full  :latest, :1.2.3, :1.2        everything (PyTorch, OCR, audio)
+#   slim  :slim, :1.2.3-slim, :1.2-slim  SLIM=1 — about 1.6 GB instead of
+#         3.9 GB, no PyTorch/OCR/audio, the fastembed search model and
+#         reranker still baked in. The quick start leads with it because the
+#         pull is what stands between a new user and a running app.
 name: Publish image
 
 on:
@@ -31,7 +38,18 @@ permissions:
 
 jobs:
   publish:
+    name: publish (${{ matrix.variant }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: full
+            suffix: ""
+            slim: "0"
+          - variant: slim
+            suffix: "-slim"
+            slim: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -52,12 +70,18 @@ jobs:
           # Lowercased by the action — a registry path cannot carry the
           # capitals a GitHub owner name may have.
           images: ghcr.io/${{ github.repository }}
+          # The variant suffix lands on every tag (1.2.3-slim, sha-abc-slim);
+          # the slim image's moving tag is plain :slim, not :latest-slim.
+          flavor: |
+            latest=false
+            suffix=${{ matrix.suffix }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
             type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ matrix.variant == 'full' && startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=slim,suffix=,enable=${{ matrix.variant == 'slim' && startsWith(github.ref, 'refs/tags/v') }}
 
       - uses: docker/build-push-action@v6
         with:
@@ -70,13 +94,16 @@ jobs:
             APP_VERSION=${{ steps.meta.outputs.version }}
             VCS_REF=${{ github.sha }}
             OFFLINE_BUNDLE=${{ inputs.offline_bundle && '1' || '0' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            SLIM=${{ matrix.slim }}
+          # One cache per variant: they share base layers but diverge at the
+          # dependency install, and a shared scope would evict each other.
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
 
       - name: Summarise
         run: |
           {
-            echo "### Published"
+            echo "### Published (${{ matrix.variant }})"
             echo '```'
             echo "${{ steps.meta.outputs.tags }}"
             echo '```'

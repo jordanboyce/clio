@@ -509,6 +509,6 @@ def test_catalog_endpoint_lists_tools_resources_and_prompts(open_client):
     assert all(r["description"] for r in resources.values())
 
     prompts = {p["name"]: p for p in catalog["prompts"]}
-    assert set(prompts) == {"research_question", "find_exact_reference", "collection_overview"}
+    assert set(prompts) == {"research_question", "find_exact_reference", "collection_overview", "try_clio"}
     assert prompts["research_question"]["arguments"] == ["question", "collection"]
     assert prompts["research_question"]["title"]

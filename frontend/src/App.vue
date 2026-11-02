@@ -1127,6 +1127,7 @@
       :show="showOnboarding"
       @complete="handleOnboardingComplete"
       @skip="handleOnboardingSkip"
+      @samples="handleOnboardingSamples"
     />
 
     <!-- Acceptable-use acknowledgement: a takeover until accepted when the
@@ -1808,6 +1809,19 @@ const handleOnboardingSkip = () => {
   localStorage.setItem('onboarding_dismissed', 'true')
   activeTab.value = 'search'
   if (statsStore.documents === 0) sourcesSidebarOpen.value = true
+}
+
+// The sample set is loaded into its own collection: open it on the chat tab,
+// where its hand-written questions wait — asked with a model, or run as Find
+// searches without one. Setup stays one click away ("Run setup again").
+const handleOnboardingSamples = async (collectionId) => {
+  showOnboarding.value = false
+  localStorage.setItem('onboarding_dismissed', 'true')
+  collectionStore.setCurrentCollection(collectionId)
+  ui.sourcesChanged()
+  await statsStore.fetchStats()
+  activeTab.value = chatTabEnabled.value ? 'chat' : 'search'
+  ui.notify('Sample documents added. Pick a question to try.', 'success', { duration: 6000 })
 }
 
 // Collections overview: view, search, sort
