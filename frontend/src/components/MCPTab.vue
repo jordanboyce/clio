@@ -442,6 +442,64 @@
         </div>
       </div>
 
+      <!-- Try it: a first task to hand the agent, and a live view of the calls
+           it makes, so a person can see the connection work and what it is
+           for without leaving this page. -->
+      <div class="card bg-base-200" data-testid="mcp-try-it">
+        <div class="card-body space-y-4">
+          <div>
+            <h3 class="card-title text-base">Try it</h3>
+            <p class="mt-1 text-sm text-base-content/60">
+              Once your client has the server, give it this task. Each call it makes to Clio appears below as it happens.
+            </p>
+          </div>
+
+          <div class="rounded-lg border border-base-300 bg-base-100 p-3" data-testid="mcp-try-prompt">
+            <div class="flex items-center justify-between gap-2 mb-1.5">
+              <span class="text-xs font-medium text-base-content/60">{{ tryPrompt.title }}</span>
+              <button type="button" class="btn btn-ghost btn-xs" @click="copyText(tryPrompt.text, 'Task')">Copy</button>
+            </div>
+            <p class="text-sm leading-relaxed">{{ tryPrompt.text }}</p>
+            <p v-if="tryPrompt.why" class="mt-2 text-xs text-base-content/55 leading-relaxed">{{ tryPrompt.why }}</p>
+            <p class="mt-2 text-xs text-base-content/55 leading-relaxed">
+              Or skip the copying: Claude Code runs the same task as
+              <code class="font-mono text-[11px] bg-base-200 rounded px-1 py-0.5">/mcp__{{ serverName }}__try_clio</code>,
+              and other clients that support MCP prompts list it as <span class="font-medium">Try Clio</span>.
+            </p>
+            <div v-if="!sampleCollection" class="mt-3 flex flex-wrap items-center gap-2 text-xs text-base-content/55">
+              <span>For a task with a clear right answer, load the sample documents first.</span>
+              <button type="button" class="btn btn-xs" :disabled="addingSamples" @click="addSamples">
+                <span v-if="addingSamples" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+                {{ addingSamples ? 'Adding…' : 'Add sample documents' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-base-300 bg-base-100" data-testid="mcp-activity">
+            <div class="flex items-center gap-2 px-3 py-2.5 border-b border-base-300 text-sm" role="status" aria-live="polite">
+              <span
+                class="inline-block w-2 h-2 rounded-full flex-shrink-0"
+                :class="activityStatus.state === 'live' ? 'bg-success' : activityStatus.state === 'idle' ? 'bg-base-content/30' : 'bg-warning animate-pulse'"
+                aria-hidden="true"
+              ></span>
+              <span class="flex-1 min-w-0 truncate">{{ activityStatus.text }}</span>
+            </div>
+            <p v-if="!activity.length" class="px-3 py-3 text-xs text-base-content/55 leading-relaxed">
+              Nothing yet. Add the server to your client with the recipe above, then give it the task. If nothing appears here after that, the client is not reaching this server: check the URL{{ openDeployment ? '' : ' and the token' }}, and restart the client if it only reads its config at start.
+            </p>
+            <TransitionGroup v-else tag="ul" name="rise" class="divide-y divide-base-300/60 max-h-72 overflow-y-auto">
+              <li v-for="entry in activityNewestFirst" :key="entry.seq" class="flex items-center gap-2.5 px-3 py-1.5 text-xs">
+                <component :is="activityIcon(entry)" :size="13" class="flex-shrink-0" :class="entry.ok ? 'text-base-content/40' : 'text-error'" aria-hidden="true" />
+                <span class="font-mono truncate" :class="entry.kind === 'connect' ? 'text-success' : ''">{{ activityLabel(entry) }}</span>
+                <span v-if="entry.collection" class="truncate text-base-content/50">in {{ collectionName(entry.collection) }}</span>
+                <span v-if="!entry.ok" class="badge badge-error badge-xs">failed</span>
+                <span class="ml-auto flex-shrink-0 text-base-content/45 tabular-nums">{{ entry.client || 'unknown client' }} · {{ ago(entry.at) }}</span>
+              </li>
+            </TransitionGroup>
+          </div>
+        </div>
+      </div>
+
       <!-- Advanced / Global server defaults -->
       <div v-if="userStore.adminConsole" class="card bg-base-200">
         <div class="card-body p-0">
@@ -563,12 +621,15 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
-import { ShieldAlert } from 'lucide-vue-next'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ShieldAlert, Plug, Wrench, MessageSquareText, FileText } from 'lucide-vue-next'
 import http from '../utils/http'
 import { useUserStore } from '../stores/userStore'
 import { useLayoutStore } from '../stores/layoutStore'
+import { useCollectionStore } from '../stores/collectionStore'
 import { MCP_CLIENT_GROUPS, MCP_CLIENTS, buildClientConfig } from '../utils/mcpClients'
+import { SAMPLE_COLLECTION_NAME, loadSampleCollection } from '../utils/sampleSources'
+import { firstTaskPrompt } from '../utils/mcpTryIt'
 const userStore = useUserStore()
 const layoutStore = useLayoutStore()
 
@@ -975,6 +1036,92 @@ const saveMcpSettings = async () => {
     mcpSaving.value = false
   }
 }
+
+// ── Try it ──────────────────────────────────────────────────────────────
+const collectionStore = useCollectionStore()
+const sampleCollection = computed(() => mcpCollections.value.find((c) => c.name === SAMPLE_COLLECTION_NAME) || null)
+const codingClient = computed(() =>
+  MCP_CLIENT_GROUPS[0].clients.some((c) => c.key === activeTab.value))
+const tryPrompt = computed(() => firstTaskPrompt({
+  sampleCollection: sampleCollection.value,
+  collection: mcpCollections.value.find((c) => c.id === exportCollectionIds.value[0]) || mcpCollections.value[0] || null,
+  codingClient: codingClient.value,
+}))
+
+const addingSamples = ref(false)
+const addSamples = async () => {
+  if (addingSamples.value) return
+  addingSamples.value = true
+  mcpError.value = ''
+  try {
+    await loadSampleCollection(collectionStore)
+    await loadMcpCollections()
+    mcpStatus.value = 'Sample documents added'
+  } catch (error) {
+    mcpError.value = error?.message || 'Could not add the sample documents'
+  } finally {
+    addingSamples.value = false
+  }
+}
+
+// Live activity: polled while this tab is open and the page is visible.
+const ACTIVITY_POLL_MS = 2500
+const ACTIVITY_KEEP = 50
+const activity = ref([])
+const activityLatest = ref(0)
+const activityEnabled = ref(true)
+const now = ref(Date.now())
+let activityTimer = null
+
+const pollActivity = async () => {
+  now.value = Date.now()
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+  try {
+    const { data } = await http.get('/api/mcp/activity', { params: { after: activityLatest.value }, quiet: true })
+    activityEnabled.value = data.enabled !== false
+    // A restarted server starts counting again: start the view over.
+    if (data.latest < activityLatest.value) activity.value = []
+    if (data.entries?.length) activity.value = [...activity.value, ...data.entries].slice(-ACTIVITY_KEEP)
+    activityLatest.value = data.latest || 0
+  } catch {
+    // The view is a convenience; the next tick tries again.
+  }
+}
+
+const activityNewestFirst = computed(() => [...activity.value].reverse())
+
+const ago = (at) => {
+  const seconds = Math.max(0, Math.round((now.value - at * 1000) / 1000))
+  if (seconds < 5) return 'just now'
+  if (seconds < 60) return `${seconds}s ago`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  return `${Math.floor(seconds / 3600)}h ago`
+}
+
+const ACTIVITY_ICONS = { connect: Plug, tool: Wrench, prompt: MessageSquareText, resource: FileText }
+const activityIcon = (entry) => ACTIVITY_ICONS[entry.kind] || Wrench
+const activityLabel = (entry) => {
+  if (entry.kind === 'connect') return 'connected'
+  if (entry.kind === 'prompt') return `prompt ${entry.name || ''}`.trim()
+  return entry.name || entry.kind
+}
+
+const activityStatus = computed(() => {
+  if (!activityEnabled.value) return { state: 'idle', text: 'The MCP server is turned off.' }
+  const last = activity.value[activity.value.length - 1]
+  if (!last) return { state: 'waiting', text: 'Waiting for your client…' }
+  const recent = now.value - last.at * 1000 < 10 * 60 * 1000
+  return {
+    state: recent ? 'live' : 'idle',
+    text: `${recent ? 'Connected' : 'Last seen'}: ${last.client || 'a client'}, ${ago(last.at)}`,
+  }
+})
+
+onMounted(() => {
+  pollActivity()
+  activityTimer = setInterval(pollActivity, ACTIVITY_POLL_MS)
+})
+onBeforeUnmount(() => clearInterval(activityTimer))
 
 onMounted(() => {
   loadMcpCollections()

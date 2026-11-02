@@ -304,7 +304,7 @@ def test_prompts_are_registered_and_render_tool_workflows():
     from services import mcp_server as mcp
 
     prompts = {p.name: p for p in asyncio.run(mcp._clio_mcp.list_prompts())}
-    assert set(prompts) == {"research_question", "find_exact_reference", "collection_overview"}
+    assert set(prompts) == {"research_question", "find_exact_reference", "collection_overview", "try_clio"}
     assert [a.name for a in prompts["research_question"].arguments] == ["question", "collection"]
     assert next(a for a in prompts["research_question"].arguments if a.name == "question").required is True
 

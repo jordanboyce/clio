@@ -8,6 +8,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import parse_qs, urlencode
@@ -4174,6 +4175,66 @@ def prompt_collection_overview(collection: str = "") -> str:
     )
 
 
+# The collection the web app's "Explore with sample documents" creates
+# (frontend/src/utils/sampleSources.js: SAMPLE_COLLECTION_NAME).
+SAMPLE_COLLECTION_NAME = "Sample: equipment policy"
+
+
+def _sample_collection() -> dict[str, Any] | None:
+    """The sample collection, when this caller can see it and it has sources."""
+    try:
+        for c in _visible_collections():
+            if c.get("name") == SAMPLE_COLLECTION_NAME and c.get("id"):
+                return c
+    except Exception as e:  # noqa: BLE001 - a prompt must still render
+        logger.debug("try_clio: could not list collections: %s", e)
+    return None
+
+
+@_clio_mcp.prompt(
+    name="try_clio",
+    title="Try Clio: a first task for your agent",
+    description=(
+        "A short task that shows what an agent can do with Clio. With the sample documents "
+        "loaded, it audits the equipment register against the policy; otherwise it tours "
+        "your collections and answers one question with citations."
+    ),
+)
+def prompt_try_clio() -> str:
+    sample = _sample_collection()
+    if sample:
+        cid = sample["id"]
+        today = datetime.now(timezone.utc).date().isoformat()
+        return (
+            f"Audit the equipment register in the Clio collection \"{SAMPLE_COLLECTION_NAME}\" "
+            f"(collection_id \"{cid}\") against the policy documents in the same collection. "
+            "The records are fictional; this is a demonstration of working from sources.\n\n"
+            "1. Establish the rules from the documents, not from memory: call research_documents "
+            "for the standard return period, the field-team exception and when it took effect, and "
+            "how extensions work. Call get_document_context before relying on a passage, and note "
+            "which document each rule comes from and which one is only an informal note.\n"
+            "2. Call list_tables and get_table_schema to find the register, then query_table for "
+            "every checkout.\n"
+            f"3. For each checkout decide which rule applied, then whether it was on time, late, "
+            f"late but covered by an approved extension, or still out past its due date as of "
+            f"{today}.\n\n"
+            "Report a table (checkout, team, rule applied, due, returned, verdict) and cite the "
+            "document behind each rule. Then list what the records cannot settle, such as who "
+            "approved the amendment or whether any fee applies, rather than guessing."
+        )
+    return (
+        "Show me what this Clio server can do, using its tools rather than general knowledge.\n\n"
+        "1. Call list_collections and pick the collection with the most sources; say which.\n"
+        "2. Call get_collection_info on it with detail=\"counts\", and list_tables to see whether "
+        "it holds any CSV/XLSX tables.\n"
+        "3. Think of one question those sources should answer well, and answer it with "
+        "research_documents, citing the filename for every claim and saying what the sources "
+        "do not establish. If there is a table, also answer one count or ranking question with "
+        "the table tools.\n\n"
+        "Finish with three questions I could ask you about these sources next."
+    )
+
+
 class ToggleableMCPApp:
     """Return HTTP 503 when MCP is disabled instead of exposing tools."""
 
@@ -4235,7 +4296,10 @@ class ToggleableMCPApp:
 
             user_token = set_request_user(state.get("auth_identity"))
         try:
-            await self.app(scope, receive, send)
+            if scope["type"] == "http" and scope.get("method") == "POST":
+                await self._call_recording_activity(scope, receive, send, state)
+            else:
+                await self.app(scope, receive, send)
         finally:
             if user_token is not None:
                 from middleware.user_context import reset_request_user
@@ -4247,6 +4311,63 @@ class ToggleableMCPApp:
             _request_mcp_token_allowlist.reset(allowlist_token)
             _request_mcp_token_scope.reset(scope_token)
             _request_mcp_profile.reset(token)
+
+
+    async def _call_recording_activity(self, scope, receive, send, state):
+        """Run one POST, noting its calls in the Connect tab's activity view.
+
+        The body is read up front (up to mcp_activity.MAX_PEEK_BYTES) and replayed to
+        the MCP app unchanged; anything past the limit streams straight
+        through. The outcome is read off the response: an HTTP error, a
+        JSON-RPC error, or a tool result flagged ``isError``. The flags are
+        matched unescaped, so the same words inside a tool's text output
+        (where they are JSON-escaped) do not count.
+        """
+        from services import mcp_activity
+
+        buffered = []
+        body = b""
+        while True:
+            message = await receive()
+            buffered.append(message)
+            if message["type"] != "http.request":
+                break
+            body += message.get("body", b"")
+            if not message.get("more_body") or len(body) > mcp_activity.MAX_PEEK_BYTES:
+                break
+        complete = not buffered[-1].get("more_body") and len(body) <= mcp_activity.MAX_PEEK_BYTES
+
+        async def replay():
+            if buffered:
+                return buffered.pop(0)
+            return await receive()
+
+        outcome = {"status": 200, "error": False}
+        tail = b""
+
+        async def watch(message):
+            nonlocal tail
+            if message["type"] == "http.response.start":
+                outcome["status"] = message.get("status", 200)
+            elif message["type"] == "http.response.body" and not outcome["error"]:
+                chunk = tail + message.get("body", b"")
+                if b'"isError":true' in chunk or b'"error":{"code":' in chunk:
+                    outcome["error"] = True
+                tail = chunk[-32:]
+            await send(message)
+
+        try:
+            await self.app(scope, replay, watch)
+        finally:
+            if complete:
+                headers = dict(scope.get("headers") or [])
+                mcp_activity.record(
+                    mcp_activity.parse_calls(body),
+                    user_agent=headers.get(b"user-agent", b"").decode("latin-1"),
+                    identity=state.get("auth_identity") or None,
+                    token_id=state.get("mcp_token_id") or None,
+                    ok=outcome["status"] < 400 and not outcome["error"],
+                )
 
 
 def _with_legacy_sse(app):
