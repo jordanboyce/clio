@@ -41,3 +41,64 @@ export async function addSampleSources(collectionId) {
   })
   return data
 }
+
+// The collection the welcome screen creates for the sample set, so someone
+// trying Clio never has fictional records mixed into their own default.
+export const SAMPLE_COLLECTION_NAME = 'Sample: equipment policy'
+const SAMPLE_COLLECTION_DESCRIPTION =
+  'Four fictional records for trying Clio. Delete this collection when you are done with it.'
+
+// Hand-written questions for the sample set. Each one exercises something
+// the set was built to show (see docs/demo/agency-evaluation.json): a plain
+// cited answer, a scoped amendment, a conflict between sources, two facts
+// the sources do not establish, and a count answered from the register.
+// They need no model call, so they appear the moment the samples land and
+// work as Find searches when no model is connected.
+export const SAMPLE_QUESTIONS = [
+  'Under EQ-17, when must shared equipment be returned?',
+  'Do field teams get longer to return equipment after July 1, 2026?',
+  'The desk note says five days. Why does the amendment say ten?',
+  'Who approved the field-team amendment?',
+  'What is the fee for a late return?',
+  'How many checkouts in the register were returned late, and by which teams?',
+]
+
+const SAMPLE_NAMES = new Set(SAMPLE_FILES.map(f => f.name))
+
+/**
+ * True when the collection holds exactly the sample set and nothing else —
+ * the case where the hand-written questions fit. Once someone adds their
+ * own sources the model-written starters take over again.
+ */
+export async function isSampleSet(collectionId) {
+  const { data } = await http.get('/documents', {
+    params: { collection_id: collectionId, limit: SAMPLE_FILES.length + 1 },
+    quiet: true,
+  })
+  const names = (data?.documents || []).map(d => d.filename)
+  return names.length === SAMPLE_NAMES.size && names.every(n => SAMPLE_NAMES.has(n))
+}
+
+/**
+ * Create (or reuse) the sample collection and fill it. Reuses an owned
+ * collection with the sample name, so running the welcome screen twice does
+ * not leave two copies, and uploads only into an empty one.
+ * Resolves to the collection.
+ */
+export async function loadSampleCollection(collectionStore) {
+  await collectionStore.loadCollections()
+  let collection = collectionStore.ownedCollections.find(c => c.name === SAMPLE_COLLECTION_NAME)
+  if (!collection) {
+    collection = await collectionStore.createCollection({
+      name: SAMPLE_COLLECTION_NAME,
+      description: SAMPLE_COLLECTION_DESCRIPTION,
+      visibility: 'private',
+    })
+  }
+  const { data } = await http.get('/documents', {
+    params: { collection_id: collection.id, limit: 1 },
+    quiet: true,
+  })
+  if (!data?.total_documents) await addSampleSources(collection.id)
+  return collection
+}

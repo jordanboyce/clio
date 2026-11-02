@@ -30,6 +30,7 @@ be forgotten. That is the job here too. The record remembers.
 
 ## Table of Contents
 
+- [Try it in two minutes](#try-it-in-two-minutes)
 - [Quick start](#quick-start)
 - [Connect an AI client](#connect-an-ai-client)
 - [If others can reach it](#if-others-can-reach-it)
@@ -47,6 +48,40 @@ be forgotten. That is the job here too. The record remembers.
 
 ---
 
+## Try it in two minutes
+
+No documents, model or API key needed.
+
+```bash
+docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 \
+  -v clio-data:/app/data ghcr.io/jordanboyce/clio:slim
+```
+
+1. Open http://localhost:8473 and choose **Explore with sample documents**.
+   Four short fictional records land in a collection of their own, already
+   searchable: a policy, an amendment that changes it for one group, an older
+   desk note that disagrees with the amendment, and a checkout register.
+2. Pick one of the suggested questions. With no model connected, each one
+   runs as a **Find** search and shows the passages that answer it. Connect a
+   model (an API key, or Ollama on this machine) and the same questions get
+   written answers that cite their passages. Two of them ask about facts the
+   records leave out (who approved the amendment, the late fee), to show an
+   answer saying so rather than guessing.
+3. Hand the same records to your agent. Claude Code, for example:
+
+   ```bash
+   claude mcp add --transport http clio http://localhost:8473/mcp
+   ```
+
+   Then ask it: *"Using the clio tools, when must equipment be returned under
+   EQ-17, and is it different for field teams?"* No token is needed while
+   Clio is reachable from this machine only; read
+   [If others can reach it](#if-others-can-reach-it) before that changes.
+   Every other client is on the **Connect** tab.
+
+When you are done, delete the *Sample: equipment policy* collection and add
+your own sources.
+
 ## Quick start
 
 Pick one. Every route ends at http://localhost:8473, reachable from this
@@ -58,6 +93,11 @@ machine only, with nothing to configure and no sign-in.
 docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 \
   -v clio-data:/app/data ghcr.io/jordanboyce/clio:latest
 ```
+
+`:latest` is the full image (3.9 GB). `:slim` (1.6 GB) leaves out PyTorch,
+OCR for scanned PDFs and audio transcription, and keeps everything else:
+search, reranking, chat, research and every MCP tool. Both carry the version
+tags too (`:1.2.3`, `:1.2.3-slim`).
 
 **Docker, built from source**
 
