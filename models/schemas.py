@@ -80,6 +80,18 @@ class DocumentMetadata(BaseModel):
     superseded_note: Optional[str] = Field(None, description="Owner's note on why")
 
 
+class FigureRef(BaseModel):
+    """A picture extracted from the cited page (chart, diagram, photograph)."""
+
+    url: str = Field(..., description="URL of the figure image (GET /documents/{id}/figures/{n})")
+    figure_number: int = Field(..., description="The figure's number within its document (1-indexed)")
+    page_number: int = Field(..., description="Page, slide or section the figure belongs to")
+    caption: Optional[str] = Field(None, description="Caption or alt text found with the figure")
+    width: Optional[int] = Field(None, description="Pixel width of the stored image")
+    height: Optional[int] = Field(None, description="Pixel height of the stored image")
+    description: Optional[str] = Field(None, description="What the vision model saw, when figure description is on")
+
+
 class SearchResult(BaseModel):
     """A single search result."""
 
@@ -94,10 +106,13 @@ class SearchResult(BaseModel):
     preview_url: Optional[str] = Field(
         None, description="URL of a thumbnail of the cited page; None for formats with no page rendering"
     )
+    figures: Optional[List[FigureRef]] = Field(
+        None, description="Pictures extracted from the cited page, in reading order; None when there are none"
+    )
 
     # v3.0: Format-aware result metadata
     source_format: Optional[str] = Field(None, description="Source format: pdf, txt, docx, csv, md, json")
-    extraction_method: Optional[str] = Field(None, description="How text was extracted: text, ocr, hybrid")
+    extraction_method: Optional[str] = Field(None, description="How text was extracted: text, ocr, hybrid, figure")
 
     # v3.3: Sensitivity label in force for the source document
     sensitivity: Optional[str] = Field(None, description="public | internal | confidential | restricted")
@@ -379,6 +394,9 @@ class ChatSource(BaseModel):
     page_url: str = Field(..., description="URL to view the specific page")
     preview_url: Optional[str] = Field(
         None, description="URL of a thumbnail of the cited page; None for formats with no page rendering"
+    )
+    figures: Optional[List[FigureRef]] = Field(
+        None, description="Pictures extracted from the cited page, in reading order; None when there are none"
     )
     source_format: Optional[str] = Field(None, description="Source format: pdf, png, docx, …")
     sensitivity: Optional[str] = Field(None, description="Sensitivity label in force for the source")

@@ -16,6 +16,7 @@
           <table class="table table-sm"><thead><tr><th v-for="col in result.csv_columns" :key="col">{{ col }}</th></tr></thead><tbody><tr><td v-for="col in result.csv_columns" :key="col"><span v-html="highlightSnippet(result.csv_values[col] ?? '', query)"></span></td></tr></tbody></table>
         </div>
         <p v-else class="mt-3 text-sm leading-7 whitespace-pre-wrap break-words max-w-prose" :class="{ 'quoted-passage': result.instruction_text }" :data-quoted="result.instruction_text ? 'true' : null" v-html="highlightSnippet(result.text_snippet || 'No passage preview available.', query)"></p>
+        <FigureStrip :source="result" />
         <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3">
           <a v-if="href" :href="href" target="_blank" rel="noopener noreferrer" class="link link-primary inline-flex items-center gap-1.5 min-h-11 text-sm font-medium" :aria-label="`Open ${result.filename} in a new tab`">{{ result.source_format === 'pdf' && result.page_number ? `Open page ${result.page_number}` : 'Open source' }}<ExternalLink :size="14" /></a>
           <details class="text-sm text-base-content/75">
@@ -42,6 +43,7 @@ import { highlightSnippet } from '../utils/searchPresentation'
 import SupersedeNote from './SupersedeNote.vue'
 import InstructionTextNote from './InstructionTextNote.vue'
 import PagePreview from './PagePreview.vue'
+import FigureStrip from './FigureStrip.vue'
 const props = defineProps({ result: { type: Object, required: true }, index: { type: Number, required: true }, query: { type: String, default: '' } })
 const href = computed(() => sourceHref(props.result))
 // Text pasted into the collection is stored as "<title>.html"; show the title.

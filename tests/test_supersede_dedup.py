@@ -123,7 +123,7 @@ def test_migration_from_3_7_adds_columns_and_keeps_rows(tmp_path):
             conn.execute(f"ALTER TABLE documents DROP COLUMN {col}")
         conn.execute("UPDATE schema_info SET value = '3.7' WHERE key = 'version'")
     store = MetadataStore(path)
-    assert store.get_schema_version() == SCHEMA_VERSION == "3.8"
+    assert store.get_schema_version() == SCHEMA_VERSION == "3.9"
     assert store.get_document_info("old")["superseded_by"] is None
     store.add_document("new", "new.pdf", 1, 1, "2026-01-01T00:00:00")
     store.set_document_superseded("old", "new", "rewritten")

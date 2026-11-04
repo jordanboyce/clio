@@ -41,7 +41,7 @@ from services.form_field_extractor import (
     estimate_form_likelihood,
     is_form_like_text,
 )
-from services import audit, git_source, governance, page_preview, pasted_text, source_changes, source_watcher, storage_quota
+from services import audit, figures, git_source, governance, page_preview, pasted_text, source_changes, source_watcher, storage_quota
 from services.content_policy import BlockedContentError, ContentRejectedError
 from services.storage_quota import StorageLimitExceeded
 from services.link_fetcher import LinkError, LinkRefused, link_indexing_available, validate_link
@@ -1763,6 +1763,63 @@ async def get_page_preview(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to render the page preview",
+        )
+
+
+@router.get(
+    "/documents/{document_id}/figures/{figure_number}",
+    summary="A figure extracted from the document",
+    tags=["documents"],
+    responses={
+        200: {"content": {"image/png": {}, "image/jpeg": {}, "image/gif": {}, "image/webp": {}},
+              "description": "The figure as it was embedded in the document"},
+        304: {"description": "Unchanged since the ETag the client holds"},
+        404: {"description": "No such document or figure"},
+    },
+)
+async def get_document_figure(
+    document_id: str,
+    figure_number: int,
+    request: Request,
+    collection_id: str = "default",
+):
+    """One picture pulled out of a document at index time.
+
+    Results and chat sources list the figures on the page they cite under
+    `figures`, each with this URL. Access follows the file itself: a
+    quarantined document's figures are 404 to everyone but a reviewer.
+    """
+    if figure_number < 1:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Figure not found")
+    try:
+        try:
+            indexer = get_indexer(collection_id)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        store = indexer.vector_store.metadata_store
+        doc_info = store.get_document_info(document_id)
+        if not doc_info:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document {document_id} not found")
+        governance.assert_document_servable(doc_info)
+        row = store.get_figure(document_id, figure_number)
+        path = figures.resolve_figure_file(indexer.figures_dir, row) if row else None
+        if path is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document {document_id} has no figure {figure_number}",
+            )
+        etag = figures.etag_for(path)
+        cache_headers = {"ETag": etag, "Cache-Control": "private, max-age=86400"}
+        if etag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
+            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=cache_headers)
+        return FileResponse(path, media_type=figures.media_type(row), headers=cache_headers)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to serve figure {figure_number} of {document_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to serve the figure",
         )
 
 

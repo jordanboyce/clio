@@ -13,7 +13,7 @@ from middleware.user_context import get_request_user
 from services.usage_service import check_daily_budget, record_chat_usage
 
 from services.ai_service import AIService, AnthropicProvider, DEFAULT_OLLAMA_MODEL, create_provider
-from services import authored_text, page_preview
+from services import authored_text, figures, page_preview
 from services.agent_tools import anthropic_tools, openai_tools
 from services.collection_overview import build_collection_overview as _build_collection_overview
 from services.collection_service import collection_service
@@ -369,7 +369,11 @@ def _cache_store(cache_ctx, answer_text: str, filtered_results, provider: str,
 
 
 def _cached_sources(entry, base_url: str) -> list[dict]:
-    """Rebuild source payloads with URLs for the current host."""
+    """Rebuild source payloads with URLs for the current host. Figures are
+    looked up afresh: a re-indexed document may have gained or lost some."""
+    page_figures = figures.refs_for_sources(
+        base_url, ((s["collection_id"], s["document_id"], s["page_number"]) for s in entry["sources"])
+    )
     return [
         {
             "filename": s["filename"],
@@ -382,6 +386,7 @@ def _cached_sources(entry, base_url: str) -> list[dict]:
             "preview_url": page_preview.preview_url(
                 base_url, s["document_id"], s["collection_id"], s["page_number"], s.get("source_format")
             ),
+            "figures": page_figures.get((s["collection_id"], s["document_id"], s["page_number"])),
             "source_format": s.get("source_format"),
             "sensitivity": s.get("sensitivity"),
         }
@@ -526,10 +531,15 @@ def _instruction_text(r) -> dict | None:
     return mark
 
 
-def _context_entry(i: int, r) -> str:
+def _context_entry(i: int, r, page_figures: list | None = None) -> str:
     """One RETRIEVED CONTEXT block. Instruction-like passages are labelled and
-    fenced so the model reads them as quoted data (see authored_text)."""
+    fenced so the model reads them as quoted data (see authored_text). The
+    page's figures are named so the answer can point at "figure 2 on page 12",
+    which the reader sees under that source."""
     header = f"[Source {i + 1}: {r.filename}, page {r.page_number}{_supersede_note(r)}"
+    note = figures.context_note(page_figures)
+    if note:
+        header += f" — {note}"
     mark = _instruction_text(r)
     if not mark:
         return f"{header}]\n{r.text_snippet}"
@@ -542,6 +552,9 @@ def _context_entry(i: int, r) -> str:
 
 def _source_dicts(results, base_url: str) -> list[dict]:
     label_cache: dict = {}
+    page_figures = figures.refs_for_sources(
+        base_url, ((cid, r.document_id, r.page_number) for r, cid in results)
+    )
     return [
         {
             "filename": r.filename,
@@ -554,6 +567,7 @@ def _source_dicts(results, base_url: str) -> list[dict]:
             "preview_url": page_preview.preview_url(
                 base_url, r.document_id, cid, r.page_number, getattr(r, "source_format", None)
             ),
+            "figures": page_figures.get((cid, r.document_id, r.page_number)),
             "source_format": getattr(r, "source_format", None),
             "sensitivity": _source_sensitivity(cid, r, label_cache),
             **_supersede_fields(r),
@@ -708,8 +722,12 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
 
         filtered = [(r, cid) for r, cid in zip(context_results, result_collection_ids)
                     if r.filename not in structured_ctx["inlined_filenames"]]
+        page_figures = figures.refs_for_sources(
+            base_url, ((cid, r.document_id, r.page_number) for r, cid in filtered)
+        )
         context_text = "\n\n---\n\n".join(
-            _context_entry(i, r) for i, (r, _) in enumerate(filtered)
+            _context_entry(i, r, page_figures.get((cid, r.document_id, r.page_number)))
+            for i, (r, cid) in enumerate(filtered)
         ) or _NO_CONTEXT
         # Evidence keeps citation numbering stable as tool calls discover more
         # passages; its `results` list is the source list for the whole turn.

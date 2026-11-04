@@ -429,7 +429,8 @@ of them. The ones that matter most:
 | `ENABLE_RERANKER`, `RERANKER_MODEL`, `RERANK_MAX_CONCURRENT` | The local cross-encoder that reorders the best candidates of every search; automatic by default |
 | `WORKER_THREADS`, `RATE_LIMIT_*`, `RESEARCH_MAX_CONCURRENT` | How much concurrent work one host takes before callers queue ([Capacity](docs/DEPLOYMENT.md#capacity--scaling)) |
 | `RESEARCH_LOOKUP_ENABLED`, `RESEARCH_CONTACT_EMAIL` | Whether the Research workspace may look up printed DOIs, arXiv ids and ISBNs in OpenAlex, Crossref, arXiv and Open Library ([Research](docs/RESEARCH.md#settings)) |
-| `COLLECTION_STORAGE_LIMIT_BYTES` | Most a single collection may hold (5 GiB default) |
+| `COLLECTION_STORAGE_LIMIT_BYTES` | Most a single collection may hold (5 GiB default); extracted figures count toward it |
+| `EXTRACT_FIGURES`, `VISION_OCR_PROVIDER` | Whether pictures embedded in documents are pulled out and shown with results (on by default), and whether a vision model describes them so charts are findable by content (off unless a provider is set) |
 | `OFFLINE_MODE`, `CLIO_PROFILE` | No cloud providers, no downloads, no web fetching; refuse to start when unsafely exposed |
 | `IDENTITY_PROVIDER`, `PRIVATE_COLLECTIONS` | Your own sign-in, and per-person collections enforced against it |
 | `DATA_DIR` | Where documents, indexes and the app database live (`./data`) |
@@ -480,6 +481,15 @@ original file at that page; `retrieval` says how the query was searched
 files also carry a `preview_url`, a thumbnail of the cited page
 (`GET /documents/{id}/preview?page=N&width=320`); the app shows it beside
 the passage. Other formats have no faithful page to draw and leave it null.
+`figures` lists the pictures embedded in the cited page of a PDF, DOCX, PPTX
+or saved HTML document (charts, diagrams, photographs), each as
+`{url, figure_number, page_number, caption, width, height, description}`;
+`url` is `GET /documents/{id}/figures/{n}`, served with the same access
+rules as the file. The app shows them under the passage. Small images and
+repeats of the same picture (logos) are left out, and `figures` is null when
+the page has none. With a vision OCR provider configured, each figure is also
+described and the description indexed as a chunk with
+`extraction_method: "figure"`, so a chart is findable by what it shows.
 
 **Ask** — a grounded answer with its sources. `provider` names the model
 provider and `X-AI-Key` carries your key; leave the header out when a team key

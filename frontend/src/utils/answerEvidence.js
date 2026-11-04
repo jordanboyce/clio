@@ -24,6 +24,28 @@ export function previewHref(source) {
   } catch { return '' }
 }
 
+// A figure extracted from the cited page, on this deployment. Empty when the
+// URL is not the figures endpoint for this document.
+export function figureHref(source, figure) {
+  if (!figure?.url || !source?.document_id) return ''
+  try {
+    const url = new URL(figure.url, window.location.origin)
+    const prefix = `/documents/${encodeURIComponent(source.document_id)}/figures/`
+    const number = url.pathname.startsWith(prefix) ? url.pathname.slice(prefix.length) : ''
+    if (!/^\d+$/.test(number) || !['http:', 'https:'].includes(url.protocol)) return ''
+    return `${url.pathname}${url.search}`
+  } catch { return '' }
+}
+
+// Alt text for a figure: its caption when the document gave one, else where
+// it sits, so a reader who cannot see it still knows what the link opens.
+export function figureAlt(source, figure) {
+  if (figure?.caption) return figure.caption
+  const page = figure?.page_number || source?.page_number
+  const where = page ? ` on page ${page}` : ''
+  return `Figure ${figure?.figure_number || ''}${where} of ${source?.filename || 'the source'}`.replace('Figure  ', 'Figure ')
+}
+
 // Alt text for a page thumbnail: what the picture is of, for a reader who
 // cannot see it. The passage itself is read out next to it.
 export function previewAlt(source) {

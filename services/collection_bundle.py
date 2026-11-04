@@ -6,6 +6,7 @@ A bundle is a zip:
     indexes/metadata.db     chunk text, pages, document records, CSV tables
     indexes/faiss.index     the vectors (omitted when they cannot be vouched for)
     sources/<doc id>/<name> the original files (optional)
+    figures/<doc id>/<n>.<ext> pictures extracted from the documents
     artifacts/<id>/<name>   files of saved artifacts, such as audio
 
 The chunk text is the valuable part. Extraction - vision OCR above all - is
@@ -40,20 +41,24 @@ import faiss
 import numpy as np
 
 from config import settings
-from services import artifact_store, authored_text
+from services import artifact_store, authored_text, figures
 from services.research.store import prune_orphan_jobs, prune_orphan_rows
 
 logger = logging.getLogger(__name__)
 
 BUNDLE_FORMAT = "clio-collection"
-BUNDLE_VERSION = 2
-# What a bundle without artifact files says: every release can read those.
+BUNDLE_VERSION = 3
+# A bundle says the lowest version that can read it: 1 without artifact or
+# figure files (every release reads those), 2 with artifact files, 3 with
+# figure files.
 _BASE_BUNDLE_VERSION = 1
+_ARTIFACT_BUNDLE_VERSION = 2
 
 _MANIFEST = "manifest.json"
 _METADATA = "indexes/metadata.db"
 _VECTORS = "indexes/faiss.index"
 _SOURCES = "sources/"
+_FIGURES = "figures/"
 _ARTIFACT_FILES = "artifacts/"
 
 
@@ -106,6 +111,9 @@ def _sweep_derived(conn: sqlite3.Connection, stripped: bool) -> None:
     for table in ("chunk_entities", "chunk_boosts"):
         if table in have:
             conn.execute(f"DELETE FROM {table} WHERE chunk_id NOT IN (SELECT chunk_id FROM chunks)")
+    if "document_figures" in have:
+        conn.execute("DELETE FROM document_figures "
+                     "WHERE document_id NOT IN (SELECT document_id FROM documents)")
     if "superseded_by" in {r[1] for r in conn.execute("PRAGMA table_info(documents)")}:
         # As on deletion: what this document replaced is current again.
         conn.execute("UPDATE documents SET superseded_by = NULL, superseded_at = NULL, "
@@ -153,6 +161,10 @@ def _strip_documents(db_path: Path, document_ids: Iterable[str]) -> List[int]:
             conn.execute(f"DELETE FROM chunks WHERE document_id IN ({marks})", ids)
             conn.execute(f"DELETE FROM documents WHERE document_id IN ({marks})", ids)
             try:
+                conn.execute(f"DELETE FROM document_figures WHERE document_id IN ({marks})", ids)
+            except sqlite3.OperationalError:
+                pass  # pre-3.9 database without figures
+            try:
                 tables = [r[0] for r in conn.execute(
                     f"SELECT table_name FROM csv_schemas WHERE document_id IN ({marks})", ids)]
                 for table in tables:
@@ -175,6 +187,20 @@ def _documents(db_path: Path) -> List[Dict[str, Any]]:
     conn.row_factory = sqlite3.Row
     try:
         return [dict(r) for r in conn.execute("SELECT * FROM documents ORDER BY filename")]
+    finally:
+        conn.close()
+
+
+def _figure_rows(db_path: Path) -> List[Dict[str, Any]]:
+    """The document_figures rows, or [] for a database from before them."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT document_id, figure_number, path, byte_size FROM document_figures "
+            "ORDER BY document_id, figure_number")]
+    except sqlite3.OperationalError:
+        return []
     finally:
         conn.close()
 
@@ -328,9 +354,23 @@ def export_collection(collection_id: str, include_sources: bool = False,
         files_store = artifact_store.ArtifactStore(db_copy, collection_service.get_artifacts_path(collection_id))
         artifact_files = {row["id"]: path for row in artifacts if (path := files_store.file_path(row))}
 
+        # Figures of the documents still in the copy (the strip above took
+        # the quarantined ones' rows with them).
+        figures_root = collection_service.get_figures_path(collection_id)
+        figure_files = [
+            (row, path) for row in _figure_rows(db_copy)
+            if (path := figures.resolve_figure_file(figures_root, row)) is not None
+        ]
+
+        if figure_files:
+            version = BUNDLE_VERSION
+        elif artifact_files:
+            version = _ARTIFACT_BUNDLE_VERSION
+        else:
+            version = _BASE_BUNDLE_VERSION
         manifest = {
             "format": BUNDLE_FORMAT,
-            "version": BUNDLE_VERSION if artifact_files else _BASE_BUNDLE_VERSION,
+            "version": version,
             "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "exported_by": exported_by,
             "collection": {
@@ -354,6 +394,7 @@ def export_collection(collection_id: str, include_sources: bool = False,
                 "sources_included": len(sources),
                 "quarantined_excluded": len(hidden),
                 "artifacts": len(artifacts),
+                "figures": len(figure_files),
             },
             "documents": [
                 {
@@ -381,6 +422,9 @@ def export_collection(collection_id: str, include_sources: bool = False,
                          compress_type=zipfile.ZIP_STORED)
             for artifact_id, path in artifact_files.items():
                 zf.write(path, f"{_ARTIFACT_FILES}{artifact_id}/{path.name}",
+                         compress_type=zipfile.ZIP_STORED)
+            for row, path in figure_files:
+                zf.write(path, f"{_FIGURES}{row['document_id']}/{path.name}",
                          compress_type=zipfile.ZIP_STORED)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -423,9 +467,29 @@ def _check_member(name: str) -> None:
         raise BundleError(f"The bundle contains an unsafe path: {name}")
     if name in (_MANIFEST, _METADATA, _VECTORS) or name.endswith("/"):
         return
-    if name.startswith((_SOURCES, _ARTIFACT_FILES)) and len(path.parts) == 3:
+    if name.startswith((_SOURCES, _FIGURES, _ARTIFACT_FILES)) and len(path.parts) == 3:
         return
     raise BundleError(f"The bundle contains an unexpected file: {name}")
+
+
+def _restore_figure_files(zf: zipfile.ZipFile, rows: List[dict], kept: Dict[str, Any], figures_root: Path) -> int:
+    """Unpack the figures recorded for kept documents, each under its document's
+    folder; a member the database does not name is left in the zip."""
+    wanted = {(row["document_id"], PurePosixPath(str(row["path"])).name)
+              for row in rows if row["document_id"] in kept}
+    restored = 0
+    for info in zf.infolist():
+        if not info.filename.startswith(_FIGURES) or info.filename.endswith("/"):
+            continue
+        _, document_id, filename = PurePosixPath(info.filename).parts
+        if (document_id, filename) not in wanted:
+            continue
+        target = figures_root / document_id / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info) as src, open(target, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        restored += 1
+    return restored
 
 
 def _restore_artifact_files(zf: zipfile.ZipFile, artifacts: List[dict], db_path: Path, files_dir: Path) -> None:
@@ -504,10 +568,14 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
         finally:
             conn.close()
 
-        # Storage counts documents' recorded sizes, as it does for uploads;
-        # a new collection starts empty, so the whole bundle must fit.
+        # Storage counts documents' recorded sizes, as it does for uploads,
+        # plus their figures; a new collection starts empty, so the whole
+        # bundle must fit.
+        figure_rows = _figure_rows(db_tmp)
         limit = storage_quota.limit_bytes()
-        incoming = sum(int(d.get("file_size") or 0) for d in kept.values())
+        incoming = sum(int(d.get("file_size") or 0) for d in kept.values()) + sum(
+            int(row.get("byte_size") or 0) for row in figure_rows if row["document_id"] in kept
+        )
         if limit and incoming > limit:
             raise storage_quota.StorageLimitExceeded("new", incoming, 0, limit,
                                                      meta.get("name") or "this bundle")
@@ -563,6 +631,7 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
                 extracted.add(document_id)
             _restore_artifact_files(zf, artifacts, indexes_dir / "metadata.db",
                                     collection_service.get_artifacts_path(cid))
+            _restore_figure_files(zf, figure_rows, kept, collection_service.get_figures_path(cid))
     except Exception:
         if cid:
             indexer_manager.close_indexer(cid)
@@ -689,6 +758,8 @@ def export_preview(collection_id: str) -> Dict[str, Any]:
         # Reusable on import only when the vectors can be vouched for.
         "vectors_included": bool(model["recorded"]) and (indexes_dir / "faiss.index").exists(),
         "sources_bytes": sum(int(d.get("file_size") or 0) for d in visible),
+        "figures_bytes": sum(int(r.get("byte_size") or 0) for r in _figure_rows(db)
+                             if r["document_id"] in {d["document_id"] for d in visible}),
     }
 
 

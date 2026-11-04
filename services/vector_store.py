@@ -599,6 +599,14 @@ class VectorStore:
         # Clear all metadata from database
         self.metadata_store.clear_all()
 
+        # Stored figures belong to the documents just cleared
+        try:
+            from services import figures
+
+            figures.clear_figures(figures.figures_root(self.metadata_store))
+        except Exception as e:
+            logger.warning(f"Failed to clear stored figures: {e}")
+
         # Clear structured tables
         try:
             self.structured_store.clear_all()

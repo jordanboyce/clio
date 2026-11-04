@@ -578,6 +578,15 @@ class Settings(BaseSettings):
     vision_ocr_model: str = ""  # Leave empty with "auto"/"ollama" to auto-detect the Ollama model
     vision_ocr_api_key: str = ""  # Stored locally so background indexing can use it
 
+    # Figures: pictures embedded in PDFs, DOCX, PPTX and saved HTML are pulled
+    # out at index time and shown under the results that cite their page
+    # (services/figure_extractor.py). They count toward the collection's
+    # storage cap. EXTRACT_FIGURES=false indexes text only. When a vision OCR
+    # provider is configured, each figure is also described by it and the
+    # description indexed, so charts are findable by what they show; that
+    # multiplies vision calls, so it is off whenever VISION_OCR_PROVIDER is.
+    extract_figures: bool = True
+
     # Local Ollama context window (num_ctx). Ollama defaults to a small context
     # (~2048 tokens) and SILENTLY truncates anything longer — which drops most of
     # the retrieved documents in a RAG prompt. We set num_ctx explicitly on every

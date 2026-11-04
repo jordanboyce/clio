@@ -7,7 +7,7 @@ import asyncio
 from services.embedder import EmbeddingUnavailable
 from fastapi import Header, HTTPException, status, Request
 
-from services import page_preview, table_row_search
+from services import figures, page_preview, table_row_search
 from services.ai_service import AIService, create_provider, DEFAULT_OLLAMA_MODEL
 from services.collection_overview import build_collection_overview as _build_collection_overview
 from services.structured_chat import (
@@ -186,6 +186,8 @@ async def search_documents(
             result.sensitivity = effective_sensitivity(collection, result.sensitivity)
             # Wording that addresses an AI is shown as quoted data, not hidden.
             result.instruction_text = mark_passage(result.text_snippet)
+        # The pictures on each cited page, shown under the passage.
+        figures.attach_to_results(indexer.vector_store.metadata_store, base_url, collection_id, results)
 
         execution_time_ms = int((time.time() - start_time) * 1000)
 

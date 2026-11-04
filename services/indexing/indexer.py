@@ -1,6 +1,6 @@
 """Document indexing orchestration service."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional, Callable
 import hashlib
@@ -20,7 +20,7 @@ from services.document_extractor import DocumentExtractor, ExtractionResult
 from services.chunker import TextChunker
 from services.embedder import EmbeddingService
 from services.vector_store import VectorStore
-from services import audit, content_policy
+from services import audit, content_policy, figure_extractor, figures
 from services.prompt_injection_detector import mark_passage as _mark_passage
 from services.content_policy import BlockedContentError, ContentRejectedError
 from services.governance import content_hash_of
@@ -57,6 +57,8 @@ class PreparedDocument:
     policy_flags: Optional[dict] = None
     # v3.4: bytes of the source file, for the per-collection storage cap.
     file_size: Optional[int] = None
+    # v3.9: pictures pulled out of the file, written beside it on persist.
+    figures: List[figure_extractor.ExtractedFigure] = field(default_factory=list)
 
 
 class ChunkBatcher:
@@ -103,6 +105,7 @@ class DocumentIndexer:
         embedding_service: EmbeddingService,
         document_extractor: DocumentExtractor,
         text_chunker: TextChunker,
+        figures_dir: Optional[Path] = None,
     ):
         """
         Initialize the document indexer.
@@ -112,11 +115,14 @@ class DocumentIndexer:
             embedding_service: Embedding service instance
             document_extractor: Document extractor instance (supports PDF, TXT, DOCX, CSV)
             text_chunker: Text chunker instance
+            figures_dir: Where extracted figures are stored; defaults to the
+                collection's ``figures/`` folder beside its indexes
         """
         self.vector_store = vector_store
         self.embedding_service = embedding_service
         self.document_extractor = document_extractor
         self.text_chunker = text_chunker
+        self.figures_dir = figures_dir or figures.figures_root(vector_store.metadata_store)
 
     def index_document(
         self,
@@ -153,6 +159,30 @@ class DocumentIndexer:
             return document_path.stat().st_size
         except OSError:
             return None
+
+    def _extract_figures(self, document_path: Path, source_format: str,
+                         page_texts: dict, filename: str) -> List[figure_extractor.ExtractedFigure]:
+        """The pictures embedded in the file, described when vision OCR is on.
+
+        Never fails the document: a file whose pictures cannot be read still
+        indexes its text.
+        """
+        if not settings.extract_figures or not figure_extractor.supports_figures(source_format):
+            return []
+        found = figure_extractor.extract_figures(document_path, source_format, page_texts)
+        if not found:
+            return []
+        engine = None
+        get_engine = getattr(self.document_extractor, "_get_vision_ocr_engine", None)
+        if callable(get_engine):
+            try:
+                engine = get_engine()
+            except Exception as e:
+                logger.warning(f"Vision engine unavailable for figure descriptions: {e}")
+        if engine is not None and hasattr(engine, "describe_image_bytes"):
+            described = figures.describe_figures(found, engine, filename)
+            logger.info(f"Described {described}/{len(found)} figure(s) in {filename}")
+        return found
 
     def _admit(self, document_path: Path, filename: str, collection_id: str | None,
                uploaded_by: str | None) -> tuple[str, str]:
@@ -310,12 +340,17 @@ class DocumentIndexer:
             extraction_method=extraction_method,
         )
 
-        num_chunks = len(chunks)
-        report("chunking", 100, f"Created {num_chunks} chunks", 0, num_chunks)
-
-        if num_chunks == 0:
+        if len(chunks) == 0:
             logger.warning(f"No chunks created from {filename}")
             raise ValueError(f"Could not create any chunks from {filename}")
+
+        # Figures: the pictures on each page, and (with vision OCR) a chunk
+        # describing each so a chart is findable by what it shows.
+        doc_figures = self._extract_figures(document_path, source_format, page_texts, filename)
+        chunks.extend(figures.description_chunks(document_id, filename, source_format, doc_figures))
+
+        num_chunks = len(chunks)
+        report("chunking", 100, f"Created {num_chunks} chunks", 0, num_chunks)
 
         # Phase 3: Generate embeddings (with progress for large files)
         report("embedding", 0, f"Generating embeddings for {num_chunks} chunks", 0, num_chunks)
@@ -360,6 +395,7 @@ class DocumentIndexer:
             policy_flags=policy_flags,
             file_size=self._file_size(document_path),
         )
+        figures.store_figures(self.vector_store.metadata_store, self.figures_dir, document_id, doc_figures)
         report("saving", 100, f"Saved {num_chunks} chunks")
 
         # Create metadata with v3.0 fields
@@ -466,6 +502,9 @@ class DocumentIndexer:
             logger.warning(f"No chunks created from {filename}")
             raise ValueError(f"Could not create any chunks from {filename}")
 
+        doc_figures = self._extract_figures(document_path, source_format, page_texts, filename)
+        chunks.extend(figures.description_chunks(document_id, filename, source_format, doc_figures))
+
         policy_status, policy_flags, suggested = self._apply_policy(
             extraction_result.policy_warnings, page_texts,
             filename=filename, document_id=document_id,
@@ -486,6 +525,7 @@ class DocumentIndexer:
             policy_status=policy_status,
             policy_flags=policy_flags,
             file_size=self._file_size(document_path),
+            figures=doc_figures,
         )
 
     def index_prepared_documents(
@@ -556,6 +596,8 @@ class DocumentIndexer:
             }
             for p in prepared
         ])
+        for p in prepared:
+            figures.store_figures(self.vector_store.metadata_store, self.figures_dir, p.document_id, p.figures)
 
         return [
             DocumentMetadata(
@@ -1295,6 +1337,7 @@ class DocumentIndexer:
         """
         logger.info(f"Deleting document: {document_id}")
         num_deleted = self.vector_store.delete_document(document_id)
+        figures.delete_figures(self.vector_store.metadata_store, self.figures_dir, document_id)
         logger.info(f"Deleted {num_deleted} chunks")
         return num_deleted
 

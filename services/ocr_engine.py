@@ -366,6 +366,17 @@ class VisionOCREngine(OCREngine):
         "Output only the description and transcription, no commentary."
     )
 
+    FIGURE_PROMPT = (
+        "This image is a figure embedded in a document (a chart, diagram, table, "
+        "photograph or screenshot). Write text that makes it findable by search.\n\n"
+        "1. Say what kind of figure it is and what it shows: subject, series, axes, "
+        "units, the key values, trends or relationships.\n"
+        "2. Transcribe the legible text exactly: title, labels, legend entries, "
+        "annotations, axis values.\n\n"
+        "Be factual and compact (a short paragraph, at most two). Do not speculate "
+        "beyond what is visible. Output only the description, no commentary."
+    )
+
     CLEANUP_PROMPT_TEMPLATE = (
         "You are an expert OCR post-processor. The text below was extracted by a vision model from a "
         "scanned document page and contains OCR noise mixed with real content.\n\n"
@@ -484,11 +495,26 @@ class VisionOCREngine(OCREngine):
         sharpness boost — that helps degraded scans but distorts photos),
         downscaled only to keep the payload reasonable.
         """
+        with open(image_path, "rb") as f:
+            data = f.read()
+        return self._describe(data, label=str(image_path), prompt=self.IMAGE_PROMPT, max_tokens=2048)
+
+    def describe_image_bytes(self, data: bytes, media_type: str = "image/png") -> str:
+        """Describe a figure pulled out of a document (services/figures.py).
+
+        Same preparation as describe_image; the prompt says the picture sits
+        inside a document, so the model reads a chart as a chart rather than
+        as a scanned page, and keeps the answer short enough to index as one
+        chunk.
+        """
+        return self._describe(data, label=f"figure ({media_type})", prompt=self.FIGURE_PROMPT, max_tokens=1024)
+
+    def _describe(self, data: bytes, *, label: str, prompt: str, max_tokens: int) -> str:
         import base64
         import io
         from PIL import Image
 
-        img = Image.open(image_path)
+        img = Image.open(io.BytesIO(data))
         img = img.convert("RGB")  # flattens alpha, takes frame 1 of animations
         max_dim = 2000
         if max(img.size) > max_dim:
@@ -498,14 +524,14 @@ class VisionOCREngine(OCREngine):
         image_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
         logger.info(
-            f"Vision image description: {image_path} "
+            f"Vision image description: {label} "
             f"({len(image_b64) // 1024}KB, model={self._model})"
         )
         result = self._provider.complete_with_image(
-            prompt=self.IMAGE_PROMPT,
+            prompt=prompt,
             image_base64=image_b64,
             media_type="image/png",
-            max_tokens=2048,
+            max_tokens=max_tokens,
             model=self._model,
         )
         return (result.get("text") or "").strip()

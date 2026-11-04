@@ -581,7 +581,8 @@ def test_export_carries_finished_artifacts_and_their_files(bundle_env):
     with zipfile.ZipFile(path) as zf:
         manifest = json.loads(zf.read("manifest.json"))
         names = zf.namelist()
-    assert manifest["version"] == cb.BUNDLE_VERSION
+    # Artifact files, no figure files: the version a reader of artifacts needs.
+    assert manifest["version"] == cb._ARTIFACT_BUNDLE_VERSION
     assert manifest["contents"]["artifacts"] == 2  # the unfinished one stays behind
     assert "artifacts/aaaaaaaaaaaa/overview.mp3" in names
 

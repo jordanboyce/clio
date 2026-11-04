@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Current schema version - increment when making breaking changes
-SCHEMA_VERSION = "3.8"
+SCHEMA_VERSION = "3.9"
 
 # v3.3 governance columns on the documents table, in migration order.
 _GOVERNANCE_DOC_COLUMNS = [
@@ -175,6 +175,12 @@ class MetadataStore:
                 )
             """)
 
+            # v3.9: pictures pulled out of documents at index time, one row per
+            # stored file (services/figures.py). Created here and in the
+            # migration so an old database gains it on open.
+            conn.execute(self._DOCUMENT_FIGURES_DDL)
+            conn.execute(self._DOCUMENT_FIGURES_INDEX_DDL)
+
             # Duplicate detection looks documents up by content_hash. Guarded
             # because a pre-v3.3 database gains the column (and this index) in
             # _migrate_to_v3_3, which runs after this method.
@@ -268,6 +274,11 @@ class MetadataStore:
             if current_version == "3.7":
                 self._migrate_to_v3_8(conn)
                 current_version = "3.8"
+
+            # Migration from 3.8 to 3.9 (figures extracted from documents)
+            if current_version == "3.8":
+                self._migrate_to_v3_9(conn)
+                current_version = "3.9"
 
             # Update schema version
             conn.execute("""
@@ -501,6 +512,114 @@ class MetadataStore:
             if column not in existing:
                 conn.execute(f"ALTER TABLE documents ADD COLUMN {column} {ddl}")
         logger.info("Added superseded_* columns to documents table")
+
+    _DOCUMENT_FIGURES_DDL = """
+        CREATE TABLE IF NOT EXISTS document_figures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id TEXT NOT NULL,
+            figure_number INTEGER NOT NULL,
+            page_number INTEGER NOT NULL,
+            position INTEGER NOT NULL DEFAULT 1,
+            path TEXT NOT NULL,
+            width INTEGER DEFAULT NULL,
+            height INTEGER DEFAULT NULL,
+            byte_size INTEGER NOT NULL DEFAULT 0,
+            content_hash TEXT DEFAULT NULL,
+            caption TEXT DEFAULT NULL,
+            description TEXT DEFAULT NULL,
+            UNIQUE (document_id, figure_number)
+        )
+    """
+    _DOCUMENT_FIGURES_INDEX_DDL = """
+        CREATE INDEX IF NOT EXISTS idx_document_figures_page
+        ON document_figures(document_id, page_number)
+    """
+
+    def _migrate_to_v3_9(self, conn: sqlite3.Connection):
+        """Migrate to v3.9: figures embedded in documents.
+
+        Pictures are pulled out of PDFs, DOCX, PPTX and saved HTML at index
+        time and stored beside the collection's documents; this table says
+        which page each belongs to, how big it is, and what its caption (and,
+        with vision OCR configured, its description) says. Documents indexed
+        before this gain their figures on re-index. Additive.
+        """
+        conn.execute(self._DOCUMENT_FIGURES_DDL)
+        conn.execute(self._DOCUMENT_FIGURES_INDEX_DDL)
+        logger.info("Created document_figures table")
+
+    # ── Figures ───────────────────────────────────────────────────────────
+
+    _FIGURE_COLUMNS = ("document_id", "figure_number", "page_number", "position", "path",
+                       "width", "height", "byte_size", "content_hash", "caption", "description")
+
+    def replace_figures(self, document_id: str, rows: List[dict]) -> None:
+        """Record a document's figures, replacing whatever was recorded before."""
+        with sqlite_connect(self.db_path) as conn:
+            conn.execute("DELETE FROM document_figures WHERE document_id = ?", (document_id,))
+            if rows:
+                marks = ",".join("?" for _ in self._FIGURE_COLUMNS)
+                conn.executemany(
+                    f"INSERT INTO document_figures ({', '.join(self._FIGURE_COLUMNS)}) VALUES ({marks})",
+                    [tuple(row.get(c) for c in self._FIGURE_COLUMNS) for row in rows],
+                )
+            conn.commit()
+
+    @staticmethod
+    def _figure_row(row: sqlite3.Row) -> dict:
+        return {k: row[k] for k in row.keys()}
+
+    def get_figures(self, document_id: str) -> List[dict]:
+        """A document's figures in document order (figure_number)."""
+        with sqlite_connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM document_figures WHERE document_id = ? ORDER BY figure_number",
+                (document_id,),
+            ).fetchall()
+        return [self._figure_row(r) for r in rows]
+
+    def get_figure(self, document_id: str, figure_number: int) -> Optional[dict]:
+        with sqlite_connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM document_figures WHERE document_id = ? AND figure_number = ?",
+                (document_id, int(figure_number)),
+            ).fetchone()
+        return self._figure_row(row) if row else None
+
+    def get_figures_for_pages(self, pages) -> List[dict]:
+        """Figures on the given (document_id, page_number) pairs, in page order."""
+        pairs = sorted({(str(d), int(p)) for d, p in pages})
+        if not pairs:
+            return []
+        out: List[dict] = []
+        with sqlite_connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            # Half the IN-clause batch: two parameters per pair.
+            step = max(1, self._IN_CLAUSE_BATCH // 2)
+            for start in range(0, len(pairs), step):
+                batch = pairs[start:start + step]
+                where = " OR ".join("(document_id = ? AND page_number = ?)" for _ in batch)
+                params = [v for pair in batch for v in pair]
+                out.extend(self._figure_row(r) for r in conn.execute(
+                    f"SELECT * FROM document_figures WHERE {where} "
+                    f"ORDER BY document_id, page_number, position, figure_number",
+                    params,
+                ))
+        return out
+
+    def delete_figures(self, document_id: str) -> int:
+        with sqlite_connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM document_figures WHERE document_id = ?", (document_id,))
+            conn.commit()
+            return cursor.rowcount
+
+    def get_figure_storage_bytes(self) -> int:
+        """Bytes of extracted figures this collection stores."""
+        with sqlite_connect(self.db_path) as conn:
+            row = conn.execute("SELECT COALESCE(SUM(byte_size), 0) FROM document_figures").fetchone()
+            return int(row[0] or 0)
 
     def _backfill_entities(self, max_per_chunk: int = 20) -> int:
         """Extract entities for every chunk that has none yet.
@@ -1231,6 +1350,9 @@ class MetadataStore:
                 DELETE FROM documents
                 WHERE document_id = ?
             """, (document_id,))
+            # Figure rows go with the document; the files are the indexer's
+            # to remove (services/figures.py), as the source file is.
+            conn.execute("DELETE FROM document_figures WHERE document_id = ?", (document_id,))
 
             # Anything that was marked as replaced by this document is current
             # again: a pointer at a document that no longer exists would
@@ -1326,14 +1448,16 @@ class MetadataStore:
                 "corpus_version": token, "newest_upload": newest}
 
     def get_storage_bytes(self) -> int:
-        """Bytes of source files this collection holds (SUM of file_size).
+        """Bytes this collection holds: source files (SUM of file_size) plus
+        the figures extracted from them (SUM of document_figures.byte_size).
 
         Rows indexed before v3.4 whose file has since vanished carry NULL and
         are not counted; everything else was backfilled from disk.
         """
         with sqlite_connect(self.db_path) as conn:
             row = conn.execute("SELECT COALESCE(SUM(file_size), 0) FROM documents").fetchone()
-            return int(row[0] or 0)
+            figures = conn.execute("SELECT COALESCE(SUM(byte_size), 0) FROM document_figures").fetchone()
+            return int(row[0] or 0) + int(figures[0] or 0)
 
     # The grouping key of a filename: its last suffix, or the whole name when
     # it has none (Makefile). Must agree with services.file_kinds.kind_key_for_filename.
@@ -2296,6 +2420,7 @@ class MetadataStore:
             mark_sources_withheld(conn, self._held_document_ids(conn))
             conn.execute("DELETE FROM chunks")
             conn.execute("DELETE FROM documents")
+            conn.execute("DELETE FROM document_figures")
             if conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_entities'"
             ).fetchone():
