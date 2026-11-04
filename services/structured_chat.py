@@ -692,7 +692,7 @@ def render_table_as_rows(
 # bloats every search/chat prompt with marginal tables AND (via
 # inlined_filenames → skip_filenames) suppresses the document's text chunks
 # from retrieval. They remain fully queryable through the SQL tool loop.
-_TABULAR_SOURCE_EXTS = {".csv", ".tsv", ".xlsx", ".xls"}
+_TABULAR_SOURCE_EXTS = {".csv", ".tsv", ".xlsx", ".xlsm", ".xls"}
 
 
 def _is_tabular_source(filename: str | None) -> bool:

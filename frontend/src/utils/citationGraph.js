@@ -28,6 +28,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   linkDistance: 60,
   // Local graph
   localDepth: 1,
+  // The side panel (map overview, or the selected node)
+  showPanel: true,
 })
 
 export const SLIDERS = {
@@ -201,4 +203,125 @@ export function yearRange(nodes) {
 export function shortLabel(node, max = 48) {
   const text = node.label || node.title || node.filename || ''
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
+// A cited work with no verified title is labelled with the reference as
+// printed; the view says so rather than presenting it as a title.
+export function isAsCited(node) {
+  return node?.type === 'external' && !node.title
+}
+
+// ── labels ──────────────────────────────────────────────────────────────
+
+/**
+ * Break ``text`` into at most ``maxLines`` lines no wider than ``maxWidth``
+ * (``measure(text)`` returns a width). Runs with no spaces — PDF text that
+ * lost them — are broken by character, so a label never runs past its box;
+ * the last kept line ends in an ellipsis when text was cut.
+ */
+export function wrapLabel(text, maxWidth, measure, maxLines = 2) {
+  const words = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean)
+  const lines = []
+  let line = ''
+  const breakWord = (word) => {
+    let chunk = ''
+    for (const ch of word) {
+      if (chunk && measure(chunk + ch) > maxWidth) { lines.push(chunk); chunk = ch } else chunk += ch
+    }
+    return chunk
+  }
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word
+    if (measure(candidate) <= maxWidth) { line = candidate; continue }
+    if (line) lines.push(line)
+    line = measure(word) <= maxWidth ? word : breakWord(word)
+    if (lines.length > maxLines) break
+  }
+  if (line) lines.push(line)
+  if (lines.length <= maxLines) return lines
+  const kept = lines.slice(0, maxLines)
+  let last = kept[maxLines - 1]
+  while (last.length > 1 && measure(`${last}…`) > maxWidth) last = last.slice(0, -1)
+  kept[maxLines - 1] = `${last.trimEnd()}…`
+  return kept
+}
+
+// Which labels speak first when they would collide: the node under the
+// pointer or selected, then its neighbours, then search matches, then the
+// best-connected nodes.
+export function labelRank(node, { anchorId = null, focusIds = null, matchIds = null, degree = {} } = {}) {
+  if (node.id === anchorId) return 0
+  if (focusIds?.has(node.id)) return 1 - Math.min(degree[node.id] || 0, 99) / 100
+  if (matchIds?.has(node.id)) return 2 - Math.min(degree[node.id] || 0, 99) / 100
+  return 3 - Math.min(degree[node.id] || 0, 99) / 100
+}
+
+const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+
+/**
+ * Lay out labels in screen space, most important first. ``items`` are
+ * ``{ id, x, y, w, h, force }`` with (x, y) the top-centre anchor and
+ * ``force`` for a label that must show even over another. A label whose
+ * node is outside ``bounds`` is dropped; the rest are nudged inside the
+ * bounds, and one that would overlap a label already placed is skipped.
+ */
+export function placeLabels(items, bounds, pad = 4) {
+  const placed = []
+  for (const it of items) {
+    if (it.x < bounds.left || it.x > bounds.right || it.y < bounds.top - it.h || it.y > bounds.bottom) continue
+    const left = Math.min(Math.max(it.x - it.w / 2, bounds.left + pad), bounds.right - pad - it.w)
+    const top = Math.min(Math.max(it.y, bounds.top + pad), bounds.bottom - pad - it.h)
+    const rect = { left, top, right: left + it.w, bottom: top + it.h }
+    if (!it.force && placed.some(p => overlaps(p.rect, rect))) continue
+    placed.push({ ...it, rect })
+  }
+  return placed
+}
+
+// ── reading the map ─────────────────────────────────────────────────────
+
+const byLabel = (a, b) => shortLabel(a.node, 200).localeCompare(shortLabel(b.node, 200))
+
+// What a node cites and what cites it, among the nodes drawn.
+export function connections(id, shown) {
+  const byId = Object.fromEntries((shown?.nodes || []).map(n => [n.id, n]))
+  const cites = []
+  const citedBy = []
+  for (const e of shown?.edges || []) {
+    if (e.source === id && byId[e.target]) cites.push({ node: byId[e.target], reason: e.reason || '' })
+    if (e.target === id && byId[e.source]) citedBy.push({ node: byId[e.source], reason: e.reason || '' })
+  }
+  return { cites: cites.sort(byLabel), citedBy: citedBy.sort(byLabel) }
+}
+
+/**
+ * What the drawn map says at a glance: the sources the others cite most,
+ * the works cited most that the collection lacks (what to read next), and
+ * how many sources connect to nothing.
+ */
+export function mapInsights(shown, limit = 5) {
+  const nodes = shown?.nodes || []
+  const edges = shown?.edges || []
+  const inDegree = {}
+  const linked = new Set()
+  for (const e of edges) {
+    inDegree[e.target] = (inDegree[e.target] || 0) + 1
+    linked.add(e.source)
+    linked.add(e.target)
+  }
+  const rank = (list) => list
+    .map(node => ({ node, count: inDegree[node.id] || 0 }))
+    .filter(r => r.count > 0)
+    .sort((a, b) => b.count - a.count || byLabel(a, b))
+    .slice(0, limit)
+  const papers = nodes.filter(n => n.type === 'paper')
+  return {
+    papers: papers.length,
+    links: edges.length,
+    hubs: rank(papers),
+    missing: rank(nodes.filter(n => n.type === 'external' && !n.in_collection)),
+    outside: rank(nodes.filter(n => n.type === 'external' && n.in_collection)),
+    missingTotal: nodes.filter(n => n.type === 'external' && !n.in_collection).length,
+    orphans: papers.filter(n => !linked.has(n.id)).length,
+  }
 }

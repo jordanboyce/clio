@@ -20,7 +20,7 @@ from typing import Dict, List, Optional
 
 from services.research.grounding import faithful, verify_statements
 from services.research.passages import (
-    GROUNDING_RULES, add_usage, chunk_passages, complete, parse_json_object, render,
+    GROUNDING_RULES, ModelReplyError, add_usage, chunk_passages, complete, parse_json_object, render,
     search_passage_ids, select,
 )
 
@@ -71,7 +71,12 @@ def assess(indexer, document_id: str, question: str, provider=None, model: Optio
     leading = list(passages)[:LEADING_PASSAGES]
     shown = select(passages, leading + hit_ids, BUDGET_CHARS)
     prompt = _PROMPT.format(rules=GROUNDING_RULES, question=question, passages=render(shown))
-    text, usage = complete(provider, model, prompt, max_tokens=1400)
+    try:
+        text, usage = complete(provider, model, prompt, max_tokens=1400)
+    except ModelReplyError as exc:
+        result["verdict"] = "not_established"
+        result["notes"].append(f"No verdict: {exc}")
+        return result
     result["usage"] = add_usage({}, usage)
     result["model"] = usage.get("model") or model or ""
     parsed = parse_json_object(text)

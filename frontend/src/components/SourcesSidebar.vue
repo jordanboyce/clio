@@ -2420,7 +2420,7 @@ const sizeLabel = (doc) => {
   const n = doc?.total_pages || 0
   if (!n || isTabularFile(doc.filename)) return ''
   const ext = (doc.filename || '').split('.').pop().toLowerCase()
-  const unit = ext === 'pdf' ? 'page' : ext === 'pptx' ? 'slide' : 'section'
+  const unit = ext === 'pdf' ? 'page' : (ext === 'pptx' || ext === 'odp') ? 'slide' : ext === 'epub' ? 'chapter' : ext === 'mbox' ? 'message' : 'section'
   return `${n.toLocaleString()} ${unit}${n === 1 ? '' : 's'}`
 }
 const isCodeDoc = (doc) => fileInfo(doc).family === 'code'

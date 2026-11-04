@@ -155,8 +155,25 @@
           :can-download="canWrite && capabilities.link_download"
           :refresh-key="refreshKey"
           :question="question"
+          :details-id="isWide ? openId : null"
           @open="openPaper"
-        />
+          @close-details="openId = null"
+        >
+          <!-- On wide screens the map shows the open source in its own side
+               panel, so the details never float over the page or the graph. -->
+          <template #details>
+            <ResearchPaperPanel
+              v-if="openId"
+              :document-id="openId"
+              :collection-id="collectionId"
+              :provider-id="providerId"
+              :question="question"
+              @close="openId = null"
+              @open="openPaper"
+              @changed="onChanged"
+            />
+          </template>
+        </ResearchMap>
 
         <ResearchReviews
           v-else
@@ -171,14 +188,12 @@
         />
       </div>
 
-      <!-- Source panel: beside the list on wide screens, a sheet on narrow
-           ones, and a drawer over the map so the map keeps its width. -->
+      <!-- Source panel: beside the list on wide screens, a full sheet on
+           narrow ones. Over the map on wide screens it lives in the map's
+           own side panel instead (above). -->
       <div
-        v-if="openId"
-        class="fixed inset-0 z-[65] bg-base-100"
-        :class="view === 'map'
-          ? 'lg:inset-auto lg:right-4 lg:top-16 lg:bottom-4 lg:w-[26rem] lg:border lg:border-base-300 lg:rounded-box lg:shadow-xl'
-          : 'lg:static lg:z-auto lg:w-[26rem] lg:shrink-0 lg:border lg:border-base-300 lg:rounded-box lg:max-h-[calc(100vh-10rem)] lg:sticky lg:top-2'"
+        v-if="openId && !(view === 'map' && isWide)"
+        class="fixed inset-0 z-[65] bg-base-100 lg:static lg:z-auto lg:w-[26rem] lg:shrink-0 lg:border lg:border-base-300 lg:rounded-box lg:max-h-[calc(100vh-10rem)] lg:sticky lg:top-2 overflow-hidden"
       >
         <ResearchPaperPanel
           :document-id="openId"
@@ -255,6 +270,12 @@ const selection = useSelectionStore()
 
 const collectionId = computed(() => collectionStore.currentCollectionId)
 const providerId = computed(() => providerStore.activeProviderId || null)
+
+// Tailwind's lg breakpoint: where panels sit beside content, not over it.
+const wideQuery = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(min-width: 1024px)') : null
+const isWide = ref(wideQuery ? wideQuery.matches : true)
+const onWide = (e) => { isWide.value = e.matches }
+wideQuery?.addEventListener?.('change', onWide)
 
 // Shared with the ribbon, which can open Research on a given view.
 const view = computed({ get: () => ui.researchView, set: (v) => { ui.researchView = v } })
@@ -333,7 +354,10 @@ watch(() => jobsStore.dataRefreshTick, () => {
   if (jobsStore.dataRefreshCollectionId === collectionId.value) loadPapers()
 })
 
-onBeforeUnmount(() => { clearTimeout(pollTimer); clearTimeout(verdictTimer); clearTimeout(previewTimer) })
+onBeforeUnmount(() => {
+  clearTimeout(pollTimer); clearTimeout(verdictTimer); clearTimeout(previewTimer)
+  wideQuery?.removeEventListener?.('change', onWide)
+})
 
 // The selection can hold spreadsheets or code too; here it counts only the
 // sources this view works on. With nothing selected, the scope is all of them.

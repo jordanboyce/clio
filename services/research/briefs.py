@@ -26,7 +26,7 @@ from typing import Dict, List, Optional
 
 from services.research.grounding import normalize, verify_statements
 from services.research.passages import (
-    GROUNDING_RULES, add_usage, chunk_passages, complete, parse_json_object, render,
+    GROUNDING_RULES, ModelReplyError, add_usage, chunk_passages, complete, parse_json_object, render,
     search_passage_ids, select,
 )
 
@@ -148,14 +148,24 @@ def prepare(indexer, document_id: str, provider, model: str, depth: str = "brief
     rejected = 0
     read_ids: set = set()
     failed_windows = 0
+    failure: Optional[str] = None
     for n, window in enumerate(windows, start=1):
         prompt = _prompt(window, question, scope.format(n=n, total=len(windows)))
-        text, call_usage = complete(provider, model, prompt, max_tokens=2200)
+        # One part the model could not answer must not sink the review of
+        # the others; the reason is kept so a review that fails entirely
+        # says why instead of saving an empty review.
+        try:
+            text, call_usage = complete(provider, model, prompt, max_tokens=2200)
+        except ModelReplyError as exc:
+            failed_windows += 1
+            failure = str(exc)
+            continue
         add_usage(usage, call_usage)
         read_ids.update(window)
         parsed = parse_json_object(text)
         if not parsed:
             failed_windows += 1
+            failure = failure or "The model's answer was not the JSON the review asks for."
             continue
         for key, _title in SECTIONS:
             if key == "relevance" and not question:
@@ -167,6 +177,8 @@ def prepare(indexer, document_id: str, provider, model: str, depth: str = "brief
             rejected += dropped
             _merge(sections, key, kept, order)
 
+    if failed_windows and failed_windows == len(windows):
+        raise ModelReplyError(failure or "The model gave no usable answer.")
     if failed_windows:
         notes.append(f"The model's answer for {failed_windows} part(s) could not be read; "
                      "those parts are not reviewed.")

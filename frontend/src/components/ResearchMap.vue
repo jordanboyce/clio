@@ -7,45 +7,74 @@
     <div
       v-else
       ref="frame"
-      class="research-graph relative rounded-box border border-base-300 bg-base-100 overflow-hidden h-[calc(100dvh-13rem)] min-h-[420px] select-none"
+      class="research-graph @container relative flex rounded-box border border-base-300 bg-base-100 overflow-hidden h-[calc(100dvh-13rem)] min-h-[420px] select-none"
     >
-      <div ref="host" class="absolute inset-0" data-testid="research-graph-canvas" />
+      <!-- Canvas area: every overlay is positioned inside it, never against the viewport -->
+      <div class="relative flex-1 min-w-0">
+        <div ref="host" class="absolute inset-0" data-testid="research-graph-canvas" />
 
-      <p v-if="graph && !shown.nodes.length" class="absolute inset-0 grid place-items-center text-sm text-base-content/55 pointer-events-none">
-        Nothing to show with these filters.
-      </p>
+        <p v-if="graph && !shown.nodes.length" class="absolute inset-0 grid place-items-center text-sm text-base-content/55 pointer-events-none">
+          Nothing to show with these filters.
+        </p>
 
-      <!-- Local graph: the selection's neighbourhood, like Obsidian's local graph -->
-      <div v-if="localOf" class="absolute top-3 left-3 z-10 flex items-center gap-2 rounded-full border border-base-300 bg-base-100/95 pl-3 pr-1 py-1 text-xs shadow-sm">
-        <Crosshair :size="13" class="text-primary shrink-0" aria-hidden="true" />
-        <span class="max-w-[14rem] truncate">Local graph · {{ shortLabel(nodeById[localOf] || {}, 40) }}</span>
-        <label class="flex items-center gap-1 text-base-content/60">
-          depth
-          <input v-model.number="settings.localDepth" type="range" class="range range-xs w-16" v-bind="SLIDERS.localDepth" aria-label="Local graph depth" />
-          <span class="tabular-nums w-2">{{ settings.localDepth }}</span>
-        </label>
-        <button class="btn btn-ghost btn-xs btn-circle" aria-label="Back to the whole graph" @click="localOf = null"><X :size="13" /></button>
-      </div>
+        <!-- Toolbar: search, settings, local graph -->
+        <div class="absolute top-3 left-3 right-3 z-20 flex flex-wrap items-start gap-2 pointer-events-none">
+          <label class="input input-sm flex items-center gap-1.5 w-60 max-w-full bg-base-100/95 shadow-sm pointer-events-auto">
+            <Search :size="13" class="text-base-content/50 shrink-0" aria-hidden="true" />
+            <input
+              v-model="settings.search"
+              type="search"
+              class="grow min-w-0"
+              placeholder="Find a title, author or year"
+              aria-label="Search the graph"
+              @keydown.enter.prevent="nextMatch($event.shiftKey ? -1 : 1)"
+              @keydown.esc="settings.search = ''"
+            />
+            <span v-if="settings.search.trim()" class="text-[11px] text-base-content/50 tabular-nums shrink-0" aria-live="polite">
+              {{ matchList.length ? `${matchCursor + 1}/${matchList.length}` : 'none' }}
+            </span>
+          </label>
+          <button
+            class="btn btn-sm btn-square border-base-300 bg-base-100/95 shadow-sm pointer-events-auto"
+            :class="settingsOpen ? 'btn-active' : ''"
+            aria-label="Graph settings"
+            title="Graph settings"
+            :aria-expanded="settingsOpen"
+            @click="settingsOpen = !settingsOpen"
+          ><Settings2 :size="15" /></button>
+          <div v-if="localOf" class="flex items-center gap-2 rounded-full border border-base-300 bg-base-100/95 pl-3 pr-1 py-1 text-xs shadow-sm pointer-events-auto max-w-full">
+            <Crosshair :size="13" class="text-primary shrink-0" aria-hidden="true" />
+            <span class="max-w-[12rem] truncate" :title="nodeTitle(nodeById[localOf])">Around {{ shortLabel(nodeById[localOf] || {}, 40) }}</span>
+            <label class="flex items-center gap-1 text-base-content/60">
+              depth
+              <input v-model.number="settings.localDepth" type="range" class="range range-xs w-14" v-bind="SLIDERS.localDepth" aria-label="Local graph depth" />
+              <span class="tabular-nums w-2">{{ settings.localDepth }}</span>
+            </label>
+            <button class="btn btn-ghost btn-xs btn-circle" aria-label="Back to the whole graph" @click="localOf = null"><X :size="13" /></button>
+          </div>
+          <span class="flex-1" />
+          <button
+            v-if="!panelVisible"
+            class="btn btn-sm border-base-300 bg-base-100/95 shadow-sm pointer-events-auto"
+            title="Show the map overview"
+            @click="settings.showPanel = true"
+          ><PanelRightOpen :size="15" aria-hidden="true" />Overview</button>
+        </div>
 
-      <!-- Settings drawer (Filters · Groups · Display · Forces) -->
-      <div class="absolute top-3 right-3 z-20 flex flex-col items-end gap-2">
-        <button
-          v-if="!settingsOpen"
-          class="btn btn-sm btn-square border-base-300 bg-base-100/95 shadow-sm"
-          aria-label="Graph settings"
-          title="Graph settings"
-          @click="settingsOpen = true"
-        ><Settings2 :size="16" /></button>
+        <!-- Settings drawer (Filters · Color · Display · Layout) -->
         <div
-          v-else
-          class="graph-settings w-64 max-h-[calc(100dvh-16rem)] overflow-y-auto rounded-box border border-base-300 bg-base-100/95 shadow-lg backdrop-blur text-xs"
+          v-if="settingsOpen"
+          class="graph-settings absolute top-14 left-3 z-20 w-64 max-w-[calc(100%-1.5rem)] max-h-[calc(100%-4.5rem)] overflow-y-auto rounded-box border border-base-300 bg-base-100/95 shadow-lg backdrop-blur text-xs"
           data-testid="graph-settings"
         >
-          <div class="flex items-center justify-end gap-1 px-2 pt-2">
-            <button class="btn btn-ghost btn-xs btn-square" title="Restore default settings" aria-label="Restore default settings" @click="restoreDefaults">
-              <RotateCcw :size="13" />
-            </button>
-            <button class="btn btn-ghost btn-xs btn-square" aria-label="Close settings" @click="settingsOpen = false"><X :size="14" /></button>
+          <div class="flex items-center justify-between gap-1 px-3 pt-2">
+            <span class="font-medium text-base-content/70">Graph settings</span>
+            <span class="flex gap-0.5">
+              <button class="btn btn-ghost btn-xs btn-square" title="Restore default settings" aria-label="Restore default settings" @click="restoreDefaults">
+                <RotateCcw :size="13" />
+              </button>
+              <button class="btn btn-ghost btn-xs btn-square" aria-label="Close settings" @click="settingsOpen = false"><X :size="14" /></button>
+            </span>
           </div>
 
           <section v-for="section in sections" :key="section.id" class="border-b border-base-300/60 last:border-b-0">
@@ -55,14 +84,9 @@
             </button>
             <div v-show="open[section.id]" class="space-y-2.5 px-3 pb-3">
               <template v-if="section.id === 'filters'">
-                <label class="input input-bordered input-xs flex items-center gap-1.5 w-full">
-                  <Search :size="12" class="text-base-content/50" aria-hidden="true" />
-                  <input v-model="settings.search" type="search" class="grow" placeholder="Search title, author, year" aria-label="Search the graph" @keydown.enter="centerOnMatch" />
-                </label>
-                <p v-if="settings.search.trim()" class="text-base-content/50 -mt-1">{{ matchIds.size }} match{{ matchIds.size === 1 ? '' : 'es' }} · Enter to jump</p>
                 <label class="setting-row" title="Works your sources cite that are not in this collection"><span>Cited works you don't have</span><input v-model="settings.showCited" type="checkbox" class="toggle toggle-xs" /></label>
                 <div v-if="settings.showCited" class="setting-slider">
-                  <span>Cited by at least <b class="tabular-nums">{{ settings.minCitations }}</b></span>
+                  <span>Cited by at least <b class="tabular-nums">{{ settings.minCitations }}</b> of your sources</span>
                   <input v-model.number="settings.minCitations" type="range" class="range range-xs" v-bind="SLIDERS.minCitations" aria-label="Cited by at least" />
                 </div>
                 <label class="setting-row" title="Sources that cite nothing here and are cited by nothing here"><span>Unconnected sources</span><input v-model="settings.showOrphans" type="checkbox" class="toggle toggle-xs" /></label>
@@ -72,26 +96,11 @@
                 <div class="join w-full">
                   <button v-for="opt in colorOptions" :key="opt.id" class="btn btn-xs join-item flex-1" :class="settings.colorBy === opt.id ? 'btn-active' : ''" @click="settings.colorBy = opt.id">{{ opt.label }}</button>
                 </div>
-                <template v-if="settings.colorBy === 'relevance'">
-                  <select v-model="relevanceQuestion" class="select select-bordered select-xs w-full" aria-label="Question the sources were screened against">
-                    <option v-if="!questions.length" value="">No screening yet — use Screen in the Library</option>
-                    <option v-for="q in questions" :key="q" :value="q">{{ q }}</option>
-                  </select>
-                  <ul class="space-y-1">
-                    <li v-for="item in RELEVANCE_LEGEND" :key="item.group" class="flex items-center gap-2 text-base-content/70">
-                      <span class="legend-dot" :class="`legend-${item.group}`" aria-hidden="true" />{{ item.label }}
-                    </li>
-                  </ul>
-                </template>
-                <ul v-else-if="settings.colorBy === 'type'" class="space-y-1">
-                  <li v-for="item in TYPE_LEGEND" :key="item.group" class="flex items-center gap-2 text-base-content/70">
-                    <span class="legend-dot" :class="`legend-${item.group}`" aria-hidden="true" />{{ item.label }}
-                  </li>
-                </ul>
-                <div v-else-if="settings.colorBy === 'year' && years" class="space-y-1 text-base-content/70">
-                  <div class="h-2 rounded-full legend-years" aria-hidden="true" />
-                  <div class="flex justify-between tabular-nums"><span>{{ years.min }}</span><span>{{ years.max }}</span></div>
-                </div>
+                <select v-if="settings.colorBy === 'relevance'" v-model="relevanceQuestion" class="select select-bordered select-xs w-full" aria-label="Question the sources were screened against">
+                  <option v-if="!questions.length" value="">No screening yet — use Screen in the Library</option>
+                  <option v-for="q in questions" :key="q" :value="q">{{ q }}</option>
+                </select>
+                <p class="text-base-content/50">The legend is in the overview panel.</p>
               </template>
 
               <template v-else-if="section.id === 'display'">
@@ -111,72 +120,203 @@
             </div>
           </section>
         </div>
+
+        <!-- Zoom -->
+        <div class="absolute bottom-3 right-3 z-10 join join-vertical shadow-sm">
+          <button class="btn btn-xs btn-square join-item bg-base-100/95" aria-label="Zoom in" @click="zoomBy(1.4)"><Plus :size="13" /></button>
+          <button class="btn btn-xs btn-square join-item bg-base-100/95" aria-label="Zoom out" @click="zoomBy(1 / 1.4)"><Minus :size="13" /></button>
+          <button class="btn btn-xs btn-square join-item bg-base-100/95" aria-label="Zoom to fit" title="Zoom to fit" @click="fit"><Maximize :size="12" /></button>
+        </div>
+        <p class="absolute bottom-3 left-3 right-14 z-0 truncate text-[11px] text-base-content/40 pointer-events-none">
+          {{ shown.nodes.length }} nodes · {{ shown.edges.length }} links · click a dot for details, double-click to open
+        </p>
       </div>
 
-      <!-- Quick view of the selected node -->
+      <!-- Side panel: the open source, the selected node, or the map overview.
+           Docked beside the canvas when the map is wide enough; over it when not. -->
       <aside
-        v-if="selected"
-        class="absolute z-10 bottom-3 left-3 w-80 max-w-[calc(100%-1.5rem)] max-h-[55%] overflow-y-auto rounded-box border border-base-300 bg-base-100/95 p-3 space-y-2 shadow-lg backdrop-blur"
-        aria-live="polite"
-        data-testid="graph-quickview"
+        v-if="panelVisible"
+        class="side-panel absolute inset-y-0 right-0 z-30 flex w-full max-w-[23rem] flex-col border-l border-base-300 bg-base-100 shadow-xl @3xl:static @3xl:shadow-none @3xl:shrink-0 select-text"
+        :aria-label="showDetails ? 'Source details' : selected ? 'Selected node' : 'Map overview'"
+        data-testid="graph-panel"
       >
-        <div class="flex items-start gap-2">
-          <div class="font-medium leading-snug text-sm flex-1">{{ selected.title || selected.label }}</div>
-          <button class="btn btn-ghost btn-xs btn-square" aria-label="Close" @click="selectedId = null"><X :size="14" /></button>
-        </div>
-        <div v-if="selected.type === 'paper'" class="text-xs text-base-content/60">
-          {{ authorsShort(selected.authors) }}<span v-if="selected.year"> · {{ selected.year }}</span>
-          <span v-if="selected.kind === 'book'"> · book</span>
-          · cited by {{ selected.cited_by }} · cites {{ selected.cites }}
-        </div>
-        <div v-else class="text-xs text-base-content/60">
-          {{ selected.in_collection ? 'In your collection, outside the selection' : 'Not in your collection' }}
-          · cited by {{ selected.cited_by }} of these sources<span v-if="!selected.title"> · title as cited</span>
-        </div>
-        <template v-if="selected.abstract">
-          <p class="text-sm leading-relaxed">{{ selected.abstract }}</p>
-          <p class="text-[11px] text-base-content/45">{{ abstractLabel(selected.abstract_source) }}</p>
-        </template>
-        <p v-else-if="selected.as_cited" class="text-xs text-base-content/70 italic">{{ selected.as_cited }}</p>
-        <p v-else class="text-xs text-base-content/50">No abstract found.</p>
-        <div class="flex flex-wrap gap-2">
-          <button v-if="selected.type === 'paper' || selected.in_collection" class="btn btn-xs btn-outline"
-                  @click="$emit('open', selected.document_id || selected.id)">Open</button>
-          <button
-            v-else-if="canDownload && selected.downloadable"
-            class="btn btn-xs btn-outline"
-            :disabled="downloading"
-            @click="downloadExternal"
-          >Download into collection</button>
-          <button class="btn btn-xs btn-ghost" @click="localOf = localOf === selected.id ? null : selected.id">
-            <Crosshair :size="12" aria-hidden="true" />{{ localOf === selected.id ? 'Whole graph' : 'Local graph' }}
-          </button>
-        </div>
-      </aside>
+        <slot v-if="showDetails" name="details" />
 
-      <!-- Zoom -->
-      <div class="absolute bottom-3 right-3 z-10 join join-vertical shadow-sm">
-        <button class="btn btn-xs btn-square join-item bg-base-100/95" aria-label="Zoom in" @click="zoomBy(1.4)"><Plus :size="13" /></button>
-        <button class="btn btn-xs btn-square join-item bg-base-100/95" aria-label="Zoom out" @click="zoomBy(1 / 1.4)"><Minus :size="13" /></button>
-        <button class="btn btn-xs btn-square join-item bg-base-100/95" aria-label="Zoom to fit" title="Zoom to fit" @click="fit"><Maximize :size="12" /></button>
-      </div>
-      <p class="absolute bottom-3 left-1/2 -translate-x-1/2 z-0 text-[11px] text-base-content/40 pointer-events-none hidden md:block" :class="selected ? 'md:hidden' : ''">
-        {{ shown.nodes.length }} nodes · {{ shown.edges.length }} links · scroll to zoom, drag to move, double-click to open
-      </p>
+        <!-- Selected node -->
+        <template v-else-if="selected">
+          <header class="flex items-start gap-2 px-4 pt-4 pb-3 border-b border-base-300">
+            <div class="min-w-0 flex-1">
+              <p class="text-[11px] uppercase tracking-wide text-base-content/50">{{ kindLabel(selected) }}</p>
+              <h3 class="font-semibold leading-snug text-sm mt-0.5 wrap-anywhere" data-testid="graph-quickview-title">
+                {{ nodeTitle(selected) }}
+              </h3>
+              <p v-if="metaLine(selected)" class="text-xs text-base-content/60 mt-1 wrap-anywhere">{{ metaLine(selected) }}</p>
+            </div>
+            <button class="btn btn-ghost btn-xs btn-square" aria-label="Clear selection" @click="selectedId = null"><X :size="15" /></button>
+          </header>
+          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-3 space-y-4 text-sm wrap-anywhere" aria-live="polite" data-testid="graph-quickview">
+            <div class="flex flex-wrap gap-1.5 text-xs">
+              <span class="badge badge-sm badge-ghost tabular-nums">Cited by {{ selectedLinks.citedBy.length }} here</span>
+              <span v-if="selected.type === 'paper'" class="badge badge-sm badge-ghost tabular-nums">Cites {{ selectedLinks.cites.length }} here</span>
+              <span v-if="verdicts[selected.id]" class="badge badge-sm" :class="VERDICTS[verdicts[selected.id].verdict]?.tone">
+                {{ VERDICTS[verdicts[selected.id].verdict]?.label }}
+              </span>
+            </div>
+
+            <div class="flex flex-wrap gap-2">
+              <button v-if="selected.type === 'paper' || selected.in_collection" class="btn btn-sm btn-primary" @click="openNode(selected)">
+                <BookOpen :size="14" aria-hidden="true" />Details
+              </button>
+              <button
+                v-else-if="canDownload && selected.downloadable"
+                class="btn btn-sm btn-outline"
+                :disabled="downloading"
+                @click="downloadExternal(selected)"
+              ><span v-if="downloading" class="loading loading-spinner loading-xs" /><Download v-else :size="14" aria-hidden="true" />Add to collection</button>
+              <button class="btn btn-sm btn-ghost" :title="localOf === selected.id ? 'Back to the whole graph' : 'Show only what this connects to'" @click="localOf = localOf === selected.id ? null : selected.id">
+                <Crosshair :size="14" aria-hidden="true" />{{ localOf === selected.id ? 'Whole graph' : 'Focus' }}
+              </button>
+            </div>
+
+            <section v-if="selected.abstract">
+              <h4 class="panel-heading">{{ selected.abstract_source?.kind === 'opening' ? 'Opening' : 'Abstract' }}</h4>
+              <p class="leading-relaxed whitespace-pre-line" :class="abstractOpen ? '' : 'line-clamp-6'">{{ selected.abstract }}</p>
+              <button v-if="selected.abstract.length > 420" class="btn btn-ghost btn-xs px-0 mt-1" @click="abstractOpen = !abstractOpen">
+                {{ abstractOpen ? 'Show less' : 'Show more' }}
+              </button>
+              <p class="text-[11px] text-base-content/45 mt-1">{{ abstractLabel(selected.abstract_source) }}</p>
+            </section>
+            <section v-else-if="selected.as_cited">
+              <h4 class="panel-heading">As cited</h4>
+              <p class="text-xs leading-relaxed text-base-content/75 italic">{{ selected.as_cited }}</p>
+            </section>
+            <p v-else class="text-xs text-base-content/50">No abstract found.</p>
+
+            <section v-for="group in linkGroups" :key="group.key">
+              <h4 class="panel-heading">{{ group.title }} <span class="font-normal tabular-nums">({{ group.items.length }})</span></h4>
+              <ul class="space-y-0.5">
+                <li v-for="item in group.items.slice(0, group.limit)" :key="item.node.id">
+                  <button class="node-row" :title="nodeTitle(item.node)" @click="focusNode(item.node.id)">
+                    <span class="legend-dot mt-1" :class="`legend-${groupOf(item.node, settings.colorBy, verdicts)}`" aria-hidden="true" />
+                    <span class="min-w-0 flex-1 line-clamp-2" :class="isAsCited(item.node) ? 'italic text-base-content/70' : ''">{{ shortLabel(item.node, 120) }}</span>
+                  </button>
+                </li>
+              </ul>
+              <button v-if="group.items.length > group.limit" class="btn btn-ghost btn-xs px-0" @click="expanded[group.key] = true">
+                Show all {{ group.items.length }}
+              </button>
+              <p v-if="!group.items.length" class="text-xs text-base-content/50">{{ group.empty }}</p>
+            </section>
+          </div>
+        </template>
+
+        <!-- Map overview: what the map says at a glance -->
+        <template v-else>
+          <header class="flex items-start gap-2 px-4 pt-4 pb-3 border-b border-base-300">
+            <div class="min-w-0 flex-1">
+              <h3 class="font-semibold text-sm">Map overview</h3>
+              <p class="text-xs text-base-content/60 mt-1">
+                {{ insights.papers }} source{{ insights.papers === 1 ? '' : 's' }} · {{ insights.links }} citation link{{ insights.links === 1 ? '' : 's' }}
+                <span v-if="settings.showCited"> · {{ insights.missingTotal }} cited work{{ insights.missingTotal === 1 ? '' : 's' }} you don't have</span>
+              </p>
+            </div>
+            <button class="btn btn-ghost btn-xs btn-square" aria-label="Hide the overview" title="Hide the overview" @click="settings.showPanel = false"><PanelRightClose :size="15" /></button>
+          </header>
+          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-3 space-y-5 text-sm wrap-anywhere" data-testid="graph-overview">
+            <div v-if="graph && !insights.links" class="rounded-box bg-base-200/70 p-3 text-xs space-y-2">
+              <p>None of these sources cite each other, and no cited work reaches the current threshold.</p>
+              <button v-if="settings.showCited && settings.minCitations > 1" class="btn btn-xs" @click="settings.minCitations = 1">
+                Show works cited by just one source
+              </button>
+              <button v-else-if="!settings.showCited" class="btn btn-xs" @click="settings.showCited = true">Show cited works</button>
+            </div>
+
+            <section v-if="insights.missing.length">
+              <h4 class="panel-heading">Cited most, not in your collection</h4>
+              <p class="text-xs text-base-content/55 mb-1.5">What your sources lean on that you haven't added — usually the next thing to read.</p>
+              <ul class="space-y-0.5">
+                <li v-for="item in insights.missing" :key="item.node.id" class="flex items-start gap-1">
+                  <button class="node-row" :title="nodeTitle(item.node)" @click="focusNode(item.node.id)">
+                    <span class="count-pill" :title="`Cited by ${item.count} of your sources`">{{ item.count }}</span>
+                    <span class="min-w-0 flex-1 line-clamp-2" :class="isAsCited(item.node) ? 'italic text-base-content/70' : ''">{{ shortLabel(item.node, 120) }}</span>
+                  </button>
+                  <button
+                    v-if="canDownload && item.node.downloadable"
+                    class="btn btn-ghost btn-xs btn-square mt-0.5"
+                    :disabled="downloading"
+                    :aria-label="`Add ${shortLabel(item.node, 60)} to the collection`"
+                    title="Add to collection"
+                    @click="downloadExternal(item.node)"
+                  ><Download :size="13" /></button>
+                </li>
+              </ul>
+            </section>
+
+            <section v-if="insights.hubs.length">
+              <h4 class="panel-heading">Most cited in your collection</h4>
+              <ul class="space-y-0.5">
+                <li v-for="item in insights.hubs" :key="item.node.id">
+                  <button class="node-row" :title="nodeTitle(item.node)" @click="focusNode(item.node.id)">
+                    <span class="count-pill" :title="`Cited by ${item.count} of your sources`">{{ item.count }}</span>
+                    <span class="min-w-0 flex-1 line-clamp-2">{{ shortLabel(item.node, 120) }}</span>
+                  </button>
+                </li>
+              </ul>
+            </section>
+
+            <section v-if="insights.outside.length">
+              <h4 class="panel-heading">In the collection, outside the selection</h4>
+              <ul class="space-y-0.5">
+                <li v-for="item in insights.outside" :key="item.node.id">
+                  <button class="node-row" :title="nodeTitle(item.node)" @click="focusNode(item.node.id)">
+                    <span class="count-pill">{{ item.count }}</span>
+                    <span class="min-w-0 flex-1 line-clamp-2">{{ shortLabel(item.node, 120) }}</span>
+                  </button>
+                </li>
+              </ul>
+            </section>
+
+            <p v-if="insights.orphans" class="text-xs text-base-content/60">
+              {{ insights.orphans }} source{{ insights.orphans === 1 ? '' : 's' }} connect{{ insights.orphans === 1 ? 's' : '' }} to nothing here.
+              <button class="link link-hover" @click="settings.showOrphans = !settings.showOrphans">{{ settings.showOrphans ? 'Hide' : 'Show' }} {{ insights.orphans === 1 ? 'it' : 'them' }}</button>
+            </p>
+
+            <section>
+              <h4 class="panel-heading">Colour</h4>
+              <ul v-if="legend.length" class="space-y-1 text-xs text-base-content/70">
+                <li v-for="item in legend" :key="item.group" class="flex items-center gap-2">
+                  <span class="legend-dot" :class="`legend-${item.group}`" aria-hidden="true" />{{ item.label }}
+                </li>
+              </ul>
+              <div v-else-if="settings.colorBy === 'year' && years" class="space-y-1 text-xs text-base-content/70">
+                <div class="h-2 rounded-full legend-years" aria-hidden="true" />
+                <div class="flex justify-between tabular-nums"><span>{{ years.min }}</span><span>{{ years.max }}</span></div>
+              </div>
+              <p v-else class="text-xs text-base-content/55">All dots share one colour.</p>
+              <p v-if="settings.colorBy === 'relevance' && relevanceQuestion" class="text-xs text-base-content/55 mt-1">Screened for “{{ relevanceQuestion }}”</p>
+              <p class="text-xs text-base-content/50 mt-2">Bigger dots have more links. Italic titles are references as printed, not verified titles.</p>
+            </section>
+          </div>
+        </template>
+      </aside>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, useSlots, watch } from 'vue'
 import ForceGraph from 'force-graph'
 import { forceCollide, forceX, forceY } from 'd3-force-3d'
-import { ChevronRight, Crosshair, Maximize, Minus, Plus, RotateCcw, Search, Settings2, X } from 'lucide-vue-next'
 import {
-  DEFAULT_SETTINGS, RELEVANCE_LEGEND, SLIDERS, TYPE_LEGEND, groupOf, labelAlpha, loadSettings, matchesQuery, neighborIds,
-  nodeRadius, saveSettings, shortLabel, visibleGraph, yearRange, yearStrength,
+  BookOpen, ChevronRight, Crosshair, Download, Maximize, Minus, PanelRightClose, PanelRightOpen, Plus, RotateCcw,
+  Search, Settings2, X,
+} from 'lucide-vue-next'
+import {
+  DEFAULT_SETTINGS, RELEVANCE_LEGEND, SLIDERS, TYPE_LEGEND, connections, groupOf, isAsCited, labelAlpha, labelRank,
+  loadSettings, mapInsights, matchesQuery, neighborIds, nodeRadius, placeLabels, saveSettings, shortLabel, visibleGraph,
+  wrapLabel, yearRange, yearStrength,
 } from '../utils/citationGraph.js'
-import { researchApi, authorsShort, abstractLabel } from '../utils/researchApi.js'
+import { researchApi, authorsShort, abstractLabel, VERDICTS } from '../utils/researchApi.js'
 import { useUiStore } from '../stores/uiStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 
@@ -187,8 +327,12 @@ const props = defineProps({
   refreshKey: { type: Number, default: 0 },
   // The Library's current question, the default for color by relevance.
   question: { type: String, default: '' },
+  // The source whose details the parent shows in this map's side panel
+  // (through the #details slot), or null.
+  detailsId: { type: String, default: null },
 })
-const emit = defineEmits(['open'])
+const emit = defineEmits(['open', 'close-details'])
+const slots = useSlots()
 
 const ui = useUiStore()
 const jobsStore = useBackgroundJobsStore()
@@ -199,7 +343,7 @@ const sections = [
   { id: 'display', label: 'Display' },
   { id: 'forces', label: 'Layout' },
 ]
-const open = reactive({ filters: true, groups: false, display: false, forces: false })
+const open = reactive({ filters: true, groups: true, display: false, forces: false })
 const colorOptions = [
   { id: 'type', label: 'Type' }, { id: 'relevance', label: 'Relevance' }, { id: 'year', label: 'Year' }, { id: 'none', label: 'None' },
 ]
@@ -215,6 +359,8 @@ const selectedId = ref(null)
 const hoveredId = ref(null)
 const localOf = ref(null)
 const downloading = ref(false)
+const abstractOpen = ref(false)
+const expanded = reactive({})
 const frame = ref(null)
 const host = ref(null)
 
@@ -257,12 +403,64 @@ const nodeById = computed(() => Object.fromEntries((graph.value?.nodes || []).ma
 const selected = computed(() => nodeById.value[selectedId.value] || null)
 const shown = computed(() => visibleGraph(graph.value, settings, localOf.value))
 const years = computed(() => yearRange(shown.value.nodes))
-const matchIds = computed(() => new Set(shown.value.nodes.filter(n => matchesQuery(n, settings.search)).map(n => n.id)))
+const insights = computed(() => mapInsights(shown.value))
+const matchList = computed(() => settings.search.trim()
+  ? shown.value.nodes.filter(n => matchesQuery(n, settings.search))
+    .sort((a, b) => (shown.value.degree[b.id] || 0) - (shown.value.degree[a.id] || 0))
+  : [])
+const matchIds = computed(() => new Set(matchList.value.map(n => n.id)))
+const matchCursor = ref(0)
+watch(() => settings.search, () => { matchCursor.value = 0 })
 const focus = computed(() => {
   const id = hoveredId.value || selectedId.value
   return id ? neighborIds(id, shown.value.edges) : null
 })
-watch(selectedId, (id) => { if (!id && localOf.value) localOf.value = null })
+watch(selectedId, (id) => {
+  abstractOpen.value = false
+  for (const key of Object.keys(expanded)) delete expanded[key]
+  if (id) settings.showPanel = true
+  if (!id && localOf.value) localOf.value = null
+})
+
+const showDetails = computed(() => Boolean(props.detailsId && slots.details))
+const panelVisible = computed(() => showDetails.value || Boolean(selected.value) || settings.showPanel)
+
+// The source open in the details panel is the one lit on the map.
+watch(() => props.detailsId, (id) => {
+  if (!id) return
+  const node = nodeById.value[id] || (graph.value?.nodes || []).find(n => n.document_id === id)
+  if (node) selectedId.value = node.id
+})
+
+const selectedLinks = computed(() => selected.value ? connections(selected.value.id, shown.value) : { cites: [], citedBy: [] })
+const linkGroups = computed(() => {
+  if (!selected.value) return []
+  const groups = [{ key: 'citedBy', title: 'Cited by, in this map', items: selectedLinks.value.citedBy, empty: 'Nothing drawn here cites it.' }]
+  if (selected.value.type === 'paper') {
+    groups.unshift({ key: 'cites', title: 'Cites, in this map', items: selectedLinks.value.cites,
+      empty: settings.showCited ? 'None of its references are drawn here.' : 'Turn on cited works in Filters to see its references.' })
+  }
+  return groups.map(g => ({ ...g, limit: expanded[g.key] ? Infinity : 8 }))
+})
+
+const legend = computed(() => {
+  if (settings.colorBy === 'relevance') return RELEVANCE_LEGEND
+  if (settings.colorBy === 'type') return TYPE_LEGEND
+  return []
+})
+
+function nodeTitle(node) {
+  if (!node) return ''
+  return node.title || node.label || node.filename || ''
+}
+function kindLabel(node) {
+  if (node.type === 'paper') return node.kind === 'book' ? 'Book in your collection' : 'Source in your collection'
+  if (node.in_collection) return 'In your collection, outside the selection'
+  return isAsCited(node) ? 'Cited work · reference as printed' : 'Cited work · not in your collection'
+}
+function metaLine(node) {
+  return [authorsShort(node.authors), node.year, node.venue].filter(Boolean).join(' · ')
+}
 
 // ── colours, read from the active theme ─────────────────────────────────
 
@@ -305,9 +503,13 @@ function fillFor(node) {
 
 // ── the force graph ─────────────────────────────────────────────────────
 
-// Label size in graph units: about 7 px on screen at zoom 1.6, where the
-// default text fade makes labels fully visible.
-const LABEL_SIZE = 4.4
+// Labels are drawn in screen space after the frame: a constant, readable
+// size at any zoom, wrapped to a fixed width, kept inside the canvas, and
+// thinned so they never print on top of each other.
+const LABEL_PX = 11
+const LABEL_LINE = 13.5
+const LABEL_WIDTH = { normal: 150, anchor: 230 }
+const FONT_STACK = '"Inter Variable", Inter, system-ui, sans-serif'
 
 let fg = null
 let resizeObserver = null
@@ -315,15 +517,38 @@ let themeObserver = null
 let fitPending = true
 let lastClick = { id: null, at: 0 }
 const nodeCache = new Map()   // keeps positions when the drawn set changes
+const labelCache = new Map()  // wrapped lines per node and style
+
+function labelFont(node, anchor) {
+  return `${isAsCited(node) ? 'italic ' : ''}${anchor ? 600 : 400} ${LABEL_PX}px ${FONT_STACK}`
+}
+
+function measureLabel(ctx, node, anchor) {
+  const text = anchor ? nodeTitle(node) : shortLabel(node, 90)
+  const key = `${anchor ? 'a' : 'n'}|${node.id}|${text}`
+  let hit = labelCache.get(key)
+  if (!hit) {
+    ctx.font = labelFont(node, anchor)
+    const measure = s => ctx.measureText(s).width
+    const lines = wrapLabel(text, anchor ? LABEL_WIDTH.anchor : LABEL_WIDTH.normal, measure, anchor ? 3 : 2)
+    hit = { lines, w: Math.ceil(Math.max(0, ...lines.map(measure))), h: lines.length * LABEL_LINE }
+    if (labelCache.size > 4000) labelCache.clear()
+    labelCache.set(key, hit)
+  }
+  return hit
+}
+
+function isDimmed(node) {
+  const searching = Boolean(settings.search.trim())
+  return (focus.value && !focus.value.has(node.id)) || (searching && !matchIds.value.has(node.id))
+}
 
 function drawNode(node, ctx, scale) {
   const degree = shown.value.degree[node.id] || 0
   const r = nodeRadius(node, degree, settings.nodeSize)
-  const isFocus = !focus.value || focus.value.has(node.id)
   const searching = Boolean(settings.search.trim())
   const isMatch = matchIds.value.has(node.id)
-  const dim = !isFocus || (searching && !isMatch)
-  ctx.globalAlpha = dim ? 0.14 : 1
+  ctx.globalAlpha = isDimmed(node) ? 0.14 : 1
 
   ctx.beginPath()
   ctx.arc(node.x, node.y, r, 0, 2 * Math.PI)
@@ -344,22 +569,51 @@ function drawNode(node, ctx, scale) {
     ctx.strokeStyle = node.id === selectedId.value ? colors.primary : colors.warning
     ctx.stroke()
   }
-
-  // Labels fade in with zoom; the hovered node and its neighbours always speak.
-  const emphasised = focus.value && focus.value.has(node.id)
-  const alpha = emphasised ? 1 : labelAlpha(scale, settings.textFade)
-  if (alpha > 0.02 && !dim) {
-    // Text belongs to the graph and scales with it, as in Obsidian; the
-    // hovered node and its neighbours never shrink below a readable size.
-    const size = emphasised ? Math.max(LABEL_SIZE, 11 / scale) : LABEL_SIZE
-    ctx.globalAlpha = alpha * (emphasised || !focus.value ? 1 : 0.5)
-    ctx.font = `${node.id === hoveredId.value ? 600 : 400} ${size}px "Inter Variable", Inter, system-ui, sans-serif`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'top'
-    ctx.fillStyle = colors.content
-    ctx.fillText(shortLabel(node, emphasised ? 80 : 40), node.x, node.y + r + 3 / scale)
-  }
   ctx.globalAlpha = 1
+}
+
+function drawLabels(ctx, scale) {
+  if (!fg) return
+  const anchorId = hoveredId.value || selectedId.value
+  const fade = labelAlpha(scale, settings.textFade)
+  const rankCtx = { anchorId, focusIds: focus.value, matchIds: matchIds.value, degree: shown.value.degree }
+  const items = []
+  for (const node of fg.graphData().nodes) {
+    if (!Number.isFinite(node.x) || isDimmed(node)) continue
+    const emphasised = Boolean(focus.value?.has(node.id)) || matchIds.value.has(node.id)
+    const alpha = emphasised ? 1 : fade
+    if (alpha <= 0.02) continue
+    const anchor = node.id === anchorId
+    const at = fg.graph2ScreenCoords(node.x, node.y)
+    const r = nodeRadius(node, shown.value.degree[node.id] || 0, settings.nodeSize) * scale
+    const m = measureLabel(ctx, node, anchor)
+    items.push({ id: node.id, node, x: at.x, y: at.y + r + 3, w: m.w, h: m.h, lines: m.lines, alpha, anchor,
+      force: anchor, rank: labelRank(node, rankCtx) })
+  }
+  items.sort((a, b) => a.rank - b.rank)
+  const placed = placeLabels(items, { left: 0, top: 0, right: fg.width(), bottom: fg.height() })
+
+  const dpr = window.devicePixelRatio || 1
+  ctx.save()
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'top'
+  ctx.lineJoin = 'round'
+  for (const p of placed) {
+    ctx.globalAlpha = p.alpha * (p.anchor || !focus.value || focus.value.has(p.id) ? 1 : 0.6)
+    ctx.font = labelFont(p.node, p.anchor)
+    const cx = p.rect.left + p.w / 2
+    p.lines.forEach((line, i) => {
+      const y = p.rect.top + i * LABEL_LINE
+      // A halo in the background colour keeps text legible over links.
+      ctx.lineWidth = 3
+      ctx.strokeStyle = withAlpha(colors.base, 0.9)
+      ctx.strokeText(line, cx, y)
+      ctx.fillStyle = colors.content
+      ctx.fillText(line, cx, y)
+    })
+  }
+  ctx.restore()
 }
 
 function paintPointerArea(node, color, ctx) {
@@ -416,14 +670,21 @@ function setData() {
   fg.graphData({ nodes, links })
 }
 
+function openNode(node) {
+  if (node.type === 'paper' || node.in_collection) emit('open', node.document_id || node.id)
+}
+
 function onNodeClick(node) {
   const now = Date.now()
-  if (lastClick.id === node.id && now - lastClick.at < 350) {
-    // Double-click opens the source, as in Obsidian.
-    if (node.type === 'paper' || node.in_collection) emit('open', node.document_id || node.id)
-  }
+  const double = lastClick.id === node.id && now - lastClick.at < 350
   lastClick = { id: node.id, at: now }
   selectedId.value = node.id
+  // Double-click opens the source, as in Obsidian. With a source already
+  // open beside the map, a single click moves the details along with it.
+  if (double || props.detailsId) {
+    if (node.type === 'paper' || node.in_collection) openNode(node)
+    else if (props.detailsId) emit('close-details')
+  }
 }
 
 function init() {
@@ -436,6 +697,7 @@ function init() {
     .nodeCanvasObjectMode(() => 'replace')
     .nodeCanvasObject(drawNode)
     .nodePointerAreaPaint(paintPointerArea)
+    .onRenderFramePost(drawLabels)
     .linkColor(linkColor)
     .linkWidth(linkWidth)
     .linkLineDash(link => (link.external ? [2, 2] : null))
@@ -451,7 +713,7 @@ function init() {
       host.value.style.cursor = node ? 'pointer' : ''
     })
     .onNodeClick(onNodeClick)
-    .onBackgroundClick(() => { selectedId.value = null })
+    .onBackgroundClick(() => { selectedId.value = null; settingsOpen.value = false })
     .onEngineStop(() => {
       if (fitPending) { fitPending = false; fit() }
     })
@@ -462,7 +724,7 @@ function init() {
   resizeObserver = new ResizeObserver(size)
   resizeObserver.observe(host.value)
   size()
-  themeObserver = new MutationObserver(() => { readColors(); redraw() })
+  themeObserver = new MutationObserver(() => { readColors(); labelCache.clear(); redraw() })
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] })
   applyForces()
   setData()
@@ -472,11 +734,20 @@ watch(host, (el) => { if (el) nextTick(init) })
 watch(shown, () => { setData(); if (fg) { fitPending = true; fg.d3ReheatSimulation() } })
 watch(() => [settings.centerForce, settings.repelForce, settings.linkForce, settings.linkDistance, settings.nodeSize], applyForces)
 watch(() => [hoveredId.value, selectedId.value, settings.search, settings.colorBy, settings.arrows,
-  settings.textFade, settings.nodeSize, settings.linkThickness], redraw)
+  settings.textFade, settings.nodeSize, settings.linkThickness, matchCursor.value], redraw)
 watch(settings, () => saveSettings(settings), { deep: true })
 watch(localOf, () => nextTick(() => fit()))
 
+// Escape steps back: settings, then the selection. Not while a dialog is open.
+function onKey(event) {
+  if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return
+  if (settingsOpen.value) settingsOpen.value = false
+  else if (selectedId.value && !props.detailsId) selectedId.value = null
+}
+onMounted(() => window.addEventListener('keydown', onKey))
+
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKey)
   resizeObserver?.disconnect()
   themeObserver?.disconnect()
   if (fg) { fg.pauseAnimation(); fg._destructor?.() }
@@ -488,23 +759,30 @@ onBeforeUnmount(() => {
 function fit() { fg?.zoomToFit(400, 60) }
 function zoomBy(factor) { if (fg) fg.zoom(fg.zoom() * factor, 250) }
 
-function centerOnMatch() {
-  const id = [...matchIds.value][0]
-  const node = id && nodeCache.get(id)
-  if (!node || !fg) return
+// Select a node and bring it into view, close enough to read its label.
+function focusNode(id) {
   selectedId.value = id
+  const node = nodeCache.get(id)
+  if (!node || !fg || !Number.isFinite(node.x)) return
   fg.centerAt(node.x, node.y, 400)
-  fg.zoom(Math.max(fg.zoom(), 2.2), 400)
+  if (fg.zoom() < 1.6) fg.zoom(1.8, 400)
+}
+
+function nextMatch(step = 1) {
+  const list = matchList.value
+  if (!list.length) return
+  matchCursor.value = (matchCursor.value + step + list.length) % list.length
+  focusNode(list[matchCursor.value].id)
 }
 
 function restoreDefaults() {
   Object.assign(settings, { ...DEFAULT_SETTINGS })
 }
 
-async function downloadExternal() {
+async function downloadExternal(node) {
   downloading.value = true
   try {
-    const out = await researchApi.download(props.collectionId, { reference_ids: selected.value.reference_ids })
+    const out = await researchApi.download(props.collectionId, { reference_ids: node.reference_ids })
     if (out.job) jobsStore.addUploadJob(out.job)
     ui.notify(out.queued?.length ? 'Downloading into this collection' : (out.skipped?.[0]?.reason || 'No open copy found'),
       out.queued?.length ? 'success' : 'info')
@@ -517,13 +795,19 @@ async function downloadExternal() {
 </script>
 
 <style scoped>
+.wrap-anywhere { overflow-wrap: anywhere; word-break: normal; }
+.panel-heading { margin-bottom: 0.375rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.025em; color: color-mix(in oklch, var(--color-base-content) 55%, transparent); }
+.node-row { display: flex; width: 100%; min-width: 0; align-items: flex-start; gap: 0.5rem; border-radius: 0.375rem; padding: 0.25rem 0.375rem; margin-inline: -0.375rem; text-align: left; font-size: 0.8125rem; line-height: 1.35; }
+.node-row:hover, .node-row:focus-visible { background: color-mix(in oklch, var(--color-base-content) 7%, transparent); }
+.count-pill { flex-shrink: 0; min-width: 1.5rem; margin-top: 0.05rem; border-radius: 9999px; padding: 0 0.35rem; text-align: center; font-size: 0.6875rem; font-variant-numeric: tabular-nums; background: color-mix(in oklch, var(--color-base-content) 10%, transparent); color: color-mix(in oklch, var(--color-base-content) 75%, transparent); }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; cursor: pointer; color: color-mix(in oklch, var(--color-base-content) 80%, transparent); }
 .setting-slider { display: flex; flex-direction: column; gap: 0.3rem; color: color-mix(in oklch, var(--color-base-content) 70%, transparent); }
 .legend-dot { width: 0.6rem; height: 0.6rem; border-radius: 9999px; flex-shrink: 0; }
-.legend-article { background: color-mix(in oklch, var(--color-base-content) 72%, transparent); }
+.legend-article, .legend-node { background: color-mix(in oklch, var(--color-base-content) 72%, transparent); }
 .legend-book { background: var(--color-secondary); }
 .legend-outside { background: var(--color-info); }
 .legend-cited { border: 1.5px solid color-mix(in oklch, var(--color-base-content) 55%, transparent); }
+.legend-year { background: var(--color-primary); }
 .legend-relevant { background: var(--color-success); }
 .legend-partial { background: var(--color-info); }
 .legend-not_established { background: var(--color-warning); }

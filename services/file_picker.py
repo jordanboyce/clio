@@ -25,9 +25,10 @@ def is_native_picker_available() -> bool:
 
 # Supported file types for the file picker dialog
 SUPPORTED_FILETYPES = [
-    ("All supported files", "*.pdf *.txt *.docx *.pptx *.csv *.xlsx *.xls *.md *.json *.jsonl *.py *.js *.ts *.jsx *.tsx *.cs *.java *.go *.rs *.c *.h *.cpp *.hpp *.php *.rb *.swift *.kt *.scala *.pas *.dpr *.asm"),
-    ("Documents", "*.pdf *.txt *.docx *.pptx *.csv *.xlsx *.xls *.md *.json *.jsonl"),
-    ("Spreadsheets", "*.csv *.xlsx *.xls"),
+    ("All supported files", "*.pdf *.txt *.docx *.pptx *.csv *.tsv *.xlsx *.xlsm *.xls *.md *.json *.jsonl *.html *.htm *.xhtml *.rtf *.odt *.ods *.odp *.epub *.eml *.mbox *.ipynb *.svg *.rst *.adoc *.asciidoc *.org *.tex *.bib *.log *.text *.srt *.vtt *.py *.js *.ts *.jsx *.tsx *.cs *.java *.go *.rs *.c *.h *.cpp *.hpp *.php *.rb *.swift *.kt *.scala *.pas *.dpr *.asm"),
+    ("Documents", "*.pdf *.txt *.docx *.pptx *.rtf *.odt *.odp *.epub *.md *.html *.htm *.xhtml *.rst *.adoc *.asciidoc *.org *.tex *.bib *.text"),
+    ("Spreadsheets and data", "*.csv *.tsv *.xlsx *.xlsm *.xls *.ods *.json *.jsonl"),
+    ("Email, notebooks, subtitles, logs", "*.eml *.mbox *.ipynb *.srt *.vtt *.log *.svg"),
     ("Python", "*.py *.pyw *.pyi"),
     ("JavaScript/TypeScript", "*.js *.jsx *.mjs *.ts *.tsx *.mts"),
     ("C#/Java", "*.cs *.java"),

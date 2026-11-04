@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import config
-from services.document_extractor import is_supported_filename
+from services.document_extractor import is_supported_filename, unsupported_reason, SUPPORTED_TYPES_SUMMARY
 from services import pii_detector
 from services.prompt_injection_detector import apply_suppressions
 from services.custom_file_types import registry as custom_types
@@ -124,12 +124,21 @@ def _storage_error(error: StorageLimitExceeded) -> HTTPException:
 
 def _supported_types_message() -> str:
     """Build a human-readable list of supported file types including custom ones."""
-    builtin = "PDF, TXT, DOCX, CSV, XLSX, XLS, MD, JSON, JSONL, images (PNG/JPG/WEBP/TIFF), audio, and source code files (by extension or well-known name such as Makefile)"
+    builtin = SUPPORTED_TYPES_SUMMARY
     custom = custom_types.extensions()
     if custom:
         custom_str = ", ".join(sorted(custom))
         return f"{builtin}, and custom types: {custom_str}"
     return builtin
+
+
+def _unsupported_message(filename: str) -> str:
+    """Why a file was refused: the specific reason, plus any admin-registered types."""
+    reason = unsupported_reason(filename)
+    custom = custom_types.extensions()
+    if custom:
+        reason += f" Custom types registered here: {', '.join(sorted(custom))}."
+    return reason
 
 
 @router.post(
@@ -183,7 +192,7 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
         if not is_supported_filename(file.filename):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File {file.filename} has unsupported type. Supported: {_supported_types_message()}",
+                detail=f"File {file.filename} has unsupported type. {_unsupported_message(file.filename)}",
             )
 
     indexed_docs = []
@@ -347,7 +356,7 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
             failed.append({"filename": "", "error": "missing filename"})
             continue
         if not is_supported_filename(file.filename):
-            failed.append({"filename": file.filename, "error": "unsupported type"})
+            failed.append({"filename": file.filename, "error": _unsupported_message(file.filename)})
             continue
         raw_filename = file.filename.replace('\\', '/').lstrip('/')
         safe_filename = raw_filename.replace('/', '_') if '/' in raw_filename else raw_filename
@@ -1150,7 +1159,7 @@ async def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobR
         if not is_supported_filename(path.name):
             skipped.append({
                 "filename": path.name,
-                "error": f"unsupported file type ({path.suffix.lower() or 'no extension'})",
+                "error": _unsupported_message(path.name),
             })
             continue
         valid_paths.append(file_path)

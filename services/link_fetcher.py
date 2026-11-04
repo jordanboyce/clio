@@ -47,6 +47,18 @@ CONTENT_TYPE_EXTENSIONS = {
     "text/markdown": ".md",
     "text/x-markdown": ".md",
     "text/csv": ".csv",
+    "text/tab-separated-values": ".tsv",
+    "application/rtf": ".rtf",
+    "text/rtf": ".rtf",
+    "application/epub+zip": ".epub",
+    "message/rfc822": ".eml",
+    "application/vnd.oasis.opendocument.text": ".odt",
+    "application/vnd.oasis.opendocument.spreadsheet": ".ods",
+    "application/vnd.oasis.opendocument.presentation": ".odp",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/x-ipynb+json": ".ipynb",
+    "text/vtt": ".vtt",
+    "application/x-subrip": ".srt",
     "application/json": ".json",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
@@ -59,9 +71,10 @@ CONTENT_TYPE_EXTENSIONS = {
 
 # Extensions a URL path may carry that are trusted when the server sends
 # no usable media type (octet-stream, or nothing at all).
-_PATH_EXTENSIONS = {".pdf", ".txt", ".md", ".csv", ".json", ".jsonl", ".docx",
-                    ".pptx", ".xlsx", ".xls", ".html", ".htm", ".png", ".jpg", ".jpeg",
-                    ".webp", ".tiff", ".tif"}
+_PATH_EXTENSIONS = {".pdf", ".txt", ".md", ".csv", ".tsv", ".json", ".jsonl", ".docx",
+                    ".pptx", ".xlsx", ".xlsm", ".xls", ".html", ".htm", ".xhtml", ".png", ".jpg", ".jpeg",
+                    ".webp", ".tiff", ".tif", ".rtf", ".odt", ".ods", ".odp", ".epub", ".eml",
+                    ".ipynb", ".rst", ".adoc", ".org", ".tex", ".bib", ".srt", ".vtt"}
 
 _HTML_TYPES = {"text/html", "application/xhtml+xml"}
 

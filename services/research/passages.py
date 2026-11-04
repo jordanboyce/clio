@@ -9,9 +9,13 @@ treat them as data — a paper is untrusted input like any other document.
 
 from __future__ import annotations
 
+import inspect
 import json
+import logging
 import re
 from typing import Dict, Iterable, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 PASSAGE_CHARS = 1800
 
@@ -103,11 +107,71 @@ def parse_json_object(raw: str) -> Optional[dict]:
     return None
 
 
+class ModelReplyError(RuntimeError):
+    """The model returned no usable answer; the message says why, in words
+    a researcher can act on."""
+
+
+# Models seen spending their whole budget on reasoning, keyed by provider
+# class and model: their next calls go straight to low reasoning effort
+# instead of wasting a call that will come back empty again.
+_LOW_EFFORT: set = set()
+RETRY_MAX_TOKENS = 12000
+
+
+def _accepts_effort(provider) -> bool:
+    try:
+        return "reasoning_effort" in inspect.signature(provider.complete).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _call(provider, model: str, prompt: str, max_tokens: int, effort: Optional[str]) -> dict:
+    if effort:
+        return provider.complete(prompt=prompt, max_tokens=max_tokens, model=model, reasoning_effort=effort)
+    return provider.complete(prompt=prompt, max_tokens=max_tokens, model=model)
+
+
 def complete(provider, model: str, prompt: str, max_tokens: int) -> Tuple[str, dict]:
-    response = provider.complete(prompt=prompt, max_tokens=max_tokens, model=model)
+    """One model call for a research task, returning ``(text, usage)``.
+
+    A reply that comes back empty — typically a reasoning model that used
+    its whole budget thinking (finish_reason "length") — is retried once with
+    a larger budget and, where the provider supports it, low reasoning
+    effort. Raises :class:`ModelReplyError` when there is still no answer."""
+    key = (type(provider).__name__, model)
+    effort_ok = _accepts_effort(provider)
+    effort = "low" if effort_ok and key in _LOW_EFFORT else None
+    response = _call(provider, model, prompt, max_tokens, effort)
     usage = dict(response.get("usage") or {})
     usage.setdefault("model", model)
-    return response.get("text") or "", usage
+    text = response.get("text") or ""
+    if text.strip():
+        return text, usage
+
+    first_finish = response.get("finish_reason")
+    retry_effort = "low" if effort_ok else None
+    try:
+        retry = _call(provider, model, prompt, max(max_tokens * 3, RETRY_MAX_TOKENS), retry_effort)
+    except Exception as exc:  # noqa: BLE001 - e.g. an endpoint that rejects reasoning_effort
+        if not retry_effort:
+            raise
+        logger.info("Retry with reasoning_effort failed for %s (%s); retrying without it", model, exc)
+        retry_effort = None
+        retry = _call(provider, model, prompt, max(max_tokens * 3, RETRY_MAX_TOKENS), None)
+    retry_usage = dict(retry.get("usage") or {})
+    for field in ("input_tokens", "output_tokens"):
+        usage[field] = int(usage.get(field) or 0) + int(retry_usage.get(field) or 0)
+    text = retry.get("text") or ""
+    if text.strip():
+        if retry_effort:
+            _LOW_EFFORT.add(key)
+        return text, usage
+    if "length" in (first_finish, retry.get("finish_reason")):
+        raise ModelReplyError(
+            f"{model} used its whole answer budget before replying (it is a reasoning model that "
+            "thinks at length). Try a non-reasoning model, or one that accepts a reasoning-effort setting.")
+    raise ModelReplyError(f"{model} returned an empty answer twice.")
 
 
 def add_usage(total: dict, usage: dict) -> dict:

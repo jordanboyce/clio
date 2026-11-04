@@ -14,8 +14,14 @@ from typing import Dict, List, Optional
 
 KINDS = ("code", "docs", "data", "media")
 
-DOC_EXTENSIONS = {".pdf", ".txt", ".docx", ".md", ".html", ".htm"}
-DATA_EXTENSIONS = {".csv", ".xlsx", ".xls", ".json", ".jsonl"}
+DOC_EXTENSIONS = {
+    ".pdf", ".txt", ".docx", ".pptx", ".md", ".html", ".htm", ".xhtml", ".xht",
+    ".rtf", ".odt", ".odp", ".epub", ".eml", ".mbox", ".svg",
+    ".rst", ".adoc", ".asciidoc", ".org", ".tex", ".bib", ".log", ".text", ".srt", ".vtt",
+}
+DATA_EXTENSIONS = {".csv", ".tsv", ".xlsx", ".xlsm", ".xls", ".ods", ".json", ".jsonl"}
+# Notebooks are code with prose around it; the sidebar draws them as code.
+NOTEBOOK_EXTENSIONS = {".ipynb"}
 
 
 def _code_extensions() -> set:
@@ -49,7 +55,7 @@ def _custom_extensions(kind: str) -> set:
 def extensions_for_kind(kind: str) -> set:
     """Lowercase suffixes (and bare basenames for code) that belong to `kind`."""
     if kind == "code":
-        return _code_extensions() | _code_basenames() | _custom_extensions("code")
+        return _code_extensions() | _code_basenames() | set(NOTEBOOK_EXTENSIONS) | _custom_extensions("code")
     if kind == "docs":
         return set(DOC_EXTENSIONS) | _custom_extensions("docs")
     if kind == "data":
@@ -69,7 +75,7 @@ def kind_for_filename(filename: str) -> Optional[str]:
         return "data"
     if suffix in _media_extensions():
         return "media"
-    if suffix in _code_extensions() or name.lower() in _code_basenames():
+    if suffix in _code_extensions() or suffix in NOTEBOOK_EXTENSIONS or name.lower() in _code_basenames():
         return "code"
     from services.custom_file_types import registry
     profile = registry.lookup(name, include_disabled=True)

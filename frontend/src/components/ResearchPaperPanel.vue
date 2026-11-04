@@ -1,14 +1,14 @@
 <template>
-  <aside class="flex flex-col h-full min-h-0" data-testid="research-paper-panel" aria-label="Source details">
+  <aside class="flex flex-col h-full min-h-0 min-w-0 w-full" data-testid="research-paper-panel" aria-label="Source details">
     <header class="flex items-start gap-2 px-4 pt-4 pb-3 border-b border-base-300">
-      <div class="min-w-0 flex-1">
+      <div class="min-w-0 flex-1 [overflow-wrap:anywhere]">
         <h3 class="font-semibold leading-snug">{{ paper?.title || paper?.filename || 'Loading…' }}</h3>
         <p v-if="paper" class="text-xs text-base-content/60 mt-1">
-          <span v-if="paper.authors?.length">{{ paper.authors.join(', ') }}</span>
+          <span v-if="paper.authors?.length" :title="paper.authors.join(', ')">{{ authorList(paper.authors) }}</span>
           <span v-if="paper.year"> · {{ paper.year }}</span>
           <span v-if="paper.venue"> · {{ paper.venue }}</span>
         </p>
-        <p v-if="paper && (paper.doi || paper.arxiv_id || paper.isbn)" class="text-xs mt-1 space-x-3">
+        <p v-if="paper && (paper.doi || paper.arxiv_id || paper.isbn)" class="text-xs mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
           <span v-if="paper.kind === 'book'" class="badge badge-ghost badge-xs">book</span>
           <a v-if="paper.isbn" class="link link-hover" :href="`https://openlibrary.org/isbn/${paper.isbn}`" target="_blank" rel="noopener">ISBN {{ paper.isbn }}</a>
           <a v-if="paper.doi" class="link link-hover" :href="`https://doi.org/${paper.doi}`" target="_blank" rel="noopener">doi:{{ paper.doi }}</a>
@@ -20,7 +20,7 @@
 
     <div v-if="loading && !paper" class="p-4"><span class="loading loading-spinner loading-sm" /></div>
 
-    <div v-else-if="paper" class="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-5">
+    <div v-else-if="paper" class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-3 space-y-5 [overflow-wrap:anywhere]">
       <!-- File name -->
       <section class="space-y-1.5" data-testid="paper-filename">
         <div class="flex items-center gap-2 text-sm">
@@ -31,14 +31,14 @@
           <template v-if="!editingName">
             <button
               v-if="paper.suggested_filename && paper.suggested_filename !== paper.filename"
-              class="btn btn-xs btn-outline"
+              class="btn btn-xs btn-outline max-w-full"
               :disabled="busy.rename"
               :title="paper.suggested_filename"
               @click="rename()"
-            >Rename to “{{ truncate(paper.suggested_filename, 48) }}”</button>
+            ><span class="truncate">Rename to “{{ truncate(paper.suggested_filename, 48) }}”</span></button>
             <button class="btn btn-xs btn-ghost" @click="startEdit">Edit name</button>
-            <button v-if="paper.original_filename && paper.original_filename !== paper.filename" class="btn btn-xs btn-ghost" @click="restore">
-              Restore “{{ truncate(paper.original_filename, 30) }}”
+            <button v-if="paper.original_filename && paper.original_filename !== paper.filename" class="btn btn-xs btn-ghost max-w-full" @click="restore">
+              <span class="truncate">Restore “{{ truncate(paper.original_filename, 30) }}”</span>
             </button>
           </template>
           <form v-else class="flex w-full gap-2" @submit.prevent="rename(nameDraft)">
@@ -57,7 +57,12 @@
           </h4>
           <span v-if="paper.abstract" class="text-[11px] text-base-content/45 text-right">{{ abstractLabel(paper.provenance?.abstract) }}</span>
         </div>
-        <p v-if="paper.abstract" class="text-sm leading-relaxed whitespace-pre-line">{{ paper.abstract }}</p>
+        <template v-if="paper.abstract">
+          <p class="text-sm leading-relaxed whitespace-pre-line" :class="abstractOpen || paper.abstract.length <= 700 ? '' : 'line-clamp-[10]'">{{ paper.abstract }}</p>
+          <button v-if="paper.abstract.length > 700" class="btn btn-ghost btn-xs px-0" @click="abstractOpen = !abstractOpen">
+            {{ abstractOpen ? 'Show less' : 'Show more' }}
+          </button>
+        </template>
         <p v-else-if="paper.analyzed" class="text-sm text-base-content/55">No abstract, preface or introduction was found.</p>
         <div v-else class="text-sm text-base-content/60 flex items-center gap-2">
           Not analyzed yet.
@@ -282,6 +287,12 @@ const downloadDialog = ref(false)
 const includeLinks = ref(false)
 const includePages = ref(false)
 const downloadResult = ref(null)
+const abstractOpen = ref(false)
+
+// Long author lists (consortium papers) collapse to the first few.
+function authorList(authors) {
+  return authors.length > 6 ? `${authors.slice(0, 5).join(', ')} and ${authors.length - 5} more` : authors.join(', ')
+}
 
 const visibleRefs = computed(() => (paper.value?.reference_list || []).slice(0, refLimit.value))
 
@@ -300,6 +311,7 @@ watch(() => props.documentId, () => {
   assessment.value = null
   queuedReview.value = false
   editingName.value = false
+  abstractOpen.value = false
   refLimit.value = 25
   downloadResult.value = null
   load()

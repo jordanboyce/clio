@@ -140,8 +140,14 @@ class AnthropicProvider(AIProvider):
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
+        # Join the text blocks: a reply can lead with a thinking block or be
+        # empty when it hit max_tokens, and content[0] is not always text.
+        text = "".join(getattr(block, "text", "") or "" for block in (response.content or [])
+                       if getattr(block, "type", "text") == "text")
+        stop = getattr(response, "stop_reason", None)
         return {
-            "text": response.content[0].text.strip(),
+            "text": text.strip(),
+            "finish_reason": "length" if stop == "max_tokens" else stop,
             "usage": {
                 "input_tokens": response.usage.input_tokens,
                 "output_tokens": response.usage.output_tokens,
@@ -306,17 +312,32 @@ class OpenAIProvider(AIProvider):
             self.FAST_MODEL = model
             self.QUALITY_MODEL = model
 
-    def complete(self, prompt: str, max_tokens: int, model: str) -> dict:
+    def complete(self, prompt: str, max_tokens: int, model: str,
+                 reasoning_effort: Optional[str] = None) -> dict:
+        # Reasoning models (GLM, DeepSeek R1, o-series, gpt-5...) can spend
+        # the whole budget thinking and return content=None with
+        # finish_reason="length"; callers get "" and the finish reason rather
+        # than an AttributeError. ``reasoning_effort`` is the OpenAI-standard
+        # knob (OpenRouter maps it for every reasoning model); it is only sent
+        # when a caller asks, because non-reasoning models reject it.
+        kwargs: dict = {}
+        if reasoning_effort:
+            kwargs["reasoning_effort"] = reasoning_effort
         response = self.client.chat.completions.create(
             model=model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
+            **kwargs,
         )
+        choice = response.choices[0] if response.choices else None
+        content = (choice.message.content if choice and choice.message else None) or ""
+        usage = response.usage
         return {
-            "text": response.choices[0].message.content.strip(),
+            "text": content.strip(),
+            "finish_reason": getattr(choice, "finish_reason", None),
             "usage": {
-                "input_tokens": response.usage.prompt_tokens,
-                "output_tokens": response.usage.completion_tokens,
+                "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
                 "model": model,
             },
         }

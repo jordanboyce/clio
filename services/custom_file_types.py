@@ -194,7 +194,8 @@ def read_text(path: Path) -> str:
     try:
         return raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        return raw.decode("latin-1")
+        from services.format_readers import decode_text_bytes
+        return decode_text_bytes(raw)
 
 
 # ── profiles ───────────────────────────────────────────────────────────

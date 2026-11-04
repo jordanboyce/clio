@@ -57,8 +57,16 @@ const NAMED = {
   '.bashrc': ['sh', Terminal], '.zshrc': ['zsh', Terminal], '.profile': ['sh', Terminal], '.env.example': ['env', Settings2],
 }
 
-const DOCS = { pdf: ['pdf'], txt: ['txt'], docx: ['docx'], md: ['md'], html: ['html'], htm: ['html'] }
-const DATA = { csv: ['csv', Table2], xlsx: ['xlsx', Table2], xls: ['xls', Table2], json: ['json', FileJson], jsonl: ['jsonl', FileJson] }
+const DOCS = {
+  pdf: ['pdf'], txt: ['txt'], docx: ['docx'], pptx: ['pptx'], md: ['md'], html: ['html'], htm: ['html'], xhtml: ['html'], xht: ['html'],
+  rtf: ['rtf'], odt: ['odt'], odp: ['odp'], epub: ['epub'], eml: ['eml'], mbox: ['mbox'], svg: ['svg'],
+  rst: ['rst'], adoc: ['adoc'], asciidoc: ['adoc'], org: ['org'], tex: ['tex'], bib: ['bib'], log: ['log'], text: ['txt'],
+  srt: ['srt'], vtt: ['vtt'],
+}
+const DATA = {
+  csv: ['csv', Table2], tsv: ['tsv', Table2], xlsx: ['xlsx', Table2], xlsm: ['xlsm', Table2], xls: ['xls', Table2], ods: ['ods', Table2],
+  json: ['json', FileJson], jsonl: ['jsonl', FileJson],
+}
 const MEDIA = {
   png: ['png', Image], jpg: ['jpg', Image], jpeg: ['jpg', Image], gif: ['gif', Image], webp: ['webp', Image], bmp: ['bmp', Image], tif: ['tiff', Image], tiff: ['tiff', Image],
   mp3: ['mp3', Mic], wav: ['wav', Mic], m4a: ['m4a', Mic], ogg: ['ogg', Mic], flac: ['flac', Mic], webm: ['webm', Mic], mp4: ['mp4', Mic], aac: ['aac', Mic], wma: ['wma', Mic],
@@ -107,7 +115,7 @@ export function describeFile(name, { isWeb = false, isNote = false } = {}) {
 }
 
 export const isCodeFile = (name) => describeFile(name).family === 'code'
-export const isTabularFile = (name) => ['csv', 'xlsx', 'xls'].includes(extOf(name))
+export const isTabularFile = (name) => ['csv', 'tsv', 'xlsx', 'xlsm', 'xls'].includes(extOf(name))
 
 // Where a cited passage sits, in the unit the reader would look for. The
 // index calls every part a "page", but only a PDF has pages: text formats
@@ -116,7 +124,10 @@ export function locationLabel(name, page) {
   if (!page) return ''
   const ext = extOf(name)
   if (ext === 'pdf') return `p.${page}`
-  if (ext === 'pptx') return `slide ${page}`
+  if (ext === 'pptx' || ext === 'odp') return `slide ${page}`
+  if (ext === 'epub') return `chapter ${page}`
+  if (ext === 'mbox') return `message ${page}`
+  if (ext === 'ods') return `sheet ${page}`
   if (isTabularFile(name)) return `part ${page}`
   return `§${page}`
 }

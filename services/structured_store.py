@@ -50,7 +50,7 @@ def _normalize_for_match(s: str) -> str:
     if not s:
         return ''
     out = s.strip().strip('"').strip("'").lower()
-    if out.endswith('.csv') or out.endswith('.xlsx') or out.endswith('.xls'):
+    if out.endswith(('.csv', '.tsv', '.xlsx', '.xlsm', '.xls')):
         out = out.rsplit('.', 1)[0]
     return _IDENTIFIER_NORMALIZE_RE.sub('', out)
 

@@ -255,7 +255,7 @@ class DocumentIndexer:
         # Both formats are normalized to the same "sheet of rows" shape and get
         # both a semantic row index (for free-text search) and a typed SQL
         # table (for aggregation / numeric queries).
-        if source_format in ("csv", "xlsx", "xls") and settings.csv_row_level_indexing:
+        if source_format in ("csv", "tsv", "xlsx", "xlsm", "xls") and settings.csv_row_level_indexing:
             return self._index_tabular_document(
                 document_path, filename, document_id, source_format=source_format,
                 progress_callback=progress_callback,
@@ -413,7 +413,7 @@ class DocumentIndexer:
 
         # Tabular documents are indexed structured-only; there is nothing to
         # batch, so the caller should fall back to the single-file path.
-        if source_format in ("csv", "xlsx", "xls") and settings.csv_row_level_indexing:
+        if source_format in ("csv", "tsv", "xlsx", "xlsm", "xls") and settings.csv_row_level_indexing:
             return None
 
         content_hash, document_id = self._admit(document_path, filename, collection_id, uploaded_by)

@@ -28,6 +28,13 @@ from services.ocr_engine import create_ocr_engine
 # Audio transcription (meeting recordings)
 from services.audio_transcriber import AUDIO_EXTENSIONS, is_audio_file
 
+# Text decoding and the standard-library readers for the lighter formats
+from services.format_readers import (
+    read_text_file, detect_encoding, text_pages, subtitle_pages, svg_pages, rtf_pages,
+    odt_pages, ods_pages, odp_pages, epub_pages, eml_pages, mbox_pages, ipynb_pages,
+    LOG_LINES_PER_PAGE,
+)
+
 # Prompt injection detection
 from services.prompt_injection_detector import (
     PromptInjectionDetector,
@@ -175,7 +182,51 @@ def _extract_preamble_metadata(preamble_rows: List[List[Any]]) -> Dict[str, Any]
     return metadata
 
 
-def _sniff_csv_header(csv_path: Path) -> Tuple[int, Dict[str, Any]]:
+_CSV_DELIMITERS = ",;\t|"
+
+
+def _detect_delimiter(sample: str, preferred: str = ",") -> str:
+    """Pick the field delimiter of a delimited-text sample.
+
+    Each candidate (, ; tab |) is scored by the share of lines that split into
+    the same number of fields (more than one), then by that field count, so a
+    semicolon file whose cells contain decimal commas still resolves to ';'
+    (every line has the same number of semicolon fields, but not of commas).
+    csv.Sniffer breaks ties between equally good candidates; with no signal
+    at all (a single column) the extension's usual delimiter is returned.
+    """
+    import csv
+    lines = [ln for ln in sample.splitlines() if ln.strip()][:200]
+    if not lines:
+        return preferred
+    scores: Dict[str, Tuple[float, int]] = {}
+    for delim in _CSV_DELIMITERS:
+        try:
+            counts = [len(r) for r in csv.reader(lines, delimiter=delim)]
+        except csv.Error:
+            continue
+        modal = max(set(counts), key=counts.count)
+        if modal >= 2:
+            scores[delim] = (round(counts.count(modal) / len(counts), 6), modal)
+    if not scores:
+        return preferred
+    top = max(scores.values())
+    tied = [d for d, s in scores.items() if s == top]
+    if len(tied) == 1:
+        return tied[0]
+    if preferred in tied:
+        return preferred
+    try:
+        sniffed = csv.Sniffer().sniff("\n".join(lines), delimiters=_CSV_DELIMITERS).delimiter
+        if sniffed in tied:
+            return sniffed
+    except csv.Error:
+        pass
+    return tied[0]
+
+
+def _sniff_csv_header(csv_path: Path, encoding: Optional[str] = None,
+                      delimiter: Optional[str] = None) -> Tuple[int, Dict[str, Any]]:
     """
     Read up to 30 raw rows via the csv stdlib (which tolerates ragged rows
     that would break pandas' C tokenizer), find the header row, and extract
@@ -184,14 +235,12 @@ def _sniff_csv_header(csv_path: Path) -> Tuple[int, Dict[str, Any]]:
     import csv
     raw_rows: List[List[str]] = []
     try:
-        with open(csv_path, "r", encoding="utf-8", errors="replace", newline="") as f:
-            sample = f.read(8192)
-            f.seek(0)
-            try:
-                dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-            except csv.Error:
-                dialect = csv.excel
-            reader = csv.reader(f, dialect)
+        encoding = encoding or detect_encoding(csv_path)
+        with open(csv_path, "r", encoding=encoding, errors="replace", newline="") as f:
+            if delimiter is None:
+                delimiter = _detect_delimiter(f.read(8192), "\t" if csv_path.suffix.lower() == ".tsv" else ",")
+                f.seek(0)
+            reader = csv.reader(f, delimiter=delimiter)
             for i, row in enumerate(reader):
                 if i >= 30:
                     break
@@ -204,6 +253,25 @@ def _sniff_csv_header(csv_path: Path) -> Tuple[int, Dict[str, Any]]:
     if header_idx == 0:
         return 0, {}
     return header_idx, _extract_preamble_metadata(raw_rows[:header_idx])
+
+
+def _read_delimited_frame(csv_path: Path):
+    """Load a CSV/TSV into a DataFrame whatever its encoding and delimiter.
+
+    Returns ``(df, header_idx, doc_metadata)``. The encoding is detected
+    (BOMs, UTF-8, then Windows-1252) and handed to pandas, so a semicolon
+    export from a European Excel, or a UTF-16 file, reads as proper columns.
+    """
+    import pandas as pd
+    encoding = detect_encoding(csv_path)
+    with open(csv_path, "r", encoding=encoding, errors="replace", newline="") as f:
+        sample = f.read(65536)
+    if len(sample) == 65536 and "\n" in sample:
+        sample = sample[:sample.rindex("\n")]  # drop the line the read cut in half
+    delimiter = _detect_delimiter(sample, "\t" if csv_path.suffix.lower() == ".tsv" else ",")
+    header_idx, doc_metadata = _sniff_csv_header(csv_path, encoding, delimiter)
+    df = pd.read_csv(csv_path, sep=delimiter, encoding=encoding, skiprows=header_idx)
+    return df, header_idx, doc_metadata
 
 
 def _sniff_dataframe_header(raw_df) -> Tuple[int, Dict[str, Any]]:
@@ -264,8 +332,18 @@ class DocumentExtractor:
     """Extracts text from various document formats (PDF, TXT, DOCX, CSV, MD, JSON, JSONL) and code files."""
 
     IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff', '.gif'}
-    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.xlsx', '.xls', '.md', '.html', '.htm', '.json', '.jsonl', '.pptx'} | SUPPORTED_CODE_EXTENSIONS | AUDIO_EXTENSIONS | IMAGE_EXTENSIONS
-    TABULAR_EXTENSIONS = {'.csv', '.xlsx', '.xls'}
+    # Plain text in everything but name: read through the shared decoder.
+    TEXT_LIKE_EXTENSIONS = {'.rst', '.adoc', '.asciidoc', '.org', '.tex', '.bib', '.log', '.text'}
+    SUBTITLE_EXTENSIONS = {'.srt', '.vtt'}
+    HTML_EXTENSIONS = {'.html', '.htm', '.xhtml', '.xht'}
+    # Containers and markup read with the standard library alone.
+    DOCUMENT_EXTENSIONS = {'.rtf', '.odt', '.ods', '.odp', '.epub', '.eml', '.mbox', '.ipynb', '.svg'}
+    SUPPORTED_EXTENSIONS = (
+        {'.pdf', '.txt', '.docx', '.csv', '.tsv', '.xlsx', '.xlsm', '.xls', '.md', '.json', '.jsonl', '.pptx'}
+        | HTML_EXTENSIONS | TEXT_LIKE_EXTENSIONS | SUBTITLE_EXTENSIONS | DOCUMENT_EXTENSIONS
+        | SUPPORTED_CODE_EXTENSIONS | AUDIO_EXTENSIONS | IMAGE_EXTENSIONS
+    )
+    TABULAR_EXTENSIONS = {'.csv', '.tsv', '.xlsx', '.xlsm', '.xls'}
     AUDIO_EXTENSIONS = AUDIO_EXTENSIONS
 
     # Fixed rendering defaults for vision OCR. These used to be user settings,
@@ -529,7 +607,7 @@ class DocumentExtractor:
         if not is_supported_filename(file_path.name):
             raise ValueError(
                 f"Unsupported file type: {file_ext or file_path.name}. "
-                f"Supported types: {', '.join(sorted(self.SUPPORTED_EXTENSIONS))}"
+                f"{unsupported_reason(file_path.name)}"
             )
 
         logger.info(f"Extracting text from {file_ext or file_path.name} file: {file_path.name}")
@@ -577,12 +655,21 @@ class DocumentExtractor:
             result = ExtractionResult(self._extract_pptx(file_path), method="text")
         elif file_ext == '.csv':
             result = ExtractionResult(self._extract_csv(file_path), method="text")
-        elif file_ext in ('.xlsx', '.xls'):
+        elif file_ext in ('.xlsx', '.xlsm', '.xls'):
             result = ExtractionResult(self._extract_xlsx(file_path), method="text")
+        elif file_ext == '.tsv':
+            result = ExtractionResult(self._extract_csv(file_path), method="text")
         elif file_ext == '.md':
             result = ExtractionResult(self._extract_markdown(file_path), method="text")
-        elif file_ext in ('.html', '.htm'):
+        elif file_ext in self.HTML_EXTENSIONS:
             result = ExtractionResult(self._extract_html(file_path), method="text")
+        elif file_ext in self.TEXT_LIKE_EXTENSIONS:
+            result = ExtractionResult(
+                text_pages(file_path, LOG_LINES_PER_PAGE if file_ext == '.log' else None), method="text")
+        elif file_ext in self.SUBTITLE_EXTENSIONS:
+            result = ExtractionResult(subtitle_pages(file_path), method="text")
+        elif file_ext in self.DOCUMENT_EXTENSIONS:
+            result = ExtractionResult(self._extract_document_format(file_path, file_ext), method="text")
         elif file_ext == '.json':
             result = ExtractionResult(self._extract_json(file_path), method="text")
         elif file_ext == '.jsonl':
@@ -640,17 +727,7 @@ class DocumentExtractor:
         if force_ocr and self.enable_ocr:
             logger.info(f"Force OCR enabled for {pdf_path.name} — skipping native extraction")
         else:
-            try:
-                # Try pdfplumber first (better for complex layouts)
-                page_texts = self._extract_pdf_with_pdfplumber(pdf_path)
-            except Exception as e:
-                logger.warning(f"pdfplumber failed for {pdf_path.name}: {e}. Trying pypdf...")
-                try:
-                    # Fallback to pypdf
-                    page_texts = self._extract_pdf_with_pypdf(pdf_path)
-                except Exception as e2:
-                    logger.warning(f"pypdf failed for {pdf_path.name}: {e2}")
-                    page_texts = {}
+            page_texts = self._extract_pdf_native(pdf_path)
 
         # Check if we need OCR (no text, mostly empty pages, or force_ocr requested)
         if self.enable_ocr:
@@ -750,6 +827,50 @@ class DocumentExtractor:
                     return len(pdf.pages)
             except Exception:
                 return 0
+
+    def _extract_pdf_native(self, pdf_path: Path) -> Dict[int, str]:
+        """Text from the PDF's own text layer: pdfium, then pdfplumber, then pypdf.
+
+        pdfium goes first: it reads text in the document's own order, so
+        two-column papers come out column by column and word spacing survives
+        tight typesetting. pdfplumber's default sorts lines by height on the
+        page, which interleaves columns line by line and merges words — that
+        broke search, citations and quote checks for most academic PDFs. The
+        others remain for files pdfium cannot open."""
+        for name, extract in (("pdfium", self._extract_pdf_with_pdfium),
+                              ("pdfplumber", self._extract_pdf_with_pdfplumber),
+                              ("pypdf", self._extract_pdf_with_pypdf)):
+            try:
+                page_texts = extract(pdf_path)
+            except Exception as e:  # noqa: BLE001 - the next reader may cope
+                logger.info(f"{name} could not read {pdf_path.name}: {e}")
+                continue
+            if any((t or "").strip() for t in page_texts.values()):
+                return page_texts
+        return {}
+
+    def _extract_pdf_with_pdfium(self, pdf_path: Path) -> Dict[int, str]:
+        """Extract text with pypdfium2 (PDFium, Chrome's PDF engine)."""
+        import pypdfium2 as pdfium
+        page_texts: Dict[int, str] = {}
+        doc = pdfium.PdfDocument(str(pdf_path))
+        try:
+            for page_num in range(1, len(doc) + 1):
+                try:
+                    page = doc[page_num - 1]
+                    textpage = page.get_textpage()
+                    text = textpage.get_text_range() or ""
+                    textpage.close()
+                    page.close()
+                except Exception as e:  # noqa: BLE001 - one bad page must not lose the rest
+                    logger.warning(f"pdfium: page {page_num} of {pdf_path.name} failed to extract ({e})")
+                    text = ""
+                # PDFium ends lines with CRLF and marks soft hyphens with \x02.
+                text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\x02", "-")
+                page_texts[page_num] = text.replace("\x00", "").strip()
+        finally:
+            doc.close()
+        return page_texts
 
     def _extract_pdf_with_pdfplumber(self, pdf_path: Path) -> Dict[int, str]:
         """Extract text using pdfplumber (handles complex layouts better)."""
@@ -906,18 +1027,33 @@ class DocumentExtractor:
         Returns:
             Dictionary with single entry (page 1) containing all text
         """
-        try:
-            # Try UTF-8 first
-            with open(txt_path, 'r', encoding='utf-8') as f:
-                text = f.read()
-        except UnicodeDecodeError:
-            # Fallback to latin-1 for broader compatibility
-            logger.warning(f"UTF-8 decoding failed for {txt_path.name}, trying latin-1")
-            with open(txt_path, 'r', encoding='latin-1') as f:
-                text = f.read()
+        # BOM-aware; UTF-8, then Windows-1252, then Latin-1 (see format_readers).
+        text = read_text_file(txt_path)
 
         # Return as single "page"
         return {1: text.strip()}
+
+    def _extract_document_format(self, path: Path, ext: str) -> Dict[int, str]:
+        """Formats read with the standard library alone (see services/format_readers)."""
+        if ext == '.rtf':
+            return rtf_pages(path)
+        if ext == '.odt':
+            return odt_pages(path)
+        if ext == '.ods':
+            return ods_pages(path)
+        if ext == '.odp':
+            return odp_pages(path)
+        if ext == '.ipynb':
+            return ipynb_pages(path)
+        if ext == '.svg':
+            return svg_pages(path)
+        if ext == '.epub':
+            return epub_pages(path, self._html_to_sections)
+        if ext == '.eml':
+            return eml_pages(path, self._html_to_sections)
+        if ext == '.mbox':
+            return mbox_pages(path, self._html_to_sections)
+        raise ValueError(f"Unsupported file extension: {ext}")
 
     def _extract_docx(self, docx_path: Path) -> Dict[int, str]:
         """
@@ -1034,10 +1170,10 @@ class DocumentExtractor:
                 "Install it with: pip install pandas"
             )
 
-        # Read CSV — sniff header row to skip brokerage-style preamble lines
-        header_idx, doc_metadata = _sniff_csv_header(csv_path)
+        # Read CSV/TSV — detect encoding and delimiter, and sniff the header row
+        # to skip brokerage-style preamble lines
         try:
-            df = pd.read_csv(csv_path, skiprows=header_idx)
+            df, header_idx, doc_metadata = _read_delimited_frame(csv_path)
         except Exception as e:
             logger.error(f"Failed to read CSV {csv_path.name}: {e}")
             raise Exception(f"Failed to read CSV file: {e}")
@@ -1082,6 +1218,20 @@ class DocumentExtractor:
 
         return page_texts
 
+    @staticmethod
+    def _excel_import_hint(path: Path, error: Exception) -> str:
+        """Say which package a workbook needs, in words a user can act on."""
+        if path.suffix.lower() == '.xls':
+            return (
+                f"Reading .xls (Excel 97-2003) files needs the xlrd package, which is not "
+                f"installed ({error}). Install it with: pip install xlrd -- or save the "
+                f"workbook as .xlsx and upload it again."
+            )
+        return (
+            f"openpyxl is required for {path.suffix.lower()} support. "
+            f"Install it with: pip install openpyxl"
+        )
+
     def _extract_xlsx(self, xlsx_path: Path) -> Dict[int, str]:
         """
         Extract text from an Excel workbook (fallback/semantic path).
@@ -1099,6 +1249,8 @@ class DocumentExtractor:
 
         try:
             excel = pd.ExcelFile(xlsx_path)
+        except ImportError as e:
+            raise ImportError(self._excel_import_hint(xlsx_path, e)) from e
         except Exception as e:
             logger.error(f"Failed to open XLSX {xlsx_path.name}: {e}")
             raise Exception(f"Failed to open Excel file: {e}")
@@ -1161,10 +1313,9 @@ class DocumentExtractor:
 
         ext = file_path.suffix.lower()
 
-        if ext == '.csv':
-            header_idx, doc_metadata = _sniff_csv_header(file_path)
+        if ext in ('.csv', '.tsv'):
             try:
-                df = pd.read_csv(file_path, skiprows=header_idx)
+                df, header_idx, doc_metadata = _read_delimited_frame(file_path)
             except Exception as e:
                 raise Exception(f"Failed to read CSV file: {e}")
             if header_idx > 0:
@@ -1176,9 +1327,11 @@ class DocumentExtractor:
             self._init_sheet_overrides(sheet)
             return [sheet]
 
-        if ext in ('.xlsx', '.xls'):
+        if ext in ('.xlsx', '.xlsm', '.xls'):
             try:
                 excel = pd.ExcelFile(file_path)
+            except ImportError as e:
+                raise ImportError(self._excel_import_hint(file_path, e)) from e
             except Exception as e:
                 raise Exception(f"Failed to open Excel file: {e}")
 
@@ -1291,13 +1444,7 @@ class DocumentExtractor:
         """
         import re
 
-        try:
-            with open(md_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-        except UnicodeDecodeError:
-            logger.warning(f"UTF-8 decoding failed for {md_path.name}, trying latin-1")
-            with open(md_path, 'r', encoding='latin-1') as f:
-                content = f.read()
+        content = read_text_file(md_path)
 
         if not content.strip():
             logger.warning(f"Empty markdown file: {md_path.name}")
@@ -1321,8 +1468,12 @@ class DocumentExtractor:
         return page_texts
 
     def _extract_html(self, html_path: Path) -> Dict[int, str]:
+        """Extract text from an HTML/XHTML file, chunking by h1/h2 headings."""
+        return self._html_to_sections(html_path.read_bytes(), html_path.name)
+
+    def _html_to_sections(self, data: Union[bytes, str], name: str) -> Dict[int, str]:
         """
-        Extract text from an HTML file, chunking by h1/h2 headings.
+        Extract text from HTML markup (bytes or str), chunking by h1/h2 headings.
 
         Mirrors _extract_markdown's section shape so citations point at a
         heading-delimited section rather than one giant page. Old report
@@ -1336,7 +1487,7 @@ class DocumentExtractor:
         """
         from bs4 import BeautifulSoup, NavigableString
 
-        soup = BeautifulSoup(html_path.read_bytes(), "html.parser")
+        soup = BeautifulSoup(data, "html.parser")
 
         for tag in soup(["script", "style", "noscript", "template", "iframe", "svg", "canvas"]):
             tag.decompose()
@@ -1378,7 +1529,7 @@ class DocumentExtractor:
 
         if not sections:
             if not title:
-                logger.warning(f"No extractable text in HTML file: {html_path.name}")
+                logger.warning(f"No extractable text in HTML file: {name}")
                 return {1: ""}
             sections = [title]
         elif title and title.lower() not in sections[0][:300].lower():
@@ -1475,12 +1626,7 @@ class DocumentExtractor:
         import json
 
         try:
-            with open(json_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except UnicodeDecodeError:
-            logger.warning(f"UTF-8 decoding failed for {json_path.name}, trying latin-1")
-            with open(json_path, 'r', encoding='latin-1') as f:
-                data = json.load(f)
+            data = json.loads(read_text_file(json_path))
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in {json_path.name}: {e}")
             raise Exception(f"Failed to parse JSON file: {e}")
@@ -1531,33 +1677,18 @@ class DocumentExtractor:
         import json
 
         lines = []
-        try:
-            with open(jsonl_path, 'r', encoding='utf-8') as f:
-                for line_num, line in enumerate(f, start=1):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        # Format as JSON for readability
-                        formatted = json.dumps(data, indent=2) if isinstance(data, (dict, list)) else str(data)
-                        lines.append(f"[{line_num}]: {formatted}")
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"Skipping invalid JSON at line {line_num} in {jsonl_path.name}: {e}")
-                        lines.append(f"[{line_num}]: {line}")
-        except UnicodeDecodeError:
-            logger.warning(f"UTF-8 decoding failed for {jsonl_path.name}, trying latin-1")
-            with open(jsonl_path, 'r', encoding='latin-1') as f:
-                for line_num, line in enumerate(f, start=1):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        formatted = json.dumps(data, indent=2) if isinstance(data, (dict, list)) else str(data)
-                        lines.append(f"[{line_num}]: {formatted}")
-                    except json.JSONDecodeError:
-                        lines.append(f"[{line_num}]: {line}")
+        for line_num, line in enumerate(read_text_file(jsonl_path).splitlines(), start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                # Format as JSON for readability
+                formatted = json.dumps(data, indent=2) if isinstance(data, (dict, list)) else str(data)
+                lines.append(f"[{line_num}]: {formatted}")
+            except json.JSONDecodeError as e:
+                logger.warning(f"Skipping invalid JSON at line {line_num} in {jsonl_path.name}: {e}")
+                lines.append(f"[{line_num}]: {line}")
 
         if not lines:
             logger.warning(f"Empty JSONL file: {jsonl_path.name}")
@@ -1693,6 +1824,41 @@ class DocumentExtractor:
     def is_supported_filename(name: Union[str, Path]) -> bool:
         """Whether a filename can be indexed, by suffix or well-known basename."""
         return is_supported_filename(name)
+
+
+SUPPORTED_TYPES_SUMMARY = (
+    "PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx, .xlsm, .xls), CSV/TSV, "
+    "OpenDocument (.odt, .ods, .odp), EPUB, RTF, email (.eml, .mbox), Jupyter notebooks, "
+    "HTML/XHTML/SVG, Markdown, JSON/JSONL, plain text and text markup "
+    "(.txt, .rst, .adoc, .org, .tex, .bib, .log), subtitles (.srt, .vtt), "
+    "images, audio, and source code (by extension or well-known name such as Makefile)"
+)
+
+# Formats people ask for that cannot be read, with the way round each.
+_UNSUPPORTED_HINTS = {
+    ".doc": "Save it as .docx in Word or LibreOffice and upload it again.",
+    ".dot": "Save it as .docx in Word or LibreOffice and upload it again.",
+    ".ppt": "Save it as .pptx in PowerPoint or LibreOffice and upload it again.",
+    ".pps": "Save it as .pptx in PowerPoint or LibreOffice and upload it again.",
+    ".msg": "Save the message as .eml (in Outlook: File > Save As) and upload it again.",
+    ".xlsb": "Save it as .xlsx in Excel and upload it again.",
+    ".pages": "Export it as PDF or .docx and upload it again.",
+    ".numbers": "Export it as .xlsx or .csv and upload it again.",
+    ".key": "Export it as .pptx or PDF and upload it again.",
+    ".wpd": "Save it as .docx or PDF and upload it again.",
+}
+_ARCHIVE_EXTENSIONS = {".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz"}
+
+
+def unsupported_reason(name: Union[str, Path]) -> str:
+    """A sentence for the person whose file was refused, saying why and what to do."""
+    ext = Path(str(name)).suffix.lower()
+    if ext in _UNSUPPORTED_HINTS:
+        return f"Clio can't read {ext} files. {_UNSUPPORTED_HINTS[ext]}"
+    if ext in _ARCHIVE_EXTENSIONS:
+        return f"Clio can't read {ext} archives. Unpack it and upload the files inside."
+    what = f"{ext} files" if ext else f"{Path(str(name)).name} (it has no file extension)"
+    return f"Clio can't read {what}. Supported: {SUPPORTED_TYPES_SUMMARY}."
 
 
 def is_supported_filename(name: Union[str, Path]) -> bool:

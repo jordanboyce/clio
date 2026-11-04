@@ -28,7 +28,7 @@ _EXTENSION_RE = re.compile(r"^\.[a-z0-9][a-z0-9_+\-]{0,19}$")
 MAX_REINDEX_EXTENSIONS = 20
 # Spreadsheets are indexed into the table store, not as chunks, so they only
 # come back through a full re-index of the collection.
-_TABULAR_EXTENSIONS = frozenset({".csv", ".xlsx", ".xls"})
+_TABULAR_EXTENSIONS = frozenset({".csv", ".tsv", ".xlsx", ".xlsm", ".xls"})
 
 
 def normalize_reindex_extensions(extensions: Any) -> List[str]:
@@ -653,6 +653,10 @@ class ReindexService:
             supported_extensions = {
                 # Documents
                 ".pdf", ".txt", ".docx", ".pptx", ".csv", ".md", ".json", ".jsonl",
+                ".tsv", ".xlsx", ".xlsm", ".xls", ".html", ".htm", ".xhtml", ".xht",
+                ".rtf", ".odt", ".ods", ".odp", ".epub", ".eml", ".mbox", ".ipynb", ".svg",
+                ".rst", ".adoc", ".asciidoc", ".org", ".tex", ".bib", ".log", ".text",
+                ".srt", ".vtt",
                 # Pascal/Delphi
                 ".pas", ".dpr", ".dpk", ".pp", ".inc", ".dfm",
                 # Modula-2

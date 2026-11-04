@@ -517,6 +517,108 @@ def test_brief_with_a_question_has_a_relevance_section(indexer):
     assert any("No statement could be verified" in n for n in out["notes"])
 
 
+class ReasoningProvider:
+    """A reasoning model behind an OpenAI-style endpoint: without a
+    reasoning-effort cap it thinks through the whole budget and returns no
+    content (finish_reason "length"), as GLM-5.3-flash does on OpenRouter."""
+
+    def __init__(self, reply, accepts_effort=True):
+        self.reply = reply
+        self.calls = []
+        if not accepts_effort:
+            self.complete = self._complete_no_effort
+
+    def complete(self, prompt, max_tokens, model, reasoning_effort=None):
+        self.calls.append({"max_tokens": max_tokens, "effort": reasoning_effort})
+        if reasoning_effort:
+            return {"text": json.dumps(self.reply), "finish_reason": "stop",
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "model": model}}
+        return {"text": "", "finish_reason": "length",
+                "usage": {"input_tokens": 10, "output_tokens": max_tokens, "model": model}}
+
+    def _complete_no_effort(self, prompt, max_tokens, model):
+        self.calls.append({"max_tokens": max_tokens, "effort": None})
+        return {"text": "", "finish_reason": "length",
+                "usage": {"input_tokens": 10, "output_tokens": max_tokens, "model": model}}
+
+
+def test_openai_provider_returns_empty_text_when_a_reasoning_model_sends_no_content():
+    from types import SimpleNamespace
+    from services.ai_service import OpenAIProvider
+    provider = OpenAIProvider.__new__(OpenAIProvider)
+    sent = {}
+
+    def create(**kwargs):
+        sent.update(kwargs)
+        message = SimpleNamespace(content=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="length")],
+                               usage=SimpleNamespace(prompt_tokens=7, completion_tokens=2200))
+    provider.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    out = provider.complete("p", 2200, "z-ai/glm-5.3-flash")
+    assert out["text"] == "" and out["finish_reason"] == "length"
+    assert "reasoning_effort" not in sent                      # never sent unless asked
+    provider.complete("p", 2200, "z-ai/glm-5.3-flash", reasoning_effort="low")
+    assert sent["reasoning_effort"] == "low"
+
+
+def test_research_call_retries_a_budget_exhausted_reply_with_low_effort_and_remembers():
+    from services.research import passages
+    passages._LOW_EFFORT.clear()
+    fake = ReasoningProvider({"tldr": []})
+    text, usage = passages.complete(fake, "reasoner", "prompt", max_tokens=2200)
+    assert json.loads(text) == {"tldr": []}
+    assert [c["effort"] for c in fake.calls] == [None, "low"]
+    assert fake.calls[1]["max_tokens"] > 2200
+    assert usage["output_tokens"] == 2205                    # both calls are counted
+    fake.calls.clear()
+    passages.complete(fake, "reasoner", "prompt", max_tokens=2200)
+    assert [c["effort"] for c in fake.calls] == ["low"]       # no wasted first call next time
+
+
+def test_research_call_explains_a_model_that_never_answers():
+    from services.research import passages
+    passages._LOW_EFFORT.clear()
+    with pytest.raises(passages.ModelReplyError, match="whole answer budget"):
+        passages.complete(ReasoningProvider({}, accepts_effort=False), "reasoner", "prompt", 2200)
+
+
+def test_brief_fails_with_the_reason_when_no_part_could_be_answered(indexer):
+    from services.research import passages
+    passages._LOW_EFFORT.clear()
+    with pytest.raises(passages.ModelReplyError, match="whole answer budget"):
+        briefs.prepare(indexer, "doc-1", ReasoningProvider({}, accepts_effort=False), "reasoner", depth="brief")
+
+
+def test_one_unanswerable_part_does_not_sink_a_thorough_review(indexer, monkeypatch):
+    from services.research import passages
+    monkeypatch.setattr(briefs, "WINDOW_CHARS", 400)
+    p2 = _pid_of("Methods.", indexer)
+    good = {"approach": [{"point": "240 saplings", "quote": "We grew 240 saplings under three watering regimes",
+                          "passage": p2}]}
+    calls = {"n": 0}
+    real = passages.complete
+
+    def flaky(provider, model, prompt, max_tokens):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise passages.ModelReplyError("reasoner returned an empty answer twice.")
+        return real(provider, model, prompt, max_tokens)
+    monkeypatch.setattr(briefs, "complete", flaky)
+    out = briefs.prepare(indexer, "doc-1", FakeProvider(good, good, good), "fake-model", depth="thorough")
+    by_key = {s["key"]: s["items"] for s in out["sections"]}
+    assert [i["point"] for i in by_key["approach"]] == ["240 saplings"]
+    assert any("1 part(s) could not be read" in n for n in out["notes"])
+
+
+def test_screening_gives_no_verdict_instead_of_failing_when_the_model_never_answers(indexer):
+    from services.research import passages
+    passages._LOW_EFFORT.clear()
+    result = relevance.assess(indexer, "doc-1", "Does root conductance predict survival?",
+                              provider=ReasoningProvider({}, accepts_effort=False), model="reasoner")
+    assert result["verdict"] == "not_established"
+    assert any("whole answer budget" in n for n in result["notes"])
+
+
 # ── jobs ────────────────────────────────────────────────────────────────
 
 def test_job_records_progress_failures_and_finish(tmp_path):
