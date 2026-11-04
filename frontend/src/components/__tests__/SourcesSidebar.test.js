@@ -8,6 +8,7 @@ import SourcesSidebar from '../SourcesSidebar.vue'
 import { useCollectionStore } from '../../stores/collectionStore'
 import { useSelectionStore } from '../../stores/selectionStore'
 import { useBackgroundJobsStore } from '../../stores/backgroundJobsStore'
+import { useLayoutStore } from '../../stores/layoutStore'
 
 // The panel as a whole, mounted the way the app mounts it: this is where a
 // setup-order mistake (a watcher reading state declared further down)
@@ -50,6 +51,118 @@ async function mountPanel() {
   await flushPromises()
   return wrapper
 }
+
+describe('Deleting sources', () => {
+  // A list that answers straight away, with a delete job the server never finishes.
+  async function listPanel(all) {
+    serve(all, { folders: [] })
+    http.post.mockResolvedValue({
+      data: { job_id: 41, collection_id: 'lab', status: 'running', total_files: 1, processed_files: 0, job_type: 'delete' },
+    })
+    vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
+    // Before mounting: the tree loads every page, and the list keeps them.
+    useLayoutStore().sourcesView = 'list'
+    return mountPanel()
+  }
+  const row = (w, id) => w.findAll('[aria-label^="Delete source"]')
+    .find(b => b.attributes('aria-label').includes(`doc${id}.pdf`)).element.closest('.group')
+  const confirm = (w) => w.findAll('.modal-action button').find(b => b.text() === 'Delete').trigger('click')
+
+  afterEach(() => {
+    useBackgroundJobsStore().cleanup()
+    vi.unstubAllGlobals()
+    sessionStorage.clear() // the selection lives there
+  })
+
+  it('closes the dialog as soon as the job has started, instead of waiting for it', async () => {
+    const w = await listPanel(docs(3))
+    const modal = w.get('dialog[aria-labelledby="sidebar-delete-title"]').element
+    modal.showModal = vi.fn()
+    modal.close = vi.fn()
+
+    await w.get('[aria-label="Delete source F1_doc1.pdf"]').trigger('click')
+    expect(modal.showModal).toHaveBeenCalled()
+    await confirm(w)
+    await flushPromises()
+
+    expect(http.post).toHaveBeenCalledWith('/documents/bulk-delete', { collection_id: 'lab', document_ids: ['d1'] })
+    expect(http.delete).not.toHaveBeenCalled()
+    expect(modal.close).toHaveBeenCalled()
+  })
+
+  it('marks only the sources on their way out, leaving the others usable', async () => {
+    const w = await listPanel(docs(3))
+    w.get('dialog[aria-labelledby="sidebar-delete-title"]').element.close = vi.fn()
+    w.get('dialog[aria-labelledby="sidebar-delete-title"]').element.showModal = vi.fn()
+
+    await w.get('[aria-label="Delete source F1_doc1.pdf"]').trigger('click')
+    await confirm(w)
+    await flushPromises()
+
+    expect(row(w, 1).dataset.deleting).toBe('true')
+    expect(row(w, 0).dataset.deleting).toBeUndefined()
+    expect(row(w, 0).querySelector('[aria-label="Delete source F0_doc0.pdf"]').disabled).toBe(false)
+  })
+
+  it('takes deleted sources out of the selection at once, so chat stops using them', async () => {
+    const w = await listPanel(docs(3))
+    useSelectionStore().set(['d0', 'd1'])
+    await flushPromises()
+    w.get('dialog[aria-labelledby="sidebar-delete-title"]').element.close = vi.fn()
+    w.get('dialog[aria-labelledby="sidebar-delete-title"]').element.showModal = vi.fn()
+
+    await w.get('[aria-label="Delete 2 selected sources"]').trigger('click')
+    await confirm(w)
+    await flushPromises()
+
+    expect(http.post).toHaveBeenCalledWith('/documents/bulk-delete', { collection_id: 'lab', document_ids: ['d0', 'd1'] })
+    expect(useSelectionStore().currentIds).toEqual([])
+  })
+
+  it('offers all of them when select-all only reached the loaded page', async () => {
+    const w = await listPanel(docs(450))
+    w.get('dialog[aria-labelledby="sidebar-delete-title"]').element.close = vi.fn()
+    w.get('dialog[aria-labelledby="sidebar-delete-title"]').element.showModal = vi.fn()
+
+    await w.get('[aria-label="Select all sources"]').setValue(true)
+    await w.get('[aria-label^="Delete 200 selected"]').trigger('click')
+
+    expect(w.get('[data-testid="more-than-loaded"]').text()).toContain('This collection has 450')
+    await w.get('[data-testid="delete-all-sources"]').trigger('click')
+    await flushPromises()
+
+    expect(http.post).toHaveBeenCalledWith('/documents/bulk-delete', { collection_id: 'lab', everything: true })
+    expect(useSelectionStore().currentIds).toEqual([])
+  })
+
+  it('says what went wrong if the job could not be started, and keeps the sources', async () => {
+    const w = await listPanel(docs(2))
+    http.post.mockRejectedValue({ message: 'This collection is being re-indexed.' })
+    w.get('dialog[aria-labelledby="sidebar-delete-title"]').element.close = vi.fn()
+    w.get('dialog[aria-labelledby="sidebar-delete-title"]').element.showModal = vi.fn()
+
+    await w.get('[aria-label="Delete source F0_doc0.pdf"]').trigger('click')
+    await confirm(w)
+    await flushPromises()
+
+    expect(w.text()).toContain('This collection is being re-indexed.')
+    expect(row(w, 0).dataset.deleting).toBeUndefined()
+  })
+
+  it('reloads the list when a delete job stops early, not only when it completes', async () => {
+    const w = await listPanel(docs(2))
+    const jobs = useBackgroundJobsStore()
+    jobs.addUploadJob({ job_id: 5, collection_id: 'lab', status: 'running', total_files: 2, processed_files: 0, job_type: 'delete' })
+    await flushPromises()
+    http.get.mockClear()
+    serve(docs(2), { folders: [] })
+
+    jobs.uploadJobs[0].status = 'cancelled'
+    await flushPromises()
+
+    expect(http.get.mock.calls.some(c => c[0] === '/documents')).toBe(true)
+  })
+})
 
 describe('Sources panel', () => {
   it('mounts and shows the folder tree with the whole collection loaded', async () => {

@@ -1007,8 +1007,19 @@
               <p class="text-xs text-base-content/55 mt-1 leading-relaxed max-w-[52ch]">
                 Permanently deletes every source and index in
                 <span class="font-medium text-base-content/75">{{ collectionStore.currentCollection?.name || 'Default' }}</span>.
-                The collection itself remains. This cannot be undone.
+                The collection itself remains. This cannot be undone. Research reviews and saved reports are kept: adding the same file back brings its reviews back. To remove them too, use the option below.
               </p>
+              <div v-if="clearJob" class="mt-2 max-w-[52ch]" role="status" data-testid="clear-progress">
+                <progress
+                  class="progress progress-error w-full h-1.5 block"
+                  :value="clearJob.queuePosition ? undefined : clearJob.progress"
+                  max="100"
+                ></progress>
+                <p class="text-xs text-base-content/60 mt-1">
+                  {{ clearJob.queuePosition ? 'Waiting for another job on this collection to finish.' : (clearJob.phaseDetail || 'Starting…') }}
+                  You can keep working; this carries on in the background.
+                </p>
+              </div>
               <p v-if="clearSuccess" class="text-success text-xs mt-1.5" role="status">All data cleared</p>
               <p v-if="clearError" class="text-error text-xs mt-1.5" role="alert">{{ clearError }}</p>
             </div>
@@ -1020,6 +1031,32 @@
             >
               <span v-if="clearing" class="loading loading-spinner loading-xs"></span>
               {{ clearing ? 'Clearing…' : 'Clear data' }}
+            </button>
+          </div>
+
+          <div class="flex items-start justify-between gap-8 mt-6" data-testid="outputs-row">
+            <div class="min-w-0">
+              <div class="text-sm font-medium text-error">Delete generated reviews and reports</div>
+              <p class="text-xs text-base-content/55 mt-1 leading-relaxed max-w-[52ch]">
+                Removes what was generated from this collection, including reviews of sources since deleted, which no list shows. Sources stay. This cannot be undone.
+              </p>
+              <p v-if="outputs" class="text-xs text-base-content/70 mt-1.5 tabular-nums" data-testid="outputs-counts">
+                {{ outputsSummary }}
+              </p>
+              <p v-if="outputs?.reports_held" class="text-xs text-base-content/55 mt-1">
+                {{ outputs.reports_held.toLocaleString() }} held for review {{ outputs.reports_held === 1 ? 'stays' : 'stay' }}: only someone who can review {{ outputs.reports_held === 1 ? 'it' : 'them' }} can delete {{ outputs.reports_held === 1 ? 'it' : 'them' }}.
+              </p>
+              <p v-if="outputsDone" class="text-success text-xs mt-1.5" role="status">{{ outputsDone }}</p>
+              <p v-if="outputsError" class="text-error text-xs mt-1.5" role="alert">{{ outputsError }}</p>
+            </div>
+            <button
+              class="btn btn-sm btn-outline btn-error flex-shrink-0"
+              data-testid="delete-outputs"
+              @click="confirmDeleteOutputs"
+              :disabled="!collectionStore.canEditCurrent || !hasOutputs"
+              :title="collectionStore.canEditCurrent ? undefined : 'This collection is shared with you read-only'"
+            >
+              Delete…
             </button>
           </div>
         </section>
@@ -1065,6 +1102,39 @@
       </div>
     </div>
 
+    <!-- Delete generated reviews and reports -->
+    <dialog ref="outputsModal" class="modal" aria-labelledby="delete-outputs-title">
+      <div class="modal-box">
+        <h3 id="delete-outputs-title" class="font-bold text-lg text-error">Delete generated work</h3>
+        <p class="py-3 text-sm">
+          From <strong>{{ collectionStore.currentCollection?.name || 'Default' }}</strong>. Its sources stay. Generating these again costs model time.
+        </p>
+        <label class="flex items-center gap-2 py-1 text-sm cursor-pointer">
+          <input v-model="deleteReviews" type="checkbox" class="checkbox checkbox-sm" data-testid="outputs-reviews" />
+          {{ countOf(outputs?.reviews || 0, 'research review', 'research reviews') }} and {{ countOf(outputs?.screenings || 0, 'screening verdict', 'screening verdicts') }}
+        </label>
+        <label class="flex items-center gap-2 py-1 text-sm cursor-pointer">
+          <input v-model="deleteReports" type="checkbox" class="checkbox checkbox-sm" data-testid="outputs-reports" />
+          {{ countOf(outputs?.reports || 0, 'saved report', 'saved reports') }}, with any files
+        </label>
+        <div class="modal-action">
+          <button class="btn" @click="outputsModal?.close()" :disabled="deletingOutputs">Cancel</button>
+          <button
+            class="btn btn-error"
+            data-testid="outputs-confirm"
+            @click="deleteOutputs"
+            :disabled="deletingOutputs || !(deleteReviews || deleteReports)"
+          >
+            <span v-if="deletingOutputs" class="loading loading-spinner"></span>
+            Delete permanently
+          </button>
+        </div>
+      </div>
+      <form method="dialog" class="modal-backdrop">
+        <button :disabled="deletingOutputs">close</button>
+      </form>
+    </dialog>
+
     <!-- Clear All Confirmation Modal -->
     <dialog ref="clearModal" class="modal" aria-labelledby="clear-all-title">
       <div class="modal-box">
@@ -1076,10 +1146,10 @@
           This action cannot be undone.
         </p>
         <div class="modal-action">
-          <button class="btn" @click="closeClearModal" :disabled="clearing">Cancel</button>
+          <button class="btn" @click="closeClearModal" :disabled="clearStarting">Cancel</button>
           <button class="btn btn-error" @click="clearAllData" :disabled="clearing">
-            <span v-if="clearing" class="loading loading-spinner"></span>
-            {{ clearing ? 'Clearing...' : 'Delete Everything' }}
+            <span v-if="clearStarting" class="loading loading-spinner"></span>
+            Delete Everything
           </button>
         </div>
       </div>
@@ -1093,6 +1163,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import http from '../utils/http'
+import { researchApi } from '../utils/researchApi.js'
 import { ChevronDown, Check, ShieldCheck, ShieldAlert } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
@@ -1742,11 +1813,19 @@ async function loadSystemInfo() {
 // Theme
 const selectedTheme = ref('light')
 
-// Clear data
-const clearing = ref(false)
+// Clear data. The job belongs to the server, so "clearing" is read from the
+// jobs store: it stays right after leaving this tab and coming back, and a
+// refresh or another tab sees the same thing.
+const clearStarting = ref(false)
 const clearSuccess = ref(false)
 const clearError = ref('')
 const clearModal = ref(null)
+const clearJob = computed(() => backgroundJobsStore.allJobs.find(j =>
+  j.type === 'delete' && j.deletingEverything &&
+  j.collectionId === collectionStore.currentCollectionId &&
+  backgroundJobsStore.isActiveStatus(j.status)
+))
+const clearing = computed(() => clearStarting.value || !!clearJob.value)
 
 // Bumped after every provider-config write so computeds/template re-read
 // localStorage (which is not reactive by itself). Also broadcasts to the
@@ -2067,38 +2146,116 @@ const confirmClearAll = () => {
 }
 
 const closeClearModal = () => {
-  if (!clearing.value) {
+  if (!clearStarting.value) {
     clearModal.value?.close()
   }
 }
 
 const clearAllData = async () => {
-  clearing.value = true
+  clearStarting.value = true
   clearError.value = ''
   clearSuccess.value = false
 
   try {
-    const collectionId = collectionStore.currentCollectionId
-    const docsResponse = await http.get(`/documents?collection_id=${collectionId}`)
-    const documents = docsResponse.data.documents || []
-
-    for (const doc of documents) {
-      await http.delete(`/documents/${doc.document_id}?collection_id=${collectionId}`)
-    }
-
-    clearSuccess.value = true
+    const job = await backgroundJobsStore.deleteSources({
+      collectionId: collectionStore.currentCollectionId,
+    })
     clearModal.value?.close()
-    emit('data-cleared')
-
-    setTimeout(() => {
-      clearSuccess.value = false
-    }, 5000)
+    // No job means the collection was already empty.
+    if (!job) showClearSuccess()
   } catch (error) {
     clearError.value = error?.message || 'Failed to clear data'
+    clearModal.value?.close()
   } finally {
-    clearing.value = false
+    clearStarting.value = false
   }
 }
+
+// Generated work: reviews and verdicts (research), saved reports (artifacts).
+const outputs = ref(null)
+const outputsModal = ref(null)
+const deleteReviews = ref(true)
+const deleteReports = ref(true)
+const deletingOutputs = ref(false)
+const outputsDone = ref('')
+const outputsError = ref('')
+const countOf = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : many}`
+const outputsSummary = computed(() => {
+  const { reviews = 0, screenings = 0, reports = 0 } = outputs.value || {}
+  if (!reviews && !screenings && !reports) return 'Nothing generated yet.'
+  return [
+    countOf(reviews, 'review', 'reviews'),
+    countOf(screenings, 'screening verdict', 'screening verdicts'),
+    countOf(reports, 'saved report', 'saved reports'),
+  ].join(' · ')
+})
+const hasOutputs = computed(() => {
+  const { reviews = 0, screenings = 0, reports = 0 } = outputs.value || {}
+  return reviews + screenings + reports > 0
+})
+
+const loadOutputs = async () => {
+  const collectionId = collectionStore.currentCollectionId
+  try {
+    const data = await researchApi.outputs(collectionId)
+    // A slower answer for the collection just left must not land on this one.
+    if (collectionId === collectionStore.currentCollectionId) outputs.value = data
+  } catch {
+    outputs.value = null
+  }
+}
+watch([activeSection, () => collectionStore.currentCollectionId], ([section]) => {
+  outputsDone.value = ''
+  outputsError.value = ''
+  if (section === 'data') loadOutputs()
+}, { immediate: true })
+
+const confirmDeleteOutputs = () => {
+  outputsDone.value = ''
+  outputsError.value = ''
+  deleteReviews.value = (outputs.value?.reviews || 0) + (outputs.value?.screenings || 0) > 0
+  deleteReports.value = (outputs.value?.reports || 0) > 0
+  outputsModal.value?.showModal()
+}
+
+const deleteOutputs = async () => {
+  deletingOutputs.value = true
+  try {
+    const deleted = await researchApi.deleteOutputs(collectionStore.currentCollectionId, {
+      ...(deleteReviews.value ? { reviews: true } : {}),
+      ...(deleteReports.value ? { reports: true } : {}),
+    })
+    const parts = []
+    if (deleteReviews.value) {
+      parts.push(countOf(deleted.reviews, 'review', 'reviews'), countOf(deleted.screenings, 'screening verdict', 'screening verdicts'))
+    }
+    if (deleteReports.value) parts.push(countOf(deleted.reports, 'saved report', 'saved reports'))
+    outputsDone.value = `Deleted ${parts.join(', ')}`
+    await loadOutputs()
+  } catch (error) {
+    outputsError.value = error?.message || 'Could not delete them'
+  } finally {
+    deletingOutputs.value = false
+    outputsModal.value?.close()
+  }
+}
+
+const showClearSuccess = () => {
+  clearSuccess.value = true
+  setTimeout(() => {
+    clearSuccess.value = false
+  }, 5000)
+}
+
+// The job finished, while this tab was showing it.
+watch(clearJob, (now, before) => {
+  if (now || !before) return
+  const finished = backgroundJobsStore.allJobs.find(j => j.type === 'delete' && j.id === before.id)
+  if (!finished || backgroundJobsStore.isActiveStatus(finished.status)) return // switched collection
+  if (finished.status === 'completed') showClearSuccess()
+  else clearError.value = finished.error || 'Failed to clear data'
+  emit('data-cleared')
+})
 
 // Lifecycle
 onMounted(() => {

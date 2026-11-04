@@ -536,6 +536,21 @@ class PostgresBackend(DatabaseBackend):
         finally:
             self._put(conn)
 
+    def remove_documents_from_collection(self, collection_id: str, document_ids: Optional[List[str]] = None):
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                if document_ids is None:
+                    cur.execute("DELETE FROM collection_documents WHERE collection_id = %s", (collection_id,))
+                else:
+                    cur.execute(
+                        "DELETE FROM collection_documents WHERE collection_id = %s AND document_id = ANY(%s)",
+                        (collection_id, list(document_ids)),
+                    )
+            conn.commit()
+        finally:
+            self._put(conn)
+
     def get_collection_documents(self, collection_id: str) -> List[str]:
         conn = self._conn()
         try:
@@ -866,7 +881,9 @@ class PostgresBackend(DatabaseBackend):
     def update_reindex_job(self, job_id: int, **kwargs):
         updates, params = [], []
         for field in ["status", "total_documents", "processed_documents", "current_file", "error"]:
-            if field in kwargs and kwargs[field] is not None:
+            # current_file=None is a deliberate clear: a finished job kept
+            # reporting the last file it touched.
+            if field in kwargs and (kwargs[field] is not None or field == "current_file"):
                 updates.append(f"{field} = %s")
                 params.append(kwargs[field])
         if kwargs.get("status") in ("completed", "failed"):
@@ -1237,6 +1254,22 @@ class PostgresBackend(DatabaseBackend):
             self._put(conn)
 
     # ── Audit trail ──────────────────────────────────────────
+
+    def add_audit_events(self, actor: Optional[str], action: str, collection_id: Optional[str],
+                         events: List[Dict[str, Optional[str]]]) -> None:
+        timestamp = datetime.utcnow().isoformat()
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    [(timestamp, actor, action, collection_id, e.get("document_id"), e.get("target"), e.get("detail"))
+                     for e in events],
+                )
+            conn.commit()
+        finally:
+            self._put(conn)
 
     def add_audit_event(
         self,

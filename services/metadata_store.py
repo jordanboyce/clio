@@ -1289,53 +1289,86 @@ class MetadataStore:
                 results.append(result)
             return results
 
-    def _held_document_ids(self, conn: sqlite3.Connection, document_id: Optional[str] = None) -> List[str]:
-        """The quarantined documents, or just this one if it is quarantined."""
+    def _held_document_ids(self, conn: sqlite3.Connection, document_ids: Optional[List[str]] = None) -> List[str]:
+        """The quarantined documents, or those of ``document_ids`` that are."""
         from services.content_policy import HIDDEN_STATUSES
 
         if "policy_status" not in self._get_table_columns(conn, "documents"):
             return []
         marks = ",".join("?" for _ in HIDDEN_STATUSES)
         sql = f"SELECT document_id FROM documents WHERE policy_status IN ({marks})"
-        params = list(HIDDEN_STATUSES)
-        if document_id is not None:
-            sql += " AND document_id = ?"
-            params.append(document_id)
-        return [row[0] for row in conn.execute(sql, params)]
+        if document_ids is None:
+            return [row[0] for row in conn.execute(sql, list(HIDDEN_STATUSES))]
+        held: List[str] = []
+        for start in range(0, len(document_ids), self._IN_CLAUSE_BATCH):
+            batch = document_ids[start:start + self._IN_CLAUSE_BATCH]
+            placeholders = ",".join("?" for _ in batch)
+            held.extend(row[0] for row in conn.execute(
+                f"{sql} AND document_id IN ({placeholders})", [*HIDDEN_STATUSES, *batch]
+            ))
+        return held
+
+    def list_document_ids(self) -> List[str]:
+        """Every document id, without the cost of a full document listing."""
+        with sqlite_connect(self.db_path) as conn:
+            return [row[0] for row in conn.execute("SELECT document_id FROM documents")]
+
+    def get_chunk_refs_for_documents(self, document_ids: List[str]) -> Tuple[List[int], List[str]]:
+        """``(row ids, chunk ids)`` of every chunk of these documents.
+
+        The row ids are the FAISS ids. The two lists are not aligned; each is
+        for a different index.
+        """
+        row_ids: List[int] = []
+        chunk_ids: List[str] = []
+        with sqlite_connect(self.db_path) as conn:
+            for start in range(0, len(document_ids), self._IN_CLAUSE_BATCH):
+                batch = document_ids[start:start + self._IN_CLAUSE_BATCH]
+                placeholders = ",".join("?" for _ in batch)
+                for row_id, chunk_id in conn.execute(
+                    f"SELECT id, chunk_id FROM chunks WHERE document_id IN ({placeholders})", batch
+                ):
+                    row_ids.append(row_id)
+                    chunk_ids.append(chunk_id)
+        return row_ids, chunk_ids
 
     def delete_document(self, document_id: str) -> int:
+        """Delete one document and its chunks. Returns chunks deleted."""
+        return self.delete_documents([document_id])
+
+    def delete_documents(self, document_ids: List[str]) -> int:
         """
-        Delete all chunks for a specific document.
+        Delete documents and all their chunks in one transaction.
 
         Args:
-            document_id: Document identifier
+            document_ids: Document identifiers
 
         Returns:
             Number of chunks deleted
         """
+        deleted = 0
         with sqlite_connect(self.db_path) as conn:
             # Reports built from a held document stay held once it is gone.
-            mark_sources_withheld(conn, self._held_document_ids(conn, document_id))
+            mark_sources_withheld(conn, self._held_document_ids(conn, document_ids))
+            has_superseded = "superseded_by" in self._get_table_columns(conn, "documents")
 
-            # Collect chunk ids first — chunk_entities has no FK cascade, so
-            # its rows must go before the chunks rows they reference vanish.
-            chunk_ids = [
-                row[0] for row in conn.execute(
-                    "SELECT chunk_id FROM chunks WHERE document_id = ?",
-                    (document_id,),
-                ).fetchall()
-            ]
+            for start in range(0, len(document_ids), self._IN_CLAUSE_BATCH):
+                docs = document_ids[start:start + self._IN_CLAUSE_BATCH]
+                doc_marks = ",".join("?" for _ in docs)
 
-            cursor = conn.execute("""
-                DELETE FROM chunks
-                WHERE document_id = ?
-            """, (document_id,))
+                # Collect chunk ids first — chunk_entities has no FK cascade, so
+                # its rows must go before the chunks rows they reference vanish.
+                chunk_ids = [
+                    row[0] for row in conn.execute(
+                        f"SELECT chunk_id FROM chunks WHERE document_id IN ({doc_marks})", docs,
+                    ).fetchall()
+                ]
+                deleted += conn.execute(
+                    f"DELETE FROM chunks WHERE document_id IN ({doc_marks})", docs,
+                ).rowcount
 
-            deleted = cursor.rowcount
-
-            if chunk_ids:
-                for start in range(0, len(chunk_ids), self._IN_CLAUSE_BATCH):
-                    batch = chunk_ids[start:start + self._IN_CLAUSE_BATCH]
+                for chunk_start in range(0, len(chunk_ids), self._IN_CLAUSE_BATCH):
+                    batch = chunk_ids[chunk_start:chunk_start + self._IN_CLAUSE_BATCH]
                     placeholders = ",".join("?" for _ in batch)
                     conn.execute(
                         f"DELETE FROM chunk_entities WHERE chunk_id IN ({placeholders})",
@@ -1346,27 +1379,24 @@ class MetadataStore:
                         batch,
                     )
 
-            conn.execute("""
-                DELETE FROM documents
-                WHERE document_id = ?
-            """, (document_id,))
-            # Figure rows go with the document; the files are the indexer's
-            # to remove (services/figures.py), as the source file is.
-            conn.execute("DELETE FROM document_figures WHERE document_id = ?", (document_id,))
+                conn.execute(f"DELETE FROM documents WHERE document_id IN ({doc_marks})", docs)
+                # Figure rows go with the document; the files are the indexer's
+                # to remove (services/figures.py), as the source file is.
+                conn.execute(f"DELETE FROM document_figures WHERE document_id IN ({doc_marks})", docs)
 
-            # Anything that was marked as replaced by this document is current
-            # again: a pointer at a document that no longer exists would
-            # demote a version nothing supersedes.
-            if "superseded_by" in self._get_table_columns(conn, "documents"):
-                conn.execute(
-                    "UPDATE documents SET superseded_by = NULL, superseded_at = NULL, "
-                    "superseded_note = NULL WHERE superseded_by = ?",
-                    (document_id,),
-                )
+                # Anything that was marked as replaced by these documents is
+                # current again: a pointer at a document that no longer exists
+                # would demote a version nothing supersedes.
+                if has_superseded:
+                    conn.execute(
+                        "UPDATE documents SET superseded_by = NULL, superseded_at = NULL, "
+                        f"superseded_note = NULL WHERE superseded_by IN ({doc_marks})",
+                        docs,
+                    )
 
             conn.commit()
 
-        logger.info(f"Deleted {deleted} chunks for document {document_id}")
+        logger.info(f"Deleted {deleted} chunks for {len(document_ids)} document(s)")
         return deleted
 
     def get_total_chunks(self) -> int:
@@ -2413,6 +2443,16 @@ class MetadataStore:
             ]
 
         return {"source_formats": formats, "documents": documents}
+
+    def clear_chunk_boosts(self) -> None:
+        """Forget every reviewer's per-chunk ranking.
+
+        Separate from clear_all: a re-index empties the tables and rebuilds the
+        same chunks, so their boosts stay; emptying a collection does not.
+        """
+        with sqlite_connect(self.db_path) as conn:
+            conn.execute("DELETE FROM chunk_boosts")
+            conn.commit()
 
     def clear_all(self):
         """Clear all chunks and documents from the metadata store."""

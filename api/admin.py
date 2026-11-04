@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from api.deps import require_admin
 from config import settings
 from services import audit, governance
+from services.indexer_manager import indexer_manager
 
 logger = logging.getLogger(__name__)
 
@@ -159,19 +160,24 @@ async def bulk_remove_documents(body: BulkRemoveRequest):
 
     def _remove_all():
         removed, skipped, blocked = [], [], 0
+        touched = set()
         for ref in body.items:
             try:
                 out = governance.remove_document(
                     ref.collection_id, ref.document_id, block=body.block, reason=body.reason,
-                    action="admin.remove_document",
+                    action="admin.remove_document", save=False,
                 )
                 removed.append(ref.document_id)
+                touched.add(ref.collection_id)
                 blocked += 1 if out.get("blocked") else 0
             except KeyError:
                 skipped.append(ref.document_id)
             except Exception as e:
                 logger.warning(f"Bulk remove failed for {ref.document_id}: {e}")
                 skipped.append(ref.document_id)
+        # Once per collection: each save rewrites that collection's whole index.
+        for collection_id in touched:
+            indexer_manager.get_indexer(collection_id).save_index()
         return removed, skipped, blocked
 
     import asyncio

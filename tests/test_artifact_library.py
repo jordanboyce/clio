@@ -724,3 +724,140 @@ def test_deleting_the_collection_removes_artifact_files(bundle_env):
 
     collection_service.delete_collection(cid)
     assert not folder.exists()
+
+
+# ── Deleting everything generated from a collection ─────────────────────
+
+
+def _research(client):
+    return ResearchStore(client.indexer.vector_store.metadata_db_path)
+
+
+def _reviewed(client, document_id):
+    store = _research(client)
+    store.add_brief(document_id, "brief", {"sections": [{"key": "tldr", "items": [{"point": "Feed it."}]}]})
+    store.add_assessment(document_id, "Does it rise?", {"verdict": "relevant", "summary": "Yes", "evidence": []})
+
+
+def test_outputs_count_what_no_list_shows(client):
+    docs = _document_ids(client.indexer)
+    _reviewed(client, docs["sourdough.txt"])
+    _reviewed(client, docs["bridges.txt"])
+    _generate(client)
+    client.indexer.delete_document(docs["bridges.txt"])
+
+    assert client.get("/api/collections/c1/outputs").json() == {
+        "reviews": 2, "screenings": 2, "reports": 1, "reports_held": 0,
+    }
+    # The list leaves out the review whose source is gone, so nothing else can reach it.
+    assert len(_research(client).list_briefs()) == 2
+
+
+def test_deleting_reviews_includes_those_of_deleted_sources_and_leaves_reports(client):
+    docs = _document_ids(client.indexer)
+    _reviewed(client, docs["sourdough.txt"])
+    _reviewed(client, docs["bridges.txt"])
+    artifact = _generate(client)
+    store = _research(client)
+    store.upsert_paper(docs["sourdough.txt"], title="Kept: its source is still here")
+    store.upsert_paper(docs["bridges.txt"], title="Goes with its source")
+    client.indexer.delete_document(docs["bridges.txt"])
+
+    response = client.delete("/api/collections/c1/outputs?reviews=true")
+
+    assert response.status_code == 200
+    assert response.json() == {"reviews": 2, "screenings": 2, "reports": 0, "reports_held": 0}
+    assert store.output_counts() == {"reviews": 0, "screenings": 0}
+    assert store.get_papers([docs["sourdough.txt"], docs["bridges.txt"]]).keys() == {docs["sourdough.txt"]}
+    assert client.get(f"/api/artifacts/{artifact['id']}?collection_id=c1").status_code == 200
+
+
+def test_deleting_reports_removes_their_files_and_leaves_reviews(client, tmp_path):
+    doc = _document_ids(client.indexer)["sourdough.txt"]
+    _reviewed(client, doc)
+    first, second = _generate(client), _generate(client)
+    store = ArtifactStore(client.indexer.vector_store.metadata_db_path,
+                          collection_service.get_artifacts_path("c1"))
+    produced = tmp_path / "overview.mp3"
+    produced.write_bytes(b"ID3 audio")
+    assert store.attach_file(first["id"], produced, "audio/mpeg")
+
+    response = client.delete("/api/collections/c1/outputs?reports=true")
+
+    assert response.json()["reports"] == 2
+    assert client.get("/api/artifacts?collection_id=c1").json()["artifacts"] == []
+    assert not (collection_service.get_artifacts_path("c1") / first["id"]).exists()
+    assert client.get(f"/api/artifacts/{second['id']}?collection_id=c1").status_code == 404
+    assert _research(client).output_counts()["reviews"] == 1
+
+
+def test_sources_survive_deleting_what_was_generated_from_them(client):
+    before = _document_ids(client.indexer)
+    _reviewed(client, before["sourdough.txt"])
+    _generate(client)
+
+    assert client.delete("/api/collections/c1/outputs?reviews=true&reports=true").status_code == 200
+
+    assert _document_ids(client.indexer) == before
+
+
+def test_a_report_held_from_the_caller_is_neither_counted_nor_deleted(client):
+    doc = _document_ids(client.indexer)["sourdough.txt"]
+    held, _ = _generate_from(client, doc)
+    _set_status(client.indexer, doc, "policy_status", "quarantined")
+    client.state["chat"] = lambda *a, **k: _answer(_source(_document_ids(client.indexer)["bridges.txt"]))
+    free = _generate(client)
+    client.state["reviewer"] = False
+
+    assert client.get("/api/collections/c1/outputs").json()["reports_held"] == 1
+    deleted = client.delete("/api/collections/c1/outputs?reports=true").json()
+
+    assert (deleted["reports"], deleted["reports_held"]) == (1, 1)
+    client.state["reviewer"] = True
+    assert client.get(f"/api/artifacts/{held['id']}?collection_id=c1").status_code == 200
+    assert client.get(f"/api/artifacts/{free['id']}?collection_id=c1").status_code == 404
+
+
+def test_a_reviewer_can_delete_held_reports_too(client):
+    doc = _document_ids(client.indexer)["sourdough.txt"]
+    _generate_from(client, doc)
+    _set_status(client.indexer, doc, "policy_status", "quarantined")
+
+    assert client.delete("/api/collections/c1/outputs?reports=true").json()["reports"] == 1
+
+
+def test_deleting_outputs_needs_write_access_and_says_what_to_delete(client):
+    assert client.delete("/api/collections/c1/outputs").status_code == 422
+    doc = _document_ids(client.indexer)["sourdough.txt"]
+    _reviewed(client, doc)
+    client.state["write"] = False
+
+    assert client.delete("/api/collections/c1/outputs?reviews=true").status_code == 403
+    assert client.get("/api/collections/c1/outputs").json()["reviews"] == 1
+    assert _research(client).output_counts()["reviews"] == 1
+
+
+def test_reviews_are_not_deleted_under_a_running_research_job(client, monkeypatch):
+    from api import artifacts as api
+
+    doc = _document_ids(client.indexer)["sourdough.txt"]
+    _reviewed(client, doc)
+    monkeypatch.setattr(api.research_jobs, "list_jobs", lambda store: [{"status": "running"}])
+
+    assert client.delete("/api/collections/c1/outputs?reviews=true").status_code == 409
+    assert _research(client).output_counts()["reviews"] == 1
+    # Reports do not depend on that job.
+    assert client.delete("/api/collections/c1/outputs?reports=true").status_code == 200
+
+
+def test_deleting_outputs_leaves_an_audit_row_with_counts_only(client, monkeypatch):
+    from api import artifacts as api
+
+    recorded = []
+    monkeypatch.setattr(api.audit, "record", lambda action, **kw: recorded.append((action, kw)))
+    _reviewed(client, _document_ids(client.indexer)["sourdough.txt"])
+
+    client.delete("/api/collections/c1/outputs?reviews=true")
+
+    assert recorded[-1][0] == "collection.outputs_deleted"
+    assert recorded[-1][1]["detail"]["reviews"] == 1

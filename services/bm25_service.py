@@ -93,15 +93,7 @@ class BM25Index:
                 )
             """)
             try:
-                conn.execute("""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS bm25_fts
-                    USING fts5(text, tokenize='unicode61')
-                """)
-                # Vocabulary view for stats (one row per distinct term)
-                conn.execute("""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS bm25_fts_vocab
-                    USING fts5vocab(bm25_fts, 'row')
-                """)
+                self._create_fts_tables(conn)
             except sqlite3.OperationalError as e:
                 raise RuntimeError(
                     "This SQLite build lacks FTS5, which Clio's keyword "
@@ -141,6 +133,30 @@ class BM25Index:
                 vac.close()
 
         logger.info(f"Initialized BM25 (FTS5) index at {self.db_path}")
+
+    @staticmethod
+    def _create_fts_tables(conn: sqlite3.Connection) -> None:
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS bm25_fts
+            USING fts5(text, tokenize='unicode61')
+        """)
+        # Vocabulary view for stats (one row per distinct term)
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS bm25_fts_vocab
+            USING fts5vocab(bm25_fts, 'row')
+        """)
+
+    def _empty_tables(self, conn: sqlite3.Connection) -> None:
+        """Remove every row, inside a transaction the caller has begun.
+
+        Dropping the table rather than DELETE FROM it: FTS5 has no fast path
+        for emptying a table, so a DELETE re-tokenizes every row it removes,
+        which on a large collection took minutes that nothing could report.
+        """
+        conn.execute("DROP TABLE IF EXISTS bm25_fts_vocab")
+        conn.execute("DROP TABLE IF EXISTS bm25_fts")
+        self._create_fts_tables(conn)
+        conn.execute("DELETE FROM bm25_docs")
 
     def _migrate_legacy(self, conn: sqlite3.Connection) -> bool:
         """Rebuild the FTS index from legacy term-frequency tables, then drop them.
@@ -272,29 +288,15 @@ class BM25Index:
             self._delete_chunks(conn, [chunk_id])
             conn.commit()
 
-    def remove_documents_by_document_id(self, document_id: str, metadata_db_path: Path):
-        """
-        Remove all chunks belonging to a document.
-
-        Args:
-            document_id: Document identifier
-            metadata_db_path: Path to metadata database to get chunk IDs
-        """
-        with sqlite_connect(metadata_db_path) as meta_conn:
-            cursor = meta_conn.execute(
-                "SELECT chunk_id FROM chunks WHERE document_id = ?",
-                (document_id,)
-            )
-            chunk_ids = [row[0] for row in cursor.fetchall()]
-
+    def remove_chunks(self, chunk_ids: List[str]) -> int:
+        """Remove many chunks in one transaction. Returns how many were indexed."""
         if not chunk_ids:
-            return
-
+            return 0
         with self._connect() as conn:
             removed = self._delete_chunks(conn, chunk_ids)
             conn.commit()
-
-        logger.info(f"Removed {removed} chunks from BM25 index for document {document_id}")
+        logger.info(f"Removed {removed} chunks from BM25 index")
+        return removed
 
     def search(self, query: str, top_k: int = 10) -> List[Tuple[str, float]]:
         """
@@ -342,8 +344,10 @@ class BM25Index:
         """
         total = 0
         with self._connect() as conn:
-            conn.execute("DELETE FROM bm25_fts")
-            conn.execute("DELETE FROM bm25_docs")
+            # Explicit: Python's sqlite3 opens no transaction before DDL, and
+            # this one has to cover the drop as well as the inserts.
+            conn.execute("BEGIN IMMEDIATE")
+            self._empty_tables(conn)
             batch: List[Tuple[str, str]] = []
             for item in documents:
                 batch.append(item)
@@ -365,8 +369,8 @@ class BM25Index:
     def clear(self):
         """Clear all data from the BM25 index."""
         with self._connect() as conn:
-            conn.execute("DELETE FROM bm25_fts")
-            conn.execute("DELETE FROM bm25_docs")
+            conn.execute("BEGIN IMMEDIATE")
+            self._empty_tables(conn)
             conn.commit()
         logger.info("Cleared BM25 index")
 

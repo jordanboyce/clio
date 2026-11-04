@@ -221,7 +221,7 @@ async def start_extension_reindex(
     summary="Get re-indexing job status",
     tags=["admin"],
 )
-async def get_reindex_status(job_id: int = None):
+def get_reindex_status(job_id: int = None):
     """
     Get status of a re-indexing job.
 
@@ -280,7 +280,9 @@ async def get_reindex_status(job_id: int = None):
     return {
         **job,
         "collection_id": collection_id,
-        "progress_percent": round(progress, 1)
+        "progress_percent": round(progress, 1),
+        # What it is doing inside the current file, while it runs.
+        **reindex_service.live_progress(job["id"]),
     }
 
 
@@ -291,7 +293,7 @@ async def get_reindex_status(job_id: int = None):
     summary="List all collections",
     tags=["collections"],
 )
-async def list_collections(request: Request, user_id: str = Depends(get_current_user_id)):
+def list_collections(request: Request, user_id: str = Depends(get_current_user_id)):
     """Get all document collections visible to the current user."""
     collections = collection_service.get_all_collections(user_id=user_id)
     return {
@@ -307,7 +309,7 @@ async def list_collections(request: Request, user_id: str = Depends(get_current_
     tags=["collections"],
     status_code=status.HTTP_201_CREATED,
 )
-async def create_collection(collection_data: dict, user_id: str = Depends(get_current_user_id)):
+def create_collection(collection_data: dict, user_id: str = Depends(get_current_user_id)):
     """
     Create a new document collection owned by the current user.
 
@@ -408,7 +410,7 @@ async def get_collection_embedding_health(collection_id: str, user_id: str = Dep
     summary="Get collection details",
     tags=["collections"],
 )
-async def get_collection(collection_id: str, user_id: str = Depends(get_current_user_id)):
+def get_collection(collection_id: str, user_id: str = Depends(get_current_user_id)):
     """Get details for a specific collection."""
     from api.deps import require_collection_access
     access = require_collection_access(collection_id, user_id)
@@ -427,7 +429,7 @@ async def get_collection(collection_id: str, user_id: str = Depends(get_current_
     summary="Get collection stats (SQL-backed counts)",
     tags=["collections"],
 )
-async def get_collection_stats(collection_id: str):
+def get_collection_stats(collection_id: str):
     """
     Cheap canonical stats for a collection.
 
@@ -460,7 +462,7 @@ async def get_collection_stats(collection_id: str):
     summary="Update collection settings",
     tags=["collections"],
 )
-async def update_collection(collection_id: str, updates: dict, user_id: str = Depends(get_current_user_id)):
+def update_collection(collection_id: str, updates: dict, user_id: str = Depends(get_current_user_id)):
     """
     Update collection settings. Requires owner access.
 
@@ -601,7 +603,7 @@ async def update_collection(collection_id: str, updates: dict, user_id: str = De
     tags=["collections"],
     status_code=status.HTTP_201_CREATED,
 )
-async def clone_collection(collection_id: str, body: dict = None, user_id: str = Depends(get_current_user_id)):
+def clone_collection(collection_id: str, body: dict = None, user_id: str = Depends(get_current_user_id)):
     """
     Copy a collection's sources into a new collection owned by the caller.
 

@@ -706,6 +706,7 @@
           :tree="sourceTree"
           :collapsed="collapsedFolders"
           :selected-ids="selectedDocuments"
+          :deleting="pendingDeletion"
           :can-edit="collectionStore.canEditCurrent"
           @toggle="toggleSelect"
           @select="selectMany"
@@ -736,7 +737,9 @@
           v-for="doc in documents"
           :key="doc.document_id"
           class="group relative flex items-start gap-2 px-2 py-2 rounded-lg transition-colors hover:bg-base-content/5"
-          :class="{ 'bg-base-content/[0.07]': isSelected(doc.document_id) }"
+          :class="{ 'bg-base-content/[0.07]': isSelected(doc.document_id), 'opacity-40': isBeingDeleted(doc) }"
+          :inert="isBeingDeleted(doc)"
+          :data-deleting="isBeingDeleted(doc) || undefined"
         >
           <!-- Checkbox -->
           <input
@@ -928,12 +931,28 @@
             Note: The original file will not be deleted, only the index entry.
           </span>
         </p>
-        <p v-else class="py-4">Delete <strong>{{ selectedDocuments.length }} source(s)</strong>?</p>
+        <p v-else class="py-4">
+          Delete <strong>{{ selectedDocuments.length.toLocaleString() }} source(s)</strong>?
+          <span v-if="moreThanLoaded" class="block text-sm text-base-content/70 mt-2" data-testid="more-than-loaded">
+            Only the {{ selectedDocuments.length.toLocaleString() }} loaded in this list are selected.
+            This collection has {{ docTotal.toLocaleString() }}.
+          </span>
+        </p>
+        <p class="text-sm text-base-content/60 -mt-2">This continues in the background, so you can keep working.</p>
         <div class="modal-action">
           <button class="btn" @click="closeDeleteModal" :disabled="deleting">Cancel</button>
+          <button
+            v-if="moreThanLoaded"
+            class="btn btn-error btn-outline"
+            @click="deleteAllSources"
+            :disabled="deleting"
+            data-testid="delete-all-sources"
+          >
+            Delete all {{ docTotal.toLocaleString() }}
+          </button>
           <button class="btn btn-error" @click="documentToDelete ? deleteDocument() : deleteBulk()" :disabled="deleting">
             <span v-if="deleting" class="loading loading-spinner"></span>
-            {{ deleting ? 'Deleting...' : 'Delete' }}
+            Delete
           </button>
         </div>
       </div>
@@ -2445,29 +2464,32 @@ const closeDeleteModal = () => {
   }
 }
 
-const deleteDocument = async () => {
-  if (!documentToDelete.value) return
-
+// Deleting runs as a server job, so asking for it only takes as long as the
+// request: the dialog closes straight away and the rest of the panel stays
+// usable. `deleting` covers that request, not the job; the job's own rows are
+// marked through pendingDeletion, and it reports in the jobs drawer.
+const startDelete = async (documentIds, failureMessage) => {
   deleting.value = true
   error.value = ''
 
   try {
     const collectionId = collectionStore.currentCollectionId
-    await http.delete(`/documents/${documentToDelete.value.document_id}?collection_id=${collectionId}`)
-
-    documents.value = documents.value.filter(
-      doc => doc.document_id !== documentToDelete.value.document_id
-    )
-
-    selectionStore.remove([documentToDelete.value.document_id])
-
-    emit('document-deleted')
+    const job = await backgroundJobsStore.deleteSources({ collectionId, documentIds })
+    // Chat and reports must stop using these now, not when the job gets there.
+    if (documentIds) selectionStore.remove(documentIds)
+    else selectionStore.clear()
+    if (!job) await loadDocuments() // nothing was there to delete: this list was stale
   } catch (err) {
-    error.value = err?.message || 'Failed to delete source'
+    error.value = err?.message || failureMessage
   } finally {
     deleting.value = false
     closeDeleteModal()
   }
+}
+
+const deleteDocument = () => {
+  if (!documentToDelete.value) return Promise.resolve()
+  return startDelete([documentToDelete.value.document_id], 'Failed to delete source')
 }
 
 const confirmBulkDelete = () => {
@@ -2475,31 +2497,23 @@ const confirmBulkDelete = () => {
   deleteModal.value?.showModal()
 }
 
-const deleteBulk = async () => {
-  if (selectedDocuments.value.length === 0) return
-
-  deleting.value = true
-  error.value = ''
-
-  try {
-    const collectionId = collectionStore.currentCollectionId
-    for (const docId of selectedDocuments.value) {
-      await http.delete(`/documents/${docId}?collection_id=${collectionId}`)
-    }
-
-    documents.value = documents.value.filter(
-      doc => !selectedDocuments.value.includes(doc.document_id)
-    )
-
-    selectedDocuments.value = []
-    emit('document-deleted')
-  } catch (err) {
-    error.value = err?.message || 'Failed to delete sources'
-  } finally {
-    deleting.value = false
-    closeDeleteModal()
-  }
+const deleteBulk = () => {
+  if (selectedDocuments.value.length === 0) return Promise.resolve()
+  return startDelete([...selectedDocuments.value], 'Failed to delete sources')
 }
+
+const deleteAllSources = () => startDelete(null, 'Failed to delete sources')
+
+// "Select all" takes what is loaded, and a long list loads a page at a time.
+// Someone who selected all of it most likely meant all of it, so say so and
+// offer that, rather than quietly leaving the other pages behind.
+const moreThanLoaded = computed(() =>
+  !documentToDelete.value && isAllSelected.value && docTotal.value > selectedDocuments.value.length &&
+  !docSearch.value && !docKind.value
+)
+
+const pendingDeletion = computed(() => backgroundJobsStore.pendingDeletion(collectionStore.currentCollectionId))
+const isBeingDeleted = (doc) => pendingDeletion.value.everything || pendingDeletion.value.ids.has(doc.document_id)
 
 // Watch for collection changes
 // Folders synced into this collection before (server-side memory).
@@ -2644,22 +2658,30 @@ async function removeExpertisePack(packId) {
 // intentionally resets to page one. docSearch is preserved via _docParams.
 watch(() => backgroundJobsStore.dataRefreshTick, async () => {
   if (backgroundJobsStore.dataRefreshCollectionId !== collectionStore.currentCollectionId) return
+  const generation = ++loadGeneration
   try {
     const response = await http.get('/documents', { params: _docParams(0) })
+    if (generation !== loadGeneration) return
     documents.value = response.data.documents || []
     docTotal.value = response.data.total_documents ?? documents.value.length
     if (response.data.kind_counts) kindCounts.value = response.data.kind_counts
     if (docTotal.value > 0) justIndexed.value = false
   } catch {
     // transient mid-job failure — the next throttled tick retries
+    return
   }
+  // Page one alone would cut the folder tree off at its first 200 sources.
+  if (viewMode.value === 'tree') loadTreeRemainder(generation)
 })
 
-// Watch for completed background uploads to reload documents
+// Watch for finished background jobs to reload documents. A delete that was
+// stopped or failed has changed the list too, unlike indexing that did.
 watch(() => backgroundJobsStore.uploadJobs, (jobs) => {
-  const completedJob = jobs.find(j => j.status === 'completed' && !j.reloaded)
-  if (completedJob) {
-    completedJob.reloaded = true
+  const finishedJob = jobs.find(j => !j.reloaded && (
+    j.status === 'completed' || (j.jobType === 'delete' && !backgroundJobsStore.isActiveStatus(j.status))
+  ))
+  if (finishedJob) {
+    finishedJob.reloaded = true
     loadDocuments()
     emit('document-deleted')
   }
@@ -2668,9 +2690,10 @@ watch(() => backgroundJobsStore.uploadJobs, (jobs) => {
 // Sources added from another surface (the sample set in an empty chat)
 watch(() => ui.sourcesVersion, () => { loadDocuments() })
 
-// Watch for completed reindex jobs to reload documents
+// Watch for finished reindex jobs to reload documents. One that failed has
+// still rebuilt the index, without the files it names.
 watch(() => backgroundJobsStore.reindexJob?.status, (newStatus, oldStatus) => {
-  if (newStatus === 'completed' && oldStatus && oldStatus !== 'completed') {
+  if (oldStatus && backgroundJobsStore.isActiveStatus(oldStatus) && newStatus && !backgroundJobsStore.isActiveStatus(newStatus)) {
     loadDocuments()
     emit('document-deleted')
   }

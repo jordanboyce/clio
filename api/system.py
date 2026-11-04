@@ -58,7 +58,7 @@ def deployment_readiness(probe: bool = False):
 
 
 @router.get("/health", tags=["health"])
-async def health(collection_id: str = "default"):
+def health(collection_id: str = "default"):
     """Health check endpoint."""
     try:
         stats = indexer_manager.get_collection_stats(collection_id)

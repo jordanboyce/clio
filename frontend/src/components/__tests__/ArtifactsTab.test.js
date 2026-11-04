@@ -167,6 +167,52 @@ describe('Saved reports', () => {
     expect(wrapper.findAll('[data-testid="artifact-row"]')).toHaveLength(0)
   })
 
+  it('deletes every saved report at once, asking first', async () => {
+    saved = [summary(), summary({ id: 'a2', title: 'Timeline' })]
+    serve()
+    http.delete.mockImplementation(async () => {
+      saved = []
+      return { data: { reviews: 0, screenings: 0, reports: 2, reports_held: 0 } }
+    })
+    const wrapper = await mountTab()
+
+    await wrapper.get('[data-testid="delete-all-reports"]').trigger('click')
+    expect(http.delete).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="delete-all-reports-confirm"]').text()).toContain('Delete all 2 permanently')
+
+    await wrapper.get('[data-testid="delete-all-reports-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(http.delete).toHaveBeenCalledWith('/api/collections/c1/outputs', { params: { reports: true } })
+    expect(wrapper.findAll('[data-testid="artifact-row"]')).toHaveLength(0)
+  })
+
+  it('still lists a report the server kept back from a delete-all', async () => {
+    saved = [summary(), summary({ id: 'a2', title: 'Held one' })]
+    serve()
+    http.delete.mockImplementation(async () => {
+      saved = [summary({ id: 'a2', title: 'Held one' })]
+      return { data: { reviews: 0, screenings: 0, reports: 1, reports_held: 1 } }
+    })
+    const wrapper = await mountTab()
+
+    await wrapper.get('[data-testid="delete-all-reports"]').trigger('click')
+    await wrapper.get('[data-testid="delete-all-reports-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="artifact-row"]').map(r => r.text())).toEqual([expect.stringContaining('Held one')])
+  })
+
+  it('offers no delete-all to someone who cannot edit', async () => {
+    saved = [summary(), summary({ id: 'a2' })]
+    serve()
+    const wrapper = await mountTab((collections) => {
+      collections.collections = [{ id: 'c1', name: 'One', permission: 'read' }]
+    })
+
+    expect(wrapper.find('[data-testid="delete-all-reports"]').exists()).toBe(false)
+  })
+
   it('can back out of deleting', async () => {
     saved = [summary()]
     const wrapper = await mountTab()

@@ -682,6 +682,17 @@ class SQLiteBackend(DatabaseBackend):
             conn.execute("DELETE FROM collection_documents WHERE collection_id = ? AND document_id = ?", (collection_id, document_id))
             conn.commit()
 
+    def remove_documents_from_collection(self, collection_id: str, document_ids: Optional[List[str]] = None):
+        with sqlite_connect(self.db_path) as conn:
+            if document_ids is None:
+                conn.execute("DELETE FROM collection_documents WHERE collection_id = ?", (collection_id,))
+            else:
+                conn.executemany(
+                    "DELETE FROM collection_documents WHERE collection_id = ? AND document_id = ?",
+                    [(collection_id, document_id) for document_id in document_ids],
+                )
+            conn.commit()
+
     def get_collection_documents(self, collection_id: str) -> List[str]:
         with sqlite_connect(self.db_path) as conn:
             return [r[0] for r in conn.execute(
@@ -1014,7 +1025,9 @@ class SQLiteBackend(DatabaseBackend):
         updates = []
         params = []
         for field in ["status", "total_documents", "processed_documents", "current_file", "error"]:
-            if field in kwargs and kwargs[field] is not None:
+            # current_file=None is a deliberate clear: a finished job kept
+            # reporting the last file it touched.
+            if field in kwargs and (kwargs[field] is not None or field == "current_file"):
                 updates.append(f"{field} = ?")
                 params.append(kwargs[field])
         status = kwargs.get("status")
@@ -1307,6 +1320,18 @@ class SQLiteBackend(DatabaseBackend):
             return cursor.rowcount > 0
 
     # ── Audit trail ──────────────────────────────────────────
+
+    def add_audit_events(self, actor: Optional[str], action: str, collection_id: Optional[str],
+                         events: List[Dict[str, Optional[str]]]) -> None:
+        timestamp = datetime.utcnow().isoformat()
+        with sqlite_connect(self.db_path) as conn:
+            conn.executemany(
+                """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                [(timestamp, actor, action, collection_id, e.get("document_id"), e.get("target"), e.get("detail"))
+                 for e in events],
+            )
+            conn.commit()
 
     def add_audit_event(
         self,

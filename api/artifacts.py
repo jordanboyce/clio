@@ -33,8 +33,10 @@ from models.schemas import (
     ChatRequest,
     ChatResponse,
 )
-from services import artifact_jobs, artifact_store, governance
+from services import artifact_jobs, artifact_store, audit, governance
 from services import artifacts as artifacts_service
+from services.research import jobs as research_jobs
+from services.research import library as research_library
 from services.artifact_store import ArtifactStore
 from services.collection_service import collection_service
 
@@ -266,3 +268,58 @@ def delete_artifact(artifact_id: str, collection_id: str = "default") -> dict:
     _visible_or_404(store, _Reader(indexer), artifact_id)
     store.delete(artifact_id)
     return {"deleted": True}
+
+
+def _reports_by_visibility(store: ArtifactStore, reader: "_Reader") -> tuple:
+    """``(reports this caller may see, how many are held from them)``."""
+    rows = store.list(limit=max(store.count(), 1))
+    visible = [row for row in rows if reader.may_see(row)]
+    return visible, len(rows) - len(visible)
+
+
+@router.get("/api/collections/{collection_id}/outputs", tags=["artifacts"],
+            summary="How much has been generated from this collection")
+def get_collection_outputs(collection_id: str) -> dict:
+    """Counts of generated reviews, screening verdicts and saved reports.
+
+    Includes reviews of sources since deleted, which no list shows.
+    """
+    indexer = _indexer(collection_id)
+    visible, held = _reports_by_visibility(_store(indexer, collection_id), _Reader(indexer))
+    return {**research_library.research_store(indexer).output_counts(),
+            "reports": len(visible), "reports_held": held}
+
+
+@router.delete("/api/collections/{collection_id}/outputs", tags=["artifacts"],
+               summary="Delete what was generated from this collection")
+def delete_collection_outputs(collection_id: str, reviews: bool = False, reports: bool = False) -> dict:
+    """Delete generated reviews and verdicts, saved reports, or both. Sources stay.
+
+    A report held from this caller stays, under the same rule as deleting one:
+    what they may not see, they may not delete. 409 while a research job is
+    running, which would only write its results straight back.
+    """
+    if not (reviews or reports):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Name what to delete: reviews, reports, or both")
+    indexer = _indexer(collection_id)
+    user = get_request_user()
+    require_collection_access(collection_id, user, write=True)
+
+    research = research_library.research_store(indexer)
+    if reviews and any(job["status"] in ("queued", "running") for job in research_jobs.list_jobs(research)):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="A research job is running. Stop it or wait for it, then delete the reviews.")
+
+    deleted = {"reviews": 0, "screenings": 0, "reports": 0, "reports_held": 0}
+    if reviews:
+        deleted.update(research.delete_outputs())
+    if reports:
+        store = _store(indexer, collection_id)
+        visible, deleted["reports_held"] = _reports_by_visibility(store, _Reader(indexer))
+        for artifact in visible:
+            store.delete(artifact["id"])
+        deleted["reports"] = len(visible)
+
+    audit.record("collection.outputs_deleted", actor=user, collection_id=collection_id, detail=deleted)
+    return deleted

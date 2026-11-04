@@ -134,6 +134,7 @@ def remove_document(
     reason: str = "",
     actor: Any = _UNSET,
     action: str = "document.delete",
+    save: bool = True,
 ) -> Dict[str, Any]:
     """Delete a document from its collection (index, tracking, file).
 
@@ -141,6 +142,10 @@ def remove_document(
     block" action. ``block`` adds the file's sha256 to the blocklist so the
     same bytes are refused on re-upload anywhere. Raises KeyError when the
     document is unknown.
+
+    Saving rewrites the whole vector index, so a caller removing several
+    documents passes ``save=False`` and calls ``save_index`` once at the end.
+    For many documents, ``remove_documents`` is cheaper still.
     """
     from services.collection_service import collection_service
     from services.indexer_manager import indexer_manager
@@ -185,14 +190,10 @@ def remove_document(
     collection_service.remove_document(collection_id, document_id)
     invalidate_review_summary()
 
-    file_deleted = False
     is_local_reference = doc_info.get("source_type") == "local_reference"
-    if not is_local_reference:
-        doc_path = indexer_manager.get_documents_path(collection_id) / doc_info["filename"]
-        if doc_path.exists():
-            doc_path.unlink()
-            file_deleted = True
-    indexer.save_index()
+    file_deleted = remove_source_file(indexer_manager.get_documents_path(collection_id), doc_info)
+    if save:
+        indexer.save_index()
     _invalidate_answers(collection_id)
 
     audit.record(action, actor=actor, collection_id=collection_id, document_id=document_id,
@@ -207,6 +208,85 @@ def remove_document(
         "was_local_reference": is_local_reference,
         "blocked": blocked,
     }
+
+
+def remove_source_file(documents_dir: Path, doc_info: Dict[str, Any],
+                       written_before: Optional[float] = None) -> bool:
+    """Delete a document's stored file. A local reference's file is not ours.
+
+    ``written_before`` is for removals that run after they were asked for: a
+    file newer than that is a fresh copy of the same name, uploaded since, and
+    belongs to the job adding it back.
+    """
+    if doc_info.get("source_type") == "local_reference":
+        return False
+    path = documents_dir / doc_info["filename"]
+    try:
+        if written_before is not None and path.stat().st_mtime > written_before:
+            logger.info(f"Keeping {path.name}: it was written after its removal was requested")
+            return False
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def remove_documents(
+    collection_id: str,
+    documents: List[Dict[str, Any]],
+    *,
+    actor: Optional[str],
+    written_before: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Remove a batch of documents as one write per store.
+
+    ``documents`` are rows from ``get_documents_info``. The bulk counterpart of
+    ``remove_document``, audited the same way (one row per document) but
+    without its admin-only options; the caller saves the index when its last
+    batch is done. A file that cannot be deleted does not stop the batch, since
+    its document is already gone from the index: it comes back in
+    ``failed_files``.
+    """
+    from services.collection_service import collection_service
+    from services.indexer_manager import indexer_manager
+
+    indexer = indexer_manager.get_indexer(collection_id)
+    document_ids = [d["document_id"] for d in documents]
+    chunks_deleted = indexer.delete_documents(document_ids)
+    collection_service.remove_documents(collection_id, document_ids)
+    invalidate_review_summary()
+    _invalidate_answers(collection_id)
+    record_removals(collection_id, documents, actor=actor)
+    return {
+        "chunks_deleted": chunks_deleted,
+        "failed_files": remove_source_files(collection_id, documents, written_before=written_before),
+    }
+
+
+def record_removals(collection_id: str, documents: List[Dict[str, Any]], *, actor: Optional[str]) -> None:
+    """One ``document.delete`` audit row per document, written together."""
+    audit.record_many("document.delete", actor=actor, collection_id=collection_id, events=[
+        {"document_id": d["document_id"],
+         "detail": {"filename": d.get("filename"), "chunks_deleted": d.get("num_chunks") or 0,
+                    "blocked": False, "reason": None, "uploaded_by": d.get("uploaded_by")}}
+        for d in documents
+    ])
+
+
+def remove_source_files(collection_id: str, documents: List[Dict[str, Any]],
+                        written_before: Optional[float] = None) -> List[Dict[str, str]]:
+    """Delete the stored files of these documents; returns what could not go."""
+    from services.indexer_manager import indexer_manager
+
+    documents_dir = indexer_manager.get_documents_path(collection_id)
+    failed: List[Dict[str, str]] = []
+    for doc in documents:
+        try:
+            remove_source_file(documents_dir, doc, written_before=written_before)
+        except OSError as e:
+            logger.warning(f"Could not delete the file of {doc.get('filename')}: {e}")
+            failed.append({"filename": doc.get("filename") or doc["document_id"], "error": str(e)})
+    return failed
 
 
 def set_policy_status(

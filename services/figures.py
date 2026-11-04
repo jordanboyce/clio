@@ -89,6 +89,12 @@ def delete_figures(metadata_store, root: Path, document_id: str) -> None:
     shutil.rmtree(root / document_id, ignore_errors=True)
 
 
+def delete_figure_files(root: Path, document_ids: Iterable[str]) -> None:
+    """Remove the figure files of documents whose rows are already gone."""
+    for document_id in document_ids:
+        shutil.rmtree(root / document_id, ignore_errors=True)
+
+
 def clear_figures(root: Path) -> None:
     """Remove every stored figure of a collection (full re-index, clear)."""
     shutil.rmtree(root, ignore_errors=True)

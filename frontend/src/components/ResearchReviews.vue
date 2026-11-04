@@ -78,33 +78,60 @@
         <h3 class="text-xs font-semibold uppercase tracking-wide text-base-content/55">
           Reviews <span v-if="unread" class="normal-case font-normal">· {{ unread }} unread</span>
         </h3>
-        <label class="flex items-center gap-1.5 text-xs cursor-pointer">
-          <input v-model="unreadOnly" type="checkbox" class="checkbox checkbox-xs" />Unread only
-        </label>
+        <div class="flex items-center gap-2">
+          <template v-if="canWrite && briefs.length && !unreadOnly">
+            <template v-if="confirmingAll">
+              <span class="text-xs text-base-content/70">Also removes screening verdicts.</span>
+              <button class="btn btn-xs btn-error" :disabled="deletingAll" data-testid="delete-all-reviews-confirm" @click="removeAll">
+                Delete all permanently
+              </button>
+              <button class="btn btn-xs btn-ghost" @click="confirmingAll = false">Keep</button>
+            </template>
+            <button v-else class="btn btn-xs btn-ghost text-error" data-testid="delete-all-reviews" @click="confirmingAll = true">
+              Delete all
+            </button>
+          </template>
+          <label class="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input v-model="unreadOnly" type="checkbox" class="checkbox checkbox-xs" />Unread only
+          </label>
+        </div>
       </div>
       <p v-if="!briefs.length" class="text-sm text-base-content/55">
         {{ unreadOnly ? 'Nothing unread.' : 'No reviews yet.' }}
       </p>
       <ul class="space-y-2">
-        <li v-for="b in briefs" :key="b.id" class="rounded-box border border-base-300">
-          <button class="w-full text-left px-3 py-2 flex items-start gap-2" :aria-expanded="openId === b.id" @click="toggle(b)">
-            <span class="mt-1.5 w-2 h-2 rounded-full shrink-0" :class="b.read_at ? 'bg-transparent' : 'bg-primary'" :aria-label="b.read_at ? 'Read' : 'Unread'" />
-            <span class="min-w-0 flex-1">
-              <span class="block text-sm font-medium truncate">{{ b.title || b.filename }}</span>
-              <span class="block text-xs text-base-content/55 truncate">
-                {{ authorsShort(b.authors) }}<span v-if="b.year"> · {{ b.year }}</span>
-                · {{ b.depth === 'thorough' ? 'Thorough' : 'Brief' }}<span v-if="b.question"> · “{{ b.question }}”</span>
-                · {{ when2(b.created_at) }}
+        <li v-for="b in briefs" :key="b.id" class="rounded-box border border-base-300" data-testid="review-row">
+          <div class="flex items-start gap-1">
+            <button class="flex-1 min-w-0 text-left px-3 py-2 flex items-start gap-2" :aria-expanded="openId === b.id" @click="toggle(b)">
+              <span class="mt-1.5 w-2 h-2 rounded-full shrink-0" :class="b.read_at ? 'bg-transparent' : 'bg-primary'" :aria-label="b.read_at ? 'Read' : 'Unread'" />
+              <span class="min-w-0 flex-1">
+                <span class="block text-sm font-medium truncate">{{ b.title || b.filename }}</span>
+                <span class="block text-xs text-base-content/55 truncate">
+                  {{ authorsShort(b.authors) }}<span v-if="b.year"> · {{ b.year }}</span>
+                  · {{ b.depth === 'thorough' ? 'Thorough' : 'Brief' }}<span v-if="b.question"> · “{{ b.question }}”</span>
+                  · {{ when2(b.created_at) }}
+                </span>
+                <span v-if="tldr(b) && openId !== b.id" class="block text-xs text-base-content/75 mt-1 line-clamp-2">{{ tldr(b) }}</span>
               </span>
-              <span v-if="tldr(b) && openId !== b.id" class="block text-xs text-base-content/75 mt-1 line-clamp-2">{{ tldr(b) }}</span>
-            </span>
-          </button>
+            </button>
+            <div v-if="canWrite" class="flex gap-1 p-1.5 flex-shrink-0">
+              <template v-if="confirmingId === b.id">
+                <button class="btn btn-xs btn-error" @click="remove(b)">Delete permanently</button>
+                <button class="btn btn-xs btn-ghost" @click="confirmingId = null">Keep</button>
+              </template>
+              <button
+                v-else
+                class="btn btn-xs btn-ghost text-error"
+                :aria-label="`Delete the review of ${b.title || b.filename}`"
+                @click="confirmingId = b.id"
+              >Delete</button>
+            </div>
+          </div>
           <div v-if="openId === b.id" class="px-3 pb-3 space-y-3 border-t border-base-300/60 pt-3">
             <ResearchBrief :brief="b" :collection-id="collectionId" />
             <div class="flex gap-2">
               <button class="btn btn-xs btn-outline" @click="$emit('open', b.document_id)">Open</button>
               <button class="btn btn-xs btn-ghost" @click="markRead(b, !b.read_at)">{{ b.read_at ? 'Mark unread' : 'Mark read' }}</button>
-              <button v-if="canWrite" class="btn btn-xs btn-ghost text-error" @click="remove(b)">Delete</button>
             </div>
           </div>
         </li>
@@ -133,6 +160,9 @@ const emit = defineEmits(['open', 'changed'])
 const ui = useUiStore()
 const jobs = ref([])
 const briefs = ref([])
+const confirmingId = ref(null)
+const confirmingAll = ref(false)
+const deletingAll = ref(false)
 const unread = ref(0)
 const unreadOnly = ref(false)
 const openId = ref(null)
@@ -242,9 +272,30 @@ async function remove(b) {
   try {
     await researchApi.deleteBrief(props.collectionId, b.id)
     briefs.value = briefs.value.filter(x => x.id !== b.id)
+    unread.value = briefs.value.filter(x => !x.read_at).length
+    if (openId.value === b.id) openId.value = null
     emit('changed')
   } catch (err) {
     ui.toastError(err, 'Could not delete the review')
+  } finally {
+    confirmingId.value = null
+  }
+}
+
+async function removeAll() {
+  deletingAll.value = true
+  try {
+    const deleted = await researchApi.deleteOutputs(props.collectionId, { reviews: true })
+    briefs.value = []
+    unread.value = 0
+    openId.value = null
+    emit('changed')
+    ui.notify(`Deleted ${deleted.reviews.toLocaleString()} review${deleted.reviews === 1 ? '' : 's'}`, 'success')
+  } catch (err) {
+    ui.toastError(err, 'Could not delete the reviews')
+  } finally {
+    deletingAll.value = false
+    confirmingAll.value = false
   }
 }
 

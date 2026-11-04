@@ -487,6 +487,8 @@ def _should_preserve_raw(values: List[Any], inferred_type: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _DEFAULT_MAX_QUERY_ROWS = 1000
+# SQLite's default host-parameter limit is 999; stay under it for IN (...).
+_IN_CLAUSE_BATCH = 900
 # Wall-clock cap on one model/MCP-written SELECT.
 _QUERY_TIMEOUT_SECONDS = 5.0
 
@@ -837,23 +839,30 @@ class StructuredStore:
 
     def delete_document(self, document_id: str) -> int:
         """Drop all structured tables + schema rows belonging to a document."""
+        return self.delete_documents([document_id])
+
+    def delete_documents(self, document_ids: List[str]) -> int:
+        """Drop the structured tables + schema rows of these documents in one transaction."""
         dropped = 0
         with sqlite_connect(self.db_path) as conn:
-            cursor = conn.execute(
-                f'SELECT table_name FROM {self.SCHEMA_REGISTRY} WHERE document_id = ?',
-                (document_id,),
-            )
-            for (table_name,) in cursor.fetchall():
-                conn.execute(f'DROP VIEW IF EXISTS "{table_name}__by_symbol"')
-                conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
-                dropped += 1
-            conn.execute(
-                f'DELETE FROM {self.SCHEMA_REGISTRY} WHERE document_id = ?',
-                (document_id,),
-            )
+            for start in range(0, len(document_ids), _IN_CLAUSE_BATCH):
+                batch = document_ids[start:start + _IN_CLAUSE_BATCH]
+                placeholders = ",".join("?" for _ in batch)
+                cursor = conn.execute(
+                    f'SELECT table_name FROM {self.SCHEMA_REGISTRY} WHERE document_id IN ({placeholders})',
+                    batch,
+                )
+                for (table_name,) in cursor.fetchall():
+                    conn.execute(f'DROP VIEW IF EXISTS "{table_name}__by_symbol"')
+                    conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+                    dropped += 1
+                conn.execute(
+                    f'DELETE FROM {self.SCHEMA_REGISTRY} WHERE document_id IN ({placeholders})',
+                    batch,
+                )
             conn.commit()
         if dropped:
-            logger.info(f'Dropped {dropped} structured table(s) for document {document_id}')
+            logger.info(f'Dropped {dropped} structured table(s) for {len(document_ids)} document(s)')
         return dropped
 
     def clear_all(self) -> None:

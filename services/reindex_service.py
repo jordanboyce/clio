@@ -7,6 +7,7 @@ Handles:
 - Support for both uploaded files and local file references
 """
 
+import json
 import logging
 import asyncio
 import re
@@ -68,6 +69,30 @@ def normalize_reindex_extensions(extensions: Any) -> List[str]:
     return wanted
 
 
+def is_reindexing(collection_id: str) -> bool:
+    """True while a re-index job that touches this collection is active."""
+    job = app_db.get_active_reindex_job()
+    if not job:
+        return False
+    try:
+        snapshot = json.loads(job.get("config_snapshot") or "{}")
+    except (TypeError, ValueError):
+        return True  # cannot tell which collection; assume this one
+    target = snapshot.get("collection_id")
+    return target is None or target == collection_id
+
+
+def _refuse_while_removing(collection_id: str) -> None:
+    """A re-index reads the document list, so a delete job behind it would
+    lose its work to a save it cannot see, or bring deleted sources back."""
+    from services.removal_jobs import is_removing
+
+    if is_removing(collection_id):
+        raise RuntimeError(
+            "Sources in this collection are being deleted. Re-index once that has finished."
+        )
+
+
 def _safe_supersede_marks(store) -> list:
     """Owners' 'replaced by' marks, read before a reindex rebuilds the table.
     A reindex must not fail because of this bookkeeping."""
@@ -98,6 +123,84 @@ class ReindexService:
         self.reload_callback: Optional[Callable[[str], None]] = None  # Takes collection_id
         # asyncio keeps only a weak reference to tasks; hold them until done.
         self._tasks: set = set()
+        # job id -> what it is doing inside the current file. Lives here, not
+        # on the job row: it changes per embedding batch, means nothing once
+        # the job ends, and a large PDF is minutes of work on one progress step.
+        self._live: Dict[int, Dict[str, Any]] = {}
+
+    def live_progress(self, job_id: int) -> Dict[str, Any]:
+        """Phase and detail of a running job; empty once it has finished."""
+        return dict(self._live.get(job_id) or {})
+
+    def _set_live(self, job_id: int, phase: str, detail: Optional[str] = None, progress: int = 0,
+                  chunks_done: int = 0, chunks_total: int = 0) -> None:
+        self._live[job_id] = {
+            "phase": phase, "phase_detail": detail, "phase_progress": progress,
+            "chunks_processed": chunks_done, "chunks_total": chunks_total,
+        }
+
+    def _reindex_documents(self, job_id: int, indexer: DocumentIndexer, vector_store: VectorStore,
+                           document_list: List[Dict[str, Any]]) -> List[str]:
+        """Index these documents again, reporting as it goes. Returns the failures.
+
+        The caller has already cleared the index, so a file that fails here is
+        no longer in the collection: the job has to say so, not finish green.
+        """
+        total_docs = len(document_list)
+        failures: List[str] = []
+
+        def report(phase: str, progress: int, detail: Optional[str], chunks_done: int, chunks_total: int) -> None:
+            self._set_live(job_id, phase, detail, progress, chunks_done, chunks_total)
+
+        for idx, doc_info in enumerate(document_list, 1):
+            doc_path = doc_info["path"]
+            source_type = doc_info.get("source_type", "upload")
+            source_path = doc_info.get("source_path")
+
+            app_db.update_reindex_job(job_id, current_file=doc_path.name, processed_documents=idx - 1)
+            self._set_live(job_id, "extracting", f"Reading {doc_path.name}")
+            logger.info(f"Re-indexing ({idx}/{total_docs}): {doc_path.name} (source_type={source_type})")
+
+            try:
+                if not doc_path.exists():
+                    raise FileNotFoundError("the file is no longer there")
+
+                metadata = indexer.index_document_with_progress(
+                    doc_path, doc_path.name, progress_callback=report,
+                )
+
+                if source_type in ("local_reference", "url") and source_path:
+                    vector_store.metadata_store.update_document_source(
+                        document_id=metadata.document_id,
+                        source_path=source_path,
+                        source_type=source_type,
+                    )
+
+                logger.info(
+                    f"Indexed {doc_path.name}: "
+                    f"{metadata.total_pages} pages, {metadata.total_chunks} chunks"
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to process {doc_path.name}: {e}")
+                failures.append(f"{doc_path.name}: {e}")
+
+        return failures
+
+    def _finish_reindex(self, job_id: int, total_docs: int, failures: List[str]) -> None:
+        """Close the job out, naming any file that did not come back."""
+        if failures:
+            shown = "; ".join(failures[:5]) + (
+                f"; and {len(failures) - 5} more" if len(failures) > 5 else "")
+            app_db.update_reindex_job(
+                job_id, status="failed", processed_documents=total_docs - len(failures), current_file=None,
+                error=(f"{len(failures)} of {total_docs} file(s) could not be re-indexed and are "
+                       f"no longer searchable: {shown}"),
+            )
+            return
+        app_db.update_reindex_job(
+            job_id, status="completed", processed_documents=total_docs, current_file=None
+        )
 
     def _spawn(self, fn: Callable, **kwargs) -> None:
         """Run a blocking job body on a worker thread.
@@ -136,7 +239,8 @@ class ReindexService:
             Job ID for tracking progress
 
         Raises:
-            RuntimeError: If a re-indexing job is already running
+            RuntimeError: If a re-indexing job is already running, or a delete
+                job is at work on this collection
         """
         # Check if already running
         active_job = app_db.get_active_reindex_job()
@@ -144,6 +248,7 @@ class ReindexService:
             raise RuntimeError(
                 f"Re-indexing job {active_job['id']} is already running"
             )
+        _refuse_while_removing(collection_id)
 
         # Create job record with collection info
         config_snapshot = {
@@ -196,7 +301,8 @@ class ReindexService:
 
         Raises:
             ValueError: Nothing to do, or an extension that cannot be re-indexed
-            RuntimeError: A re-indexing job is already running
+            RuntimeError: A re-indexing job is already running, or a delete job
+                is at work on this collection
         """
         wanted = normalize_reindex_extensions(extensions)
 
@@ -205,6 +311,7 @@ class ReindexService:
             raise RuntimeError(
                 f"Re-indexing job {active_job['id']} is already running"
             )
+        _refuse_while_removing(collection_id)
 
         if indexer_provider is None or documents_dir is None:
             from services.indexer_manager import indexer_manager
@@ -259,6 +366,7 @@ class ReindexService:
 
             # Update job status
             app_db.update_reindex_job(job_id, status="running")
+            self._set_live(job_id, "preparing", "Loading the embedding model")
 
             # Initialize services with new config
             # Route through the shared factory so a reindex re-embeds with the
@@ -322,71 +430,32 @@ class ReindexService:
 
             # Clear existing index AFTER getting the document list
             logger.info(f"Clearing existing index for collection {collection_id} (job {job_id})")
+            self._set_live(job_id, "clearing", "Clearing the old index")
             # Owners' "replaced by" calls live in the table clear_index empties;
             # document ids are content hashes, so they can be put back below.
             supersede_marks = _safe_supersede_marks(vector_store.metadata_store)
             vector_store.clear_index()
 
-            # Process each document
-            for idx, doc_info in enumerate(document_list, 1):
-                doc_path = doc_info["path"]
-                source_type = doc_info.get("source_type", "upload")
-                source_path = doc_info.get("source_path")
-
-                try:
-                    app_db.update_reindex_job(
-                        job_id,
-                        current_file=doc_path.name,
-                        processed_documents=idx - 1
-                    )
-
-                    logger.info(f"Re-indexing ({idx}/{total_docs}): {doc_path.name} (source_type={source_type})")
-
-                    if not doc_path.exists():
-                        logger.warning(f"Document not found, skipping: {doc_path}")
-                        continue
-
-                    metadata = indexer.index_document(doc_path, doc_path.name)
-
-                    if source_type in ("local_reference", "url") and source_path:
-                        vector_store.metadata_store.update_document_source(
-                            document_id=metadata.document_id,
-                            source_path=source_path,
-                            source_type=source_type,
-                        )
-
-                    logger.info(
-                        f"Indexed {doc_path.name}: "
-                        f"{metadata.total_pages} pages, {metadata.total_chunks} chunks"
-                    )
-
-                except Exception as e:
-                    logger.error(f"Failed to process {doc_path.name}: {e}")
-                    continue
+            failures = self._reindex_documents(job_id, indexer, vector_store, document_list)
 
             _safe_restore_supersede_marks(vector_store.metadata_store, supersede_marks)
 
             # Save the index to disk
             logger.info("Saving re-indexed data to disk...")
+            self._set_live(job_id, "saving", "Saving the new index")
             vector_store.save()
 
-            # Mark as completed
-            app_db.update_reindex_job(
-                job_id,
-                status="completed",
-                processed_documents=total_docs,
-                current_file=None
-            )
-
-            logger.info(f"Re-indexing job {job_id} for collection {collection_id} completed successfully")
-
-            # Trigger reload callback to refresh the indexer for this collection
+            # Swap the rebuilt index in before saying the job is over: whoever
+            # is watching reloads the moment it does, and must see the new one.
             if self.reload_callback:
                 try:
                     self.reload_callback(collection_id)
                     logger.info(f"Collection {collection_id} indexer reloaded successfully")
                 except Exception as e:
                     logger.error(f"Failed to reload indexer for collection {collection_id}: {e}")
+
+            self._finish_reindex(job_id, total_docs, failures)
+            logger.info(f"Re-indexing job {job_id} for collection {collection_id} finished")
 
         except Exception as e:
             logger.error(f"Re-indexing job {job_id} failed: {e}")
@@ -400,6 +469,7 @@ class ReindexService:
             self.is_running = False
             self.current_job_id = None
             self.current_collection_id = None
+            self._live.pop(job_id, None)
 
     def _run_extension_reindex(
         self,
@@ -823,63 +893,20 @@ class ReindexService:
 
             # Clear existing index AFTER getting the document list
             logger.info(f"Clearing existing index for re-indexing job {job_id}")
+            self._set_live(job_id, "clearing", "Clearing the old index")
             # Owners' "replaced by" calls live in the table clear_index empties;
             # document ids are content hashes, so they can be put back below.
             supersede_marks = _safe_supersede_marks(vector_store.metadata_store)
             vector_store.clear_index()
 
-            # Process each document
-            for idx, doc_info in enumerate(document_list, 1):
-                doc_path = doc_info["path"]
-                source_type = doc_info.get("source_type", "upload")
-                source_path = doc_info.get("source_path")
-
-                try:
-                    app_db.update_reindex_job(
-                        job_id,
-                        current_file=doc_path.name,
-                        processed_documents=idx - 1
-                    )
-
-                    logger.info(f"Re-indexing ({idx}/{total_docs}): {doc_path.name}")
-
-                    if not doc_path.exists():
-                        logger.warning(f"Document not found, skipping: {doc_path}")
-                        continue
-
-                    metadata = indexer.index_document(doc_path, doc_path.name)
-
-                    if source_type in ("local_reference", "url") and source_path:
-                        vector_store.metadata_store.update_document_source(
-                            document_id=metadata.document_id,
-                            source_path=source_path,
-                            source_type=source_type,
-                        )
-
-                    logger.info(
-                        f"Indexed {doc_path.name}: "
-                        f"{metadata.total_pages} pages, {metadata.total_chunks} chunks"
-                    )
-
-                except Exception as e:
-                    logger.error(f"Failed to process {doc_path.name}: {e}")
-                    continue
+            failures = self._reindex_documents(job_id, indexer, vector_store, document_list)
 
             _safe_restore_supersede_marks(vector_store.metadata_store, supersede_marks)
 
             # Save the index to disk
             logger.info("Saving re-indexed data to disk...")
+            self._set_live(job_id, "saving", "Saving the new index")
             vector_store.save()
-
-            # Mark as completed
-            app_db.update_reindex_job(
-                job_id,
-                status="completed",
-                processed_documents=total_docs,
-                current_file=None
-            )
-
-            logger.info(f"Re-indexing job {job_id} completed successfully")
 
             # Trigger reload callback to refresh the main indexer
             if self.reload_callback:
@@ -888,6 +915,9 @@ class ReindexService:
                     logger.info("Main indexer reloaded successfully")
                 except Exception as e:
                     logger.error(f"Failed to reload main indexer: {e}")
+
+            self._finish_reindex(job_id, total_docs, failures)
+            logger.info(f"Re-indexing job {job_id} finished")
 
         except Exception as e:
             logger.error(f"Re-indexing job {job_id} failed: {e}")
@@ -900,6 +930,7 @@ class ReindexService:
         finally:
             self.is_running = False
             self.current_job_id = None
+            self._live.pop(job_id, None)
 
     def get_job_status(self, job_id: int) -> Optional[dict]:
         """Get status of a re-indexing job.

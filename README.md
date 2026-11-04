@@ -563,11 +563,21 @@ curl "http://localhost:8473/documents?collection_id=default"                    
 curl "http://localhost:8473/documents/4a3a2a313e0382fa/pdf" -o original.pdf     # the original file
 curl "http://localhost:8473/documents/4a3a2a313e0382fa/chunks"                  # exactly what was indexed
 curl -X DELETE "http://localhost:8473/documents/4a3a2a313e0382fa?collection_id=default"
+
+# Many at once, as a background job (far faster than one DELETE per document)
+curl -X POST "http://localhost:8473/documents/bulk-delete" -H "Content-Type: application/json" \
+  -d '{"collection_id": "default", "document_ids": ["4a3a2a313e0382fa"]}'    # or "everything": true
+
+# What was generated from a collection: research reviews, saved reports, or both
+curl "http://localhost:8473/api/collections/default/outputs"
+curl -X DELETE "http://localhost:8473/api/collections/default/outputs?reviews=true&reports=true"
 ```
 
 Deleting removes the document's chunks and vectors and, for an upload, its
 stored file (a file indexed in place from your own folder is left alone). It
-cannot be undone.
+cannot be undone. Research reviews and saved reports are kept when their source
+goes, so adding the same file back brings its reviews back; delete them with the
+last call above, or from **Settings > Data**.
 
 **Research workspace** — `/api/research/*` (analysis, renaming, references,
 the citation graph, screening and review jobs) is listed in

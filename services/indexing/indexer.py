@@ -1341,6 +1341,12 @@ class DocumentIndexer:
         logger.info(f"Deleted {num_deleted} chunks")
         return num_deleted
 
+    def delete_documents(self, document_ids: List[str]) -> int:
+        """Delete many documents at once. Returns chunks deleted; does not save."""
+        num_deleted = self.vector_store.delete_documents(document_ids)
+        figures.delete_figure_files(self.figures_dir, document_ids)
+        return num_deleted
+
     def save_index(self):
         """Persist the vector store to disk."""
         self.vector_store.save()

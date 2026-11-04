@@ -31,6 +31,35 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
   const ACTIVE_STATUSES = ['pending', 'queued', 'running', 'cancelling']
   const isActiveStatus = (status) => ACTIVE_STATUSES.includes(status)
 
+  // Browsers allow six connections per origin over HTTP/1.1, shared by every
+  // tab, and a stream holds one for as long as its job runs. A stream per job
+  // meant a queue of six jobs left no connection for anything else: every
+  // request in the app hung, which looked like the whole UI had frozen. Jobs
+  // beyond this many are followed by polling instead.
+  const MAX_SSE_STREAMS = 2
+
+  // How long the work so far says the rest will take, measured from when this
+  // tab first saw it making progress. Not from the job's start: a job that sat
+  // in the queue for an hour has not been slow.
+  const _progressMarks = new Map() // job key -> { at, progress }
+  const ETA_MIN_MS = 3000
+  function remainingSeconds(key, status, progress) {
+    if (!isActiveStatus(status)) {
+      _progressMarks.delete(key)
+      return null
+    }
+    if (!progress) return null
+    const mark = _progressMarks.get(key)
+    if (!mark) {
+      _progressMarks.set(key, { at: Date.now(), progress })
+      return null
+    }
+    const elapsed = Date.now() - mark.at
+    const gained = progress - mark.progress
+    if (elapsed < ETA_MIN_MS || gained <= 0) return null
+    return Math.round(((100 - progress) * elapsed) / gained / 1000)
+  }
+
   // Computed
   const hasActiveJobs = computed(() => {
     const activeUploads = uploadJobs.value.some(j => isActiveStatus(j.status))
@@ -61,6 +90,7 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
         collectionId: job.collectionId,
         status: job.status,
         progress: job.progressPercent || 0,
+        remainingSeconds: remainingSeconds(`upload-${job.jobId}`, job.status, job.progressPercent),
         currentFile: job.currentFile,
         totalFiles: job.totalFiles,
         processedFiles: job.processedFiles,
@@ -83,25 +113,39 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
         // from the job itself or, failing that, its first coded file failure.
         errorCode: job.resultSummary?.error_code || failed.find(f => f.code)?.code || null,
         skippedFiles: job.skippedFiles || [],
-        cancellable: job.jobType !== 'reindex' && isActiveStatus(job.status),
+        // Emptying a collection cannot stop half way, so once it is running
+        // there is nothing a Cancel button could do.
+        cancellable: job.jobType !== 'reindex' && isActiveStatus(job.status) &&
+          !(job.deletingEverything && !job.queuePosition),
+        deletingEverything: job.deletingEverything,
       })
     })
 
     if (reindexJob.value) {
+      const reindex = reindexJob.value
+      const total = reindex.total_documents || 0
+      // Whole files done, plus how far into the current one: a single large
+      // PDF can be many minutes of work on one step of the count.
+      const done = (reindex.processed_documents || 0) + (reindex.phase_progress || 0) / 100
+      const progress = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
       jobs.push({
         type: 'reindex',
-        id: reindexJob.value.id,
-        collectionId: reindexJob.value.collection_id,
-        status: reindexJob.value.status,
-        progress: reindexJob.value.total_documents > 0
-          ? Math.round((reindexJob.value.processed_documents / reindexJob.value.total_documents) * 100)
-          : 0,
-        currentFile: reindexJob.value.current_file,
-        totalFiles: reindexJob.value.total_documents,
-        processedFiles: reindexJob.value.processed_documents,
-        error: reindexJob.value.error,
-        startedAt: reindexJob.value.started_at,
-        completedAt: reindexJob.value.completed_at,
+        id: reindex.id,
+        collectionId: reindex.collection_id,
+        status: reindex.status,
+        progress,
+        remainingSeconds: remainingSeconds(`reindex-${reindex.id}`, reindex.status, progress),
+        currentFile: reindex.current_file,
+        totalFiles: total,
+        processedFiles: reindex.processed_documents,
+        error: reindex.error,
+        startedAt: reindex.started_at,
+        completedAt: reindex.completed_at,
+        phase: reindex.phase,
+        phaseProgress: reindex.phase_progress || 0,
+        phaseDetail: reindex.phase_detail,
+        chunksProcessed: reindex.chunks_processed || 0,
+        chunksTotal: reindex.chunks_total || 0,
         failedFiles: [],
         skippedFiles: [],
         cancellable: false,
@@ -119,11 +163,28 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
 
   const finishedJobs = computed(() => allJobs.value.filter(j => !isActiveStatus(j.status)))
 
+  // The sources a running delete job in this collection has yet to reach, as
+  // far as this tab knows: { everything, ids }. A tab that did not start the
+  // job does not know which, and just sees the list shrink as it refreshes.
+  function pendingDeletion(collectionId) {
+    const ids = new Set()
+    let everything = false
+    for (const job of uploadJobs.value) {
+      if (job.jobType !== 'delete' || job.collectionId !== collectionId || !isActiveStatus(job.status)) continue
+      everything = everything || job.deletingEverything
+      for (const id of job.deletingIds || []) ids.add(id)
+    }
+    return { everything, ids }
+  }
+
   // Live-refresh signal: while a job is indexing, bump dataRefreshTick so
   // the sources sidebar and header/footer stats can update mid-job instead
   // of waiting for completion. Throttled to at most every ~10s, or sooner
-  // once ~200 more files have been processed since the last signal.
+  // once ~200 more files have been processed since the last signal, but never
+  // faster than the floor: a job through small files can pass 200 several
+  // times a second, and each signal re-fetches the source list.
   const REFRESH_INTERVAL_MS = 10000
+  const REFRESH_MIN_GAP_MS = 2000
   const REFRESH_FILE_STEP = 200
   const dataRefreshTick = ref(0)
   const dataRefreshCollectionId = ref(null)
@@ -142,7 +203,9 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
       return
     }
     const now = Date.now()
-    if (now - mark.at >= REFRESH_INTERVAL_MS || processed - mark.processed >= REFRESH_FILE_STEP) {
+    const sinceLast = now - mark.at
+    if (sinceLast >= REFRESH_INTERVAL_MS ||
+        (sinceLast >= REFRESH_MIN_GAP_MS && processed - mark.processed >= REFRESH_FILE_STEP)) {
       mark.at = now
       mark.processed = processed
       dataRefreshCollectionId.value = collectionId
@@ -173,6 +236,9 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
       queuePosition: jobData.queue_position ?? null,
       cancelRequested: jobData.cancel_requested || false,
       skippedFiles: jobData.skipped_files || [],
+      // What a delete job is removing. Only this tab's own request says.
+      deletingIds: jobData.deleting_ids || null,
+      deletingEverything: jobData.deleting_everything || false,
       // Set once the sidebar has reloaded its list for this job's finish.
       reloaded: false,
       // announced: the outcome toast has been shown (or deliberately
@@ -199,6 +265,25 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
       startPolling()
     }
     return record
+  }
+
+  // Ask the server to delete these sources, or with no ids all of them, and
+  // follow the job. Returns its record, or null when there was nothing to do.
+  async function deleteSources({ collectionId, documentIds = null }) {
+    const response = await http.post('/documents/bulk-delete', documentIds
+      ? { collection_id: collectionId, document_ids: documentIds }
+      : { collection_id: collectionId, everything: true })
+    const data = response.data
+    if (data.job_id == null) return null
+    addUploadJob({
+      ...data,
+      deleting_ids: documentIds,
+      deleting_everything: !documentIds,
+    })
+    const job = uploadJobs.value.find(j => j.jobId === data.job_id)
+    // A small delete can be over before this response is.
+    if (!isActiveStatus(job.status)) onJobFinished(job)
+    return job
   }
 
   function updateUploadJob(jobData) {
@@ -318,6 +403,10 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
   function announceOutcome(job) {
     const ui = useUiStore()
     const failed = failedFilesOf(job)
+    if (job.jobType === 'delete') {
+      announceDeletion(ui, job, failed)
+      return
+    }
     const noun = job.jobType === 'upload' ? 'Upload' : 'Indexing'
     if (job.status === 'failed') {
       ui.notify(`${noun} failed: ${job.error || 'unknown error'}`, 'error', { duration: 8000 })
@@ -341,8 +430,42 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     }
   }
 
+  function announceDeletion(ui, job, failed) {
+    if (job.status === 'failed') {
+      ui.notify(`Deleting sources failed: ${job.error || 'unknown error'}`, 'error', { duration: 8000 })
+      return
+    }
+    if (job.status === 'cancelled') {
+      ui.notify(job.error || 'Delete stopped', 'warning')
+      return
+    }
+    if (job.status !== 'completed') return
+    const deleted = job.resultSummary?.documents_processed ?? job.processedFiles ?? 0
+    const what = job.resultSummary?.filename || `${deleted.toLocaleString()} source${deleted === 1 ? '' : 's'}`
+    if (failed.length > 0) {
+      ui.notify(
+        `Deleted ${what}, but ${failed.length} stored file${failed.length === 1 ? '' : 's'} could not be removed — ` +
+        'open Background jobs for the list.',
+        'warning',
+        { duration: 9000 },
+      )
+      return
+    }
+    ui.notify(`Deleted ${what}`, 'success')
+  }
+
+  function announceReindex(job) {
+    const ui = useUiStore()
+    if (job.status === 'completed') {
+      ui.notify('Re-index complete', 'success')
+    } else if (job.status === 'failed') {
+      ui.notify(`Re-index failed: ${job.error || 'unknown error'}`, 'error', { duration: 9000 })
+    }
+  }
+
   function startSSEStream(jobId) {
     if (eventSources.value[jobId]) return // no duplicate connections
+    if (Object.keys(eventSources.value).length >= MAX_SSE_STREAMS) return // polling has this one
 
     const eventSource = new EventSource(`/documents/upload/${jobId}/stream`)
     const onEvent = (e) => {
@@ -446,37 +569,54 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     stopPollingIfNoActiveJobs()
   }
 
-  async function pollAllJobs() {
-    // Poll upload jobs (fallback when SSE is not available)
-    for (const job of uploadJobs.value) {
-      if (!isActiveStatus(job.status)) continue
-      if (eventSources.value[job.jobId]) continue // SSE has this one
-      try {
-        const response = await http.get(`/documents/upload/${job.jobId}/status`)
-        updateUploadJob(response.data)
-      } catch (err) {
-        // A job row that has gone missing is not coming back; drop it
-        // rather than polling a 404 forever.
-        if (err?.status === 404) removeUploadJob(job.jobId)
-      }
-    }
+  // A job with a stream is still polled now and then: a proxy that buffers
+  // event streams delivers nothing and raises no error, and without this such
+  // a job would sit at its first percent until the page was reloaded.
+  const STREAMED_JOB_POLL_EVERY = 5
+  let pollCount = 0
+  // A slow server must not get a new round of requests on top of a round it
+  // has not answered yet.
+  let pollInFlight = false
 
-    // Poll reindex job
-    if (reindexJob.value && isActiveStatus(reindexJob.value.status)) {
-      try {
-        const response = await http.get('/api/reindex/status')
-        reindexJob.value = response.data
-        if (reindexJob.value) {
-          maybeSignalDataRefresh(
-            'reindex',
-            reindexJob.value.status,
-            reindexJob.value.collection_id,
-            reindexJob.value.processed_documents,
-          )
+  async function pollAllJobs() {
+    if (pollInFlight) return
+    pollInFlight = true
+    pollCount += 1
+    try {
+      // Poll upload jobs (fallback when SSE is not available)
+      for (const job of uploadJobs.value) {
+        if (!isActiveStatus(job.status)) continue
+        if (eventSources.value[job.jobId] && pollCount % STREAMED_JOB_POLL_EVERY !== 0) continue
+        try {
+          const response = await http.get(`/documents/upload/${job.jobId}/status`)
+          updateUploadJob(response.data)
+        } catch (err) {
+          // A job row that has gone missing is not coming back; drop it
+          // rather than polling a 404 forever.
+          if (err?.status === 404) removeUploadJob(job.jobId)
         }
-      } catch (err) {
-        if (err?.status === 404) reindexJob.value = null
       }
+
+      // Poll reindex job
+      if (reindexJob.value && isActiveStatus(reindexJob.value.status)) {
+        try {
+          const response = await http.get('/api/reindex/status')
+          reindexJob.value = response.data
+          if (reindexJob.value) {
+            maybeSignalDataRefresh(
+              'reindex',
+              reindexJob.value.status,
+              reindexJob.value.collection_id,
+              reindexJob.value.processed_documents,
+            )
+            if (!isActiveStatus(reindexJob.value.status)) announceReindex(reindexJob.value)
+          }
+        } catch (err) {
+          if (err?.status === 404) reindexJob.value = null
+        }
+      }
+    } finally {
+      pollInFlight = false
     }
 
     stopPollingIfNoActiveJobs()
@@ -519,6 +659,7 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
         if (!isActiveStatus(job.status)) {
           record.announced = true
           record.finalized = true
+          record.reloaded = true
         }
       }
     } catch {
@@ -559,6 +700,7 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
 
     // Helpers
     isActiveStatus,
+    pendingDeletion,
 
     // Live-refresh signal (throttled; watched by App and SourcesSidebar)
     dataRefreshTick,
@@ -566,6 +708,7 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
 
     // Actions
     addUploadJob,
+    deleteSources,
     updateUploadJob,
     removeUploadJob,
     clearFinishedJobs,

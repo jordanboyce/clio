@@ -59,6 +59,9 @@ export const researchApi = {
     http.get(`/api/research/briefs?${q(cid, { unread: unread || null, document_id: documentId })}`).then(r => r.data),
   markBrief: (cid, id, read = true) => http.post(`/api/research/briefs/${id}/read?${q(cid)}`, { read }).then(r => r.data),
   deleteBrief: (cid, id) => http.delete(`/api/research/briefs/${id}?${q(cid)}`).then(r => r.data),
+  outputs: (cid) => http.get(`/api/collections/${encodeURIComponent(cid)}/outputs`).then(r => r.data),
+  // { reviews, reports }: delete everything of that kind generated from the collection.
+  deleteOutputs: (cid, what) => http.delete(`/api/collections/${encodeURIComponent(cid)}/outputs`, { params: what }).then(r => r.data),
 }
 
 export const VERDICTS = {

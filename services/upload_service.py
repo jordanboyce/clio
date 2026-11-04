@@ -106,6 +106,11 @@ class _QueuedJob:
     collection_id: str
     target: Callable[..., None]
     args: tuple
+    # Needs no embedding, so it neither waits for nor counts against
+    # MAX_CONCURRENT_INDEX_JOBS. Still one job per collection, in order: a
+    # delete running beside an upload into the same collection is the race
+    # the per-collection rule exists to prevent.
+    light: bool = False
 
 
 def _size_of(path: Path) -> int:
@@ -175,6 +180,7 @@ class UploadService:
         # so the dispatcher can keep one running job per collection without
         # a database round trip.
         self._active_collections: Dict[int, str] = {}
+        self._active_light: set = set()  # running jobs outside the concurrency cap
         self._queue: deque = deque()  # _QueuedJob, FIFO
         self._lock = threading.Lock()
         # SSE event queues per job (for real-time streaming)
@@ -223,22 +229,30 @@ class UploadService:
             self._queue.append(job)
         self._dispatch()
 
-    def _dispatch(self) -> None:
-        """Start as many waiting jobs as the caps allow.
+    def _next_job(self) -> Optional[_QueuedJob]:
+        """The first waiting job allowed to start. Call with the lock held.
 
-        Picks the first waiting job whose collection has nothing running,
-        so a queue headed by a busy collection does not block jobs for
-        other collections behind it.
+        Skips collections with a job running, so a queue headed by a busy
+        collection does not block jobs for other collections behind it, and
+        anything behind a job of the same collection, so each collection's
+        jobs run in the order they were asked for.
         """
+        cap = max(0, int(settings.max_concurrent_index_jobs or 0))
+        slot_free = not cap or len(self._active_threads) - len(self._active_light) < cap
+        unavailable = set(self._active_collections.values())
+        for job in self._queue:
+            if job.collection_id in unavailable:
+                continue
+            if job.light or slot_free:
+                return job
+            unavailable.add(job.collection_id)
+        return None
+
+    def _dispatch(self) -> None:
+        """Start as many waiting jobs as the caps allow."""
         while True:
             with self._lock:
-                cap = max(0, int(settings.max_concurrent_index_jobs or 0))
-                if cap and len(self._active_threads) >= cap:
-                    return
-                busy = set(self._active_collections.values())
-                picked = next(
-                    (q for q in self._queue if q.collection_id not in busy), None
-                )
+                picked = self._next_job()
                 if picked is None:
                     return
                 self._queue.remove(picked)
@@ -251,6 +265,8 @@ class UploadService:
                 )
                 self._active_threads[picked.job_id] = thread
                 self._active_collections[picked.job_id] = picked.collection_id
+                if picked.light:
+                    self._active_light.add(picked.job_id)
             thread.start()
             logger.info(
                 f"Started index job {picked.job_id} for collection "
@@ -284,6 +300,7 @@ class UploadService:
             with self._lock:
                 self._active_threads.pop(job.job_id, None)
                 self._active_collections.pop(job.job_id, None)
+                self._active_light.discard(job.job_id)
                 self._cancel_flags.pop(job.job_id, None)
             self._dispatch()
 
@@ -299,7 +316,7 @@ class UploadService:
         try:
             counts = app_db.fail_interrupted_jobs(
                 "Interrupted - the server restarted while this job was running. "
-                "Add the sources again to finish indexing them."
+                "What it finished is kept; run it again to do the rest."
             )
         except Exception as e:
             logger.error(f"Could not reconcile interrupted jobs: {e}")
@@ -485,6 +502,7 @@ class UploadService:
         total_files: int,
         target: Callable[..., None],
         args: Tuple = (),
+        light: bool = False,
     ) -> int:
         """Queue a job of another kind (e.g. a collection import) on the same
         dispatcher, so it shows in the jobs drawer, respects the one-job-per-
@@ -492,7 +510,9 @@ class UploadService:
 
         `target(job_id, *args)` runs on the job thread; it reports through
         report_progress()/finish_job() and may check is_cancelled(job_id).
-        Raises RuntimeError when the waiting list is full.
+        Pass ``light`` for a job that never embeds, so it does not wait on
+        another collection's indexing. Raises RuntimeError when the waiting
+        list is full.
         """
         self._check_queue_capacity()
         job_id = app_db.create_upload_job(collection_id, total_files, job_type=job_type)
@@ -501,11 +521,30 @@ class UploadService:
             collection_id=collection_id,
             target=target,
             args=(job_id, *args),
+            light=light,
         ))
         return job_id
 
     def is_cancelled(self, job_id: int) -> bool:
         return self._is_cancelled(job_id)
+
+    def is_live(self, job_id: int) -> bool:
+        """True while a job is waiting for a slot or running."""
+        with self._lock:
+            return job_id in self._active_threads or any(q.job_id == job_id for q in self._queue)
+
+    def report_files(self, job_id: int, phase: str, done: int, total: int, detail: str,
+                     chunks_done: int = 0, chunks_total: int = 0) -> None:
+        """Record and broadcast whole-item progress for a submit_job() job."""
+        app_db.update_upload_job(
+            job_id, status="running", processed_files=done, phase=phase, phase_detail=detail,
+            chunks_processed=chunks_done, chunks_total=chunks_total,
+        )
+        self._broadcast_event(ProgressEvent(
+            job_id=job_id, event_type="file_complete", phase=phase, file_index=done, total_files=total,
+            phase_detail=detail, chunks_processed=chunks_done, chunks_total=chunks_total,
+            overall_percent=(done / total * 100) if total else 0.0,
+        ))
 
     def report_progress(self, job_id: int, phase: str, percent: float, detail: str,
                         done: int = 0, total: int = 0) -> None:
@@ -520,13 +559,20 @@ class UploadService:
             chunks_processed=done, chunks_total=total, overall_percent=percent,
         ))
 
-    def finish_job(self, job_id: int, summary: Dict[str, Any], cancelled: bool = False) -> None:
-        """Mark a submit_job() job completed (or cancelled) and tell listeners."""
+    def finish_job(self, job_id: int, summary: Dict[str, Any], cancelled: bool = False,
+                   processed: Optional[int] = None, message: Optional[str] = None) -> None:
+        """Mark a submit_job() job completed (or cancelled) and tell listeners.
+
+        ``processed`` is the final item count for a job that reports one, and
+        ``message`` what to say about a cancellation instead of "Cancelled".
+        """
         status = "cancelled" if cancelled else "completed"
+        if processed is None:
+            processed = 0 if cancelled else 1
         app_db.update_upload_job(
-            job_id, status=status, processed_files=0 if cancelled else 1,
+            job_id, status=status, processed_files=processed,
             current_file=None, phase=status, result_summary=json.dumps(summary),
-            error="Cancelled" if cancelled else None,
+            error=(message or "Cancelled") if cancelled else None,
         )
         self._broadcast_event(ProgressEvent(
             job_id=job_id, event_type="job_cancelled" if cancelled else "job_complete",
@@ -961,11 +1007,18 @@ class UploadService:
         """Partition files into (to_index, unchanged, hashes) against a collection.
 
         A file is unchanged when a document with its content hash is already
-        in the collection, whatever name or path it was added under.
+        in the collection, whatever name or path it was added under, and is
+        not about to be deleted: delete everything and add it all back is an
+        ordinary thing to do, and the second step must not be skipped because
+        the first is still queued.
         """
+        from services import removal_jobs
+
         hashes = UploadService._hash_files(file_paths)
         store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store
-        existing = store.get_document_ids_by_content_hashes(hashes.values())
+        existing = removal_jobs.without_pending_removals(
+            collection_id, store.get_document_ids_by_content_hashes(hashes.values())
+        )
         to_index: List[str] = []
         unchanged: List[str] = []
         for fp in file_paths:
@@ -1218,13 +1271,16 @@ class UploadService:
                 continue  # excluded by the filters this time, or prune is off
             try:
                 governance.remove_document(
-                    collection_id, doc_id, actor=uploaded_by, action=action,
+                    collection_id, doc_id, actor=uploaded_by, action=action, save=False,
                 )
             except KeyError:
                 continue  # already gone
             removed_ids.add(doc_id)
             bucket.append(doc.get("filename") or Path(source_path).name)
             paths.append(source_path)
+        if removed_ids:
+            # Once for the whole sync: it rewrites the entire vector index.
+            indexer_manager.get_indexer(collection_id).save_index()
 
         job_id: Optional[int] = None
         if files_to_index:

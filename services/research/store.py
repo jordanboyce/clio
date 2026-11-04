@@ -13,10 +13,13 @@ Tables (all keyed by the collection's own ``document_id``):
 
 Living in metadata.db means collection export/import, backups and the
 storage accounting already cover it. Rows for a deleted document are
-ignored by every reader (they join against ``documents``) and swept by
-``prune_orphans``. Those rows hold statements drawn from the paper, so a
-collection bundle must sweep them too, or a withheld paper's words leave
-with the export: see ``prune_orphan_rows`` and ``prune_orphan_jobs``.
+ignored by every reader (they join against ``documents``) and kept, because
+document ids are content hashes: add the same file back and its reviews, which
+cost a model to produce, return with it. They go when someone asks
+(``delete_outputs``, behind Settings > Data). Those rows hold statements drawn
+from the paper, so a collection bundle sweeps them regardless, or a withheld
+paper's words leave with the export: see ``prune_orphan_rows`` and
+``prune_orphan_jobs``.
 """
 
 from __future__ import annotations
@@ -528,6 +531,31 @@ class ResearchStore:
         return [self._job_row(r) for r in rows]
 
     # ── housekeeping ────────────────────────────────────────────────────
+
+    def output_counts(self) -> Dict[str, int]:
+        """Every generated review and verdict, those of deleted sources included.
+
+        Not what any list shows: readers leave those rows out, so this is the
+        only place a person can learn they are still there.
+        """
+        with self._connect() as conn:
+            return {
+                "reviews": conn.execute("SELECT COUNT(*) FROM research_briefs").fetchone()[0],
+                "screenings": conn.execute("SELECT COUNT(*) FROM research_assessments").fetchone()[0],
+            }
+
+    def delete_outputs(self) -> Dict[str, int]:
+        """Delete every review and verdict, and what is left of deleted sources.
+
+        The bibliographic records of sources still in the collection stay:
+        they are read from the papers themselves and cost no model to rebuild.
+        """
+        with self._connect() as conn:
+            reviews = conn.execute("DELETE FROM research_briefs").rowcount
+            screenings = conn.execute("DELETE FROM research_assessments").rowcount
+            prune_orphan_rows(conn)
+            conn.commit()
+        return {"reviews": reviews, "screenings": screenings}
 
     def prune_orphans(self) -> int:
         """Drop research rows whose document is gone from the collection."""

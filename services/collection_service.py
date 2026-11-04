@@ -335,6 +335,10 @@ class CollectionService:
     def remove_document(self, collection_id: str, document_id: str):
         app_db.remove_document_from_collection(collection_id, document_id)
 
+    def remove_documents(self, collection_id: str, document_ids: Optional[List[str]] = None):
+        """Remove these documents, or with ``None`` all of them, in one transaction."""
+        app_db.remove_documents_from_collection(collection_id, document_ids)
+
     def get_collection_document_ids(self, collection_id: str) -> List[str]:
         return app_db.get_collection_documents(collection_id)
 

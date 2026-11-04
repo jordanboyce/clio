@@ -103,6 +103,11 @@ class DatabaseBackend(ABC):
         ...
 
     @abstractmethod
+    def remove_documents_from_collection(self, collection_id: str, document_ids: Optional[List[str]] = None):
+        """Remove these documents, or with ``document_ids=None`` all of them, in one transaction."""
+        ...
+
+    @abstractmethod
     def get_collection_documents(self, collection_id: str) -> List[str]:
         ...
 
@@ -240,6 +245,12 @@ class DatabaseBackend(ABC):
         target: Optional[str] = None,
         detail: Optional[str] = None,
     ) -> int:
+        ...
+
+    @abstractmethod
+    def add_audit_events(self, actor: Optional[str], action: str, collection_id: Optional[str],
+                         events: List[Dict[str, Optional[str]]]) -> None:
+        """Record one action over many documents in one transaction."""
         ...
 
     @abstractmethod

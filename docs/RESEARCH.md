@@ -196,6 +196,7 @@ an outbound path.
 | POST | `/api/research/jobs` | Background screening (`assess`) or reviews (`brief`), optional `not_before` |
 | GET/POST | `/api/research/jobs`, `/jobs/{id}`, `/jobs/{id}/cancel` | Job progress and cancellation |
 | GET/POST/DELETE | `/api/research/briefs`, `/briefs/{id}/read`, `/briefs/{id}` | The review queue |
+| GET / DELETE | `/api/collections/{id}/outputs` (`reviews`, `reports`) | Count, or delete, everything generated from a collection, including reviews of sources since deleted |
 
 All take `collection_id` as a query parameter. Model-backed calls take the
 same provider headers as `/api/chat`.

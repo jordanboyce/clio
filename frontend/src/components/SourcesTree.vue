@@ -7,7 +7,10 @@
       :class="{
         'is-selected': row.kind === 'file' && selected.has(row.doc.document_id),
         'is-focused': focusIndex === index,
+        'opacity-40': isBeingDeleted(row),
       }"
+      :inert="isBeingDeleted(row)"
+      :data-deleting="isBeingDeleted(row) || undefined"
       :style="{ paddingLeft: `${0.35 + row.depth * INDENT}rem` }"
       role="treeitem"
       :aria-level="row.depth + 1"
@@ -127,6 +130,8 @@ const props = defineProps({
   tree: { type: Object, required: true },
   collapsed: { type: Object, required: true },     // Set of folder paths
   selectedIds: { type: Array, default: () => [] },
+  // What a running delete job has yet to reach: { everything, ids: Set }
+  deleting: { type: Object, default: () => ({ everything: false, ids: new Set() }) },
   canEdit: { type: Boolean, default: false },
 })
 const emit = defineEmits(['toggle', 'select', 'select-only', 'toggle-folder', 'collapse-others', 'open', 'chunks', 'replace', 'report', 'delete', 'injection', 'policy'])
@@ -145,6 +150,8 @@ watch(rows, (r) => { if (focusIndex.value >= r.length) focusIndex.value = Math.m
 const fileInfo = (doc) => describeFile(doc?.filename, { isWeb: doc?.source_type === 'url', isNote: doc?.source_type === 'text' })
 const iconTone = (doc) => (fileInfo(doc).tile.split(' ').find(c => c.startsWith('text-')) || 'text-base-content/60')
 const folderState = (node) => folderSelection(node, selected.value)
+const isBeingDeleted = (row) =>
+  row.kind === 'file' && (props.deleting.everything || props.deleting.ids.has(row.doc.document_id))
 const stem = (name) => {
   const n = String(name || '')
   const i = n.lastIndexOf('.')

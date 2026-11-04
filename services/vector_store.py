@@ -138,6 +138,7 @@ class VectorStore:
 
             if isinstance(faiss.downcast_index(loaded), faiss.IndexIDMap2):
                 self.index = loaded
+                self._drop_orphan_vectors()
             else:
                 self.index = self._migrate_legacy_index(loaded)
 
@@ -147,6 +148,22 @@ class VectorStore:
             logger.info("Creating new FAISS index")
             self.index = self._new_index()
             logger.info("Created new index")
+
+    def _drop_orphan_vectors(self) -> None:
+        """Remove vectors whose chunk row is gone.
+
+        A bulk delete commits its rows batch by batch and saves the index once
+        at the end, so a crash in between leaves vectors on disk that nothing
+        can resolve. They would keep taking result slots from real matches.
+        Only runs when the counts already show more vectors than chunks.
+        """
+        if self.index.ntotal <= self.metadata_store.get_total_chunks():
+            return
+        vector_ids = faiss.vector_to_array(faiss.downcast_index(self.index).id_map)
+        orphans = np.setdiff1d(vector_ids, np.asarray(self.metadata_store.get_all_rowids_ordered(), dtype=np.int64))
+        if orphans.size:
+            self.index.remove_ids(orphans)
+            logger.warning(f"Dropped {orphans.size} vectors left behind by an interrupted delete")
 
     def _migrate_legacy_index(self, legacy: faiss.Index) -> faiss.Index:
         """Wrap a legacy positional IndexFlatIP into an id-mapped index.
@@ -506,32 +523,45 @@ class VectorStore:
         Returns:
             Number of chunks deleted
         """
-        # Capture row ids before the metadata rows disappear. Tabular documents
+        return self.delete_documents([document_id])
+
+    def delete_documents(self, document_ids: List[str]) -> int:
+        """
+        Delete many documents as one operation per store.
+
+        ``remove_ids`` walks the whole index and every commit is a disk sync,
+        so a batch costs about what one document does; call this rather than
+        delete_document in a loop. The caller decides when to save().
+
+        Args:
+            document_ids: Document IDs to delete
+
+        Returns:
+            Number of chunks deleted
+        """
+        # Capture the ids before the metadata rows disappear. Tabular documents
         # (CSV/XLSX) are indexed with zero chunks by design — they must still
         # fall through so their documents row and structured tables are removed.
-        row_ids = self.metadata_store.get_document_chunk_rowids(document_id)
+        row_ids, chunk_ids = self.metadata_store.get_chunk_refs_for_documents(document_ids)
         num_deleted = len(row_ids)
-        logger.info(f"Deleting {num_deleted} chunks for document {document_id}")
+        logger.info(f"Deleting {num_deleted} chunks for {len(document_ids)} document(s)")
 
-        if row_ids:
-            # Delete from BM25 index (reads chunk ids from metadata.db, so
-            # this must run before the metadata rows are deleted)
-            self.bm25_index.remove_documents_by_document_id(document_id, self.metadata_db_path)
+        self.bm25_index.remove_chunks(chunk_ids)
 
-        # Delete from metadata (SQLite) — removes chunks and the documents row
-        self.metadata_store.delete_document(document_id)
+        # Delete from metadata (SQLite) — removes chunks and the documents rows
+        self.metadata_store.delete_documents(document_ids)
 
-        # Drop any structured tables (CSV/XLSX) created for this document
+        # Drop any structured tables (CSV/XLSX) created for these documents
         try:
-            self.structured_store.delete_document(document_id)
+            self.structured_store.delete_documents(document_ids)
         except Exception as e:
-            logger.warning(f"Failed to drop structured tables for {document_id}: {e}")
+            logger.warning(f"Failed to drop structured tables: {e}")
 
         if row_ids:
             # Remove the vectors in place
             with self._index_lock:
                 removed = self.index.remove_ids(np.asarray(row_ids, dtype=np.int64))
-            logger.info(f"Removed {removed} vectors from FAISS index for document {document_id}")
+            logger.info(f"Removed {removed} vectors from FAISS index")
 
         return num_deleted
 

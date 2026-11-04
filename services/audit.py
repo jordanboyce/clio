@@ -29,7 +29,8 @@ ACTIONS: List[str] = [
     "document.upload",          # synchronous upload request (files + resulting ids)
     "document.index_job",       # background index job started (repo / local paths)
     "document.delete",
-    "document.flagged",         # content policy: indexed with a warning badge
+    "document.bulk_delete",     # delete job started; each document also gets its own document.delete
+    "document.flagged",        # content policy: indexed with a warning badge
     "document.quarantined",     # content policy: indexed but hidden pending review
     "document.rejected",        # content policy: refused at ingest
     "document.blocked",         # hash blocklist refused a re-upload
@@ -45,6 +46,7 @@ ACTIONS: List[str] = [
     "collection.guide",         # guide text changed (length/digest/scan verdict, never the text)
     "collection.metadata",      # name/description changed (length/digest only)
     "collection.expertise",     # expertise packs attached/detached
+    "collection.outputs_deleted",  # generated reviews and saved reports removed (counts only)
     "expertise.create",         # expertise pack created (id, name, digest)
     "expertise.update",
     "expertise.delete",
@@ -103,6 +105,32 @@ def record(
         )
     except Exception as e:  # pragma: no cover - defensive by design
         logger.warning(f"Audit event {action} could not be recorded: {e}")
+
+
+def record_many(
+    action: str,
+    *,
+    actor: Optional[str],
+    collection_id: Optional[str],
+    events: List[Dict[str, Any]],
+) -> None:
+    """Append one action over many documents as a single write.
+
+    Still one row per document, so the trail reads the same as for single
+    removals. Each event is ``{"document_id", "detail"}``; never raises.
+    """
+    if not events:
+        return
+    try:
+        from services.app_database import app_db
+
+        app_db.add_audit_events(actor, action, collection_id, [
+            {"document_id": e.get("document_id"),
+             "detail": json.dumps(e["detail"], default=str) if e.get("detail") else None}
+            for e in events
+        ])
+    except Exception as e:  # pragma: no cover - defensive by design
+        logger.warning(f"Audit events {action} could not be recorded: {e}")
 
 
 def list_events(

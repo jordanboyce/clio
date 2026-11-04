@@ -105,7 +105,20 @@
 
     <!-- Everything saved in this collection -->
     <section aria-label="Saved in this collection" class="space-y-2">
-      <h3 class="text-sm font-semibold">Saved in this collection</h3>
+      <div class="flex items-center justify-between gap-2">
+        <h3 class="text-sm font-semibold">Saved in this collection</h3>
+        <template v-if="canEdit && artifacts.length > 1">
+          <div v-if="confirmingAll" class="flex items-center gap-1">
+            <button class="btn btn-xs btn-error" :disabled="deleting" data-testid="delete-all-reports-confirm" @click="removeAll">
+              Delete all {{ artifacts.length }} permanently
+            </button>
+            <button class="btn btn-xs btn-ghost" @click="confirmingAll = false">Keep</button>
+          </div>
+          <button v-else class="btn btn-xs btn-ghost text-error" data-testid="delete-all-reports" @click="confirmingAll = true">
+            Delete all
+          </button>
+        </template>
+      </div>
 
       <p v-if="loaded && !artifacts.length" class="text-sm text-base-content/60" data-testid="artifacts-empty">
         Nothing yet.
@@ -205,6 +218,7 @@ const loaded = ref(false)
 const opened = ref(null)
 const openId = ref(null)
 const confirmingId = ref(null)
+const confirmingAll = ref(false)
 const deleting = ref(false)
 
 // The one to open when it finishes, unless something else was opened first.
@@ -343,6 +357,24 @@ async function remove(artifact) {
   } finally {
     deleting.value = false
     confirmingId.value = null
+  }
+}
+
+async function removeAll() {
+  deleting.value = true
+  error.value = ''
+  try {
+    await http.delete(`/api/collections/${encodeURIComponent(collectionId.value)}/outputs`, { params: { reports: true } })
+    artifacts.value = []
+    closeArtifact()
+    openWhenDone = null
+    // Ask again rather than assume: a report held from this person stays.
+    await loadList()
+  } catch (e) {
+    error.value = e.message || 'Could not delete those reports'
+  } finally {
+    deleting.value = false
+    confirmingAll.value = false
   }
 }
 

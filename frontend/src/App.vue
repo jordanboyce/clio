@@ -1221,7 +1221,7 @@
                       @click="cancelJob(job.id)"
                       class="btn btn-ghost btn-xs text-error"
                       :disabled="job.cancelRequested"
-                      :title="job.cancelRequested ? 'Stopping after the current file' : 'Cancel job'"
+                      :title="job.cancelRequested ? `Stopping after the current ${job.type === 'delete' ? 'batch' : 'file'}` : 'Cancel job'"
                       :aria-label="`Cancel ${job.type} job`"
                     >
                       <XCircle :size="16" />
@@ -1244,6 +1244,13 @@
                     {{ job.chunksProcessed.toLocaleString() }}/{{ job.chunksTotal.toLocaleString() }} chunks
                   </span>
                 </div>
+                <div
+                  v-if="job.phaseDetail && backgroundJobsStore.isActiveStatus(job.status) && !job.queuePosition"
+                  class="text-xs text-base-content/60 truncate"
+                  :title="job.phaseDetail"
+                >
+                  {{ job.phaseDetail }}
+                </div>
 
                 <!-- Progress -->
                 <div v-if="backgroundJobsStore.isActiveStatus(job.status)" class="space-y-1">
@@ -1253,9 +1260,10 @@
                     :value="job.queuePosition ? 0 : job.progress"
                     max="100"
                   ></progress>
-                  <div class="flex justify-between text-xs text-base-content/60">
+                  <div class="flex justify-between gap-2 text-xs text-base-content/60">
                     <span>{{ Math.round(job.progress) }}%</span>
-                    <span>{{ (job.processedFiles || 0).toLocaleString() }}/{{ (job.totalFiles || 0).toLocaleString() }} files</span>
+                    <span v-if="remainingLabel(job)" data-testid="job-remaining">{{ remainingLabel(job) }}</span>
+                    <span>{{ (job.processedFiles || 0).toLocaleString() }}/{{ (job.totalFiles || 0).toLocaleString() }} {{ jobUnit(job) }}</span>
                   </div>
                 </div>
 
@@ -1282,7 +1290,7 @@
                      otherwise looks like it worked. -->
                 <details v-if="job.failedFiles.length" class="text-xs">
                   <summary class="cursor-pointer text-warning">
-                    {{ job.failedFiles.length }} file{{ job.failedFiles.length === 1 ? '' : 's' }} could not be indexed
+                    {{ job.failedFiles.length }} file{{ job.failedFiles.length === 1 ? '' : 's' }} could not be {{ job.type === 'delete' ? 'removed from disk' : 'indexed' }}
                   </summary>
                   <ul class="mt-1.5 space-y-1 max-h-40 overflow-y-auto">
                     <li v-for="(f, i) in job.failedFiles" :key="i" class="text-base-content/70">
@@ -1638,14 +1646,31 @@ const footerJobLabel = computed(() => {
   if (!job) return ''
   if (job.cancelRequested) return 'Cancelling…'
   if (job.queuePosition) return `Queued — ${ordinal(job.queuePosition)} in line`
-  return job.currentFile || job.phase || jobTitle(job)
+  return job.currentFile || (job.type === 'delete' && job.phaseDetail) || job.phase || jobTitle(job)
 })
 
 function jobTitle(job) {
   if (job.type === 'reindex') return 'Re-indexing'
   if (job.type === 'upload') return 'Upload'
   if (job.type === 'import') return 'Import'
+  if (job.type === 'delete') return 'Delete sources'
   return 'Indexing'
+}
+
+function jobUnit(job) {
+  return job.type === 'delete' ? 'sources' : 'files'
+}
+
+// A rough figure on purpose: it is an extrapolation of the work so far, and
+// seconds would only advertise a precision it does not have.
+function remainingLabel(job) {
+  const seconds = job.remainingSeconds
+  if (seconds == null || job.cancelRequested || job.queuePosition) return ''
+  if (seconds < 60) return 'under a minute left'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `about ${minutes} min left`
+  const hours = Math.floor(minutes / 60)
+  return `about ${hours} h ${minutes % 60} min left`
 }
 
 function jobStatusLabel(job) {
@@ -1670,6 +1695,10 @@ function ordinal(n) {
 
 function jobOutcomeLine(job) {
   const total = job.totalFiles || 0
+  if (job.type === 'delete') {
+    const deleted = job.indexedFiles ?? job.processedFiles ?? 0
+    return `Deleted ${deleted.toLocaleString()} of ${total.toLocaleString()} source${total === 1 ? '' : 's'}`
+  }
   if (job.status === 'completed') {
     const indexed = job.indexedFiles ?? job.processedFiles ?? 0
     return `Indexed ${indexed.toLocaleString()} of ${total.toLocaleString()} file${total === 1 ? '' : 's'}`

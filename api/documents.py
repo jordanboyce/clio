@@ -427,7 +427,7 @@ def _job_row_to_response(job: dict, with_summary: bool = False) -> UploadJobResp
     summary="Get upload job status",
     tags=["documents"],
 )
-async def get_upload_status(job_id: int) -> UploadJobResponse:
+def get_upload_status(job_id: int) -> UploadJobResponse:
     """
     Get the status of a background upload job.
 
@@ -477,7 +477,7 @@ async def get_upload_status(job_id: int) -> UploadJobResponse:
     summary="Get all active upload jobs",
     tags=["documents"],
 )
-async def get_active_upload_jobs() -> List[UploadJobResponse]:
+def get_active_upload_jobs() -> List[UploadJobResponse]:
     """
     Get all active (pending/running) upload jobs.
 
@@ -497,7 +497,7 @@ async def get_active_upload_jobs() -> List[UploadJobResponse]:
     summary="Recent indexing jobs, finished ones included",
     tags=["documents"],
 )
-async def list_recent_jobs(limit: int = 20, collection_id: Optional[str] = None) -> List[UploadJobResponse]:
+def list_recent_jobs(limit: int = 20, collection_id: Optional[str] = None) -> List[UploadJobResponse]:
     """
     Recent indexing jobs in every state, newest first.
 
@@ -560,16 +560,19 @@ async def stream_upload_progress(job_id: int):
     """
     import queue
 
+    # Subscribe before reading the status. The other way round, a job that
+    # finished between the two looked unfinished and its last event was never
+    # seen, leaving this stream (and the browser's connection) open for good.
+    event_queue = upload_service.subscribe_to_events(job_id)
+
     # Check job exists
     job_status = upload_service.get_job_status(job_id)
     if not job_status:
+        upload_service.unsubscribe_from_events(job_id, event_queue)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Upload job {job_id} not found",
         )
-
-    # Subscribe to events
-    event_queue = upload_service.subscribe_to_events(job_id)
 
     async def event_generator():
         """Generate SSE events from the queue."""
@@ -587,13 +590,15 @@ async def stream_upload_progress(job_id: int):
             yield f"event: connected\ndata: {json.dumps(initial_data)}\n\n"
 
             # If job is already complete, send final event and close
-            if job_status["status"] in ("completed", "failed", "cancelled"):
+            terminal_event = {"completed": "job_complete", "failed": "job_error",
+                              "cancelled": "job_cancelled"}.get(job_status["status"])
+            if terminal_event:
                 final_data = {
                     "job_id": job_id,
-                    "event_type": f"job_{job_status['status']}",
+                    "event_type": terminal_event,
                     "phase": job_status["status"],
                 }
-                yield f"event: job_{job_status['status']}\ndata: {json.dumps(final_data)}\n\n"
+                yield f"event: {terminal_event}\ndata: {json.dumps(final_data)}\n\n"
                 return
 
             # Stream events from the queue.
@@ -643,7 +648,7 @@ async def stream_upload_progress(job_id: int):
     summary="Cancel a running upload job",
     tags=["documents"],
 )
-async def cancel_upload_job(job_id: int):
+def cancel_upload_job(job_id: int):
     """
     Request cancellation of a running upload job.
 
@@ -1125,7 +1130,7 @@ class IndexLocalAsyncRequest(BaseModel):
     summary="Index local files in background",
     tags=["documents"],
 )
-async def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobResponse:
+def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobResponse:
     """
     Start a background job to index local files.
 
@@ -1339,7 +1344,7 @@ class PastedTextRequest(BaseModel):
     summary="Add typed or pasted text as a source",
     tags=["documents"],
 )
-async def index_pasted_text(request: PastedTextRequest) -> UploadJobResponse:
+def index_pasted_text(request: PastedTextRequest) -> UploadJobResponse:
     """
     Save a note written in the app as a document and index it in the background.
 
@@ -1530,7 +1535,7 @@ def export_documents(
     summary="List all indexed documents",
     tags=["documents"],
 )
-async def list_documents(
+def list_documents(
     collection_id: str = "default",
     limit: int = 0,
     offset: int = 0,
@@ -1777,7 +1782,7 @@ async def get_page_preview(
         404: {"description": "No such document or figure"},
     },
 )
-async def get_document_figure(
+def get_document_figure(
     document_id: str,
     figure_number: int,
     request: Request,
@@ -1829,7 +1834,7 @@ async def get_document_figure(
     tags=["documents"],
     response_class=FileResponse,
 )
-async def get_pdf(
+def get_pdf(
     document_id: str,
     collection_id: str = "default",
 ):
@@ -1910,7 +1915,7 @@ async def get_pdf(
     summary="List indexed chunks for a document",
     tags=["documents"],
 )
-async def get_document_chunks(
+def get_document_chunks(
     document_id: str,
     collection_id: str = "default",
     include_fields: bool = True,
@@ -2307,6 +2312,74 @@ def delete_document(  # sync: FAISS rebuild on delete runs in the threadpool
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete document: {str(e)}",
         )
+
+
+MAX_BULK_DELETE_DOCUMENTS = 200_000
+
+
+class BulkDeleteRequest(BaseModel):
+    """Body for deleting many sources: name them, or ask for all of them."""
+    collection_id: str = "default"
+    document_ids: Optional[List[str]] = Field(default=None, max_length=MAX_BULK_DELETE_DOCUMENTS)
+    everything: bool = False
+
+
+@router.post(
+    "/documents/bulk-delete",
+    summary="Delete many sources, or a whole collection's, in the background",
+    tags=["documents"],
+)
+def bulk_delete_documents(body: BulkDeleteRequest, response: Response) -> dict:  # sync: reads the document list
+    """
+    Start a job that removes sources from the index and their stored files.
+
+    Far cheaper than calling ``DELETE /documents/{id}`` in a loop, and the
+    caller does not have to stay connected. Answers 202 with a job to follow on
+    ``/documents/upload/{job_id}/stream`` (or ``/status``); cancelling it stops
+    at the next batch and keeps the sources not yet reached. 200 with a null
+    ``job_id`` when there was nothing to delete.
+
+    Args:
+        body: ``document_ids`` to delete, or ``everything: true``. Unknown ids
+            are counted in the job's summary rather than refused, since they
+            are what a repeated request would find.
+    """
+    from services import removal_jobs
+    from services.reindex_service import is_reindexing
+
+    collection_id = body.collection_id
+    if body.everything == (body.document_ids is not None):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Send either document_ids or everything: true",
+        )
+    try:
+        indexer = get_indexer(collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    _require_write(collection_id)
+
+    # A full re-index writes through a second copy of the index, which would
+    # not see these deletions and would save over them.
+    if is_reindexing(collection_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This collection is being re-indexed. Delete its sources once that has finished.",
+        )
+
+    wanted = None if body.everything else body.document_ids
+    if wanted == [] or (wanted is None and not indexer.count_documents()):
+        return {"job_id": None, "collection_id": collection_id, "status": "completed",
+                "total_files": 0, "processed_files": 0, "job_type": removal_jobs.JOB_TYPE}
+
+    try:
+        job_id = removal_jobs.submit(collection_id, wanted, actor=get_request_user())
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    job = upload_service.get_job_status(job_id)
+
+    response.status_code = status.HTTP_202_ACCEPTED
+    return UploadJobResponse(**job).model_dump()
 
 
 class ReportRequest(BaseModel):
