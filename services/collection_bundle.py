@@ -15,7 +15,9 @@ redoing extraction. The keyword (BM25) index is always rebuilt on import
 from the same text rather than shipped.
 
 Quarantined documents never leave: they are stripped from the exported
-database and vectors. On import, documents whose hash this deployment has
+database and vectors, and so is what was derived from them: research whose
+briefs and evidence quote the paper, extracted entities, reviewer notes and
+coverage entries. On import, documents whose hash this deployment has
 blocklisted are stripped the same way.
 """
 
@@ -36,6 +38,7 @@ import numpy as np
 
 from config import settings
 from services import authored_text
+from services.research.store import prune_orphan_jobs, prune_orphan_rows
 
 logger = logging.getLogger(__name__)
 
@@ -72,29 +75,89 @@ def _work_dir() -> Path:
 # ── Shared: stripping documents out of a metadata.db copy ────────────────────
 
 
+def _names_absent_document(value: Any, present: set) -> bool:
+    """Whether any ``document_id`` anywhere in parsed JSON is not in ``present``."""
+    if isinstance(value, dict):
+        if value.get("document_id") and value["document_id"] not in present:
+            return True
+        return any(_names_absent_document(v, present) for v in value.values())
+    if isinstance(value, list):
+        return any(_names_absent_document(v, present) for v in value)
+    return False
+
+
+def _sweep_derived(conn: sqlite3.Connection, stripped: bool) -> None:
+    """Clear what a metadata.db still holds about documents no longer in it.
+
+    Takes each table only if the database has it: these all arrived after the
+    first bundles. The coverage report goes whole, and so does an owner's
+    question that names an absent document. Neither can be filtered: a
+    report's probe queries are built from the document's text and its totals
+    count it, and the question was written about it. An owner can run the
+    report and write the question again; a withheld paper cannot be recalled.
+    """
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    for table in ("chunk_entities", "chunk_boosts"):
+        if table in have:
+            conn.execute(f"DELETE FROM {table} WHERE chunk_id NOT IN (SELECT chunk_id FROM chunks)")
+    if "superseded_by" in {r[1] for r in conn.execute("PRAGMA table_info(documents)")}:
+        # As on deletion: what this document replaced is current again.
+        conn.execute("UPDATE documents SET superseded_by = NULL, superseded_at = NULL, "
+                     "superseded_note = NULL "
+                     "WHERE superseded_by NOT IN (SELECT document_id FROM documents)")
+
+    present = {r[0] for r in conn.execute("SELECT document_id FROM documents")}
+
+    def unvouched(text: Any) -> bool:
+        try:
+            return _names_absent_document(json.loads(text), present)
+        except (TypeError, ValueError):
+            return True  # unreadable, so nothing can say what it names
+
+    if "coverage_questions" in have:
+        rows = conn.execute("SELECT id, expected_documents FROM coverage_questions").fetchall()
+        conn.executemany("DELETE FROM coverage_questions WHERE id = ?",
+                         [(qid,) for qid, expected in rows if unvouched(expected)])
+    if "coverage_report" in have:
+        # After a strip the report goes even if it never names the document:
+        # a future field that quotes a chunk should not need this code to know.
+        reports = conn.execute("SELECT report FROM coverage_report").fetchall()
+        if stripped or any(unvouched(r[0]) for r in reports):
+            conn.execute("DELETE FROM coverage_report")
+
+
 def _strip_documents(db_path: Path, document_ids: Iterable[str]) -> List[int]:
-    """Delete documents (chunks, records, CSV tables) from a metadata.db.
+    """Delete documents (chunks, records, CSV tables) from a metadata.db,
+    along with what was derived from any document no longer in it.
+
+    The sweep runs even when ``document_ids`` is empty: a document deleted
+    earlier leaves research rows and coverage entries behind, and a bundle
+    from before this sweep holds them for documents it stripped.
 
     Returns the chunk row ids removed - their vectors must go too.
     """
     ids = sorted(set(document_ids))
-    if not ids:
-        return []
     marks = ",".join("?" * len(ids))
     conn = sqlite3.connect(db_path)
     try:
-        rowids = [r[0] for r in conn.execute(
-            f"SELECT id FROM chunks WHERE document_id IN ({marks})", ids)]
-        conn.execute(f"DELETE FROM chunks WHERE document_id IN ({marks})", ids)
-        conn.execute(f"DELETE FROM documents WHERE document_id IN ({marks})", ids)
-        try:
-            tables = [r[0] for r in conn.execute(
-                f"SELECT table_name FROM csv_schemas WHERE document_id IN ({marks})", ids)]
-            for table in tables:
-                conn.execute(f'DROP TABLE IF EXISTS "{table}"')
-            conn.execute(f"DELETE FROM csv_schemas WHERE document_id IN ({marks})", ids)
-        except sqlite3.OperationalError:
-            pass  # no structured tables in this collection
+        rowids: List[int] = []
+        if ids:
+            rowids = [r[0] for r in conn.execute(
+                f"SELECT id FROM chunks WHERE document_id IN ({marks})", ids)]
+            conn.execute(f"DELETE FROM chunks WHERE document_id IN ({marks})", ids)
+            conn.execute(f"DELETE FROM documents WHERE document_id IN ({marks})", ids)
+            try:
+                tables = [r[0] for r in conn.execute(
+                    f"SELECT table_name FROM csv_schemas WHERE document_id IN ({marks})", ids)]
+                for table in tables:
+                    conn.execute(f'DROP VIEW IF EXISTS "{table}__by_symbol"')
+                    conn.execute(f'DROP TABLE IF EXISTS "{table}"')
+                conn.execute(f"DELETE FROM csv_schemas WHERE document_id IN ({marks})", ids)
+            except sqlite3.OperationalError:
+                pass  # no structured tables in this collection
+        prune_orphan_rows(conn)
+        prune_orphan_jobs(conn)
+        _sweep_derived(conn, stripped=bool(ids))
         conn.commit()
         return rowids
     finally:
@@ -398,10 +461,13 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
         kept = {d["document_id"]: d for d in docs if d["document_id"] not in blocked}
         conn = sqlite3.connect(db_tmp)
         try:
-            conn.execute("UPDATE documents SET source_type = 'upload', source_path = NULL")
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass  # pre-3.1 database without the source columns
+            try:
+                conn.execute("UPDATE documents SET source_type = 'upload', source_path = NULL")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # pre-3.1 database without the source columns
+            # Deleted rows stay readable in free pages until this rewrites the file.
+            conn.execute("VACUUM")
         finally:
             conn.close()
 
