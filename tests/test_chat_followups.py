@@ -93,6 +93,37 @@ def _events(response):
     return [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
 
 
+@pytest.mark.parametrize("native_tools, limit, expected", [
+    (True, None, 4096), (True, 8000, 8000),
+    (False, None, 2048), (False, 8000, 8000),
+])
+def test_a_request_can_give_the_model_more_room(monkeypatch, native_tools, limit, expected):
+    provider = Mock()
+    provider.supports_native_tools.return_value = native_tools
+    provider.complete_with_tools.return_value = {"text": "Five days.", "tool_calls": [], "usage": {}}
+    provider.complete.return_value = {"text": "Five days.", "usage": {}}
+    _wire(monkeypatch, provider)
+
+    with _client() as client:
+        response = client.post("/api/chat", json={
+            "messages": [{"role": "user", "content": "How long?"}],
+            "provider": "ollama", "use_cache": False, "depth": "quick", "max_output_tokens": limit,
+        })
+    assert response.status_code == 200, response.text
+    turn = provider.complete_with_tools if native_tools else provider.complete
+    assert turn.call_args_list[0].kwargs["max_tokens"] == expected
+
+
+@pytest.mark.parametrize("limit", [10, 100000])
+def test_the_output_limit_is_bounded(monkeypatch, limit):
+    _wire(monkeypatch, Mock())
+    with _client() as client:
+        response = client.post("/api/chat", json={
+            "messages": [{"role": "user", "content": "How long?"}], "max_output_tokens": limit,
+        })
+    assert response.status_code == 422
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 def test_quick_depth_answers_in_one_pass_and_suggests_followups(monkeypatch, streaming):
     provider = Mock()

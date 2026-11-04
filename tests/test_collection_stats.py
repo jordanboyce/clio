@@ -321,11 +321,62 @@ def test_stats_endpoint(client):
     assert client.get("/documents/stats", params={"collection_id": "nope"}).status_code == 404
 
 
+def test_stats_endpoint_counts_what_it_holds_back(client):
+    # The source list still shows held documents, so a reader needs this to
+    # square 8 rows there with 7 here. The count names nothing.
+    body = client.get("/documents/stats", params={"collection_id": "default"}).json()
+    assert body["total_documents"] == 7 and body["held_documents"] == 1
+    assert "secret.pdf" not in json.dumps(body)
+
+
+def test_held_count_ignores_flagged_and_clear_documents(tmp_path):
+    s = MetadataStore(tmp_path / "h.db")
+    assert s.count_held_documents() == 0
+    _add(s, 1, "a.txt")
+    _add(s, 2, "b.txt", policy_status="flagged")
+    _add(s, 3, "c.txt", policy_status="quarantined")
+    assert s.count_held_documents() == 1
+
+
+def test_export_plain_names_is_one_file_per_line(tmp_path, monkeypatch):
+    import api.documents as docs_api
+
+    s = MetadataStore(tmp_path / "n.db")
+    _add(s, 1, "a.txt")
+    _add(s, 2, "evil\r\nfake-row.txt")
+    _add(s, 3, "held.txt", policy_status="quarantined")
+    monkeypatch.setattr(docs_api, "get_indexer", lambda cid="default": _FakeIndexer(s))
+    monkeypatch.setattr(docs_api.audit, "record", lambda *a, **k: None)
+    app = FastAPI()
+    app.include_router(docs_api.router)
+
+    r = TestClient(app).get("/documents/export", params={"format": "txt"})
+
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
+    assert r.text.splitlines() == ["a.txt", "evil fake-row.txt"]
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("Q3 Policies", "documents-Q3-Policies.csv"),
+    ('quo"te', "documents-quo-te.csv"),
+    ("政策", "documents-c1.csv"),          # nothing ASCII left: fall back to the id
+    (None, "documents-c1.csv"),
+])
+def test_export_is_named_after_the_collection(client, monkeypatch, name, expected):
+    import api.documents as docs_api
+
+    monkeypatch.setattr(docs_api.collection_service, "get_collection",
+                        lambda cid: {"name": name} if name else None)
+    r = client.get("/documents/export", params={"collection_id": "c1"})
+    assert r.status_code == 200
+    assert f'filename="{expected}"' in r.headers["content-disposition"]
+
+
 def test_export_csv_has_every_file_and_a_bom(client):
     r = client.get("/documents/export", params={"collection_id": "default"})
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/csv")
-    assert 'filename="documents-default.csv"' in r.headers["content-disposition"]
+    assert r.headers["content-disposition"].endswith('.csv"')
     assert r.content.startswith(b"\xef\xbb\xbf")
     rows = list(csv.DictReader(io.StringIO(r.content.decode("utf-8-sig"))))
     assert len(rows) == 7

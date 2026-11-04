@@ -1,4 +1,6 @@
 import http from './http'
+import { fetchCollectionStats, fileListUrl, heldNote } from './collectionStats'
+import { formatBytes } from './format'
 
 // Shared slash commands used by both Chat and Search. Each command reads
 // collection metadata directly and returns a plain-text block — zero tokens,
@@ -7,6 +9,7 @@ import http from './http'
 export const SLASH_COMMANDS = {
   '/stats': 'Show collection statistics',
   '/docs': 'List indexed documents',
+  '/export': 'Download the full file list as CSV',
   '/tools': 'Show what the assistant can do',
   '/help': 'Show available slash commands',
 }
@@ -26,41 +29,27 @@ export const isSlashCommand = (input) => {
   return Object.prototype.hasOwnProperty.call(SLASH_COMMANDS, first)
 }
 
-const formatStats = (collection, documents) => {
-  const totalDocs = documents.length
-  const totalPages = documents.reduce((sum, d) => sum + (d.total_pages || 0), 0)
-  const totalChunks = documents.reduce((sum, d) => sum + (d.total_chunks || 0), 0)
-
-  const timestamps = documents
-    .map((d) => d.indexed_at)
-    .filter(Boolean)
-    .sort()
-  const dateRange = timestamps.length
-    ? `${timestamps[0].slice(0, 10)} → ${timestamps[timestamps.length - 1].slice(0, 10)}`
+const formatStats = (collection, stats) => {
+  const day = (timestamp) => (timestamp || '').slice(0, 10)
+  const dateRange = stats.oldest_upload
+    ? `${day(stats.oldest_upload)} → ${day(stats.newest_upload)}`
     : '—'
-
-  const fileTypes = {}
-  for (const d of documents) {
-    const ext = d.filename.includes('.')
-      ? d.filename.split('.').pop().toLowerCase()
-      : 'other'
-    fileTypes[ext] = (fileTypes[ext] || 0) + 1
-  }
-  const fileTypesStr = Object.entries(fileTypes)
-    .sort((a, b) => b[1] - a[1])
-    .map(([ext, count]) => `${ext} (${count})`)
+  const fileTypes = stats.by_extension
+    .map((row) => `${row.extension.replace(/^\./, '')} (${row.documents})`)
     .join(', ') || '—'
 
   const title = `${collection?.name || 'Collection'} — Stats`
   const lines = [title, '─'.repeat(Math.min(title.length, 48))]
   if (collection?.description) lines.push(collection.description, '')
   lines.push(
-    `Documents:     ${totalDocs}`,
-    `Pages:         ${totalPages}`,
-    `Chunks:        ${totalChunks}`,
-    `File types:    ${fileTypesStr}`,
+    `Documents:     ${stats.total_documents}`,
+    `Pages:         ${stats.total_pages}`,
+    `Chunks:        ${stats.total_chunks}`,
+    `Size:          ${formatBytes(stats.total_bytes)}`,
+    `File types:    ${fileTypes}`,
     `Indexed range: ${dateRange}`,
   )
+  if (stats.held_documents) lines.push('', heldNote(stats.held_documents))
   return lines.join('\n')
 }
 
@@ -106,9 +95,24 @@ const formatDocs = (collection, documents) => {
     )
   }
   if (sorted.length > MAX_ROWS) {
-    lines.push('', `…and ${sorted.length - MAX_ROWS} more`)
+    lines.push('', `…and ${sorted.length - MAX_ROWS} more. /export downloads the full list.`)
   }
   return lines.join('\n')
+}
+
+const startFileListDownload = (collection, collectionId, stats) => {
+  const name = collection?.name || 'this collection'
+  const held = stats.held_documents ? ` ${heldNote(stats.held_documents)}` : ''
+  if (!stats.total_documents) return `${name} has no documents to export.${held}`
+
+  const link = document.createElement('a')
+  link.href = fileListUrl(collectionId)
+  link.download = ''
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  const count = stats.total_documents.toLocaleString()
+  return `Downloading the list of ${count} file${stats.total_documents === 1 ? '' : 's'} in ${name} as CSV.${held}`
 }
 
 const formatHelp = () => {
@@ -185,14 +189,18 @@ export const runSlashCommand = async (input, { collectionId, collection }) => {
       return { cmd, content: formatTools() }
     }
 
-    const response = await http.get(`/documents?collection_id=${collectionId}`)
-    const documents = response.data.documents || []
-
     if (cmd === '/stats') {
-      return { cmd, content: formatStats(collection, documents) }
+      return { cmd, content: formatStats(collection, await fetchCollectionStats(collectionId)) }
     }
+
+    if (cmd === '/export') {
+      const stats = await fetchCollectionStats(collectionId)
+      return { cmd, content: startFileListDownload(collection, collectionId, stats) }
+    }
+
     if (cmd === '/docs') {
-      return { cmd, content: formatDocs(collection, documents) }
+      const response = await http.get(`/documents?collection_id=${collectionId}`)
+      return { cmd, content: formatDocs(collection, response.data.documents || []) }
     }
   } catch (err) {
     const msg = err.response?.data?.detail || err.message || 'Unknown error'

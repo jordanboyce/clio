@@ -7,80 +7,93 @@
       </p>
     </div>
 
-    <!-- Artifact type picker -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
-      <button
-        v-for="t in types"
-        :key="t.type"
-        class="text-left rounded-lg border p-3 transition-colors"
-        :class="selectedType === t.type
-          ? 'border-primary bg-primary/10'
-          : 'border-base-300 bg-base-200/40 hover:bg-base-100'"
-        @click="selectedType = t.type"
-      >
-        <div class="font-medium text-sm">{{ t.label }}</div>
-        <div class="text-xs text-base-content/60 mt-0.5">{{ t.description }}</div>
-      </button>
-    </div>
+    <template v-if="canEdit">
+      <!-- Artifact type picker -->
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <button
+          v-for="t in types"
+          :key="t.type"
+          class="text-left rounded-lg border p-3 transition-colors"
+          :class="selectedType === t.type
+            ? 'border-primary bg-primary/10'
+            : 'border-base-300 bg-base-200/40 hover:bg-base-100'"
+          @click="selectedType = t.type"
+        >
+          <div class="font-medium text-sm">{{ t.label }}</div>
+          <div class="text-xs text-base-content/60 mt-0.5">{{ t.description }}</div>
+        </button>
+      </div>
 
-    <!-- Options -->
-    <div class="space-y-2">
-      <input
-        v-model="focus"
-        type="text"
-        aria-label="Focus for the artifact"
-        placeholder="Optional focus (e.g. a topic or a specific document)"
-        class="input input-bordered input-sm w-full"
-      />
-      <textarea
-        v-model="customInstructions"
-        aria-label="Custom instructions for the artifact"
-        rows="2"
-        placeholder="Optional extra instructions"
-        class="textarea textarea-bordered textarea-sm w-full"
-      ></textarea>
-    </div>
+      <!-- Options -->
+      <div class="space-y-2">
+        <input
+          v-model="focus"
+          type="text"
+          aria-label="Focus for the artifact"
+          placeholder="Optional focus (e.g. a topic or a specific document)"
+          class="input input-bordered input-sm w-full"
+        />
+        <textarea
+          v-model="customInstructions"
+          aria-label="Custom instructions for the artifact"
+          rows="2"
+          placeholder="Optional extra instructions"
+          class="textarea textarea-bordered textarea-sm w-full"
+        ></textarea>
+      </div>
 
-    <div class="flex items-center gap-3">
-      <button
-        class="btn btn-primary btn-sm"
-        :disabled="loading || !selectedType || !providerId"
-        @click="generate"
-      >
-        <span v-if="loading" class="loading loading-spinner loading-xs"></span>
-        {{ loading ? 'Generating…' : 'Generate' }}
-      </button>
-      <span v-if="!providerId" class="text-xs text-warning">
-        Configure an AI provider in Settings first.
-      </span>
-      <span v-else class="text-xs text-base-content/50">
-        Using {{ providerDisplayName(providerId) }}
-      </span>
-    </div>
+      <div class="flex items-center gap-3">
+        <button
+          class="btn btn-primary btn-sm"
+          :disabled="starting || !selectedType || !providerId"
+          @click="generate"
+        >
+          <span v-if="starting" class="loading loading-spinner loading-xs"></span>
+          Generate
+        </button>
+        <span v-if="!providerId" class="text-xs text-warning">
+          Configure an AI provider in Settings first.
+        </span>
+        <span v-else class="text-xs text-base-content/50">
+          Using {{ providerDisplayName(providerId) }}
+        </span>
+      </div>
+    </template>
 
     <!-- Error -->
-    <div v-if="error" class="alert alert-error text-sm py-2">
-      {{ error }}
+    <div v-if="error || listError" class="alert alert-error text-sm py-2">
+      {{ error || listError }}
     </div>
 
-    <!-- Result -->
-    <div v-if="result" class="rounded-lg border border-base-300 bg-base-100">
-      <div class="flex items-center justify-between border-b border-base-300 px-4 py-2">
-        <h3 class="font-semibold text-sm">{{ result.title }}</h3>
-        <div class="flex gap-1">
+    <!-- The open artifact -->
+    <div v-if="opened" class="rounded-lg border border-base-300 bg-base-100" data-testid="artifact-viewer">
+      <div class="flex items-center justify-between gap-2 border-b border-base-300 px-4 py-2">
+        <h3 class="font-semibold text-sm min-w-0 break-words">{{ opened.title }}</h3>
+        <div class="flex gap-1 flex-shrink-0">
           <button class="btn btn-ghost btn-xs" @click="copyMarkdown">{{ copied ? 'Copied' : 'Copy' }}</button>
           <button class="btn btn-ghost btn-xs" @click="downloadMarkdown">Download</button>
+          <button class="btn btn-ghost btn-xs" @click="closeArtifact">Close</button>
         </div>
       </div>
+
+      <div v-if="opened.held" class="border-b border-base-300 bg-warning/10 px-4 py-2 text-xs">
+        A source of this report is held for review, or was deleted while held. Only reviewers can see it.
+      </div>
+      <div v-if="opened.source_changes.length" class="border-b border-base-300 bg-warning/10 px-4 py-2 text-xs" data-testid="artifact-changes">
+        Generated before these sources changed:
+        <span v-for="(c, i) in opened.source_changes" :key="c.document_id">{{ i ? ', ' : ' ' }}{{ c.filename || 'a source' }} ({{ c.change }})</span>.
+        It may no longer match them.
+      </div>
+
       <div
         class="prose prose-sm max-w-none p-4 text-sm artifact-markdown"
         v-html="renderedContent"
       ></div>
 
-      <div v-if="result.sources && result.sources.length" class="border-t border-base-300 px-4 py-3">
+      <div v-if="opened.sources.length" class="border-t border-base-300 px-4 py-3">
         <div class="text-xs font-semibold text-base-content/60 mb-1">Sources</div>
         <ul class="text-xs space-y-0.5">
-          <li v-for="(s, i) in result.sources" :key="i" class="text-base-content/70">
+          <li v-for="s in citedPages" :key="`${s.document_id}:${s.page_number}`" class="text-base-content/70">
             <a v-if="s.page_url" :href="s.page_url" target="_blank" class="link link-hover">
               {{ s.filename }}<span v-if="s.page_number"> · {{ locationLabel(s.filename, s.page_number) }}</span>
             </a>
@@ -89,17 +102,80 @@
         </ul>
       </div>
     </div>
+
+    <!-- Everything saved in this collection -->
+    <section aria-label="Saved in this collection" class="space-y-2">
+      <h3 class="text-sm font-semibold">Saved in this collection</h3>
+
+      <p v-if="loaded && !artifacts.length" class="text-sm text-base-content/60" data-testid="artifacts-empty">
+        Nothing yet.
+        <template v-if="canEdit">Reports you generate are kept here, even after you leave this page.</template>
+        <template v-else>Reports generated by people with edit access will appear here.</template>
+      </p>
+
+      <ul v-if="artifacts.length" class="divide-y divide-base-300 rounded-lg border border-base-300">
+        <li
+          v-for="a in artifacts"
+          :key="a.id"
+          class="flex items-center gap-2 px-3 py-2"
+          :class="{ 'bg-primary/10': openId === a.id }"
+          data-testid="artifact-row"
+        >
+          <button
+            class="flex-1 min-w-0 text-left disabled:cursor-default"
+            :disabled="a.status !== 'done'"
+            :aria-current="openId === a.id ? 'true' : undefined"
+            @click="openArtifact(a.id)"
+          >
+            <span class="block text-sm font-medium truncate">{{ a.title }}</span>
+            <span class="block text-xs text-base-content/60 truncate">
+              {{ when(a.created_at) }}<template v-if="showCreator && a.created_by"> · {{ a.created_by }}</template>
+            </span>
+            <span v-if="a.status === 'failed'" class="block text-xs text-error break-words">{{ a.error }}</span>
+          </button>
+
+          <span v-if="isActive(a)" class="badge badge-sm badge-info gap-1 flex-shrink-0">
+            <span class="loading loading-spinner loading-xs"></span>
+            {{ a.status === 'queued' ? 'Waiting' : 'Generating' }}
+          </span>
+          <span v-else-if="a.status === 'failed'" class="badge badge-sm badge-error flex-shrink-0">Failed</span>
+          <span v-if="a.held" class="badge badge-sm badge-warning flex-shrink-0">Held</span>
+          <span
+            v-else-if="a.source_changes.length"
+            class="badge badge-sm badge-warning badge-outline flex-shrink-0"
+            :title="changeSummary(a)"
+          >Sources changed</span>
+
+          <template v-if="canEdit">
+            <template v-if="confirmingId === a.id">
+              <button class="btn btn-xs btn-error flex-shrink-0" :disabled="deleting" @click="remove(a)">Delete permanently</button>
+              <button class="btn btn-xs btn-ghost flex-shrink-0" @click="confirmingId = null">Keep</button>
+            </template>
+            <button
+              v-else
+              class="btn btn-xs btn-ghost text-error flex-shrink-0"
+              :aria-label="`Delete ${a.title}`"
+              @click="confirmingId = a.id"
+            >Delete</button>
+          </template>
+        </li>
+      </ul>
+
+      <p v-if="truncated" class="text-xs text-base-content/50">Showing the newest {{ artifacts.length }}.</p>
+    </section>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import http from '../utils/http'
 import { locationLabel } from '../utils/fileTypes'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useProviderStore } from '../stores/providerStore'
 import { useSelectionStore } from '../stores/selectionStore'
+import { useUserStore } from '../stores/userStore'
 import {
   getAPIProviderName,
   buildProviderHeaders,
@@ -108,17 +184,38 @@ import {
 
 marked.setOptions({ gfm: true, breaks: true })
 
+const POLL_MS = 2500
+
 const collectionStore = useCollectionStore()
 const selectionStore = useSelectionStore()
+const userStore = useUserStore()
 
 const types = ref([])
 const selectedType = ref('summary')
 const focus = ref('')
 const customInstructions = ref('')
-const loading = ref(false)
+const starting = ref(false)
 const error = ref('')
-const result = ref(null)
+const listError = ref('')
 const copied = ref(false)
+
+const artifacts = ref([])
+const truncated = ref(false)
+const loaded = ref(false)
+const opened = ref(null)
+const openId = ref(null)
+const confirmingId = ref(null)
+const deleting = ref(false)
+
+// The one to open when it finishes, unless something else was opened first.
+let openWhenDone = null
+let pollTimer = null
+let listSeq = 0
+let openSeq = 0
+
+const collectionId = computed(() => collectionStore.currentCollectionId)
+const canEdit = computed(() => collectionStore.canEditCurrent)
+const showCreator = computed(() => userStore.privateCollections)
 
 // Generate has no per-surface override: it follows the app-wide default via
 // the shared resolution chain and just displays "Using X". Reactivity comes
@@ -129,9 +226,155 @@ const providerId = computed(() => providerStore.activeProviderId)
 const providerDisplayName = (id) => getProviderDisplayName(id)
 
 const renderedContent = computed(() => {
-  if (!result.value?.content) return ''
-  return DOMPurify.sanitize(marked.parse(String(result.value.content)), { ADD_ATTR: ['target', 'rel'] })
+  if (!opened.value?.content) return ''
+  return DOMPurify.sanitize(marked.parse(String(opened.value.content)), { ADD_ATTR: ['target', 'rel'] })
 })
+
+// Several passages can come from one page; the list names each page once.
+const citedPages = computed(() => {
+  const pages = new Map()
+  for (const s of opened.value?.sources || []) {
+    const key = `${s.document_id}:${s.page_number}`
+    if (!pages.has(key)) pages.set(key, s)
+  }
+  return [...pages.values()]
+})
+
+const isActive = (a) => a.status === 'queued' || a.status === 'running'
+
+function when(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function changeSummary(a) {
+  return a.source_changes.map(c => `${c.filename || 'A source'} (${c.change})`).join(', ')
+}
+
+async function loadList() {
+  clearTimeout(pollTimer)
+  const mine = ++listSeq
+  const requestedFor = collectionId.value
+  try {
+    const { data } = await http.get('/api/artifacts', { params: { collection_id: requestedFor } })
+    if (mine !== listSeq) return
+    artifacts.value = data.artifacts || []
+    truncated.value = !!data.truncated
+    loaded.value = true
+    listError.value = ''
+    settlePending()
+  } catch (e) {
+    if (mine !== listSeq) return
+    loaded.value = true
+    listError.value = e.message || 'Could not load the saved reports'
+  }
+  if (artifacts.value.some(isActive)) pollTimer = setTimeout(loadList, POLL_MS)
+}
+
+function settlePending() {
+  if (!openWhenDone) return
+  const artifact = artifacts.value.find(a => a.id === openWhenDone)
+  if (artifact && isActive(artifact)) return
+  const id = openWhenDone
+  openWhenDone = null
+  if (artifact?.status === 'done') openArtifact(id)
+}
+
+async function openArtifact(id) {
+  const mine = ++openSeq
+  openWhenDone = null
+  openId.value = id
+  error.value = ''
+  try {
+    const { data } = await http.get(`/api/artifacts/${id}`, { params: { collection_id: collectionId.value } })
+    if (mine === openSeq) opened.value = data
+  } catch (e) {
+    if (mine !== openSeq) return
+    closeArtifact()
+    error.value = e.message || 'Could not open that report'
+  }
+}
+
+function closeArtifact() {
+  openSeq++
+  openId.value = null
+  opened.value = null
+}
+
+async function generate() {
+  if (!selectedType.value || !providerId.value) return
+  starting.value = true
+  error.value = ''
+  try {
+    const { data } = await http.post('/api/artifacts', {
+      artifact_type: selectedType.value,
+      provider: getAPIProviderName(providerId.value),
+      focus: focus.value || null,
+      custom_instructions: customInstructions.value || null,
+      // A report honours the same source selection as chat.
+      document_ids: selectionStore.active ? selectionStore.currentIds : null,
+    }, {
+      params: { collection_id: collectionId.value },
+      headers: buildProviderHeaders(providerId.value),
+    })
+    // A listing already on its way predates this row; drop it.
+    listSeq++
+    openWhenDone = data.id
+    artifacts.value = [data, ...artifacts.value]
+    clearTimeout(pollTimer)
+    pollTimer = setTimeout(loadList, POLL_MS)
+  } catch (e) {
+    error.value = e.message || 'Generation failed'
+  } finally {
+    starting.value = false
+  }
+}
+
+async function remove(artifact) {
+  deleting.value = true
+  error.value = ''
+  try {
+    await http.delete(`/api/artifacts/${artifact.id}`, { params: { collection_id: collectionId.value } })
+    artifacts.value = artifacts.value.filter(a => a.id !== artifact.id)
+    if (openId.value === artifact.id) closeArtifact()
+    if (openWhenDone === artifact.id) openWhenDone = null
+  } catch (e) {
+    error.value = e.message || 'Could not delete that report'
+  } finally {
+    deleting.value = false
+    confirmingId.value = null
+  }
+}
+
+const copyMarkdown = async () => {
+  if (!opened.value?.content) return
+  await navigator.clipboard.writeText(opened.value.content)
+  copied.value = true
+  setTimeout(() => (copied.value = false), 1500)
+}
+
+const downloadMarkdown = () => {
+  if (!opened.value) return
+  const blob = new Blob([opened.value.content], { type: 'text/markdown' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${(opened.value.title || 'artifact').replace(/[^a-z0-9]+/gi, '_').toLowerCase()}.md`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+watch(collectionId, () => {
+  closeArtifact()
+  openWhenDone = null
+  confirmingId.value = null
+  error.value = ''
+  listError.value = ''
+  artifacts.value = []
+  truncated.value = false
+  loaded.value = false
+  if (collectionId.value) loadList()
+}, { immediate: true })
 
 onMounted(async () => {
   // Server-stored team keys count as configured — providerStore bumps its
@@ -141,13 +384,10 @@ onMounted(async () => {
   } catch { /* offline from server config is fine — local configs still count */ }
 
   try {
-    const resp = await fetch('/api/artifacts/types')
-    if (resp.ok) {
-      const data = await resp.json()
-      types.value = data.types || []
-      if (types.value.length && !types.value.some(t => t.type === selectedType.value)) {
-        selectedType.value = types.value[0].type
-      }
+    const { data } = await http.get('/api/artifacts/types')
+    types.value = data.types || []
+    if (types.value.length && !types.value.some(t => t.type === selectedType.value)) {
+      selectedType.value = types.value[0].type
     }
   } catch (e) {
     // Non-fatal: fall back to a minimal default set.
@@ -155,56 +395,9 @@ onMounted(async () => {
   }
 })
 
-
-
-const generate = async () => {
-  if (!selectedType.value || !providerId.value) return
-  loading.value = true
-  error.value = ''
-  result.value = null
-  try {
-    const collectionId = collectionStore.currentCollectionId
-    const headers = { 'Content-Type': 'application/json', ...buildProviderHeaders(providerId.value) }
-    const resp = await fetch(`/api/artifacts?collection_id=${collectionId}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        artifact_type: selectedType.value,
-        provider: getAPIProviderName(providerId.value),
-        scope: 'current',
-        focus: focus.value || null,
-        custom_instructions: customInstructions.value || null,
-        // A report honours the same source selection as chat.
-        document_ids: selectionStore.active ? selectionStore.currentIds : null,
-      }),
-    })
-    if (!resp.ok) {
-      const errBody = await resp.json().catch(() => ({}))
-      throw new Error(errBody.detail || `HTTP ${resp.status}`)
-    }
-    result.value = await resp.json()
-  } catch (e) {
-    error.value = e.message || 'Generation failed'
-  } finally {
-    loading.value = false
-  }
-}
-
-const copyMarkdown = async () => {
-  if (!result.value?.content) return
-  await navigator.clipboard.writeText(result.value.content)
-  copied.value = true
-  setTimeout(() => (copied.value = false), 1500)
-}
-
-const downloadMarkdown = () => {
-  if (!result.value) return
-  const blob = new Blob([result.value.content], { type: 'text/markdown' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${(result.value.title || 'artifact').replace(/[^a-z0-9]+/gi, '_').toLowerCase()}.md`
-  a.click()
-  URL.revokeObjectURL(url)
-}
+onBeforeUnmount(() => {
+  clearTimeout(pollTimer)
+  listSeq++
+  openSeq++
+})
 </script>

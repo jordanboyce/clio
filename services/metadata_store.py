@@ -3,6 +3,7 @@
 import sqlite3
 from pathlib import Path
 
+from services.artifact_store import mark_sources_withheld
 from services.sqlite_utils import sqlite_connect
 from typing import List, Optional, Dict, Any, Set, Tuple
 import json
@@ -1169,6 +1170,20 @@ class MetadataStore:
                 results.append(result)
             return results
 
+    def _held_document_ids(self, conn: sqlite3.Connection, document_id: Optional[str] = None) -> List[str]:
+        """The quarantined documents, or just this one if it is quarantined."""
+        from services.content_policy import HIDDEN_STATUSES
+
+        if "policy_status" not in self._get_table_columns(conn, "documents"):
+            return []
+        marks = ",".join("?" for _ in HIDDEN_STATUSES)
+        sql = f"SELECT document_id FROM documents WHERE policy_status IN ({marks})"
+        params = list(HIDDEN_STATUSES)
+        if document_id is not None:
+            sql += " AND document_id = ?"
+            params.append(document_id)
+        return [row[0] for row in conn.execute(sql, params)]
+
     def delete_document(self, document_id: str) -> int:
         """
         Delete all chunks for a specific document.
@@ -1180,6 +1195,9 @@ class MetadataStore:
             Number of chunks deleted
         """
         with sqlite_connect(self.db_path) as conn:
+            # Reports built from a held document stay held once it is gone.
+            mark_sources_withheld(conn, self._held_document_ids(conn, document_id))
+
             # Collect chunk ids first — chunk_entities has no FK cascade, so
             # its rows must go before the chunks rows they reference vanish.
             chunk_ids = [
@@ -1413,6 +1431,17 @@ class MetadataStore:
             ).fetchall()
             docs = self._attach_replacement_names(conn, [self._document_row_to_dict(r) for r in rows])
             return docs, int(total)
+
+    def count_held_documents(self) -> int:
+        """Documents withheld by content policy, which stats and exports leave out."""
+        from services.content_policy import HIDDEN_STATUSES
+
+        marks = ", ".join("?" for _ in HIDDEN_STATUSES)
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            return int(conn.execute(
+                f"SELECT COUNT(*) FROM documents WHERE COALESCE(policy_status, 'clear') IN ({marks})",
+                list(HIDDEN_STATUSES)).fetchone()[0])
 
     def collection_stats(self, document_ids: Optional[List[str]] = None,
                          top_extensions: int = 25, largest: int = 5) -> dict:
@@ -2264,6 +2293,7 @@ class MetadataStore:
     def clear_all(self):
         """Clear all chunks and documents from the metadata store."""
         with sqlite_connect(self.db_path) as conn:
+            mark_sources_withheld(conn, self._held_document_ids(conn))
             conn.execute("DELETE FROM chunks")
             conn.execute("DELETE FROM documents")
             if conn.execute(

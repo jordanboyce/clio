@@ -72,6 +72,14 @@
       >
         <component :is="viewMode === 'tree' ? Rows3 : FolderTree" :size="15" />
       </button>
+      <button
+        class="side-icon-btn text-base-content/55 hover:text-base-content"
+        @click="emit('open-overview')"
+        title="Collection overview and file list"
+        aria-label="Collection overview and file list"
+      >
+        <ChartColumn :size="15" />
+      </button>
       <div class="flex-1"></div>
       <button
         class="side-icon-btn text-base-content/55 hover:text-base-content"
@@ -1213,7 +1221,7 @@ import PastedTextEditor from './PastedTextEditor.vue'
 import { noteBodyHtml } from '../utils/richText'
 import { buildTree, folderPaths, sortFiles } from '../utils/sourceTree.js'
 import { replacedBadge } from '../utils/supersede'
-import { FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync, GitBranch, EyeOff, Replace, FilePlus, ArrowUpDown, ChevronsDownUp, ChevronsUpDown, Rows3, FolderTree, ClipboardPaste } from 'lucide-vue-next'
+import { ChartColumn, FileText, Eye, Trash2, RefreshCw, X, ArrowUp, ArrowDown, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle, Plus, ChevronDown, ShieldAlert, Table2, Mic, Square, BookOpen, Flag, Copy, Search, ListFilter, Link, Globe, FolderSync, GitBranch, EyeOff, Replace, FilePlus, ArrowUpDown, ChevronsDownUp, ChevronsUpDown, Rows3, FolderTree, ClipboardPaste } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useUiStore } from '../stores/uiStore'
 import { useUserStore } from '../stores/userStore'
@@ -1231,7 +1239,7 @@ import { useCustomFileTypesStore } from '../stores/customFileTypesStore'
 const customTypes = useCustomFileTypesStore()
 customTypes.load()
 
-const emit = defineEmits(['document-deleted', 'open', 'background-job-started', 'clone-collection'])
+const emit = defineEmits(['document-deleted', 'open', 'background-job-started', 'clone-collection', 'open-overview'])
 
 const collectionStore = useCollectionStore()
 const ui = useUiStore()

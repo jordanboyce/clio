@@ -14,7 +14,9 @@ Tables (all keyed by the collection's own ``document_id``):
 Living in metadata.db means collection export/import, backups and the
 storage accounting already cover it. Rows for a deleted document are
 ignored by every reader (they join against ``documents``) and swept by
-``prune_orphans``.
+``prune_orphans``. Those rows hold statements drawn from the paper, so a
+collection bundle must sweep them too, or a withheld paper's words leave
+with the export: see ``prune_orphan_rows`` and ``prune_orphan_jobs``.
 """
 
 from __future__ import annotations
@@ -138,6 +140,65 @@ def _loads(value: Any, default: Any) -> Any:
         return json.loads(value)
     except (TypeError, ValueError):
         return default
+
+
+def _existing_tables(conn: sqlite3.Connection) -> set:
+    return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+
+def prune_orphan_rows(conn: sqlite3.Connection) -> int:
+    """Drop rows whose document is gone, on a connection the caller commits.
+
+    A paper that merely cites a missing document keeps its reference entry;
+    only the pointer goes. Takes an open connection, and skips tables the
+    database does not have, so a bundle can be swept without creating the
+    research schema in a database from before it existed.
+    """
+    have = _existing_tables(conn)
+    removed = 0
+    for table in ("research_papers", "research_references",
+                  "research_assessments", "research_briefs"):
+        if table in have:
+            cur = conn.execute(
+                f"DELETE FROM {table} WHERE document_id NOT IN (SELECT document_id FROM documents)"
+            )
+            removed += cur.rowcount
+    if "research_references" in have:
+        conn.execute(
+            "UPDATE research_references SET matched_document_id = NULL, match_reason = NULL, "
+            "status = CASE WHEN resolved_url IS NOT NULL THEN 'resolved' ELSE 'parsed' END "
+            "WHERE matched_document_id IS NOT NULL "
+            "AND matched_document_id NOT IN (SELECT document_id FROM documents)"
+        )
+    return removed
+
+
+def prune_orphan_jobs(conn: sqlite3.Connection) -> int:
+    """Drop job rows naming a document that is gone; the caller commits.
+
+    The whole row goes rather than the one id: its question, filename, error
+    text and counts all describe work on that paper, and nothing reads a job
+    row for the sake of the other papers in the batch. A row that cannot be
+    read goes too, since nothing can say what it names. Kept out of
+    ``prune_orphans`` because this is for what leaves a deployment: a live
+    collection may keep the history of work on a paper it has since deleted.
+    """
+    if "research_jobs" not in _existing_tables(conn):
+        return 0
+    present = {row[0] for row in conn.execute("SELECT document_id FROM documents")}
+    doomed = []
+    for job_id, params, errors in conn.execute(
+            "SELECT job_id, params, errors FROM research_jobs").fetchall():
+        try:
+            named = list(json.loads(params or "{}").get("document_ids") or [])
+            # A budget stop records an error with no document_id.
+            named += [e["document_id"] for e in json.loads(errors or "[]") if e.get("document_id")]
+            if not present.issuperset(named):
+                doomed.append(job_id)
+        except (TypeError, ValueError, AttributeError, KeyError):
+            doomed.append(job_id)
+    conn.executemany("DELETE FROM research_jobs WHERE job_id = ?", [(j,) for j in doomed])
+    return len(doomed)
 
 
 class ResearchStore:
@@ -470,19 +531,7 @@ class ResearchStore:
 
     def prune_orphans(self) -> int:
         """Drop research rows whose document is gone from the collection."""
-        removed = 0
         with self._connect() as conn:
-            for table in ("research_papers", "research_references",
-                          "research_assessments", "research_briefs"):
-                cur = conn.execute(
-                    f"DELETE FROM {table} WHERE document_id NOT IN (SELECT document_id FROM documents)"
-                )
-                removed += cur.rowcount
-            conn.execute(
-                "UPDATE research_references SET matched_document_id = NULL, match_reason = NULL, "
-                "status = CASE WHEN resolved_url IS NOT NULL THEN 'resolved' ELSE 'parsed' END "
-                "WHERE matched_document_id IS NOT NULL "
-                "AND matched_document_id NOT IN (SELECT document_id FROM documents)"
-            )
+            removed = prune_orphan_rows(conn)
             conn.commit()
         return removed

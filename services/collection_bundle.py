@@ -6,6 +6,7 @@ A bundle is a zip:
     indexes/metadata.db     chunk text, pages, document records, CSV tables
     indexes/faiss.index     the vectors (omitted when they cannot be vouched for)
     sources/<doc id>/<name> the original files (optional)
+    artifacts/<id>/<name>   files of saved artifacts, such as audio
 
 The chunk text is the valuable part. Extraction - vision OCR above all - is
 what takes hours; embedding chunk text takes minutes. So an importer whose
@@ -15,8 +16,12 @@ redoing extraction. The keyword (BM25) index is always rebuilt on import
 from the same text rather than shipped.
 
 Quarantined documents never leave: they are stripped from the exported
-database and vectors. On import, documents whose hash this deployment has
-blocklisted are stripped the same way.
+database and vectors, and so is what was derived from them: research whose
+briefs and evidence quote the paper, extracted entities, reviewer notes,
+coverage entries and saved artifacts (their rows travel in metadata.db) built
+from it. On import, documents whose hash this deployment has blocklisted are
+stripped the same way. A document deleted earlier counts too: what was derived
+from it, reports included, stays behind.
 """
 
 from __future__ import annotations
@@ -35,17 +40,21 @@ import faiss
 import numpy as np
 
 from config import settings
-from services import authored_text
+from services import artifact_store, authored_text
+from services.research.store import prune_orphan_jobs, prune_orphan_rows
 
 logger = logging.getLogger(__name__)
 
 BUNDLE_FORMAT = "clio-collection"
-BUNDLE_VERSION = 1
+BUNDLE_VERSION = 2
+# What a bundle without artifact files says: every release can read those.
+_BASE_BUNDLE_VERSION = 1
 
 _MANIFEST = "manifest.json"
 _METADATA = "indexes/metadata.db"
 _VECTORS = "indexes/faiss.index"
 _SOURCES = "sources/"
+_ARTIFACT_FILES = "artifacts/"
 
 
 class BundleError(ValueError):
@@ -72,29 +81,89 @@ def _work_dir() -> Path:
 # ── Shared: stripping documents out of a metadata.db copy ────────────────────
 
 
+def _names_absent_document(value: Any, present: set) -> bool:
+    """Whether any ``document_id`` anywhere in parsed JSON is not in ``present``."""
+    if isinstance(value, dict):
+        if value.get("document_id") and value["document_id"] not in present:
+            return True
+        return any(_names_absent_document(v, present) for v in value.values())
+    if isinstance(value, list):
+        return any(_names_absent_document(v, present) for v in value)
+    return False
+
+
+def _sweep_derived(conn: sqlite3.Connection, stripped: bool) -> None:
+    """Clear what a metadata.db still holds about documents no longer in it.
+
+    Takes each table only if the database has it: these all arrived after the
+    first bundles. The coverage report goes whole, and so does an owner's
+    question that names an absent document. Neither can be filtered: a
+    report's probe queries are built from the document's text and its totals
+    count it, and the question was written about it. An owner can run the
+    report and write the question again; a withheld paper cannot be recalled.
+    """
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    for table in ("chunk_entities", "chunk_boosts"):
+        if table in have:
+            conn.execute(f"DELETE FROM {table} WHERE chunk_id NOT IN (SELECT chunk_id FROM chunks)")
+    if "superseded_by" in {r[1] for r in conn.execute("PRAGMA table_info(documents)")}:
+        # As on deletion: what this document replaced is current again.
+        conn.execute("UPDATE documents SET superseded_by = NULL, superseded_at = NULL, "
+                     "superseded_note = NULL "
+                     "WHERE superseded_by NOT IN (SELECT document_id FROM documents)")
+
+    present = {r[0] for r in conn.execute("SELECT document_id FROM documents")}
+
+    def unvouched(text: Any) -> bool:
+        try:
+            return _names_absent_document(json.loads(text), present)
+        except (TypeError, ValueError):
+            return True  # unreadable, so nothing can say what it names
+
+    if "coverage_questions" in have:
+        rows = conn.execute("SELECT id, expected_documents FROM coverage_questions").fetchall()
+        conn.executemany("DELETE FROM coverage_questions WHERE id = ?",
+                         [(qid,) for qid, expected in rows if unvouched(expected)])
+    if "coverage_report" in have:
+        # After a strip the report goes even if it never names the document:
+        # a future field that quotes a chunk should not need this code to know.
+        reports = conn.execute("SELECT report FROM coverage_report").fetchall()
+        if stripped or any(unvouched(r[0]) for r in reports):
+            conn.execute("DELETE FROM coverage_report")
+
+
 def _strip_documents(db_path: Path, document_ids: Iterable[str]) -> List[int]:
-    """Delete documents (chunks, records, CSV tables) from a metadata.db.
+    """Delete documents (chunks, records, CSV tables) from a metadata.db,
+    along with what was derived from any document no longer in it.
+
+    The sweep runs even when ``document_ids`` is empty: a document deleted
+    earlier leaves research rows and coverage entries behind, and a bundle
+    from before this sweep holds them for documents it stripped.
 
     Returns the chunk row ids removed - their vectors must go too.
     """
     ids = sorted(set(document_ids))
-    if not ids:
-        return []
     marks = ",".join("?" * len(ids))
     conn = sqlite3.connect(db_path)
     try:
-        rowids = [r[0] for r in conn.execute(
-            f"SELECT id FROM chunks WHERE document_id IN ({marks})", ids)]
-        conn.execute(f"DELETE FROM chunks WHERE document_id IN ({marks})", ids)
-        conn.execute(f"DELETE FROM documents WHERE document_id IN ({marks})", ids)
-        try:
-            tables = [r[0] for r in conn.execute(
-                f"SELECT table_name FROM csv_schemas WHERE document_id IN ({marks})", ids)]
-            for table in tables:
-                conn.execute(f'DROP TABLE IF EXISTS "{table}"')
-            conn.execute(f"DELETE FROM csv_schemas WHERE document_id IN ({marks})", ids)
-        except sqlite3.OperationalError:
-            pass  # no structured tables in this collection
+        rowids: List[int] = []
+        if ids:
+            rowids = [r[0] for r in conn.execute(
+                f"SELECT id FROM chunks WHERE document_id IN ({marks})", ids)]
+            conn.execute(f"DELETE FROM chunks WHERE document_id IN ({marks})", ids)
+            conn.execute(f"DELETE FROM documents WHERE document_id IN ({marks})", ids)
+            try:
+                tables = [r[0] for r in conn.execute(
+                    f"SELECT table_name FROM csv_schemas WHERE document_id IN ({marks})", ids)]
+                for table in tables:
+                    conn.execute(f'DROP VIEW IF EXISTS "{table}__by_symbol"')
+                    conn.execute(f'DROP TABLE IF EXISTS "{table}"')
+                conn.execute(f"DELETE FROM csv_schemas WHERE document_id IN ({marks})", ids)
+            except sqlite3.OperationalError:
+                pass  # no structured tables in this collection
+        prune_orphan_rows(conn)
+        prune_orphan_jobs(conn)
+        _sweep_derived(conn, stripped=bool(ids))
         conn.commit()
         return rowids
     finally:
@@ -207,6 +276,8 @@ def export_collection(collection_id: str, include_sources: bool = False,
 
         hidden = [d["document_id"] for d in _documents(db_copy) if governance.is_hidden(d)]
         removed_rowids = _strip_documents(db_copy, hidden)
+        # Before VACUUM, so what this removes is gone from the file too.
+        artifacts = artifact_store.prune_for_bundle(db_copy, artifact_store.load_blocked_hashes())
         conn = sqlite3.connect(db_copy)
         conn.execute("VACUUM")
         conn.close()
@@ -254,9 +325,12 @@ def export_collection(collection_id: str, include_sources: bool = False,
                 if path.is_file():
                     sources[doc["document_id"]] = str(path)
 
+        files_store = artifact_store.ArtifactStore(db_copy, collection_service.get_artifacts_path(collection_id))
+        artifact_files = {row["id"]: path for row in artifacts if (path := files_store.file_path(row))}
+
         manifest = {
             "format": BUNDLE_FORMAT,
-            "version": BUNDLE_VERSION,
+            "version": BUNDLE_VERSION if artifact_files else _BASE_BUNDLE_VERSION,
             "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "exported_by": exported_by,
             "collection": {
@@ -279,6 +353,7 @@ def export_collection(collection_id: str, include_sources: bool = False,
                 "vectors_note": vectors_note,
                 "sources_included": len(sources),
                 "quarantined_excluded": len(hidden),
+                "artifacts": len(artifacts),
             },
             "documents": [
                 {
@@ -303,6 +378,9 @@ def export_collection(collection_id: str, include_sources: bool = False,
             for document_id, path in sources.items():
                 # PDFs and images are already compressed; don't spend CPU.
                 zf.write(path, f"{_SOURCES}{document_id}/{Path(path).name}",
+                         compress_type=zipfile.ZIP_STORED)
+            for artifact_id, path in artifact_files.items():
+                zf.write(path, f"{_ARTIFACT_FILES}{artifact_id}/{path.name}",
                          compress_type=zipfile.ZIP_STORED)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -345,9 +423,26 @@ def _check_member(name: str) -> None:
         raise BundleError(f"The bundle contains an unsafe path: {name}")
     if name in (_MANIFEST, _METADATA, _VECTORS) or name.endswith("/"):
         return
-    if name.startswith(_SOURCES) and len(path.parts) == 3:
+    if name.startswith((_SOURCES, _ARTIFACT_FILES)) and len(path.parts) == 3:
         return
     raise BundleError(f"The bundle contains an unexpected file: {name}")
+
+
+def _restore_artifact_files(zf: zipfile.ZipFile, artifacts: List[dict], db_path: Path, files_dir: Path) -> None:
+    """Unpack the files of the artifacts that were kept, each to its own folder."""
+    store = artifact_store.ArtifactStore(db_path, files_dir)
+    by_id = {row["id"]: row for row in artifacts}
+    for info in zf.infolist():
+        if not info.filename.startswith(_ARTIFACT_FILES) or info.filename.endswith("/"):
+            continue
+        _, artifact_id, filename = PurePosixPath(info.filename).parts
+        row = by_id.get(artifact_id)
+        target = store.file_target(row) if row and row.get("file_name") == filename else None
+        if target is None:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info) as src, open(target, "wb") as dst:
+            shutil.copyfileobj(src, dst)
 
 
 def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
@@ -395,13 +490,17 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
         blocked = [d["document_id"] for d in docs
                    if d.get("content_hash") and content_policy.is_hash_blocked(d["content_hash"])]
         removed_rowids = _strip_documents(db_tmp, blocked)
+        artifacts = artifact_store.prune_for_bundle(db_tmp, artifact_store.load_blocked_hashes())
         kept = {d["document_id"]: d for d in docs if d["document_id"] not in blocked}
         conn = sqlite3.connect(db_tmp)
         try:
-            conn.execute("UPDATE documents SET source_type = 'upload', source_path = NULL")
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass  # pre-3.1 database without the source columns
+            try:
+                conn.execute("UPDATE documents SET source_type = 'upload', source_path = NULL")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # pre-3.1 database without the source columns
+            # Deleted rows stay readable in free pages until this rewrites the file.
+            conn.execute("VACUUM")
         finally:
             conn.close()
 
@@ -462,6 +561,8 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
                 with zf.open(info) as src, open(target, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                 extracted.add(document_id)
+            _restore_artifact_files(zf, artifacts, indexes_dir / "metadata.db",
+                                    collection_service.get_artifacts_path(cid))
     except Exception:
         if cid:
             indexer_manager.close_indexer(cid)

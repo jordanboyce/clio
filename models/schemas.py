@@ -396,6 +396,11 @@ class ChatRequest(BaseModel):
     scope: Literal["current", "all"] = Field("current", description="Collection scope: 'current' (single collection) or 'all' (search across all collections)")
     rerank: bool = Field(False, description="Rerank retrieved context chunks using AI before generating a response")
     top_k: int = Field(5, description="Number of source chunks to consider", ge=1, le=20)
+    max_output_tokens: Optional[int] = Field(
+        None, ge=256, le=16000,
+        description="Most tokens the model may use on one reply, reasoning included on models "
+                    "that reason. Omitted = the chat defaults.",
+    )
     use_cache: bool = Field(
         True,
         description="Serve a semantically matching cached answer when one exists; "
@@ -470,28 +475,66 @@ class ArtifactRequest(BaseModel):
     """Request body for generating a collection artifact."""
 
     # Mirrors services.artifacts.ARTIFACT_TYPES.
-    artifact_type: Literal["summary", "faq", "timeline", "briefing", "study_guide"] = Field(
-        ..., description="Artifact type: 'summary', 'faq', 'timeline', 'briefing' or 'study_guide'"
+    artifact_type: Literal["summary", "faq", "timeline", "briefing", "study_guide", "podcast_script"] = Field(
+        ..., description="Artifact type: 'summary', 'faq', 'timeline', 'briefing', 'study_guide' or 'podcast_script'"
     )
     provider: str = Field("anthropic", description="AI provider")
-    scope: Literal["current", "all"] = Field("current", description="'current' (this collection) or 'all'")
+    # A saved artifact belongs to one collection, so it may only draw on that
+    # collection: content from others would reach whoever can read this one.
+    scope: Literal["current"] = Field("current", description="Always 'current': this collection")
     mode: SearchMode = Field(SearchMode.AUTO, description="Search mode for context retrieval ('auto' picks per query)")
     top_k: int = Field(8, description="Chunks per retrieval call during generation", ge=1, le=20)
     focus: Optional[str] = Field(None, max_length=4000, description="Optional subject to narrow the artifact to")
     custom_instructions: Optional[str] = Field(None, max_length=4000, description="Optional extra freeform guidance")
     document_ids: Optional[List[str]] = Field(
-        None, description="Limit the artifact to these sources (document ids in the current collection)"
+        None, max_length=1000,
+        description="Limit the artifact to these sources (document ids in the current collection)",
     )
 
 
-class ArtifactResponse(BaseModel):
-    """A generated, source-grounded artifact."""
+class ArtifactSourceChange(BaseModel):
+    """A source that is no longer as it was when the artifact was generated."""
 
+    document_id: Optional[str] = None
+    filename: str = ""
+    change: Literal["changed", "removed"]
+
+
+class ArtifactSummary(BaseModel):
+    """A saved artifact, without its body."""
+
+    id: str
     artifact_type: str = Field(..., description="The artifact type that was generated")
     title: str = Field(..., description="Human-readable title")
-    content: str = Field(..., description="The artifact body as Markdown, with inline citations")
+    status: Literal["queued", "running", "done", "failed"]
+    error: Optional[str] = Field(None, description="Why generation failed")
+    focus: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: str
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    has_file: bool = Field(False, description="True when GET .../file can download a file for it")
+    file_name: Optional[str] = None
+    media_type: Optional[str] = None
+    file_size: Optional[int] = None
+    held: bool = Field(False, description="A source is held for review, or was deleted while held; only reviewers can see this")
+    source_changes: List[ArtifactSourceChange] = Field(default_factory=list)
+
+
+class ArtifactDetail(ArtifactSummary):
+    """A saved artifact with its body and citations."""
+
+    content: str = Field("", description="The artifact body as Markdown, with inline citations")
+    custom_instructions: Optional[str] = None
+    document_ids: Optional[List[str]] = Field(None, description="The sources it was limited to, if any")
     sources: List[ChatSource] = Field(default_factory=list, description="Sources cited/used")
-    ai_usage: Optional[AIUsage] = Field(None, description="AI token usage")
+
+
+class ArtifactListResponse(BaseModel):
+    artifacts: List[ArtifactSummary] = Field(default_factory=list)
+    truncated: bool = Field(False, description="True when older artifacts were left out of this list")
 
 
 # Repository/Folder upload schemas
