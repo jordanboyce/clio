@@ -24,6 +24,7 @@ from services.app_database import SQLiteBackend, app_db
 from services.artifact_store import ArtifactStore
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
+from services.research.store import ResearchStore
 from tests.coverage_support import build_collection
 from tests.test_governance import FakeEmbedder
 
@@ -451,6 +452,52 @@ def test_import_drops_artifacts_built_from_a_blocklisted_document(bundle_env, mo
     store = ArtifactStore(new_db, collection_service.get_artifacts_path(imported["id"]))
     assert {a["id"] for a in store.list()} == {"aaaaaaaaaaaa"}
     assert not (collection_service.get_artifacts_path(imported["id"]) / "bbbbbbbbbbbb").exists()
+
+
+def _seed_brief(db, document_id, text):
+    ResearchStore(db).add_brief(document_id, "brief", {"sections": [{"statements": [{"text": text}]}]})
+
+
+def test_export_withholds_a_quarantined_documents_research_and_artifacts_alike(bundle_env):
+    cid, (kept, hidden), db = _bundle_collection(bundle_env)
+    _seed_brief(db, kept, "Brief about holidays")
+    _seed_brief(db, hidden, "SECRET brief about expenses")
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE documents SET policy_status='quarantined' WHERE document_id=?", (hidden,))
+
+    path, _ = cb.export_collection(cid)
+    with zipfile.ZipFile(path) as zf:
+        raw = zf.read("indexes/metadata.db")
+        names = zf.namelist()
+    # The raw file, not a query: neither sweep may leave a row in a free page.
+    assert b"SECRET" not in raw
+    assert hidden.encode() not in raw
+    assert "artifacts/bbbbbbbbbbbb/overview.mp3" not in names
+
+    assert b"About holidays" in raw and b"Brief about holidays" in raw
+    assert "artifacts/aaaaaaaaaaaa/overview.mp3" in names
+
+
+def test_import_withholds_a_blocklisted_documents_research_and_artifacts_alike(bundle_env, monkeypatch):
+    cid, (kept, blocked), db = _bundle_collection(bundle_env)
+    _seed_brief(db, kept, "Brief about holidays")
+    _seed_brief(db, blocked, "SECRET brief about expenses")
+    with sqlite3.connect(db) as conn:
+        blocked_hash = conn.execute("SELECT content_hash FROM documents WHERE document_id=?",
+                                    (blocked,)).fetchone()[0]
+    path, _ = cb.export_collection(cid)
+    with zipfile.ZipFile(path) as zf:
+        assert b"SECRET" in zf.read("indexes/metadata.db")  # it left before the block
+
+    app_db.add_blocked_hash(blocked_hash, "admin", "test", "expenses.txt")
+    imported = cb.import_collection(path, owner_id="default", name="Copy")
+    new_db = collection_service.get_indexes_path(imported["id"]) / "metadata.db"
+    raw = new_db.read_bytes()
+    assert b"SECRET" not in raw
+    assert blocked.encode() not in raw
+    store = ArtifactStore(new_db, collection_service.get_artifacts_path(imported["id"]))
+    assert {a["id"] for a in store.list()} == {"aaaaaaaaaaaa"}
+    assert b"Brief about holidays" in raw
 
 
 def test_import_tolerates_an_unusable_artifacts_table(tmp_path):
