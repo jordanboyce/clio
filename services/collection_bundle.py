@@ -6,6 +6,7 @@ A bundle is a zip:
     indexes/metadata.db     chunk text, pages, document records, CSV tables
     indexes/faiss.index     the vectors (omitted when they cannot be vouched for)
     sources/<doc id>/<name> the original files (optional)
+    artifacts/<id>/<name>   files of saved artifacts, such as audio
 
 The chunk text is the valuable part. Extraction - vision OCR above all - is
 what takes hours; embedding chunk text takes minutes. So an importer whose
@@ -16,7 +17,9 @@ from the same text rather than shipped.
 
 Quarantined documents never leave: they are stripped from the exported
 database and vectors. On import, documents whose hash this deployment has
-blocklisted are stripped the same way.
+blocklisted are stripped the same way. Saved artifacts (their rows travel in
+metadata.db) built from a stripped or blocklisted document go with it, because
+they contain its content.
 """
 
 from __future__ import annotations
@@ -35,17 +38,20 @@ import faiss
 import numpy as np
 
 from config import settings
-from services import authored_text
+from services import artifact_store, authored_text
 
 logger = logging.getLogger(__name__)
 
 BUNDLE_FORMAT = "clio-collection"
-BUNDLE_VERSION = 1
+BUNDLE_VERSION = 2
+# What a bundle without artifact files says: every release can read those.
+_BASE_BUNDLE_VERSION = 1
 
 _MANIFEST = "manifest.json"
 _METADATA = "indexes/metadata.db"
 _VECTORS = "indexes/faiss.index"
 _SOURCES = "sources/"
+_ARTIFACT_FILES = "artifacts/"
 
 
 class BundleError(ValueError):
@@ -207,6 +213,8 @@ def export_collection(collection_id: str, include_sources: bool = False,
 
         hidden = [d["document_id"] for d in _documents(db_copy) if governance.is_hidden(d)]
         removed_rowids = _strip_documents(db_copy, hidden)
+        # Before VACUUM, so what this removes is gone from the file too.
+        artifacts = artifact_store.prune_for_bundle(db_copy, hidden, artifact_store.load_blocked_hashes())
         conn = sqlite3.connect(db_copy)
         conn.execute("VACUUM")
         conn.close()
@@ -254,9 +262,12 @@ def export_collection(collection_id: str, include_sources: bool = False,
                 if path.is_file():
                     sources[doc["document_id"]] = str(path)
 
+        files_store = artifact_store.ArtifactStore(db_copy, collection_service.get_artifacts_path(collection_id))
+        artifact_files = {row["id"]: path for row in artifacts if (path := files_store.file_path(row))}
+
         manifest = {
             "format": BUNDLE_FORMAT,
-            "version": BUNDLE_VERSION,
+            "version": BUNDLE_VERSION if artifact_files else _BASE_BUNDLE_VERSION,
             "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "exported_by": exported_by,
             "collection": {
@@ -279,6 +290,7 @@ def export_collection(collection_id: str, include_sources: bool = False,
                 "vectors_note": vectors_note,
                 "sources_included": len(sources),
                 "quarantined_excluded": len(hidden),
+                "artifacts": len(artifacts),
             },
             "documents": [
                 {
@@ -303,6 +315,9 @@ def export_collection(collection_id: str, include_sources: bool = False,
             for document_id, path in sources.items():
                 # PDFs and images are already compressed; don't spend CPU.
                 zf.write(path, f"{_SOURCES}{document_id}/{Path(path).name}",
+                         compress_type=zipfile.ZIP_STORED)
+            for artifact_id, path in artifact_files.items():
+                zf.write(path, f"{_ARTIFACT_FILES}{artifact_id}/{path.name}",
                          compress_type=zipfile.ZIP_STORED)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -345,9 +360,26 @@ def _check_member(name: str) -> None:
         raise BundleError(f"The bundle contains an unsafe path: {name}")
     if name in (_MANIFEST, _METADATA, _VECTORS) or name.endswith("/"):
         return
-    if name.startswith(_SOURCES) and len(path.parts) == 3:
+    if name.startswith((_SOURCES, _ARTIFACT_FILES)) and len(path.parts) == 3:
         return
     raise BundleError(f"The bundle contains an unexpected file: {name}")
+
+
+def _restore_artifact_files(zf: zipfile.ZipFile, artifacts: List[dict], db_path: Path, files_dir: Path) -> None:
+    """Unpack the files of the artifacts that were kept, each to its own folder."""
+    store = artifact_store.ArtifactStore(db_path, files_dir)
+    by_id = {row["id"]: row for row in artifacts}
+    for info in zf.infolist():
+        if not info.filename.startswith(_ARTIFACT_FILES) or info.filename.endswith("/"):
+            continue
+        _, artifact_id, filename = PurePosixPath(info.filename).parts
+        row = by_id.get(artifact_id)
+        target = store.file_target(row) if row and row.get("file_name") == filename else None
+        if target is None:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info) as src, open(target, "wb") as dst:
+            shutil.copyfileobj(src, dst)
 
 
 def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
@@ -395,6 +427,7 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
         blocked = [d["document_id"] for d in docs
                    if d.get("content_hash") and content_policy.is_hash_blocked(d["content_hash"])]
         removed_rowids = _strip_documents(db_tmp, blocked)
+        artifacts = artifact_store.prune_for_bundle(db_tmp, blocked, artifact_store.load_blocked_hashes())
         kept = {d["document_id"]: d for d in docs if d["document_id"] not in blocked}
         conn = sqlite3.connect(db_tmp)
         try:
@@ -462,6 +495,8 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
                 with zf.open(info) as src, open(target, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                 extracted.add(document_id)
+            _restore_artifact_files(zf, artifacts, indexes_dir / "metadata.db",
+                                    collection_service.get_artifacts_path(cid))
     except Exception:
         if cid:
             indexer_manager.close_indexer(cid)

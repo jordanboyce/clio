@@ -8,7 +8,8 @@ It is a thin adapter: each artifact type maps to an instruction message that is
 fed through the existing provider-agnostic chat tool loop (the same loop the
 in-app chat uses), so grounding, citations, the structured-table tools, and the
 sources list all come for free. We add no new retrieval or synthesis engine —
-only the framing. See `/api/artifacts` in main.py for the orchestration.
+only the framing. See api/artifacts.py for the orchestration and
+services/artifact_store.py for how the results are kept.
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ _CITATION_CONTRACT = (
     "you are about to do — emit the artifact directly."
 )
 
+
+MAX_TITLE_FOCUS_CHARS = 120
 
 ARTIFACT_TYPES: Dict[str, Dict[str, str]] = {
     "summary": {
@@ -103,9 +106,13 @@ def is_valid_type(artifact_type: str) -> bool:
 
 def artifact_title(artifact_type: str, focus: Optional[str] = None) -> str:
     label = ARTIFACT_TYPES[artifact_type]["label"]
-    if focus:
-        return f"{label}: {focus.strip()}"
-    return label
+    # A focus can run to pages; the title is one line in a list.
+    focus_line = " ".join((focus or "").split())
+    if not focus_line:
+        return label
+    if len(focus_line) > MAX_TITLE_FOCUS_CHARS:
+        focus_line = focus_line[:MAX_TITLE_FOCUS_CHARS].rstrip() + "…"
+    return f"{label}: {focus_line}"
 
 
 def build_artifact_message(

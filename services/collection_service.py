@@ -317,6 +317,10 @@ class CollectionService:
         self._ensure_collection_dirs(collection_id)
         return self._get_documents_dir(collection_id)
 
+    def get_artifacts_path(self, collection_id: str) -> Path:
+        """Where saved artifacts keep their files. Created on first use."""
+        return self._get_collection_dir(collection_id) / "artifacts"
+
     def get_indexes_path(self, collection_id: str) -> Path:
         self._ensure_collection_dirs(collection_id)
         return self._get_indexes_dir(collection_id)
