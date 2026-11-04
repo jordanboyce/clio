@@ -622,6 +622,54 @@ set `FORWARDED_ALLOW_IPS` to the proxy (see shape **C**). A
 stats, and the rate-limit counters; the same data is at
 `/api/admin/usage` and `/api/admin/stats`.
 
+### Parallel searches of one collection
+
+Searches of the same collection run at the same time. Anything that changes its
+index runs alone, because FAISS crashes the process if a write overlaps a search:
+adds, deletes, saves and the swap in a document re-index. A waiting write holds
+back new searches, so constant searching cannot keep it out, and it waits only for
+the searches already running.
+
+Measured on one host with a 6-core, 12-thread i7-8750H and 32 GiB of RAM, using
+random 384-dimension vectors, top 10, for 15 seconds per run. The old and new code
+took turns. Linux is a container under Docker Desktop on that same host.
+
+| Vectors | Platform | 8 callers before | 8 callers after | Gain | Median time per search, before → after |
+|---|---|---|---|---|---|
+| 100,000 | Windows | 74 /s | 326 /s | 4.4× | 105 → 24 ms |
+| 500,000 | Windows | 16 /s | 63 /s | 3.9× | 491 → 121 ms |
+| 1,000,000 | Windows | 8.5 /s | 31 /s | 3.6× | 942 → 251 ms |
+| 100,000 | Linux | 93 /s | 307 /s | 3.3× | 83 → 25 ms |
+| 500,000 | Linux | 23 /s | 54 /s | 2.3× | 342 → 142 ms |
+| 1,000,000 | Linux | 11.5 /s | 19.5 /s | 1.7× | 689 → 425 ms |
+
+**These numbers cover only the vector scan.** A real search also passes through
+the embedding lock and the reranker slots described above, which this change does
+not touch, so end-to-end gains will be smaller. Use `scripts/mcp_load.py` to measure
+your own host.
+
+What else the same runs showed, at 1,000,000 vectors on Windows unless stated:
+
+- **Eight callers do not make eight times the throughput.** Each search takes
+  longer as more run at once, at 96 ms alone and about 250 ms with eight. Why the
+  gain is smaller in the Linux container was not investigated.
+- **More searches than that lowers throughput.** It peaked at 8 callers (32 /s) and
+  fell to 20 /s at 12 and at 16, still above the old lock. Nothing limits concurrent
+  searches today, so a burst well past the core count gets slower for everyone.
+- **OpenMP has to stay capped.** A single-query search gains nothing from OpenMP
+  threads: one caller takes the same time either way, but uncapped it keeps about
+  11 cores busy instead of 1.3. Each searching thread also gets its own team, 136 OS
+  threads at eight callers against 37, and with the new lock but no cap eight
+  callers reached only 10 /s. Clio caps it on each search thread, because on Linux
+  a cap set at startup does not reach threads started later. The cap does not
+  depend on `OMP_NUM_THREADS`.
+- **Writes wait less.** With eight callers searching, the median wait for the lock
+  fell from 851 ms to 165 ms, and the longest from 958 ms to 267 ms.
+- **Filtered searches gain the same way.** With a filter allowing a tenth of the
+  collection, eight callers went from 15.5 /s to 67 /s.
+- **Searches still wait for writes.** A save of a 1.44 GiB index holds the lock for
+  about 1.5 seconds, and removing 1,000 ids for about 0.4 seconds.
+
 ### Monitoring
 
 `METRICS_ENABLED=true` serves Prometheus metrics at `GET /metrics`. It sits

@@ -3,8 +3,9 @@
 import os
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, List, Optional, Dict
+from typing import Any, Iterator, List, Optional, Dict
 import logging
 import numpy as np
 import faiss
@@ -13,6 +14,7 @@ from config import DEFAULT_SEMANTIC_WEIGHT
 from models.schemas import ChunkMetadata, SearchResult
 from services.metadata_store import MetadataStore
 from services.bm25_service import BM25Index
+from services.rw_lock import ReadWriteLock
 from services.structured_store import StructuredStore
 
 logger = logging.getLogger(__name__)
@@ -89,11 +91,12 @@ class VectorStore:
 
         # FAISS indexes are NOT thread-safe under concurrent mutation: an
         # upload batch adding vectors while a delete removes them (or a search
-        # scans them) is a native crash, not an exception. One reentrant lock
-        # serializes every touch of self.index — adds, removes, searches,
-        # saves. Discovered live: concurrent upload+delete segfaulted the
-        # server twice during a bulk cleanup.
-        self._index_lock = threading.RLock()
+        # scans them) is a native crash, not an exception. Discovered live:
+        # concurrent upload+delete segfaulted the server twice during a bulk
+        # cleanup. Searches may run together, so they share this lock through
+        # _loaded_index_for_reading(); adds, removes, saves, reloads and anything
+        # else that touches self.index take it alone with `with self._index_lock`.
+        self._index_lock = ReadWriteLock()
 
         self._load_or_create_index()
 
@@ -113,8 +116,30 @@ class VectorStore:
     @index.setter
     def index(self, value: Optional[faiss.Index]) -> None:
         """Replace the whole index; it counts as unsaved until the next save()."""
-        self._index = value
-        self._dirty = True
+        with self._index_lock:
+            self._index = value
+            self._dirty = True
+
+    @contextmanager
+    def _loaded_index_for_reading(self) -> Iterator[Optional[faiss.Index]]:
+        """Yield the index, loaded, with shared access to it. None once closed.
+
+        Other readers may hold it at the same time; writers and unload_if_idle
+        wait or give up. Reading a released index back needs exclusive access, so
+        it happens before taking shared access, and a release that slips in
+        between sends this around again.
+        """
+        while True:
+            self.index  # noqa: B018 - the property reads it back and marks it used
+            self._index_lock.acquire_shared()
+            index = self._index
+            if index is not None or self._closed:
+                break
+            self._index_lock.release_shared()
+        try:
+            yield index
+        finally:
+            self._index_lock.release_shared()
 
     def unload_if_idle(self, idle_seconds: float) -> bool:
         """Release the vectors from memory if nothing has used them for a while.
@@ -130,7 +155,8 @@ class VectorStore:
             return False
         if time.monotonic() - self._last_used < idle_seconds:
             return False
-        # Whoever holds the lock is using the index, so this one is not idle.
+        # Whoever holds the lock, shared or not, or waits for it is using the
+        # index, so this one is not idle.
         if not self._index_lock.acquire(blocking=False):
             return False
         try:
@@ -348,16 +374,25 @@ class VectorStore:
         """The k most similar vectors, among allowed_ids when given.
 
         The filter runs inside FAISS. Ranking every vector and discarding the
-        rest in Python took a second at a million chunks, all of it holding the
-        lock that every other search of this collection waits on.
+        rest in Python took a second at a million chunks.
         """
-        if allowed_ids is None:
-            with self._index_lock:
-                return self.index.search(query, k)
-        selector = faiss.IDSelectorBatch(np.fromiter(allowed_ids, dtype=np.int64, count=len(allowed_ids)))
-        params = faiss.SearchParameters(sel=selector)
-        with self._index_lock:
-            return self.index.search(query, k, params=params)
+        params = None
+        if allowed_ids is not None:
+            selector = faiss.IDSelectorBatch(np.fromiter(allowed_ids, dtype=np.int64, count=len(allowed_ids)))
+            params = faiss.SearchParameters(sel=selector)
+        # Clio searches one query at a time, and OpenMP does not speed that up:
+        # it costs each searching thread a team of its own, one per core, spinning
+        # while it waits. Parallel searches gained almost nothing until this was
+        # capped (see Capacity & scaling in docs/DEPLOYMENT.md). This thread's
+        # setting is what counts on Linux, hence here and not once at startup.
+        faiss.omp_set_num_threads(1)
+        with self._loaded_index_for_reading() as index:
+            return index.search(query, k, params=params)
+
+    def reconstruct_vector(self, row_id: int) -> np.ndarray:
+        """The stored vector for one chunk row id. Raises if it has no vector."""
+        with self._loaded_index_for_reading() as index:
+            return index.reconstruct(row_id)
 
     def search(
         self,

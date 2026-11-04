@@ -1,6 +1,7 @@
 """SQLite-based metadata storage for document chunks."""
 
 import sqlite3
+import threading
 from pathlib import Path
 
 from services.artifact_store import mark_sources_withheld
@@ -36,6 +37,7 @@ class MetadataStore:
         """
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._columns_lock = threading.Lock()
 
         self._init_db()
         self._migrate_schema()
@@ -960,7 +962,16 @@ class MetadataStore:
             return cur.rowcount > 0
 
     def _ensure_v3_1_columns(self, conn: sqlite3.Connection):
-        """Ensure v3.1+ columns exist (defensive migration for runtime checks)."""
+        """Ensure v3.1+ columns exist (defensive migration for runtime checks).
+
+        A new database gets its columns here, on first use, and a new collection's
+        first searches arrive together. One at a time, or two of them both see a
+        column missing and the second ALTER TABLE fails with "duplicate column".
+        """
+        with self._columns_lock:
+            self._add_missing_columns(conn)
+
+    def _add_missing_columns(self, conn: sqlite3.Connection):
         doc_columns = self._get_table_columns(conn, "documents")
         migrated = False
         if "source_path" not in doc_columns:

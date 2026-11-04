@@ -1478,8 +1478,7 @@ class DocumentIndexer:
             row_id = id_by_chunk.get(chunk_id)
             if row_id is None:
                 return 0.0
-            with self.vector_store._index_lock:
-                vec = self.vector_store.index.reconstruct(int(row_id))
+            vec = self.vector_store.reconstruct_vector(int(row_id))
             q = query_embedding.reshape(-1).astype(np.float32)
             q = q / np.linalg.norm(q)
             v = vec.reshape(-1).astype(np.float32)
