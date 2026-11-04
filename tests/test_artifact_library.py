@@ -273,6 +273,68 @@ def test_a_held_source_withholds_the_artifact_from_all_but_reviewers(client, hol
     assert client.get("/api/artifacts?collection_id=c1").json()["artifacts"] == []
 
 
+def _generate_from(client, doc):
+    client.state["chat"] = lambda *a, **k: _answer(_source(doc))
+    artifact = _generate(client)
+    return artifact, f"/api/artifacts/{artifact['id']}?collection_id=c1"
+
+
+def test_a_report_stays_held_after_its_quarantined_source_is_deleted(client):
+    doc = _document_ids(client.indexer)["sourdough.txt"]
+    artifact, url = _generate_from(client, doc)
+    _set_status(client.indexer, doc, "policy_status", "quarantined")
+    client.indexer.delete_document(doc)
+
+    detail = client.get(url).json()  # a reviewer still sees it, and can delete it
+    assert detail["held"] is True
+    assert [c["change"] for c in detail["source_changes"]] == ["removed"]
+
+    client.state["reviewer"] = False
+    assert client.get(url).status_code == 404
+    assert client.get("/api/artifacts?collection_id=c1").json()["artifacts"] == []
+
+
+def test_a_full_clear_remembers_which_sources_were_held(client):
+    doc = _document_ids(client.indexer)["sourdough.txt"]
+    _artifact, url = _generate_from(client, doc)
+    _set_status(client.indexer, doc, "policy_status", "quarantined")
+    client.indexer.vector_store.metadata_store.clear_all()
+    client.state["reviewer"] = False
+    assert client.get(url).status_code == 404
+
+
+def test_a_report_outlives_the_ordinary_deletion_of_its_source(client):
+    doc = _document_ids(client.indexer)["sourdough.txt"]
+    _artifact, url = _generate_from(client, doc)
+    client.indexer.delete_document(doc)
+    client.state["reviewer"] = False
+
+    detail = client.get(url).json()
+    assert detail["held"] is False
+    assert [c["change"] for c in detail["source_changes"]] == ["removed"]
+
+
+def test_the_lasting_hold_applies_only_while_the_document_is_absent():
+    # Ids are content hashes, so the same id back means the same content, and
+    # its live status decides again.
+    row = {"source_documents": [{"document_id": "d1", "withheld": True}]}
+    assert artifact_store.is_withheld(row, (), (), {}) is True
+    assert artifact_store.is_withheld(row, (), (), {"d1"}) is False
+    assert artifact_store.is_withheld(row, {"d1"}, (), {"d1"}) is True
+
+
+def test_deleting_a_document_does_not_depend_on_the_artifacts_table(client):
+    ids = _document_ids(client.indexer)
+    store = client.indexer.vector_store.metadata_store
+    _set_status(client.indexer, ids["sourdough.txt"], "policy_status", "quarantined")
+    assert store.delete_document(ids["sourdough.txt"]) > 0  # no table yet
+
+    _set_status(client.indexer, ids["bridges.txt"], "policy_status", "quarantined")
+    with sqlite3.connect(client.indexer.vector_store.metadata_db_path) as conn:
+        conn.execute("CREATE TABLE artifacts (nonsense TEXT)")
+    assert store.delete_document(ids["bridges.txt"]) > 0  # one this version cannot read
+
+
 def test_readers_can_read_but_not_generate_or_delete(client):
     artifact = _generate(client)
     client.state["write"] = False
@@ -454,6 +516,33 @@ def test_import_drops_artifacts_built_from_a_blocklisted_document(bundle_env, mo
     assert not (collection_service.get_artifacts_path(imported["id"]) / "bbbbbbbbbbbb").exists()
 
 
+def test_export_leaves_out_artifacts_whose_source_was_deleted(bundle_env):
+    cid, (_kept, gone), db = _bundle_collection(bundle_env)
+    indexer = indexer_manager.get_indexer(cid)
+    indexer.delete_document(gone)
+    indexer.save_index()
+
+    path, _ = cb.export_collection(cid)
+    with zipfile.ZipFile(path) as zf:
+        raw = zf.read("indexes/metadata.db")
+        names = zf.namelist()
+        assert json.loads(zf.read("manifest.json"))["contents"]["artifacts"] == 1
+    assert b"SECRET about expenses" not in raw
+    assert gone.encode() not in raw
+    assert "artifacts/bbbbbbbbbbbb/overview.mp3" not in names
+
+    # Only the bundle: the collection keeps the report, flagged.
+    assert ArtifactStore(db).get("bbbbbbbbbbbb") is not None
+
+
+def test_import_drops_artifacts_a_bundle_carried_for_an_absent_document(bundle_env):
+    _cid, (_kept, gone), db = _bundle_collection(bundle_env)
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM documents WHERE document_id=?", (gone,))
+    kept = artifact_store.prune_for_bundle(db, set())
+    assert [row["id"] for row in kept] == ["aaaaaaaaaaaa"]
+
+
 def _seed_brief(db, document_id, text):
     ResearchStore(db).add_brief(document_id, "brief", {"sections": [{"statements": [{"text": text}]}]})
 
@@ -504,7 +593,7 @@ def test_import_tolerates_an_unusable_artifacts_table(tmp_path):
     db = tmp_path / "m.db"
     with sqlite3.connect(db) as conn:
         conn.execute("CREATE TABLE artifacts (nonsense TEXT)")
-    assert artifact_store.prune_for_bundle(db, [], set()) == []
+    assert artifact_store.prune_for_bundle(db, set()) == []
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT name FROM sqlite_master WHERE name='artifacts'").fetchone() is None
 

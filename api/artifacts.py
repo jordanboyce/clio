@@ -9,8 +9,8 @@ page that asked for it.
 
 Reading needs read access. Generating and deleting change what everyone with
 access to the collection sees, so they need contributor (write) access. An
-artifact built from a source that is now quarantined or blocklisted looks
-absent to everyone but a reviewer, the same as the source itself.
+artifact built from a source that is now quarantined or blocklisted, or that
+was deleted while quarantined, looks absent to everyone but a reviewer.
 """
 
 import logging
@@ -77,7 +77,7 @@ class _Reader:
         self._can_review = None
 
     def held(self, artifact: dict) -> bool:
-        return artifact_store.is_withheld(artifact, self.hidden_ids, self.blocked_hashes)
+        return artifact_store.is_withheld(artifact, self.hidden_ids, self.blocked_hashes, self.documents)
 
     def may_see(self, artifact: dict) -> bool:
         if not self.held(artifact):

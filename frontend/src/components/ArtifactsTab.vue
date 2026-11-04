@@ -77,7 +77,7 @@
       </div>
 
       <div v-if="opened.held" class="border-b border-base-300 bg-warning/10 px-4 py-2 text-xs">
-        A source of this report is held for review. Only reviewers can see it until that is settled.
+        A source of this report is held for review, or was deleted while held. Only reviewers can see it.
       </div>
       <div v-if="opened.source_changes.length" class="border-b border-base-300 bg-warning/10 px-4 py-2 text-xs" data-testid="artifact-changes">
         Generated before these sources changed:

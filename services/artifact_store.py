@@ -10,6 +10,8 @@ A row keeps what is needed to judge the artifact later:
   on plus any the person selected, each with the content hash it had then. A
   reader compares those with the live documents to say what has since changed,
   and to withhold an artifact whose source is now quarantined or blocklisted.
+  Deleting a quarantined source would end that comparison, so the deletion
+  marks the entry ``withheld`` and the hold lasts while the document is absent.
 * ``sources`` holds the citations without URLs. A URL names a host and a
   collection, and neither survives a move, so readers rebuild them.
 
@@ -196,12 +198,49 @@ def _safe_file_name(name: Any) -> Optional[str]:
 
 # ── judging an artifact against the live documents ──────────────────────────
 
-def is_withheld(artifact: Mapping[str, Any], hidden_ids: Collection[str], blocked_hashes: Collection[str]) -> bool:
-    """Did it draw on a source that may no longer be shown?"""
+def is_withheld(artifact: Mapping[str, Any], hidden_ids: Collection[str], blocked_hashes: Collection[str],
+                present_ids: Collection[str]) -> bool:
+    """Did it draw on a source that may no longer be shown?
+
+    Document ids are content hashes, so a marked document that is back is the
+    same content, and its live status decides again.
+    """
     for source in artifact.get("source_documents") or []:
-        if source.get("document_id") in hidden_ids or source.get("content_hash") in blocked_hashes:
+        document_id = source.get("document_id")
+        if document_id in hidden_ids or source.get("content_hash") in blocked_hashes:
+            return True
+        if source.get("withheld") and document_id not in present_ids:
             return True
     return False
+
+
+def mark_sources_withheld(conn: sqlite3.Connection, document_ids: Iterable[str]) -> None:
+    """Record on the artifacts built from these documents that they were held.
+
+    Runs on the connection deleting the documents, so the two land together.
+    An artifacts table this version cannot read has nothing to mark, and must
+    not stop a deletion.
+    """
+    ids = set(document_ids)
+    if not ids:
+        return
+    try:
+        rows = conn.execute("SELECT id, source_documents FROM artifacts").fetchall()
+    except sqlite3.OperationalError:
+        return
+    for artifact_id, raw in rows:
+        try:
+            sources = json.loads(raw) if raw else []
+        except ValueError:
+            continue
+        if not isinstance(sources, list):
+            continue
+        named = [s for s in sources if isinstance(s, dict) and s.get("document_id") in ids]
+        for source in named:
+            source["withheld"] = True
+        if named:
+            conn.execute("UPDATE artifacts SET source_documents = ? WHERE id = ?",
+                         (json.dumps(sources), artifact_id))
 
 
 def source_changes(artifact: Mapping[str, Any], documents: Mapping[str, Mapping[str, Any]]) -> List[dict]:
@@ -222,24 +261,28 @@ def source_changes(artifact: Mapping[str, Any], documents: Mapping[str, Mapping[
 
 # ── bundles ─────────────────────────────────────────────────────────────────
 
-def prune_for_bundle(db_path: Path, withheld_ids: Iterable[str], blocked_hashes: Collection[str]) -> List[dict]:
+def prune_for_bundle(db_path: Path, blocked_hashes: Collection[str]) -> List[dict]:
     """Leave only the finished artifacts a bundle may carry; return those rows.
 
-    Run on the scratch copy of a metadata.db, in both directions: a stripped
-    document's content must not travel on inside an artifact built from it.
-    An artifacts table this version cannot read is dropped rather than trusted.
+    Run on the scratch copy of a metadata.db, in both directions, once withheld
+    documents are stripped from it. An artifact built from any document no
+    longer there stays behind: stripped or deleted, its content must not travel
+    on inside the report. An artifacts table this version cannot read is
+    dropped rather than trusted.
     """
-    hidden = set(withheld_ids)
     try:
         store = ArtifactStore(db_path)
         rows = store.list(limit=store.count() or 1)
+        with closing(store._connect()) as conn:
+            present = {r[0] for r in conn.execute("SELECT document_id FROM documents")}
     except sqlite3.OperationalError:
         with closing(sqlite_connect(db_path)) as conn, conn:
             conn.execute("DROP TABLE IF EXISTS artifacts")
         return []
     kept = []
     for row in rows:
-        if row.get("status") != "done" or is_withheld(row, hidden, blocked_hashes):
+        absent = any(s.get("document_id") not in present for s in row.get("source_documents") or [])
+        if row.get("status") != "done" or absent or is_withheld(row, (), blocked_hashes, present):
             store.delete(row["id"])
         else:
             kept.append(row)

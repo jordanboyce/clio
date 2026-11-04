@@ -514,7 +514,7 @@ class ArtifactSummary(BaseModel):
     file_name: Optional[str] = None
     media_type: Optional[str] = None
     file_size: Optional[int] = None
-    held: bool = Field(False, description="A source is held for review; only reviewers can see this")
+    held: bool = Field(False, description="A source is held for review, or was deleted while held; only reviewers can see this")
     source_changes: List[ArtifactSourceChange] = Field(default_factory=list)
 
 

@@ -20,7 +20,8 @@ database and vectors, and so is what was derived from them: research whose
 briefs and evidence quote the paper, extracted entities, reviewer notes,
 coverage entries and saved artifacts (their rows travel in metadata.db) built
 from it. On import, documents whose hash this deployment has blocklisted are
-stripped the same way.
+stripped the same way. A document deleted earlier counts too: what was derived
+from it, reports included, stays behind.
 """
 
 from __future__ import annotations
@@ -276,7 +277,7 @@ def export_collection(collection_id: str, include_sources: bool = False,
         hidden = [d["document_id"] for d in _documents(db_copy) if governance.is_hidden(d)]
         removed_rowids = _strip_documents(db_copy, hidden)
         # Before VACUUM, so what this removes is gone from the file too.
-        artifacts = artifact_store.prune_for_bundle(db_copy, hidden, artifact_store.load_blocked_hashes())
+        artifacts = artifact_store.prune_for_bundle(db_copy, artifact_store.load_blocked_hashes())
         conn = sqlite3.connect(db_copy)
         conn.execute("VACUUM")
         conn.close()
@@ -489,7 +490,7 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
         blocked = [d["document_id"] for d in docs
                    if d.get("content_hash") and content_policy.is_hash_blocked(d["content_hash"])]
         removed_rowids = _strip_documents(db_tmp, blocked)
-        artifacts = artifact_store.prune_for_bundle(db_tmp, blocked, artifact_store.load_blocked_hashes())
+        artifacts = artifact_store.prune_for_bundle(db_tmp, artifact_store.load_blocked_hashes())
         kept = {d["document_id"]: d for d in docs if d["document_id"] not in blocked}
         conn = sqlite3.connect(db_tmp)
         try:
