@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 import config
 from models.schemas import ChatMessage, ChatResponse, ChatSource
-from services import artifact_jobs, artifact_store
+from services import artifact_jobs, artifact_store, artifacts as artifacts_service
 from services import collection_bundle as cb
 from services.app_database import SQLiteBackend, app_db
 from services.artifact_store import ArtifactStore
@@ -414,6 +414,117 @@ def test_store_refuses_unknown_fields(tmp_path):
     store = ArtifactStore(tmp_path / "m.db")
     with pytest.raises(ValueError):
         store.update("abcabcabcabc", nonsense=1)
+
+
+# ── podcast scripts ─────────────────────────────────────────────────────────
+
+_SCRIPT = (
+    "**Alex:** Today, sourdough starters. Feed yours daily [sourdough.txt].\n\n"
+    "**Sam:** Why daily?\n\n"
+    "**Alex:** The yeast runs out of food [sourdough.txt p.2].\n\n"
+    "**Sam:** That is all we have time for.\n\n"
+    "[END OF SCRIPT]"
+)
+
+
+def test_the_podcast_script_is_offered_and_asks_for_the_parseable_form(client):
+    types = {t["type"]: t for t in client.get("/api/artifacts/types").json()["types"]}
+    assert types["podcast_script"]["label"] == "Podcast script"
+    message = artifacts_service.build_artifact_message("podcast_script", focus="yeast")
+    for required in ("**Alex:**", "**Sam:**", "[END OF SCRIPT]", "Focus specifically on: yeast", "Grounding rules"):
+        assert required in message
+
+
+def test_a_finished_script_is_saved_without_its_end_marker(client):
+    client.state["chat"] = lambda *a, **k: _answer(_source("doc-1"), content=_SCRIPT)
+    artifact = _generate(client, artifact_type="podcast_script")
+    detail = client.get(f"/api/artifacts/{artifact['id']}?collection_id=c1").json()
+    assert detail["status"] == "done"
+    assert detail["title"] == "Podcast script"
+    assert detail["content"] == _SCRIPT.replace("\n\n[END OF SCRIPT]", "")
+
+
+def test_a_cut_off_script_fails_rather_than_saving_half_an_episode(client):
+    cut_off = _SCRIPT.replace("[END OF SCRIPT]", "**Alex:** And the next thing to know is")
+    client.state["chat"] = lambda *a, **k: _answer(_source("doc-1"), content=cut_off)
+    artifact = _generate(client, artifact_type="podcast_script")
+    detail = client.get(f"/api/artifacts/{artifact['id']}?collection_id=c1").json()
+    assert detail["status"] == "failed"
+    assert "cut off" in detail["error"]
+    assert detail["content"] == ""
+
+
+@pytest.mark.parametrize("content", [
+    "A plain summary of the sources, with no hosts at all.\n\n[END OF SCRIPT]",
+    "**Alex:** I will do all the talking.\n\n**Alex:** Still me.\n\n[END OF SCRIPT]",
+    "**Alex:** Hello.\n\n**Sam:** Bye.\n\n[END OF SCRIPT]",  # not an episode
+])
+def test_anything_but_a_two_host_conversation_is_refused(content):
+    with pytest.raises(ValueError, match="two-host"):
+        artifacts_service.finish_content("podcast_script", content)
+
+
+def test_script_formatting_slips_are_tidied():
+    tidy = artifacts_service.finish_content("podcast_script", """Here is your script:
+
+# Episode one
+
+Alex: Welcome back.
+It is good to be here.
+
+---
+
+**Sam**: Thanks. [a.txt]
+
+__Alex__: Next.
+
+**Sam:** Goodbye. **[END OF SCRIPT]**
+Anything after the end goes too.
+""")
+    assert tidy == ("**Alex:** Welcome back. It is good to be here.\n\n**Sam:** Thanks. [a.txt]\n\n"
+                    "**Alex:** Next.\n\n**Sam:** Goodbye.")
+
+
+@pytest.mark.parametrize("ending", [
+    "[END OF SCRIPT]", "**[END OF SCRIPT]**", "**END OF SCRIPT**", "END OF SCRIPT", "[end of script]", "(End of script.)",
+])
+def test_the_ways_models_write_the_end_marker_all_count(ending):
+    finished = artifacts_service.finish_content("podcast_script", _SCRIPT.replace("[END OF SCRIPT]", ending))
+    assert finished.endswith("**Sam:** That is all we have time for.")
+
+
+def test_a_host_mentioning_the_end_of_the_script_does_not_end_the_episode():
+    spoken = "**Alex:** We have reached the end of script review.\n\n" + _SCRIPT
+    assert artifacts_service.finish_content("podcast_script", spoken).startswith("**Alex:** We have reached")
+    with pytest.raises(ValueError, match="cut off"):
+        artifacts_service.finish_content("podcast_script", _SCRIPT.replace("[END OF SCRIPT]", "") +
+                                         "**Alex:** And that is the end of script")
+
+
+def test_an_empty_script_says_the_model_returned_nothing(client):
+    # What a reasoning model gives when its thinking uses up the whole limit.
+    client.state["chat"] = lambda *a, **k: _answer(_source("doc-1"), content="")
+    artifact = _generate(client, artifact_type="podcast_script")
+    detail = client.get(f"/api/artifacts/{artifact['id']}?collection_id=c1").json()
+    assert detail["status"] == "failed"
+    assert detail["error"] == artifact_jobs.EMPTY_REASON
+
+
+def test_a_script_gets_more_room_than_a_report(client):
+    client.state["chat"] = lambda *a, **k: _answer(_source("doc-1"), content=_SCRIPT)
+    _generate(client, artifact_type="podcast_script")
+    assert client.state["seen"][-1].max_output_tokens == 8000
+    _generate(client)
+    assert client.state["seen"][-1].max_output_tokens is None
+
+
+def test_generating_again_does_not_repeat_a_cached_answer(client):
+    _generate(client)
+    assert client.state["seen"][-1].use_cache is False
+
+
+def test_other_artifact_types_are_saved_as_written():
+    assert artifacts_service.finish_content("faq", "  **Q?** A.\n") == "  **Q?** A.\n"
 
 
 # ── bundles ─────────────────────────────────────────────────────────────────

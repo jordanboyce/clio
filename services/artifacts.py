@@ -14,7 +14,8 @@ services/artifact_store.py for how the results are kept.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+import re
+from typing import Dict, List, Optional, Tuple
 
 # Appended to every artifact instruction so generations stay grounded and
 # citable regardless of type. The chat loop already returns a structured
@@ -33,6 +34,16 @@ _CITATION_CONTRACT = (
 
 
 MAX_TITLE_FOCUS_CHARS = 120
+
+PODCAST_HOSTS = ("Alex", "Sam")
+SCRIPT_END = "[END OF SCRIPT]"
+# Bracketed anywhere, or bare on a line of its own: a host saying "the end of
+# the script" in passing must not end the episode.
+_SCRIPT_END_PATTERN = re.compile(r"\[\s*end of script\s*\]|^[*_\s(]*end of script[*_\s).]*$", re.IGNORECASE)
+_MIN_SCRIPT_TURNS = 4
+# Room for the script plus a reasoning model's thinking, which counts against
+# the same limit: a 300-word script took one model 1,800 tokens.
+_OUTPUT_TOKENS = {"podcast_script": 8000}
 
 ARTIFACT_TYPES: Dict[str, Dict[str, str]] = {
     "summary": {
@@ -89,6 +100,30 @@ ARTIFACT_TYPES: Dict[str, Dict[str, str]] = {
             "without answers). Aim to help someone learn the material thoroughly."
         ),
     },
+    "podcast_script": {
+        "label": "Podcast script",
+        "description": "Two hosts talk through the sources, with citations. About eight minutes read aloud.",
+        "instruction": (
+            f"Write the script of a podcast episode in which two hosts, {PODCAST_HOSTS[0]} and "
+            f"{PODCAST_HOSTS[1]}, talk through what this collection says, for a listener who has "
+            f"not read it. {PODCAST_HOSTS[0]} explains; {PODCAST_HOSTS[1]} asks what a curious "
+            "listener would ask and draws out why it matters. Search the collection on each major "
+            "theme before writing, so the episode covers it rather than the first passage found. "
+            "Write 1,000 to 1,200 words: about eight minutes read aloud.\n\n"
+            "Format, exactly:\n"
+            f"- Each turn is one paragraph starting with **{PODCAST_HOSTS[0]}:** or "
+            f"**{PODCAST_HOSTS[1]}:**, with a blank line between turns. Keep turns to one to four "
+            "spoken sentences.\n"
+            "- Write only what is said aloud: no title, headings, lists, tables, sound effects or "
+            "stage directions.\n"
+            "- Citations are for the written transcript and are not read aloud, so the hosts never "
+            "mention them.\n"
+            "- The hosts are not real people. Give them no personal stories, and no facts or "
+            "figures the sources do not contain. When the sources do not cover something, a host "
+            "says so.\n"
+            f"- After the last turn, write {SCRIPT_END} alone on its own line."
+        ),
+    },
 }
 
 
@@ -113,6 +148,59 @@ def artifact_title(artifact_type: str, focus: Optional[str] = None) -> str:
     if len(focus_line) > MAX_TITLE_FOCUS_CHARS:
         focus_line = focus_line[:MAX_TITLE_FOCUS_CHARS].rstrip() + "…"
     return f"{label}: {focus_line}"
+
+
+def _script_turns(content: str) -> Tuple[List[List[str]], bool]:
+    """The [host, words] turns of a script, and whether it reached its end.
+
+    Tolerates what models commonly do to the format: a preamble, headings and
+    rules are dropped, labels are normalised, and a loose line continues the
+    turn before it. A cut-off answer is not something to tolerate.
+    """
+    hosts = "|".join(PODCAST_HOSTS)
+    label = re.compile(rf"^[*_\s]*({hosts})[*_\s]*:[*_\s]*(.*)$", re.IGNORECASE)
+    turns: List[List[str]] = []
+    for raw in content.splitlines():
+        end = _SCRIPT_END_PATTERN.search(raw)
+        # A marker wrapped in bold leaves its opening ** on this side.
+        line = raw[:end.start()].rstrip("*_ \t").strip() if end else raw.strip()
+        match = label.match(line)
+        if match:
+            turns.append([match.group(1).capitalize(), match.group(2).strip()])
+        elif turns and line and not line.startswith("#") and line.strip("-*_ "):
+            turns[-1][1] = f"{turns[-1][1]} {line}".strip()
+        if end:
+            return turns, True
+    return turns, False
+
+
+def _finish_script(content: str) -> str:
+    """A script fit to read and later voice, or a reason it is not."""
+    if not content.strip():
+        return ""  # the job has its own way of saying the model returned nothing
+    turns, ended = _script_turns(content)
+    turns = [turn for turn in turns if turn[1]]
+    if len(turns) < _MIN_SCRIPT_TURNS or len({host for host, _ in turns}) < len(PODCAST_HOSTS):
+        raise ValueError("The model did not write a two-host script. Try again, or try another model.")
+    if not ended:
+        raise ValueError("The script was cut off before its end, most likely at the model's length "
+                         "limit. Try a narrower focus, or another model.")
+    return "\n\n".join(f"**{host}:** {words}" for host, words in turns)
+
+
+_FINISHERS = {"podcast_script": _finish_script}
+
+
+def output_token_limit(artifact_type: str) -> Optional[int]:
+    """How many tokens this type needs per reply; None for the chat defaults."""
+    return _OUTPUT_TOKENS.get(artifact_type)
+
+
+def finish_content(artifact_type: str, content: str) -> str:
+    """What to save from a model's answer. Raises ValueError, with a message
+    fit to show, when the answer is not usable as this type of artifact."""
+    finish = _FINISHERS.get(artifact_type)
+    return finish(content) if finish else content
 
 
 def build_artifact_message(

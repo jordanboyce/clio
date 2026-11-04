@@ -396,6 +396,11 @@ class ChatRequest(BaseModel):
     scope: Literal["current", "all"] = Field("current", description="Collection scope: 'current' (single collection) or 'all' (search across all collections)")
     rerank: bool = Field(False, description="Rerank retrieved context chunks using AI before generating a response")
     top_k: int = Field(5, description="Number of source chunks to consider", ge=1, le=20)
+    max_output_tokens: Optional[int] = Field(
+        None, ge=256, le=16000,
+        description="Most tokens the model may use on one reply, reasoning included on models "
+                    "that reason. Omitted = the chat defaults.",
+    )
     use_cache: bool = Field(
         True,
         description="Serve a semantically matching cached answer when one exists; "
@@ -470,8 +475,8 @@ class ArtifactRequest(BaseModel):
     """Request body for generating a collection artifact."""
 
     # Mirrors services.artifacts.ARTIFACT_TYPES.
-    artifact_type: Literal["summary", "faq", "timeline", "briefing", "study_guide"] = Field(
-        ..., description="Artifact type: 'summary', 'faq', 'timeline', 'briefing' or 'study_guide'"
+    artifact_type: Literal["summary", "faq", "timeline", "briefing", "study_guide", "podcast_script"] = Field(
+        ..., description="Artifact type: 'summary', 'faq', 'timeline', 'briefing', 'study_guide' or 'podcast_script'"
     )
     provider: str = Field("anthropic", description="AI provider")
     # A saved artifact belongs to one collection, so it may only draw on that

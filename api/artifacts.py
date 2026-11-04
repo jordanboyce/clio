@@ -176,6 +176,9 @@ def generate_artifact(
         mode=artifact_request.mode,
         scope="current",
         rerank=False,
+        # Asking again must generate again, not repeat a saved answer.
+        use_cache=False,
+        max_output_tokens=artifacts_service.output_token_limit(artifact_request.artifact_type),
         top_k=artifact_request.top_k,
         document_ids=selected,
     )
@@ -193,7 +196,8 @@ def generate_artifact(
             raise RuntimeError("Your daily token budget ran out before this could start.")
         sources = [s.model_dump(exclude={"pdf_url", "page_url"}) for s in response.sources]
         documents = {d["document_id"]: d for d in indexer.list_documents()}
-        return {"content": response.message.content, "sources": sources,
+        content = artifacts_service.finish_content(artifact_request.artifact_type, response.message.content)
+        return {"content": content, "sources": sources,
                 "source_documents": _source_documents(selected, sources, documents)}
 
     try:

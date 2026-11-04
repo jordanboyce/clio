@@ -793,7 +793,7 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
 
             for iteration in range(max_iterations):
                 turn = provider.complete_with_tools(
-                    messages=messages, tools=tools_spec, max_tokens=4096,
+                    messages=messages, tools=tools_spec, max_tokens=chat_request.max_output_tokens or 4096,
                     model=ai_service.quality_model, system=system_text,
                 )
                 account(turn.get("usage"))
@@ -818,7 +818,8 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
                 # so the turn always ends in an answer.
                 try:
                     turn = provider.complete_with_tools(
-                        messages=messages, tools=[], max_tokens=2048, model=ai_service.quality_model,
+                        messages=messages, tools=[], max_tokens=chat_request.max_output_tokens or 2048,
+                        model=ai_service.quality_model,
                         system=system_text + "\n\nDo not call any more tools. Summarize the final answer.",
                     )
                     account(turn.get("usage"))
@@ -847,7 +848,8 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
                 return "\n\n".join(parts)
 
             def ask(extra: str) -> str:
-                result = provider.complete(prompt=compose(extra), max_tokens=2048, model=ai_service.quality_model)
+                result = provider.complete(prompt=compose(extra), max_tokens=chat_request.max_output_tokens or 2048,
+                                           model=ai_service.quality_model)
                 account(result.get("usage"))
                 return result["text"]
 
