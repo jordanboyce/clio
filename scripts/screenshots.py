@@ -9,12 +9,14 @@ Setup, once:
     pip install playwright            # the browser channel below needs no download
 
 Then, against a Clio that has a collection to show (the welcome screen's
-sample set is what the README uses, plus the two files ``--make-sources``
-writes: a two-page PDF with a bar chart on each page and a PNG diagram, so
-the page thumbnails have something to draw):
+sample set is what the README uses, plus the three files ``--make-sources``
+writes: a two-page PDF with a chart image on each page, a DOCX with a
+diagram in it, and that diagram as a PNG, so the page thumbnails and the
+extracted figures have something to show; this step needs Pillow and
+python-docx, which the project's venv has):
 
     python scripts/screenshots.py --make-sources ./shot-sources
-    # add those two files and the sample set to a collection, then:
+    # add those three files and the sample set to a collection, then:
     python scripts/screenshots.py --base http://localhost:8473 --collection <id> --out docs/screenshots
 
 The Ask shot needs a model: ``--model`` names an Ollama model reachable from
@@ -34,79 +36,150 @@ QUESTION = "Which region had the most checkouts, and does the field-team amendme
 FIND = "checkouts by region and the depot workflow"
 
 
-# ── the two extra sources ─────────────────────────────────────────────
+# ── the extra sources ─────────────────────────────────────────────────
+#
+# Hand-written so no PDF library is needed: a two-page PDF whose charts are
+# embedded raster images (the figure extractor keeps those; a chart drawn
+# with PDF operators has no picture to pull out), a DOCX with the depot
+# diagram embedded, and the diagram itself as a PNG. Pillow and python-docx
+# are in the project's venv.
 
 
-def _page_stream(title: str, lines: list[str], bars=None) -> bytes:
+def _font(size: int):
+    from PIL import ImageFont
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # Pillow < 10.1 has no scalable default
+        return ImageFont.load_default()
+
+
+def _bar_chart(title: str, bars, colours, size=(900, 560)):
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", size, "white")
+    d = ImageDraw.Draw(img)
+    d.text((30, 20), title, fill="#111", font=_font(26))
+    base, left = size[1] - 70, 80
+    d.line((left, 60, left, base), fill="#333", width=3)
+    d.line((left, base, size[0] - 40, base), fill="#333", width=3)
+    top = max(v for _, v in bars)
+    x = left + 40
+    w = (size[0] - left - 120) // len(bars) - 30
+    for (label, value), colour in zip(bars, colours):
+        h = int((base - 90) * value / top)
+        d.rectangle((x, base - h, x + w, base), fill=colour)
+        d.text((x + 6, base - h - 26), str(value), fill="#111", font=_font(20))
+        d.text((x + 6, base + 10), label, fill="#111", font=_font(20))
+        x += w + 30
+    return img
+
+
+def _jpeg(img) -> bytes:
+    import io
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=85)
+    return buf.getvalue()
+
+
+def _page_stream(title: str, lines: list[str], image_ref: str, size, caption: str) -> bytes:
+    """Title, a few lines, the picture (468 pt wide) and its caption under it."""
     parts = [f"BT /F1 20 Tf 72 720 Td ({title}) Tj ET"]
     y = 690
     for line in lines:
         parts.append(f"BT /F1 12 Tf 72 {y} Td ({line}) Tj ET")
         y -= 18
-    if bars:
-        x = 90
-        parts.append("0.2 0.2 0.2 RG 1 w 80 300 m 80 560 l S 80 300 m 520 300 l S")
-        colours = ["0.16 0.45 0.85", "0.95 0.55 0.15", "0.25 0.70 0.35", "0.75 0.25 0.55"]
-        for i, (label, value) in enumerate(bars):
-            h = value * 2.4
-            parts.append(f"{colours[i % 4]} rg {x} 300 60 {h} re f")
-            parts.append(f"0 g BT /F1 10 Tf {x} 285 Td ({label}) Tj ET")
-            parts.append(f"BT /F1 10 Tf {x + 10} {300 + h + 6} Td ({value}) Tj ET")
-            x += 100
+    w, h = 468, int(468 * size[1] / size[0])
+    top = y - 10
+    parts.append(f"q {w} 0 0 {h} 72 {top - h} cm {image_ref} Do Q")
+    parts.append(f"BT /F1 11 Tf 72 {top - h - 18} Td ({caption}) Tj ET")
     return "\n".join(parts).encode("latin-1")
 
 
-def make_sources(out: Path) -> None:
-    """A hand-written PDF (real text, drawn charts) and a PNG diagram."""
-    out.mkdir(parents=True, exist_ok=True)
-    pages = [
-        _page_stream("Regional totals 2026", [
-            "Figure 1 compares equipment checkouts by region for the first half of 2026.",
-            "North leads with 96 checkouts; West trails at 41 after the depot closure in March.",
-            "Each bar counts checkouts recorded in the register, late returns included.",
-        ], bars=[("North", 96), ("East", 72), ("South", 58), ("West", 41)]),
-        _page_stream("Late returns by quarter", [
-            "Figure 2 counts returns logged after their due date, by quarter.",
-            "Late returns fell from 18 in Q1 to 9 in Q2 once the five-day reminder started.",
-            "The field-team amendment applies from Q2 and extends those loans to ten working days.",
-            "Extensions still need approval from the operations desk before the return date.",
-        ], bars=[("Q1", 18), ("Q2", 9)]),
-    ]
+def _pdf(pages) -> bytes:
+    """pages: (stream, jpeg bytes, (width, height)) per page; one image each."""
     objs = [b"<< /Type /Catalog /Pages 2 0 R >>"]
-    kids = " ".join(f"{3 + i * 2} 0 R" for i in range(len(pages)))
-    objs.append(f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode())
-    font_num = 3 + len(pages) * 2
-    for i, stream in enumerate(pages):
-        objs.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {4 + i * 2} 0 R "
-                    f"/Resources << /Font << /F1 {font_num} 0 R >> >> >>".encode())
+    n = len(pages)
+    kids = " ".join(f"{3 + i * 3} 0 R" for i in range(n))
+    objs.append(f"<< /Type /Pages /Kids [{kids}] /Count {n} >>".encode())
+    font_num = 3 + n * 3
+    for i, (stream, jpeg, (w, h)) in enumerate(pages):
+        content_num, image_num = 4 + i * 3, 5 + i * 3
+        objs.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {content_num} 0 R "
+                    f"/Resources << /Font << /F1 {font_num} 0 R >> /XObject << /Im1 {image_num} 0 R >> >> >>".encode())
         objs.append(b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream")
+        objs.append((f"<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB "
+                     f"/BitsPerComponent 8 /Filter /DCTDecode /Length {len(jpeg)} >>\nstream\n").encode()
+                    + jpeg + b"\nendstream")
     objs.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
     pdf = bytearray(b"%PDF-1.4\n")
     offsets = []
-    for n, body in enumerate(objs, start=1):
+    for num, body in enumerate(objs, start=1):
         offsets.append(len(pdf))
-        pdf += f"{n} 0 obj\n".encode() + body + b"\nendobj\n"
+        pdf += f"{num} 0 obj\n".encode() + body + b"\nendobj\n"
     xref = len(pdf)
     pdf += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
     for off in offsets:
         pdf += f"{off:010d} 00000 n \n".encode()
     pdf += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
-    (out / "Regional totals 2026.pdf").write_bytes(pdf)
+    return bytes(pdf)
 
+
+def _diagram():
     from PIL import Image, ImageDraw
     img = Image.new("RGB", (1000, 640), "white")
     d = ImageDraw.Draw(img)
     d.rectangle((40, 40, 960, 600), outline="#333", width=4)
-    d.text((70, 70), "Depot workflow: checkout, use, return", fill="#111")
+    d.text((70, 70), "Depot workflow: checkout, use, return", fill="#111", font=_font(28))
     x = 90
     for label, colour in [("Checkout desk", "#2a74d9"), ("Field team", "#f28c28"), ("Return bin", "#3fa34d")]:
         d.rounded_rectangle((x, 250, x + 220, 380), radius=18, fill=colour)
-        d.text((x + 30, 305), label, fill="white")
+        d.text((x + 24, 300), label, fill="white", font=_font(24))
         if x + 300 < 960:
             d.line((x + 220, 315, x + 300, 315), fill="#333", width=5)
             d.polygon([(x + 300, 315), (x + 280, 303), (x + 280, 327)], fill="#333")
         x += 300
-    img.save(out / "Depot workflow.png")
+    return img
+
+
+def make_sources(out: Path) -> None:
+    """The PDF with a chart image on each page, the DOCX with the diagram in
+    it, and the diagram on its own as a PNG."""
+    out.mkdir(parents=True, exist_ok=True)
+    regions = _bar_chart("Equipment checkouts by region, first half of 2026",
+                         [("North", 96), ("East", 72), ("South", 58), ("West", 41)],
+                         ["#2a74d9", "#f28c28", "#3fa34d", "#b23a9c"])
+    quarters = _bar_chart("Late returns by quarter", [("Q1", 18), ("Q2", 9)], ["#d94a2a", "#28a0f2"])
+    pages = [
+        (_page_stream("Regional totals 2026", [
+            "The chart below compares equipment checkouts by region for the first half of 2026.",
+            "North leads with 96 checkouts; West trails at 41 after the depot closure in March.",
+            "Each bar counts checkouts recorded in the register, late returns included.",
+        ], "/Im1", regions.size, "Figure 1: Equipment checkouts by region, first half of 2026."),
+         _jpeg(regions), regions.size),
+        (_page_stream("Late returns by quarter", [
+            "The chart below counts returns logged after their due date, by quarter.",
+            "Late returns fell from 18 in Q1 to 9 in Q2 once the five-day reminder started.",
+            "The field-team amendment applies from Q2 and extends those loans to ten working days.",
+            "Extensions still need approval from the operations desk before the return date.",
+        ], "/Im1", quarters.size, "Figure 2: Late returns by quarter, 2026."),
+         _jpeg(quarters), quarters.size),
+    ]
+    (out / "Regional totals 2026.pdf").write_bytes(_pdf(pages))
+
+    diagram = _diagram()
+    diagram.save(out / "Depot workflow.png")
+
+    import docx
+    from docx.shared import Inches
+    d = docx.Document()
+    d.add_heading("Depot workflow notes", 0)
+    d.add_paragraph("Every piece of equipment moves through three stations: the checkout desk records the loan, "
+                    "the field team uses the item on site, and the return bin closes the loan when the item "
+                    "comes back. The diagram below shows the depot workflow from checkout to return.")
+    d.add_picture(str(out / "Depot workflow.png"), width=Inches(5.5))
+    d.add_paragraph("Figure 1: The depot workflow from checkout desk to return bin.")
+    d.add_paragraph("A loan that misses its return date is logged as a late return and counted in the "
+                    "quarterly totals. The operations desk reviews late returns every Monday.")
+    d.save(out / "Depot workflow notes.docx")
     print("wrote", sorted(p.name for p in out.iterdir()))
 
 

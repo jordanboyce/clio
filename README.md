@@ -17,7 +17,7 @@ default install needs no configuration at all.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/01-ask-cited-answer-dark.png">
-  <img src="docs/screenshots/01-ask-cited-answer.png" alt="Clio's Ask tab: a question about equipment checkouts answered with [Source N] citations, a strip of source chips, and the Review evidence panel showing each cited passage beside a thumbnail of the page it came from." width="100%">
+  <img src="docs/screenshots/01-ask-cited-answer.png" alt="Clio's Ask tab: a question about equipment checkouts answered with [Source N] citations, a strip of source chips, and the Review evidence panel showing each cited passage beside a thumbnail of the page it came from, with the chart embedded in that page under it." width="100%">
 </picture>
 
 Clio is named for the Muse of history: daughter of Zeus and of Mnemosyne,
@@ -345,15 +345,17 @@ disables cloud providers and model downloads entirely.
 
 The pictures follow your system theme; every one has a light and a dark
 version in [docs/screenshots](docs/screenshots). The sources are the
-fictional sample set from the welcome screen plus a two-page PDF and a
-diagram, indexed on a laptop with a local Ollama model.
+fictional sample set from the welcome screen plus a two-page PDF with a
+chart on each page, a DOCX and a diagram, indexed on a laptop with a local
+Ollama model.
 
 **Find** returns the passages that match, without a model. A PDF page or an
-image file shows a thumbnail of the page the passage came from.
+image file shows a thumbnail of the page the passage came from, and a chart
+embedded in that page appears under the passage.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/02-find-results-dark.png">
-  <img src="docs/screenshots/02-find-results.png" alt="The Find tab: a query with its matched words highlighted in each passage, and page thumbnails beside a PDF result and a PNG result." width="100%">
+  <img src="docs/screenshots/02-find-results.png" alt="The Find tab: a query with its matched words highlighted in each passage, page thumbnails beside a PDF result and a PNG result, and the bar chart embedded in the PDF page shown under its passage." width="100%">
 </picture>
 
 **Connect** hands the same collections to Claude Code, Codex, Cursor and any
