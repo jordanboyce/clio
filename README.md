@@ -15,6 +15,11 @@ whatever model you trust, hosted or on your own hardware. Nothing in the
 product depends on a cloud service, there are no accounts to create, and the
 default install needs no configuration at all.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/01-ask-cited-answer-dark.png">
+  <img src="docs/screenshots/01-ask-cited-answer.png" alt="Clio's Ask tab: a question about equipment checkouts answered with [Source N] citations, a strip of source chips, and the Review evidence panel showing each cited passage beside a thumbnail of the page it came from." width="100%">
+</picture>
+
 Clio is named for the Muse of history: daughter of Zeus and of Mnemosyne,
 memory itself, who kept the record on Mount Helicon with her eight sisters.
 Her symbols are an open scroll, a chest of books, tablets and a stylus, and
@@ -36,6 +41,7 @@ be forgotten. That is the job here too. The record remembers.
 - [If others can reach it](#if-others-can-reach-it)
 - [Where people run it](#where-people-run-it)
 - [What people do with it](#what-people-do-with-it)
+- [A look around](#a-look-around)
 - [More ways to deploy](#more-ways-to-deploy)
 - [Configuration](#configuration)
 - [API](#api)
@@ -334,6 +340,49 @@ live in the data directory on your machine; local embeddings, keyword search
 and reranking never leave it. External AI is optional: a hosted model you
 configure receives only the passages it is asked about, and `OFFLINE_MODE=1`
 disables cloud providers and model downloads entirely.
+
+## A look around
+
+The pictures follow your system theme; every one has a light and a dark
+version in [docs/screenshots](docs/screenshots). The sources are the
+fictional sample set from the welcome screen plus a two-page PDF and a
+diagram, indexed on a laptop with a local Ollama model.
+
+**Find** returns the passages that match, without a model. A PDF page or an
+image file shows a thumbnail of the page the passage came from.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/02-find-results-dark.png">
+  <img src="docs/screenshots/02-find-results.png" alt="The Find tab: a query with its matched words highlighted in each passage, and page thumbnails beside a PDF result and a PNG result." width="100%">
+</picture>
+
+**Connect** hands the same collections to Claude Code, Codex, Cursor and any
+other MCP client: a personal token per device, and the exact settings each
+client wants.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/03-connect-agents-dark.png">
+  <img src="docs/screenshots/03-connect-agents.png" alt="The Connect tab: the MCP server toggle, the personal access token form with its write and collection-scope options, and the connection details for a client." width="100%">
+</picture>
+
+<table>
+  <tr>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/05-reports-dark.png">
+        <img src="docs/screenshots/05-reports.png" alt="The Reports tab: six report types (executive summary, FAQ, timeline, briefing doc, study guide, podcast script) with optional focus and instructions.">
+      </picture>
+      <p align="center"><b>Reports</b> turn a collection into a cited document.</p>
+    </td>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/06-settings-providers-dark.png">
+        <img src="docs/screenshots/06-settings-providers.png" alt="Settings, AI Providers: Anthropic, OpenAI, Grok, Google Gemini, GitHub Models, OpenRouter, a connected local Ollama, Ollama Cloud, and an option to add your own endpoint.">
+      </picture>
+      <p align="center"><b>AI providers</b>: a cloud key, a local model, or your own endpoint.</p>
+    </td>
+  </tr>
+</table>
 
 ## More ways to deploy
 
