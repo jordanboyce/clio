@@ -37,6 +37,10 @@ fastembed>=0.7
 faiss-cpu>=1.9
 numpy>=2.1,<3
 
+# Research network analysis. Pure Python. SciPy is deliberately not added:
+# services/research/network.py avoids the NetworkX calls that need it.
+networkx>=3.7
+
 # AI providers (optional - users provide their own API keys)
 anthropic>=0.40.0
 openai>=1.0.0

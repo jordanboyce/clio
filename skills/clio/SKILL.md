@@ -129,6 +129,64 @@ enumerate from search results; they are the top few passages, not the corpus.
 - Do not upload anything the user has not told you to share. Collections are
   visible to everyone with access.
 
+## Network analysis
+
+Which papers, authors and concepts hold a research collection together, and why.
+The method is Healy's "Using Metadata to Find Paul Revere": a few structural
+measures on membership data find the brokers. That is the whole claim. A high
+score describes a position in these links, not the quality of the work.
+
+```
+GET  $CLIO_URL/api/research/network?collection_id=ID&graph=citation|authors|entities
+     &include_external=true&min_citations=2&seed=42
+POST $CLIO_URL/api/research/network?collection_id=ID
+     {"graph": "...", "document_ids": ["..."]}
+```
+
+POST limits it to a selection. `include_external` and `min_citations` only affect
+`citation`. The documents are those of `/api/research/graph`, so read access and
+quarantine apply. Results are cached until the collection or its analysis changes.
+
+Reading a response:
+
+- Say `reliability.note` first, in its own words, whenever `reliable` is false.
+  `level` is `too_small` under 50 nodes, 50 links or 30 sources (`MIN_RELIABLE_NODES`,
+  `MIN_RELIABLE_EDGES`, `MIN_RELIABLE_SOURCES` in `services/research/network.py`),
+  `fragmented` when under half the nodes are in the largest connected part, and
+  `empty` when nothing connects. `weak_groups` means modularity under 0.3. Sources
+  count separately because ten papers can yield 200 entities and are still ten papers.
+- Quote a broker's `sentence`, and cite the `bridges[].edges` behind it. Those edges
+  are the evidence; a score alone is not a finding. `definitions` says what each
+  measure means.
+- `merges`, `ambiguous` and `unparsed_authors` say what author normalisation did. A
+  false merge invents a broker, so check them before naming a person as one.
+- Before relying on a broker, compare runs: `seed=1..4`, and `min_citations` one up
+  and one down. On small collections the threshold changes the brokers far more than
+  the seed does. `scripts/network_analysis.ipynb` does this and validates the method
+  on Healy's data.
+- Key concepts come from a capitalised-phrase heuristic, so cited names and PDF-glued
+  words can appear among them. Do not present that list as a clean topic list.
+
+Pitfalls when changing this code:
+
+- NetworkX is pure Python only in part. `nx.pagerank` imports SciPy, and without SciPy
+  `nx.constraint` and `nx.effective_size` take a path that ran for minutes on a dense
+  200-node graph. The slim image has no SciPy, hence `pagerank` and `structural_holes`
+  in `network.py`; tests hold them equal to NetworkX's results.
+- Never pass tie strength as `weight` to betweenness: NetworkX reads it as a distance,
+  so the strongest ties look longest. Betweenness here counts hops.
+- Run Louvain on integer labels. A set of strings iterates differently per process, so
+  a fixed seed alone does not give the same communities.
+- Do not key a cache on `corpus_version` alone: analysis rewrites the research tables
+  without touching `documents`. Add `ResearchStore.version_token()`.
+- A reference matched before its target was quarantined keeps `matched_document_id`.
+  Pass `hidden_ids` to `build_graph`. Test it with `min_citations=1`: at the default of 2
+  a work cited once never becomes a node, so the test passes with the leak present.
+- Entity stoplists must hold the stored form, which is plural-stripped (`proceeding`,
+  `analysi`). Run them through `normalize_entity`.
+- Citation edges point citer to cited. Sort endpoints only when building the undirected
+  view, and read the weight from the original direction.
+
 ## When something is wrong
 
 | Symptom | Meaning / action |

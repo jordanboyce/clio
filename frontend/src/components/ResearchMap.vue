@@ -7,7 +7,7 @@
     <div
       v-else
       ref="frame"
-      class="research-graph @container relative flex rounded-box border border-base-300 bg-base-100 overflow-hidden h-[calc(100dvh-13rem)] min-h-[420px] select-none"
+      class="research-graph @container relative flex rounded-box border border-base-300 bg-base-100 overflow-hidden h-[calc(100dvh-22.25rem)] md:h-[calc(100dvh-18.25rem)] min-h-[420px] select-none"
     >
       <!-- Canvas area: every overlay is positioned inside it, never against the viewport -->
       <div class="relative flex-1 min-w-0">
@@ -93,8 +93,8 @@
               </template>
 
               <template v-else-if="section.id === 'groups'">
-                <div class="join w-full">
-                  <button v-for="opt in colorOptions" :key="opt.id" class="btn btn-xs join-item flex-1" :class="settings.colorBy === opt.id ? 'btn-active' : ''" @click="settings.colorBy = opt.id">{{ opt.label }}</button>
+                <div class="flex flex-wrap gap-1">
+                  <button v-for="opt in colorOptions" :key="opt.id" class="btn btn-xs" :class="settings.colorBy === opt.id ? 'btn-active' : ''" :aria-pressed="settings.colorBy === opt.id" @click="settings.colorBy = opt.id">{{ opt.label }}</button>
                 </div>
                 <select v-if="settings.colorBy === 'relevance'" v-model="relevanceQuestion" class="select select-bordered select-xs w-full" aria-label="Question the sources were screened against">
                   <option v-if="!questions.length" value="">No screening yet — use Screen in the Library</option>
@@ -105,6 +105,12 @@
 
               <template v-else-if="section.id === 'display'">
                 <label class="setting-row"><span>Arrows</span><input v-model="settings.arrows" type="checkbox" class="toggle toggle-xs" /></label>
+                <div class="setting-slider">
+                  <span>Size by</span>
+                  <div class="flex flex-wrap gap-1">
+                    <button v-for="opt in SIZE_OPTIONS" :key="opt.id" class="btn btn-xs" :class="settings.sizeBy === opt.id ? 'btn-active' : ''" :aria-pressed="settings.sizeBy === opt.id" @click="settings.sizeBy = opt.id">{{ opt.label }}</button>
+                  </div>
+                </div>
                 <div v-for="key in ['textFade', 'nodeSize', 'linkThickness']" :key="key" class="setting-slider">
                   <span>{{ sliderLabels[key] }}</span>
                   <input v-model.number="settings[key]" type="range" class="range range-xs" v-bind="SLIDERS[key]" :aria-label="sliderLabels[key]" />
@@ -197,7 +203,7 @@
               <ul class="space-y-0.5">
                 <li v-for="item in group.items.slice(0, group.limit)" :key="item.node.id">
                   <button class="node-row" :title="nodeTitle(item.node)" @click="focusNode(item.node.id)">
-                    <span class="legend-dot mt-1" :class="`legend-${groupOf(item.node, settings.colorBy, verdicts)}`" aria-hidden="true" />
+                    <span class="legend-dot mt-1" :class="`legend-${groupOf(item.node, settings.colorBy, verdicts, communityOf)}`" aria-hidden="true" />
                     <span class="min-w-0 flex-1 line-clamp-2" :class="isAsCited(item.node) ? 'italic text-base-content/70' : ''">{{ shortLabel(item.node, 120) }}</span>
                   </button>
                 </li>
@@ -230,6 +236,15 @@
               </button>
               <button v-else-if="!settings.showCited" class="btn btn-xs" @click="settings.showCited = true">Show cited works</button>
             </div>
+
+            <ResearchNetworkPanel
+              v-if="networks.citation"
+              section="papers"
+              :citation="networks.citation"
+              :node-by-id="nodeById"
+              @focus="focusNode"
+              @open="emit('open', $event)"
+            />
 
             <section v-if="insights.missing.length">
               <h4 class="panel-heading">Cited most, not in your collection</h4>
@@ -276,6 +291,21 @@
               </ul>
             </section>
 
+            <ResearchNetworkPanel
+              v-if="networks.authors?.key_nodes?.length"
+              section="people"
+              :authors="networks.authors"
+              @focus="focusNode"
+              @open="emit('open', $event)"
+            />
+            <ResearchNetworkPanel
+              v-if="networks.entities?.key_nodes?.length"
+              section="concepts"
+              :entities="networks.entities"
+              @focus="focusNode"
+              @open="emit('open', $event)"
+            />
+
             <p v-if="insights.orphans" class="text-xs text-base-content/60">
               {{ insights.orphans }} source{{ insights.orphans === 1 ? '' : 's' }} connect{{ insights.orphans === 1 ? 's' : '' }} to nothing here.
               <button class="link link-hover" @click="settings.showOrphans = !settings.showOrphans">{{ settings.showOrphans ? 'Hide' : 'Show' }} {{ insights.orphans === 1 ? 'it' : 'them' }}</button>
@@ -283,7 +313,16 @@
 
             <section>
               <h4 class="panel-heading">Colour</h4>
-              <ul v-if="legend.length" class="space-y-1 text-xs text-base-content/70">
+              <template v-if="settings.colorBy === 'community' && communityRows.length">
+                <ul class="space-y-1 text-xs text-base-content/70">
+                  <li v-for="item in communityRows" :key="item.group" class="flex items-start gap-2">
+                    <span class="legend-dot mt-1" :class="`legend-${item.group}`" aria-hidden="true" />
+                    <span class="min-w-0 flex-1 wrap-anywhere">{{ item.label }} <span class="tabular-nums text-base-content/50">· {{ item.size }}</span></span>
+                  </li>
+                </ul>
+                <p v-if="networks.citation?.definitions?.community" class="text-xs text-base-content/55 mt-1.5">{{ networks.citation.definitions.community }}</p>
+              </template>
+              <ul v-else-if="legend.length" class="space-y-1 text-xs text-base-content/70">
                 <li v-for="item in legend" :key="item.group" class="flex items-center gap-2">
                   <span class="legend-dot" :class="`legend-${item.group}`" aria-hidden="true" />{{ item.label }}
                 </li>
@@ -292,9 +331,10 @@
                 <div class="h-2 rounded-full legend-years" aria-hidden="true" />
                 <div class="flex justify-between tabular-nums"><span>{{ years.min }}</span><span>{{ years.max }}</span></div>
               </div>
+              <p v-else-if="settings.colorBy === 'community'" class="text-xs text-base-content/55">Groups are not available for this map.</p>
               <p v-else class="text-xs text-base-content/55">All dots share one colour.</p>
               <p v-if="settings.colorBy === 'relevance' && relevanceQuestion" class="text-xs text-base-content/55 mt-1">Screened for “{{ relevanceQuestion }}”</p>
-              <p class="text-xs text-base-content/50 mt-2">Bigger dots have more links. Italic titles are references as printed, not verified titles.</p>
+              <p class="text-xs text-base-content/50 mt-2">{{ sizeCaption }} Italic titles are references as printed, not verified titles.</p>
             </section>
           </div>
         </template>
@@ -312,10 +352,11 @@ import {
   Search, Settings2, X,
 } from 'lucide-vue-next'
 import {
-  DEFAULT_SETTINGS, RELEVANCE_LEGEND, SLIDERS, TYPE_LEGEND, connections, groupOf, isAsCited, labelAlpha, labelRank,
-  loadSettings, mapInsights, matchesQuery, neighborIds, nodeRadius, placeLabels, saveSettings, shortLabel, visibleGraph,
-  wrapLabel, yearRange, yearStrength,
+  DEFAULT_SETTINGS, RELEVANCE_LEGEND, SIZE_OPTIONS, SLIDERS, TYPE_LEGEND, communityLegend, connections,
+  groupOf, isAsCited, labelAlpha, labelRank, loadSettings, mapInsights, matchesQuery, metricIndex, metricRadius,
+  neighborIds, nodeRadius, placeLabels, saveSettings, shortLabel, visibleGraph, wrapLabel, yearRange, yearStrength,
 } from '../utils/citationGraph.js'
+import ResearchNetworkPanel from './ResearchNetworkPanel.vue'
 import { researchApi, authorsShort, abstractLabel, VERDICTS } from '../utils/researchApi.js'
 import { useUiStore } from '../stores/uiStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
@@ -345,7 +386,8 @@ const sections = [
 ]
 const open = reactive({ filters: true, groups: true, display: false, forces: false })
 const colorOptions = [
-  { id: 'type', label: 'Type' }, { id: 'relevance', label: 'Relevance' }, { id: 'year', label: 'Year' }, { id: 'none', label: 'None' },
+  { id: 'type', label: 'Type' }, { id: 'relevance', label: 'Relevance' }, { id: 'year', label: 'Year' },
+  { id: 'community', label: 'Community' }, { id: 'none', label: 'None' },
 ]
 const sliderLabels = {
   textFade: 'Titles appear when zoomed in to', nodeSize: 'Dot size', linkThickness: 'Line thickness',
@@ -366,14 +408,45 @@ const host = ref(null)
 
 // ── data ────────────────────────────────────────────────────────────────
 
-async function load() {
+// The network measures (key papers, people, concepts, communities). They are
+// extra: if a call fails the map still works and the panel simply has no data.
+const NO_NETWORKS = { citation: null, authors: null, entities: null }
+const networks = shallowRef(NO_NETWORKS)
+let graphSeq = 0
+let networkSeq = 0
+let networkScope = ''
+
+async function loadGraph(args) {
+  const seq = ++graphSeq
   try {
-    graph.value = await researchApi.graph(props.collectionId, {
-      includeExternal: settings.showCited, minCitations: settings.minCitations, documentIds: props.documentIds,
-    })
+    const data = await researchApi.graph(props.collectionId, args)
+    if (seq === graphSeq) graph.value = data
   } catch (err) {
-    ui.toastError(err, 'Could not load the graph')
+    if (seq === graphSeq) ui.toastError(err, 'Could not load the graph')
   }
+}
+
+// Separate from the graph, because the analysis can take far longer than the
+// map: the map never waits for it. Results of another collection or selection
+// are cleared at once rather than shown under this one.
+async function loadNetworks(args) {
+  const seq = ++networkSeq
+  const scope = `${props.collectionId}|${(props.documentIds || []).join(',')}`
+  if (scope !== networkScope) {
+    networkScope = scope
+    networks.value = NO_NETWORKS
+  }
+  const results = await Promise.allSettled(['citation', 'authors', 'entities'].map(
+    kind => researchApi.network(props.collectionId, { ...args, graph: kind })))
+  if (seq !== networkSeq) return   // a newer request has superseded this one
+  const [citation, authors, entities] = results.map(r => (r.status === 'fulfilled' ? r.value : null))
+  networks.value = { citation, authors, entities }
+}
+
+function load() {
+  const args = { includeExternal: settings.showCited, minCitations: settings.minCitations, documentIds: props.documentIds }
+  loadGraph(args)
+  loadNetworks(args)
 }
 watch(() => [props.collectionId, props.refreshKey, settings.showCited, settings.minCitations,
   (props.documentIds || []).join(',')], load, { immediate: true })
@@ -398,6 +471,22 @@ watch(() => [props.collectionId, props.refreshKey, relevanceQuestion.value, sett
   if (settings.colorBy === 'relevance') loadVerdicts()
 }, { immediate: true })
 watch(verdicts, () => redraw())
+
+const metrics = computed(() => metricIndex(networks.value.citation))
+const communityOf = computed(() => Object.fromEntries(
+  Object.values(metrics.value.byId).filter(r => r.community !== null && r.community !== undefined).map(r => [r.id, r.community])))
+const communityRows = computed(() => communityLegend(networks.value.citation))
+const sizeDefinition = computed(() => networks.value.citation?.definitions?.[settings.sizeBy] || '')
+const sizeCaption = computed(() => settings.sizeBy === 'citations' || !sizeDefinition.value
+  ? 'Bigger dots have more links.' : `Dot size: ${sizeDefinition.value}`)
+
+// Radius of a dot: links by default, or a network measure when chosen.
+function radiusOf(node) {
+  const size = settings.nodeSize
+  if (settings.sizeBy === 'citations') return nodeRadius(node, shown.value.degree[node.id] || 0, size)
+  const row = metrics.value.byId[node.id]
+  return metricRadius(node, row?.[settings.sizeBy], metrics.value.max[settings.sizeBy], size)
+}
 
 const nodeById = computed(() => Object.fromEntries((graph.value?.nodes || []).map(n => [n.id, n])))
 const selected = computed(() => nodeById.value[selectedId.value] || null)
@@ -464,13 +553,19 @@ function metaLine(node) {
 
 // ── colours, read from the active theme ─────────────────────────────────
 
-const colors = reactive({ content: '#888', primary: '#55f', secondary: '#c4c', info: '#3ad', base: '#fff', warning: '#fb0', success: '#2b6' })
+const colors = reactive({
+  content: '#888', primary: '#55f', secondary: '#c4c', info: '#3ad', base: '#fff', warning: '#fb0', success: '#2b6',
+  accent: '#1bb', error: '#e43', neutral: '#445',
+})
+// Community slots 0-7 take these theme colours in order.
+const COMMUNITY_COLORS = ['primary', 'secondary', 'accent', 'info', 'success', 'warning', 'error', 'neutral']
 
 function readColors() {
   const style = getComputedStyle(frame.value || document.documentElement)
   for (const [key, cssVar] of Object.entries({
     content: '--color-base-content', primary: '--color-primary', secondary: '--color-secondary',
     info: '--color-info', base: '--color-base-100', warning: '--color-warning', success: '--color-success',
+    accent: '--color-accent', error: '--color-error', neutral: '--color-neutral',
   })) {
     const value = style.getPropertyValue(cssVar).trim()
     if (value) colors[key] = value
@@ -488,7 +583,9 @@ function withAlpha(color, alpha) {
 }
 
 function fillFor(node) {
-  const group = groupOf(node, settings.colorBy, verdicts.value)
+  const group = groupOf(node, settings.colorBy, verdicts.value, communityOf.value)
+  if (group === 'community-other') return withAlpha(colors.content, 0.25)
+  if (group.startsWith('community-')) return colors[COMMUNITY_COLORS[Number(group.slice(10))]]
   if (group === 'relevant') return colors.success
   if (group === 'partial') return colors.info
   if (group === 'not_established') return colors.warning
@@ -544,15 +641,14 @@ function isDimmed(node) {
 }
 
 function drawNode(node, ctx, scale) {
-  const degree = shown.value.degree[node.id] || 0
-  const r = nodeRadius(node, degree, settings.nodeSize)
+  const r = radiusOf(node)
   const searching = Boolean(settings.search.trim())
   const isMatch = matchIds.value.has(node.id)
   ctx.globalAlpha = isDimmed(node) ? 0.14 : 1
 
   ctx.beginPath()
   ctx.arc(node.x, node.y, r, 0, 2 * Math.PI)
-  if (node.type === 'external' && !node.in_collection) {
+  if (node.type === 'external' && !node.in_collection && settings.colorBy !== 'community') {
     ctx.fillStyle = colors.base
     ctx.fill()
     ctx.lineWidth = 1.1 / scale + 0.4
@@ -585,7 +681,7 @@ function drawLabels(ctx, scale) {
     if (alpha <= 0.02) continue
     const anchor = node.id === anchorId
     const at = fg.graph2ScreenCoords(node.x, node.y)
-    const r = nodeRadius(node, shown.value.degree[node.id] || 0, settings.nodeSize) * scale
+    const r = radiusOf(node) * scale
     const m = measureLabel(ctx, node, anchor)
     items.push({ id: node.id, node, x: at.x, y: at.y + r + 3, w: m.w, h: m.h, lines: m.lines, alpha, anchor,
       force: anchor, rank: labelRank(node, rankCtx) })
@@ -617,7 +713,7 @@ function drawLabels(ctx, scale) {
 }
 
 function paintPointerArea(node, color, ctx) {
-  const r = nodeRadius(node, shown.value.degree[node.id] || 0, settings.nodeSize)
+  const r = radiusOf(node)
   ctx.fillStyle = color
   ctx.beginPath()
   ctx.arc(node.x, node.y, r + 3, 0, 2 * Math.PI)
@@ -645,8 +741,7 @@ function applyForces() {
   fg.d3Force('charge').strength(-settings.repelForce).distanceMax(600)
   fg.d3Force('link').distance(settings.linkDistance).strength(settings.linkForce)
   // Nodes never sit on top of each other.
-  fg.d3Force('collide', forceCollide(node =>
-    nodeRadius(node, shown.value.degree[node.id] || 0, settings.nodeSize) + 2))
+  fg.d3Force('collide', forceCollide(node => radiusOf(node) + 2))
   fg.d3ReheatSimulation()
 }
 
@@ -732,9 +827,14 @@ function init() {
 
 watch(host, (el) => { if (el) nextTick(init) })
 watch(shown, () => { setData(); if (fg) { fitPending = true; fg.d3ReheatSimulation() } })
-watch(() => [settings.centerForce, settings.repelForce, settings.linkForce, settings.linkDistance, settings.nodeSize], applyForces)
+watch(() => [settings.centerForce, settings.repelForce, settings.linkForce, settings.linkDistance, settings.nodeSize, settings.sizeBy], applyForces)
+watch(networks, () => {
+  // Dot sizes only move, and the layout only needs reheating, if they depend on it.
+  if (settings.sizeBy !== 'citations') applyForces()
+  redraw()
+})
 watch(() => [hoveredId.value, selectedId.value, settings.search, settings.colorBy, settings.arrows,
-  settings.textFade, settings.nodeSize, settings.linkThickness, matchCursor.value], redraw)
+  settings.textFade, settings.nodeSize, settings.sizeBy, settings.linkThickness, matchCursor.value], redraw)
 watch(settings, () => saveSettings(settings), { deep: true })
 watch(localOf, () => nextTick(() => fit()))
 
@@ -813,5 +913,14 @@ async function downloadExternal(node) {
 .legend-not_established { background: var(--color-warning); }
 .legend-not_relevant { background: color-mix(in oklch, var(--color-base-content) 25%, transparent); }
 .legend-unscreened { background: color-mix(in oklch, var(--color-base-content) 50%, transparent); }
+.legend-community-0 { background: var(--color-primary); }
+.legend-community-1 { background: var(--color-secondary); }
+.legend-community-2 { background: var(--color-accent); }
+.legend-community-3 { background: var(--color-info); }
+.legend-community-4 { background: var(--color-success); }
+.legend-community-5 { background: var(--color-warning); }
+.legend-community-6 { background: var(--color-error); }
+.legend-community-7 { background: var(--color-neutral); }
+.legend-community-other { background: color-mix(in oklch, var(--color-base-content) 25%, transparent); }
 .legend-years { background: linear-gradient(to right, color-mix(in oklch, var(--color-primary) 30%, transparent), var(--color-primary)); }
 </style>
