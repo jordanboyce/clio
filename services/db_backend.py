@@ -5,8 +5,27 @@ This allows the application to switch database backends via configuration.
 """
 
 import json
+import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List
+
+from services import secret_box
+
+logger = logging.getLogger(__name__)
+
+
+class DatabaseBusy(Exception):
+    """No database connection came free in time. Becomes a 503 with Retry-After."""
+
+
+def _decode_config(key: str, stored: str) -> Any:
+    """A stored config value as the caller expects it: opened, then parsed."""
+    if key in secret_box.SECRET_CONFIG_FIELDS:
+        stored = secret_box.unseal(stored)
+    try:
+        return json.loads(stored)
+    except json.JSONDecodeError:
+        return stored
 
 
 class DatabaseBackend(ABC):
@@ -14,21 +33,57 @@ class DatabaseBackend(ABC):
 
     # ── Configuration ────────────────────────────────────────
 
-    @abstractmethod
+    # Parsing and encryption are shared; each backend only moves strings.
     def get_config(self, key: str, default: Any = None) -> Any:
-        ...
+        stored = self._read_config(key)
+        return default if stored is None else _decode_config(key, stored)
 
-    @abstractmethod
     def set_config(self, key: str, value: Any):
+        value_str = json.dumps(value) if not isinstance(value, str) else value
+        if key in secret_box.SECRET_CONFIG_FIELDS:
+            value_str = secret_box.seal(value_str)
+        self._write_config(key, value_str)
+        # The name only: a value here can be a credential.
+        logger.info(f"Config updated: {key}")
+
+    def get_all_config(self) -> Dict[str, Any]:
+        return {key: _decode_config(key, stored) for key, stored in self._read_all_config().items()}
+
+    @abstractmethod
+    def _read_config(self, key: str) -> Optional[str]:
         ...
 
     @abstractmethod
-    def get_all_config(self) -> Dict[str, Any]:
+    def _write_config(self, key: str, value: str):
+        ...
+
+    @abstractmethod
+    def _read_all_config(self) -> Dict[str, str]:
         ...
 
     @abstractmethod
     def delete_config(self, key: str):
         ...
+
+    def seal_stored_secrets(self) -> int:
+        """Encrypt credentials stored before encryption existed. Safe to repeat.
+
+        Runs once at startup. Returns how many values it sealed.
+        """
+        sealed = 0
+        for key, stored in self._read_all_config().items():
+            if key in secret_box.SECRET_CONFIG_FIELDS and stored and not secret_box.is_sealed(stored):
+                self._write_config(key, secret_box.seal(stored))
+                sealed += 1
+        for key, stored in self.get_all_user_preferences().items():
+            if key.startswith("agent_api_key_") and isinstance(stored, str) and stored and not secret_box.is_sealed(stored):
+                self.set_user_preference(key, secret_box.seal(stored))
+                sealed += 1
+        return sealed
+
+    def pool_stats(self) -> Optional[Dict[str, int]]:
+        """Connection pool state for /metrics, or None for a backend with no pool."""
+        return None
 
     # ── Users ────────────────────────────────────────────────
 
@@ -428,13 +483,13 @@ class DatabaseBackend(ABC):
 
     # ── Agent API Keys ───────────────────────────────────────
 
-    # Agent keys are plain user preferences, so these are concrete and shared;
-    # only the delete (raw SQL) differs per backend.
+    # Agent keys are user preferences sealed by services/secret_box.py, so these
+    # are concrete and shared; only the delete (raw SQL) differs per backend.
     def set_agent_api_key(self, provider: str, api_key: str):
-        self.set_user_preference(f"agent_api_key_{provider}", api_key)
+        self.set_user_preference(f"agent_api_key_{provider}", secret_box.seal(api_key))
 
     def get_agent_api_key(self, provider: str) -> Optional[str]:
-        return self.get_user_preference(f"agent_api_key_{provider}")
+        return secret_box.unseal(self.get_user_preference(f"agent_api_key_{provider}"))
 
     @abstractmethod
     def delete_agent_api_key(self, provider: str):

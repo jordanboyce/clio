@@ -6,6 +6,8 @@ Requires psycopg2-binary.
 
 import json
 import logging
+import selectors
+import threading
 import uuid
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
@@ -15,7 +17,7 @@ import psycopg2.extras
 from psycopg2.pool import ThreadedConnectionPool
 
 from config import settings
-from services.db_backend import DatabaseBackend
+from services.db_backend import DatabaseBackend, DatabaseBusy
 from services import provenance
 
 logger = logging.getLogger(__name__)
@@ -27,16 +29,85 @@ from services.db_helpers import _get_document_count_from_metadata, _get_storage_
 class PostgresBackend(DatabaseBackend):
     """Application database backed by PostgreSQL."""
 
-    def __init__(self, dsn: str, min_conn: int = 2, max_conn: int = 10):
+    def __init__(self, dsn: str, max_conn: int = 20, wait_timeout: float = 10.0):
         self.dsn = dsn
-        self.pool = ThreadedConnectionPool(min_conn, max_conn, dsn)
+        self.max_conn = max_conn
+        self.wait_timeout = wait_timeout
+        self.pool = ThreadedConnectionPool(1, max_conn, dsn)
+        # The pool closes a returned connection once it holds minconn idle ones.
+        # Left low, a busy server reconnects and re-authenticates on nearly every
+        # call: 1,280 calls from 64 threads took 13 s with minconn=4, against
+        # 1.7 s with this. Connections open as needed and then stay.
+        self.pool.minconn = max_conn
+        # ThreadedConnectionPool raises the moment it is full instead of
+        # waiting, and the app runs far more worker threads than connections
+        # (WORKER_THREADS), so a burst of ordinary traffic would have failed
+        # with PoolError. Callers queue on this semaphore instead. Every method
+        # here takes one connection and calls no other method while holding it,
+        # so a waiter is always waiting on someone who will finish.
+        self._slots = threading.BoundedSemaphore(max_conn)
+        self._stats_lock = threading.Lock()
+        self._in_use = 0
+        self._waits = 0
+        self._timeouts = 0
         self._init_db()
 
     def _conn(self):
-        return self.pool.getconn()
+        if not self._slots.acquire(blocking=False):
+            with self._stats_lock:
+                self._waits += 1
+            if not self._slots.acquire(timeout=self.wait_timeout):
+                with self._stats_lock:
+                    self._timeouts += 1
+                raise DatabaseBusy(
+                    f"All {self.max_conn} database connections stayed busy for "
+                    f"{self.wait_timeout:g}s."
+                )
+        try:
+            conn = self._live_connection()
+        except Exception:
+            self._slots.release()
+            raise
+        with self._stats_lock:
+            self._in_use += 1
+        return conn
+
+    def _live_connection(self):
+        """A connection from the pool that has not died while it sat idle.
+
+        After a Postgres restart or failover every idle connection is dead, and
+        without this check each would fail one caller's request on its way out
+        of the pool. An idle connection has nothing to read until the server
+        says goodbye, so a readable socket gives it away without the round trip
+        a test query would add to every call.
+        """
+        while True:
+            conn = self.pool.getconn()
+            if not conn.closed:
+                with selectors.DefaultSelector() as selector:
+                    selector.register(conn, selectors.EVENT_READ)
+                    if not selector.select(timeout=0):
+                        return conn
+            # Discarded, so each pass leaves one fewer dead connection and the
+            # pool opens a new one once it has run out of them.
+            self.pool.putconn(conn, close=True)
 
     def _put(self, conn):
-        self.pool.putconn(conn)
+        try:
+            self.pool.putconn(conn)
+        finally:
+            with self._stats_lock:
+                self._in_use -= 1
+            self._slots.release()
+
+    def pool_stats(self) -> Dict[str, int]:
+        with self._stats_lock:
+            return {
+                "size": self.max_conn,
+                "in_use": self._in_use,
+                "waits": self._waits,
+                "timeouts": self._timeouts,
+            }
 
     # ── Schema ───────────────────────────────────────────────
 
@@ -319,23 +390,17 @@ class PostgresBackend(DatabaseBackend):
 
     # ── Configuration ────────────────────────────────────────
 
-    def get_config(self, key: str, default: Any = None) -> Any:
+    def _read_config(self, key: str) -> Optional[str]:
         conn = self._conn()
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT value FROM config WHERE key = %s", (key,))
                 row = cur.fetchone()
-                if row:
-                    try:
-                        return json.loads(row[0])
-                    except json.JSONDecodeError:
-                        return row[0]
-                return default
+                return row[0] if row else None
         finally:
             self._put(conn)
 
-    def set_config(self, key: str, value: Any):
-        value_str = json.dumps(value) if not isinstance(value, str) else value
+    def _write_config(self, key: str, value: str):
         ts = datetime.utcnow().isoformat()
         conn = self._conn()
         try:
@@ -343,24 +408,18 @@ class PostgresBackend(DatabaseBackend):
                 cur.execute(
                     """INSERT INTO config (key, value, updated_at) VALUES (%s, %s, %s)
                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at""",
-                    (key, value_str, ts)
+                    (key, value, ts)
                 )
             conn.commit()
         finally:
             self._put(conn)
 
-    def get_all_config(self) -> Dict[str, Any]:
+    def _read_all_config(self) -> Dict[str, str]:
         conn = self._conn()
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT key, value FROM config")
-                config = {}
-                for key, value in cur.fetchall():
-                    try:
-                        config[key] = json.loads(value)
-                    except json.JSONDecodeError:
-                        config[key] = value
-                return config
+                return dict(cur.fetchall())
         finally:
             self._put(conn)
 
@@ -437,19 +496,28 @@ class PostgresBackend(DatabaseBackend):
         finally:
             self._put(conn)
 
+    @staticmethod
+    def _with_collection_counts(collection: Dict[str, Any]) -> Dict[str, Any]:
+        """Add what lives in the collection's own metadata.db.
+
+        Called after the database connection is back in the pool: this opens
+        SQLite files, one or two per collection, and a long collection list
+        must not hold a Postgres connection while it does.
+        """
+        collection['published'] = bool(collection.get('published'))
+        collection['document_count'] = _get_document_count_from_metadata(collection['id'])
+        collection['storage_bytes'] = _get_storage_bytes_from_metadata(collection['id'])
+        return collection
+
     def get_collection(self, collection_id: str) -> Optional[Dict[str, Any]]:
         conn = self._conn()
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM collections WHERE id = %s", (collection_id,))
                 coll = self._fetchone_dict(cur)
-                if coll:
-                    coll['published'] = bool(coll.get('published'))
-                    coll['document_count'] = _get_document_count_from_metadata(collection_id)
-                    coll['storage_bytes'] = _get_storage_bytes_from_metadata(collection_id)
-                return coll
         finally:
             self._put(conn)
+        return self._with_collection_counts(coll) if coll else coll
 
     def get_all_collections(self, owner_id: Optional[str] = None) -> List[Dict[str, Any]]:
         conn = self._conn()
@@ -460,13 +528,9 @@ class PostgresBackend(DatabaseBackend):
                 else:
                     cur.execute("SELECT * FROM collections ORDER BY created_at ASC")
                 colls = self._fetchall_dict(cur)
-                for c in colls:
-                    c['published'] = bool(c.get('published'))
-                    c['document_count'] = _get_document_count_from_metadata(c['id'])
-                    c['storage_bytes'] = _get_storage_bytes_from_metadata(c['id'])
-                return colls
         finally:
             self._put(conn)
+        return [self._with_collection_counts(c) for c in colls]
 
     def update_collection(self, collection_id: str, name=None, description=None, color=None,
                           chunk_size=None, chunk_overlap=None, embedding_model=None,
@@ -699,14 +763,9 @@ class PostgresBackend(DatabaseBackend):
                     (user_id,)
                 )
                 results = self._fetchall_dict(cur)
-                for c in results:
-                    c['published'] = bool(c.get('published'))
-                    c['document_count'] = _get_document_count_from_metadata(c['id'])
-                    c['storage_bytes'] = _get_storage_bytes_from_metadata(c['id'])
-                    c['shared'] = True
-                return results
         finally:
             self._put(conn)
+        return [{**self._with_collection_counts(c), 'shared': True} for c in results]
 
     def revoke_share(self, share_id: str):
         conn = self._conn()

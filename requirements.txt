@@ -58,3 +58,6 @@ cryptography>=42.0.0
 # mcp 2.x renamed FastMCP -> MCPServer; migrate deliberately before unpinning
 mcp>=1.9.4,<2
 
+# Prometheus metrics (GET /metrics, off unless METRICS_ENABLED is set)
+prometheus-client>=0.20.0
+

@@ -606,6 +606,9 @@ What protects the deployment when many people share it:
 | `RERANK_QUEUE_TIMEOUT_SECONDS` | 1 | A search that waits longer than this for a reranking slot answers in retrieval order and says so (`retrieval.reranked: false`) |
 | `CHAT_DAILY_TOKEN_BUDGET` | 0 (off) | Provider tokens one identity may spend on chat per UTC day. Cached answers stay free once capped. |
 | `MAX_CONCURRENT_INDEX_JOBS` | 2 | Indexing jobs across all collections |
+| `INDEX_IDLE_UNLOAD_SECONDS` | 1800 | Release a collection's vectors from memory after this long without a search or write; the next use reads them back (about a second per 400,000 chunks). `0` keeps every opened collection in memory until restart |
+| `POSTGRES_POOL_MAX` | 20 | With `DB_BACKEND=postgresql`, the most database connections this process opens. Keep it below the server's `max_connections` |
+| `POSTGRES_POOL_TIMEOUT_SECONDS` | 10 | How long a call waits for a free database connection before a **503** with `Retry-After` |
 | `COLLECTION_STORAGE_LIMIT_BYTES` | 5 GiB | Most a single collection may hold, as the sum of its source files. Every ingest path (upload, staged upload, local/repo index jobs, `write_document` over MCP) refuses a file that would cross it with a **413** carrying the numbers; the Sources panel and the collections overview show usage. `0` = unlimited. |
 | `SEARCH_HISTORY_RETENTION_DAYS` | 30 | Search log (stores result snippets) |
 | `USAGE_RETENTION_DAYS` | 180 | Per-turn chat usage rows |
@@ -618,6 +621,36 @@ set `FORWARDED_ALLOW_IPS` to the proxy (see shape **C**). A
 `ADMIN_EMAILS` set, the Admin tab shows per-person spend, live process
 stats, and the rate-limit counters; the same data is at
 `/api/admin/usage` and `/api/admin/stats`.
+
+### Monitoring
+
+`METRICS_ENABLED=true` serves Prometheus metrics at `GET /metrics`. It sits
+behind the app's normal authentication; `METRICS_TOKEN` adds a bearer token that
+opens `/metrics` and nothing else, so a scraper does not need a real credential:
+
+```yaml
+scrape_configs:
+  - job_name: clio
+    authorization: { credentials: <METRICS_TOKEN> }
+    static_configs: [{ targets: ["clio.example.org:8473"] }]
+```
+
+Metrics carry no identities, queries or document names, and routes are labelled
+by template (`/api/collections/{collection_id}/stats`), never by the raw path.
+The ones that tell you a deployment is reaching its limit:
+
+| Metric | What to watch for |
+|---|---|
+| `clio_worker_threads_busy`, `clio_worker_threads_queued` | Busy near `clio_worker_threads`, or anything queued: every kind of call is waiting. Usually the first limit you reach |
+| `clio_http_request_duration_seconds` | Rising latency per route. For a streamed chat answer this is the time to the first byte |
+| `clio_rerank_shed_total` | Rising: searches are answering in retrieval order because reranking cannot keep up |
+| `clio_index_memory_bytes`, `clio_index_reloads_total` | Vector memory against the host's RAM. Reloads climbing quickly mean `INDEX_IDLE_UNLOAD_SECONDS` is too short for how the collections are used |
+| `clio_index_jobs_queued` | Indexing is falling behind what people submit |
+| `clio_db_pool_in_use`, `clio_db_pool_waits_total`, `clio_db_pool_timeouts_total` | Postgres only. Timeouts are 503s people saw: raise `POSTGRES_POOL_MAX` |
+| `clio_rate_limit_rejected_total` | People hitting their limits, by class |
+
+Numbers belong to one process and reset when it restarts, which is what
+Prometheus counters expect.
 
 ## Embedding model on first start
 
@@ -692,6 +725,26 @@ upgrade.
 The shipped `docker-compose.yml` bind-mounts `./data`; on Windows hosts, or
 wherever SQLite misbehaves on a bind mount, use a named volume and take the
 backup from a container as above, or `docker cp clio:/app/data ./copy`.
+
+### Stored credentials
+
+Team API keys (Settings → AI Providers) and the API keys saved under Settings
+are encrypted before they reach the database, whichever backend holds it.
+Credentials stored by an earlier version are encrypted at the next start.
+Nothing needs setting up, but where the key lives decides what this protects:
+
+| | Key | Protects against |
+|---|---|---|
+| **Default** | Generated at `DATA_DIR/secret.key` on first use | A database that leaves on its own: a Postgres dump or replica, a copied `app.db`. **Not** a stolen data directory or a `scripts/backup.py` archive, which hold the key too; that is what lets a restore work with nothing else to carry |
+| **Your own** | `SECRET_ENCRYPTION_KEY` (16+ characters; use `openssl rand -base64 32`), from your secret manager or the service's environment | Everything above, including the data directory and its backups. Restoring then also needs this key |
+
+Changing or losing the key does not stop the app. Stored credentials read as not
+configured, a warning is logged, and an administrator enters them again.
+
+Settings now keeps credentials out of `.env` when it saves. A key that an earlier
+version already copied there stays until you remove it: check `.env` after
+upgrading. Keys you set through the environment yourself (`AI_API_KEY`,
+`EMBEDDING_API_KEY`, ...) are yours to protect, as with any service.
 
 ## Hardened container
 
@@ -952,6 +1005,11 @@ Only needed if anyone other than you can reach the app.
       drill has been run on a scratch directory
 - [ ] Each agent has its own expiring, collection-limited token, and the
       container runs with `docker-compose.hardened.yml`
+- [ ] If provider keys are stored in the app, `SECRET_ENCRYPTION_KEY` comes from
+      your secret manager (see [Stored credentials](#stored-credentials)), and
+      `.env` holds no key an earlier version copied there
+- [ ] If you run monitoring, `METRICS_ENABLED=true` and a `METRICS_TOKEN` for the
+      scraper (see [Monitoring](#monitoring))
 
 ### Behind a firewall that blocks huggingface.co
 

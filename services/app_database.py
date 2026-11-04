@@ -484,19 +484,12 @@ class SQLiteBackend(DatabaseBackend):
 
     # ── Configuration ────────────────────────────────────────
 
-    def get_config(self, key: str, default: Any = None) -> Any:
+    def _read_config(self, key: str) -> Optional[str]:
         with sqlite_connect(self.db_path) as conn:
-            cursor = conn.execute("SELECT value FROM config WHERE key = ?", (key,))
-            row = cursor.fetchone()
-            if row:
-                try:
-                    return json.loads(row[0])
-                except json.JSONDecodeError:
-                    return row[0]
-            return default
+            row = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
+            return row[0] if row else None
 
-    def set_config(self, key: str, value: Any):
-        value_str = json.dumps(value) if not isinstance(value, str) else value
+    def _write_config(self, key: str, value: str):
         timestamp = datetime.utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
@@ -504,21 +497,13 @@ class SQLiteBackend(DatabaseBackend):
                 INSERT INTO config (key, value, updated_at) VALUES (?, ?, ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
                 """,
-                (key, value_str, timestamp)
+                (key, value, timestamp)
             )
             conn.commit()
-            logger.info(f"Config updated: {key} = {value}")
 
-    def get_all_config(self) -> Dict[str, Any]:
+    def _read_all_config(self) -> Dict[str, str]:
         with sqlite_connect(self.db_path) as conn:
-            cursor = conn.execute("SELECT key, value FROM config")
-            config = {}
-            for key, value in cursor.fetchall():
-                try:
-                    config[key] = json.loads(value)
-                except json.JSONDecodeError:
-                    config[key] = value
-            return config
+            return dict(conn.execute("SELECT key, value FROM config").fetchall())
 
     def delete_config(self, key: str):
         with sqlite_connect(self.db_path) as conn:
@@ -1500,7 +1485,11 @@ def create_app_db() -> DatabaseBackend:
     """Factory: create the appropriate database backend based on configuration."""
     if settings.db_backend == "postgresql":
         from services.db_postgres import PostgresBackend
-        return PostgresBackend(settings.postgres_url)
+        return PostgresBackend(
+            settings.postgres_url,
+            max_conn=settings.postgres_pool_max,
+            wait_timeout=settings.postgres_pool_timeout_seconds,
+        )
     return SQLiteBackend(Path(settings.data_dir) / "app.db")
 
 

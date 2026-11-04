@@ -64,3 +64,11 @@ def _restore_import_time_settings():
     """
     yield
     _config.settings = _IMPORT_TIME_SETTINGS
+
+
+@pytest.fixture(autouse=True)
+def _settings_saves_stay_out_of_the_real_env_file(tmp_path, monkeypatch):
+    """Saving settings mirrors them into ./.env, which here is the developer's own."""
+    from services.config_manager import config_manager
+
+    monkeypatch.setattr(config_manager, "env_file", tmp_path / ".env.test")

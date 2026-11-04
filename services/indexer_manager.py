@@ -6,6 +6,7 @@ Each collection has its own:
 - Settings (chunk size, overlap, embedding model)
 """
 
+import asyncio
 import logging
 import threading
 from pathlib import Path
@@ -24,6 +25,8 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+_UNLOAD_SWEEP_INTERVAL_S = 60
+
 
 class IndexerManager:
     """Manages DocumentIndexer instances for multiple collections."""
@@ -32,6 +35,7 @@ class IndexerManager:
         """Initialize the indexer manager."""
         self._indexers: Dict[str, DocumentIndexer] = {}
         self._embedding_services: Dict[str, object] = {}
+        self.index_unload_count = 0
         # get_indexer is called from request threads and background indexing
         # threads. Without this lock, two concurrent first-touches of a
         # collection each construct a VectorStore over the same directory and
@@ -297,6 +301,36 @@ class IndexerManager:
             del self._indexers[collection_id]
             logger.info(f"Closed indexer for collection '{collection_id}'")
 
+    def unload_idle_indexes(self) -> int:
+        """Release vectors no search or write has touched for a while.
+
+        Returns how many collections were released. They stay open and read
+        their vectors back on the next use; see VectorStore.unload_if_idle.
+        """
+        idle_seconds = settings.index_idle_unload_seconds
+        if idle_seconds <= 0:
+            return 0
+        released = 0
+        for collection_id, indexer in list(self._indexers.items()):
+            if indexer.vector_store.unload_if_idle(idle_seconds):
+                released += 1
+                logger.info(f"Released idle index of collection '{collection_id}' from memory")
+        self.index_unload_count += released
+        return released
+
+    def index_memory_stats(self) -> dict:
+        """What the open collections hold in memory, for /metrics."""
+        stats = [indexer.vector_store for indexer in list(self._indexers.values())]
+        memory = [store.memory_stats() for store in stats]
+        return {
+            "open": len(stats),
+            "loaded": sum(m["loaded"] for m in memory),
+            "vectors": sum(m["vectors"] for m in memory),
+            "bytes": sum(m["bytes"] for m in memory),
+            "unloads": self.index_unload_count,
+            "reloads": sum(store.reload_count for store in stats),
+        }
+
     def save_all(self):
         """Save all indexers to disk."""
         for collection_id, indexer in self._indexers.items():
@@ -374,4 +408,14 @@ class IndexerManager:
 
 # Global instance
 indexer_manager = IndexerManager()
+
+
+async def index_unload_loop() -> None:
+    """Started from main.py's lifespan; a no-op when INDEX_IDLE_UNLOAD_SECONDS is 0."""
+    while True:
+        await asyncio.sleep(_UNLOAD_SWEEP_INTERVAL_S)
+        try:
+            await asyncio.to_thread(indexer_manager.unload_idle_indexes)
+        except Exception as e:  # noqa: BLE001 - the next sweep tries again
+            logger.warning(f"Idle index sweep failed: {e}")
 

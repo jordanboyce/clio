@@ -2,6 +2,7 @@
 
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, List, Optional, Dict
 import logging
@@ -57,8 +58,15 @@ class VectorStore:
         # FAISS index: IndexIDMap2 over IndexFlatIP, keyed by the chunk's
         # SQLite row id. Stable ids mean deletes are in-place remove_ids
         # calls instead of full rebuilds, and search hits map straight to
-        # primary-key lookups.
-        self.index: Optional[faiss.Index] = None
+        # primary-key lookups. Reached through the `index` property, which reads
+        # it back from disk after unload_if_idle released it.
+        self._index: Optional[faiss.Index] = None
+        # True while memory holds vectors the file on disk does not: never
+        # released in that state, because releasing it would lose them.
+        self._dirty = False
+        self._closed = False
+        self._last_used = time.monotonic()
+        self.reload_count = 0
 
         # SQLite metadata store
         self.metadata_store = MetadataStore(self.metadata_db_path)
@@ -89,6 +97,61 @@ class VectorStore:
 
         self._load_or_create_index()
 
+    @property
+    def index(self) -> Optional[faiss.Index]:
+        """The FAISS index, read back from disk if it was released while idle."""
+        self._last_used = time.monotonic()
+        index = self._index
+        if index is None and not self._closed:
+            with self._index_lock:
+                if self._index is None and not self._closed:
+                    self._load_or_create_index()
+                    self.reload_count += 1
+                index = self._index
+        return index
+
+    @index.setter
+    def index(self, value: Optional[faiss.Index]) -> None:
+        """Replace the whole index; it counts as unsaved until the next save()."""
+        self._index = value
+        self._dirty = True
+
+    def unload_if_idle(self, idle_seconds: float) -> bool:
+        """Release the vectors from memory if nothing has used them for a while.
+
+        Only the vectors go. This object stays, along with whoever holds it, so
+        there is never a second store over the same files, which is the case
+        IndexerManager._creation_lock exists to prevent. A running job that holds
+        this store simply reads the vectors back on its next write.
+
+        Returns True when something was released.
+        """
+        if self._index is None or self._dirty or self._closed:
+            return False
+        if time.monotonic() - self._last_used < idle_seconds:
+            return False
+        # Whoever holds the lock is using the index, so this one is not idle.
+        if not self._index_lock.acquire(blocking=False):
+            return False
+        try:
+            if self._index is None or self._dirty or self._closed:
+                return False
+            # An index that was never saved has nothing on disk to return to.
+            if self._index.ntotal and not self.index_path.exists():
+                return False
+            self._index = None
+            return True
+        finally:
+            self._index_lock.release()
+
+    def memory_stats(self) -> Dict[str, int]:
+        """What this store holds in memory now. Never reads the index back."""
+        index = self._index
+        if index is None:
+            return {"loaded": 0, "vectors": 0, "bytes": 0}
+        # Each vector plus its 8-byte id; the id lookup table comes on top.
+        return {"loaded": 1, "vectors": int(index.ntotal), "bytes": int(index.ntotal) * (int(index.d) * 4 + 8)}
+
     def _rebuild_bm25(self) -> None:
         """Re-tokenize every stored chunk into the keyword index.
 
@@ -114,6 +177,7 @@ class VectorStore:
 
     def _load_or_create_index(self):
         """Load existing index from disk (migrating legacy formats) or create a new one."""
+        self._dirty = False
         if self.index_path.exists():
             logger.info("Loading existing FAISS index")
             loaded = faiss.read_index(str(self.index_path))
@@ -126,7 +190,7 @@ class VectorStore:
                     f"Discarding {loaded.d}-dim index at {self.index_path}; "
                     f"re-indexing at {self.embedding_dim} dims"
                 )
-                self.index = self._new_index()
+                self._index = self._new_index()
                 return
             if loaded.d != self.embedding_dim:
                 raise RuntimeError(
@@ -137,16 +201,16 @@ class VectorStore:
                 )
 
             if isinstance(faiss.downcast_index(loaded), faiss.IndexIDMap2):
-                self.index = loaded
+                self._index = loaded
                 self._drop_orphan_vectors()
             else:
-                self.index = self._migrate_legacy_index(loaded)
+                self._index = self._migrate_legacy_index(loaded)
 
             total_chunks = self.metadata_store.get_total_chunks()
             logger.info(f"Loaded index with {total_chunks} chunks")
         else:
             logger.info("Creating new FAISS index")
-            self.index = self._new_index()
+            self._index = self._new_index()
             logger.info("Created new index")
 
     def _drop_orphan_vectors(self) -> None:
@@ -157,12 +221,13 @@ class VectorStore:
         can resolve. They would keep taking result slots from real matches.
         Only runs when the counts already show more vectors than chunks.
         """
-        if self.index.ntotal <= self.metadata_store.get_total_chunks():
+        if self._index.ntotal <= self.metadata_store.get_total_chunks():
             return
-        vector_ids = faiss.vector_to_array(faiss.downcast_index(self.index).id_map)
+        vector_ids = faiss.vector_to_array(faiss.downcast_index(self._index).id_map)
         orphans = np.setdiff1d(vector_ids, np.asarray(self.metadata_store.get_all_rowids_ordered(), dtype=np.int64))
         if orphans.size:
-            self.index.remove_ids(orphans)
+            self._index.remove_ids(orphans)
+            self._dirty = True
             logger.warning(f"Dropped {orphans.size} vectors left behind by an interrupted delete")
 
     def _migrate_legacy_index(self, legacy: faiss.Index) -> faiss.Index:
@@ -211,13 +276,15 @@ class VectorStore:
     def load(self):
         """Reload the index from disk (public method for external reload)."""
         logger.info("Reloading index from disk...")
-        self._load_or_create_index()
+        with self._index_lock:
+            self._load_or_create_index()
 
     def close(self):
         """Close the vector store and release resources."""
         logger.info("Closing vector store...")
         # Clear references to allow garbage collection
-        self.index = None
+        self._closed = True
+        self._index = None
         self.metadata_store = None
 
     def add_chunks(self, chunks: List[ChunkMetadata], embeddings: np.ndarray):
@@ -240,6 +307,7 @@ class VectorStore:
         # Re-indexed chunk_ids get a fresh row id from INSERT OR REPLACE, so
         # evict any existing vectors for them first to avoid orphaned ids.
         with self._index_lock:
+            self._dirty = True
             stale = self.metadata_store.get_ids_for_chunk_ids([c.chunk_id for c in chunks])
             if stale:
                 self.index.remove_ids(np.asarray(list(stale.values()), dtype=np.int64))
@@ -276,6 +344,21 @@ class VectorStore:
 
         logger.info(f"Added {len(chunks)} chunks to index")
 
+    def _top_matches(self, query: np.ndarray, k: int, allowed_ids: Optional[set]):
+        """The k most similar vectors, among allowed_ids when given.
+
+        The filter runs inside FAISS. Ranking every vector and discarding the
+        rest in Python took a second at a million chunks, all of it holding the
+        lock that every other search of this collection waits on.
+        """
+        if allowed_ids is None:
+            with self._index_lock:
+                return self.index.search(query, k)
+        selector = faiss.IDSelectorBatch(np.fromiter(allowed_ids, dtype=np.int64, count=len(allowed_ids)))
+        params = faiss.SearchParameters(sel=selector)
+        with self._index_lock:
+            return self.index.search(query, k, params=params)
+
     def search(
         self,
         query_embedding: np.ndarray,
@@ -289,9 +372,8 @@ class VectorStore:
             query_embedding: Query embedding vector
             top_k: Number of results to return
             allowed_chunk_ids: Optional set of chunk_ids to restrict results to
-                (metadata pre-filter). When provided, the whole index is scanned
-                so the top_k *filtered* results are exact rather than whatever
-                survives a narrow candidate window.
+                (metadata pre-filter). The top_k *filtered* results are exact:
+                FAISS applies the filter as it scans.
 
         Returns:
             List of SearchResult objects, sorted by similarity (highest first)
@@ -308,33 +390,24 @@ class VectorStore:
         query_normalized = query_embedding / np.linalg.norm(query_embedding)
         query_normalized = query_normalized.reshape(1, -1).astype(np.float32)
 
-        # Search. When filtering, scan the full index so post-filtering still
-        # yields the true top_k; otherwise just fetch top_k. FAISS labels are
-        # the chunks' SQLite row ids.
-        filtering = allowed_chunk_ids is not None
+        # FAISS labels are the chunks' SQLite row ids.
         allowed_ids: Optional[set] = None
-        if filtering:
+        if allowed_chunk_ids is not None:
             allowed_ids = set(
                 self.metadata_store.get_ids_for_chunk_ids(allowed_chunk_ids).values()
             )
             if not allowed_ids:
                 return []
 
-        with self._index_lock:
-            k = self.index.ntotal if filtering else min(top_k, self.index.ntotal)
-            similarities, labels = self.index.search(query_normalized, k)
+        similarities, labels = self._top_matches(query_normalized, top_k, allowed_ids)
 
-        # Keep the top_k hits (post-filter) before touching SQLite, then
-        # batch-fetch metadata for just those.
-        hits: List[tuple] = []
-        for similarity, row_id in zip(similarities[0], labels[0]):
-            if row_id == -1:  # FAISS returns -1 for empty results
-                continue
-            if filtering and int(row_id) not in allowed_ids:
-                continue
-            hits.append((float(similarity), int(row_id)))
-            if len(hits) >= top_k:
-                break
+        # Batch-fetch metadata for just the hits. FAISS pads with -1 when fewer
+        # than top_k vectors qualify.
+        hits: List[tuple] = [
+            (float(similarity), int(row_id))
+            for similarity, row_id in zip(similarities[0], labels[0])
+            if row_id != -1
+        ]
 
         chunks_by_id = self.metadata_store.get_chunks_by_rowids([rid for _, rid in hits])
         doc_infos = self.metadata_store.get_documents_info(
@@ -391,28 +464,20 @@ class VectorStore:
             if not allowed_ids:
                 return []
 
-        # Get more candidates than top_k to allow for re-ranking. When filtering,
-        # scan the full index so the post-filter doesn't starve the result set,
-        # but keep only the best candidate_limit survivors.
+        # Get more candidates than top_k to allow for re-ranking.
         candidate_limit = min(top_k * 3, self.index.ntotal)
-        candidate_k = self.index.ntotal if filtering else candidate_limit
 
-        # 1. Semantic search — collect surviving (row id, score) pairs first,
-        # then batch-fetch metadata for just those.
+        # 1. Semantic search — collect (row id, score) pairs first, then
+        # batch-fetch metadata for just those.
         query_normalized = query_embedding / np.linalg.norm(query_embedding)
         query_normalized = query_normalized.reshape(1, -1).astype(np.float32)
-        with self._index_lock:
-            semantic_sims, semantic_labels = self.index.search(query_normalized, candidate_k)
+        semantic_sims, semantic_labels = self._top_matches(query_normalized, candidate_limit, allowed_ids)
 
-        semantic_hits: List[tuple] = []
-        for similarity, row_id in zip(semantic_sims[0], semantic_labels[0]):
-            if row_id == -1:
-                continue
-            if filtering and int(row_id) not in allowed_ids:
-                continue
-            semantic_hits.append((int(row_id), float(similarity)))
-            if len(semantic_hits) >= candidate_limit:
-                break
+        semantic_hits: List[tuple] = [
+            (int(row_id), float(similarity))
+            for similarity, row_id in zip(semantic_sims[0], semantic_labels[0])
+            if row_id != -1
+        ]
 
         chunks_by_id = self.metadata_store.get_chunks_by_rowids([rid for rid, _ in semantic_hits])
 
@@ -560,6 +625,7 @@ class VectorStore:
         if row_ids:
             # Remove the vectors in place
             with self._index_lock:
+                self._dirty = True
                 removed = self.index.remove_ids(np.asarray(row_ids, dtype=np.int64))
             logger.info(f"Removed {removed} vectors from FAISS index")
 
@@ -577,8 +643,14 @@ class VectorStore:
     def save(self):
         """Persist the FAISS index to disk (metadata is already in SQLite)."""
         with self._index_lock:
-            logger.info(f"Saving FAISS index with {self.index.ntotal} vectors")
-            self._write_index_atomic(self.index)
+            # Released while idle means the file is already current. Reading it
+            # back to write it out again would make every shutdown load every
+            # collection into memory.
+            if self._index is None:
+                return
+            logger.info(f"Saving FAISS index with {self._index.ntotal} vectors")
+            self._write_index_atomic(self._index)
+            self._dirty = False
             # Record what produced these vectors next to them, so an export
             # (or a person) can tell which model a query must use.
             if self.embedding_info:

@@ -435,6 +435,9 @@ class CrossEncoderReranker:
 
         gate = _inference_gate()
         if gate is not None and not gate.acquire(timeout=_queue_timeout()):
+            global _shed_total
+            with _gate_lock:
+                _shed_total += 1
             logger.info("Reranker busy (%d slots); returning retrieval order", _gate_size)
             return items[:top_k], False
         getter = text_getter or _default_text_getter
@@ -467,6 +470,14 @@ class CrossEncoderReranker:
 _gate: Optional[threading.BoundedSemaphore] = None
 _gate_size = 0
 _gate_lock = threading.Lock()
+# Searches answered in retrieval order because no slot came free in time.
+_shed_total = 0
+
+
+def shed_count() -> int:
+    """How many searches have lost their reranking to load, for /metrics."""
+    with _gate_lock:
+        return _shed_total
 
 
 def _inference_gate() -> Optional[threading.BoundedSemaphore]:

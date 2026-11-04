@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from config import ALL_AI_PROVIDERS, Settings, settings
 from services.app_database import app_db
+from services.secret_box import SECRET_CONFIG_FIELDS
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +48,10 @@ VALID_CONFIG_FIELDS = {
     "aup_required", "aup_version", "aup_text",
 }
 
-# Config fields holding a credential. GET /api/config returns MASKED_SECRET in
-# place of the stored value, and an update carrying MASKED_SECRET back is
+# For the fields in SECRET_CONFIG_FIELDS, GET /api/config returns MASKED_SECRET
+# in place of the stored value, and an update carrying MASKED_SECRET back is
 # treated as "leave unchanged" — so a client can round-trip the config without
 # either seeing the secret or wiping it.
-SECRET_CONFIG_FIELDS = {"vision_ocr_api_key", "ollama_cloud_api_key", "embedding_api_key",
-                        "ai_api_key"}
 MASKED_SECRET = "********"
 
 # Field names that older builds persisted; read and written as their current
@@ -307,9 +306,14 @@ class ConfigManager:
             result["success"] = False
             return result
 
-        # Also update .env file for restart compatibility
+        # Also update .env file for restart compatibility. Credentials stay out
+        # of it: they are encrypted in the database, which restores them on
+        # start (IndexerManager._apply_db_config), and a plain copy here would
+        # undo that.
         try:
-            self._update_env_file(updates)
+            mirrored = {k: v for k, v in updates.items() if k not in SECRET_CONFIG_FIELDS}
+            if mirrored:
+                self._update_env_file(mirrored)
         except Exception as e:
             # Non-fatal - database is source of truth
             logger.warning(f"Failed to update .env file: {e}")

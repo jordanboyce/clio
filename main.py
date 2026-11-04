@@ -14,7 +14,7 @@ import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -86,6 +86,10 @@ def _check_security_posture() -> None:
     from services import identity as identity_service
 
     identity_service.validate_config()
+
+    from services import secret_box
+
+    secret_box.validate_config()
 
     if settings.auth_require_identity and not identity_service.active_provider():
         raise RuntimeError(
@@ -203,6 +207,12 @@ async def lifespan(app: FastAPI):
         from services.upload_service import upload_service
         upload_service.recover_orphaned_jobs()
 
+        # Credentials saved by a version that stored them in plain text.
+        from services.app_database import app_db
+        sealed = app_db.seal_stored_secrets()
+        if sealed:
+            logger.info(f"Encrypted {sealed} stored credentials")
+
         # Get the embedding model ready in the background with visible
         # progress (GET /api/embedding/status) instead of blocking startup on
         # a download; the job opens the default collection once the model is
@@ -255,6 +265,10 @@ async def lifespan(app: FastAPI):
         from services.source_watcher import watcher_loop
         watcher_task = asyncio.create_task(watcher_loop())
 
+        # Collections nobody is using give their vectors' memory back.
+        from services.indexer_manager import index_unload_loop
+        index_unload_task = asyncio.create_task(index_unload_loop())
+
         logger.info("Clio API ready")
         logger.info(f"Data directory: {settings.data_dir}")
         logger.info(f"Embedded MCP server: {'enabled' if settings.enable_mcp else 'disabled'}")
@@ -265,6 +279,7 @@ async def lifespan(app: FastAPI):
         logger.info("Shutting down Clio API...")
         retention_task.cancel()
         watcher_task.cancel()
+        index_unload_task.cancel()
         indexer_manager.save_all()
         logger.info("Shutdown complete")
 
@@ -302,6 +317,20 @@ async def _embedding_unavailable(request, exc: EmbeddingUnavailable):
         },
         headers={"Retry-After": "20"},
     )
+
+
+from services.db_backend import DatabaseBusy  # noqa: E402
+
+
+@app.exception_handler(DatabaseBusy)
+async def _database_busy(request, exc: DatabaseBusy):
+    logger.warning(f"Refused {request.method} {request.url.path}: {exc}")
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "The server is busy. Try again shortly.", "code": "database_busy"},
+        headers={"Retry-After": "5"},
+    )
+
 
 # CORS: origins come from CORS_ALLOW_ORIGINS (comma-separated). Empty — the
 # default — installs no CORS middleware at all, so the same-origin policy keeps
@@ -399,6 +428,12 @@ async def require_auth(request, call_next):
     # preflight can be answered; the actual request still authenticates.
     if request.method == "OPTIONS":
         return await call_next(request)
+
+    # A scraper's token opens /metrics and nothing else.
+    if request.url.path == "/metrics" and settings.metrics_token:
+        scraper_token = _password_from_auth_header(request.headers.get("authorization", ""))
+        if secrets.compare_digest(scraper_token.encode(), settings.metrics_token.encode()):
+            return await call_next(request)
 
     # Verified identity: a bearer JWT from the site's own IdP, or a header an
     # authenticating proxy already vouched for (services/identity.py). Any of these is stronger auth than the shared
@@ -567,6 +602,17 @@ def _spa_response() -> HTMLResponse:
         ),
         status_code=200,
     )
+
+
+@app.get("/metrics", tags=["system"], include_in_schema=False)
+async def prometheus_metrics():
+    """Prometheus metrics. async on purpose: reading how busy the worker pool is
+    needs the event loop, and a scrape must still answer when that pool is full."""
+    if not settings.metrics_enabled:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    from services import metrics
+
+    return Response(content=metrics.render(), media_type=metrics.CONTENT_TYPE)
 
 
 @app.get("/", response_class=HTMLResponse, tags=["ui"], include_in_schema=False)

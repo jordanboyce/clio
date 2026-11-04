@@ -10,8 +10,9 @@ to read on every /api/admin/stats call.
 Registered LAST in main.py's file order, which makes it the OUTERMOST
 middleware: it times auth and rate limiting too, and by the time the
 response comes back through, request.state.auth_identity is set for the
-access line. Counters are plain ints guarded by a lock — a histogram
-dependency is not worth it for a single-process appliance.
+access line. Counters are plain ints guarded by a lock. Per-route counts and
+latency histograms are recorded in services/metrics.py, only when
+METRICS_ENABLED is on.
 """
 
 import logging
@@ -19,6 +20,7 @@ import threading
 import time
 import uuid
 
+from config import settings
 from services.provenance import LINEAGE_HEADER, LINEAGE_ID
 
 logger = logging.getLogger("clio.access")
@@ -45,6 +47,13 @@ def _should_log(path: str) -> bool:
     return path.startswith("/api/") and path != "/health"
 
 
+def _observe(request, status_code: int, started: float) -> None:
+    if settings.metrics_enabled:
+        from services import metrics
+
+        metrics.observe_request(request, status_code, time.perf_counter() - started)
+
+
 async def track_request(request, call_next):
     """The middleware body — registered in main.py."""
     global _in_flight, _requests_total, _errors_total
@@ -61,6 +70,7 @@ async def track_request(request, call_next):
     except Exception:
         with _lock:
             _errors_total += 1
+        _observe(request, 500, started)
         if _should_log(request.url.path):
             duration_ms = int((time.perf_counter() - started) * 1000)
             logger.info(
@@ -76,6 +86,7 @@ async def track_request(request, call_next):
     if response.status_code >= 500:
         with _lock:
             _errors_total += 1
+    _observe(request, response.status_code, started)
     if _should_log(request.url.path):
         duration_ms = int((time.perf_counter() - started) * 1000)
         logger.info(

@@ -313,6 +313,33 @@ class Settings(BaseSettings):
     # See docs/DEPLOYMENT.md "Capacity & scaling".
     db_backend: Literal["sqlite", "postgresql"] = "sqlite"
     postgres_url: str = ""  # e.g. postgresql://user:pass@localhost:5432/clio
+    # The most connections this process opens; they open as needed and stay open.
+    # Callers beyond it wait up to the timeout, then get a 503 with Retry-After.
+    # Calls are short, so this can be well below WORKER_THREADS; keep it below
+    # the server's max_connections.
+    postgres_pool_max: int = 20
+    postgres_pool_timeout_seconds: float = 10.0
+
+    # Encrypts the credentials stored in the app database (team API keys and the
+    # *_API_KEY settings saved from the UI). Any string of 16+ characters; use
+    # `openssl rand -base64 32` and keep it in your secret manager. Empty means
+    # a key generated at DATA_DIR/secret.key, which protects a database that
+    # leaves on its own but not a stolen data directory. Changing this makes
+    # stored credentials unreadable until they are entered again.
+    secret_encryption_key: str = ""
+
+    # Serve Prometheus metrics at GET /metrics. Off by default: an appliance
+    # nobody scrapes does not need it. The endpoint sits behind the app's normal
+    # authentication; METRICS_TOKEN adds a bearer token that opens /metrics and
+    # nothing else, for a scraper that should not hold a real credential.
+    metrics_enabled: bool = False
+    metrics_token: str = ""
+
+    # Release a collection's vectors from memory after this many seconds without
+    # a search or write, and read them back on the next use (about a second per
+    # 400,000 chunks). Without it, every collection opened since the last
+    # restart stays in RAM. 0 = keep them all loaded.
+    index_idle_unload_seconds: int = 1800
 
     # Multi-user mode is NOT supported and the app refuses to start with it on.
     # The flag only ever filtered the collection list — search, document
