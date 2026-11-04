@@ -240,6 +240,20 @@ answers one question with citations. To see how many agents a host can serve, ru
 `python scripts/mcp_load.py --url http://localhost:8473/mcp --sessions 32`
 ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#capacity--scaling)).
 
+**Agents in your browser (experimental).** Browsers are starting to carry
+their own AI agents, and [WebMCP](https://developer.chrome.com/docs/ai/webmcp)
+lets a page offer them tools the way an MCP server does. When Clio is open in
+a browser that has it, the page registers the read-only tools above with the
+browser, with no URL to paste and no token: calls use your own session and
+see the collections you see, land in *Try it* like any other client's, and
+are scoped to the collection you have open. Support is detected from the
+browser itself, never from its name: today that is Chrome and other Chromium
+browsers from version 149 with `chrome://flags/#enable-webmcp-testing` on (an
+origin trial through 162), on a secure page (`localhost` or HTTPS). *Agents
+in this browser* on the Connect tab says what this browser supports and has
+the switch; the choice is remembered per browser. Firefox and Safari show the
+note and nothing else changes.
+
 **Agent skill and CLI.** `skills/clio/` is a ready-to-install
 [Agent Skills](https://agentskills.io) folder: `SKILL.md` teaches an agent to
 search, verify, cite and index safely, and `skills/clio/scripts/clio_cli.py`

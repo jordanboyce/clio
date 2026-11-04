@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import MCPTab from '../MCPTab.vue'
 import http from '../../utils/http'
+import { useWebMcp } from '../../composables/useWebMcp'
 
 vi.mock('../../utils/http', () => ({ default: { get: vi.fn(), post: vi.fn() } }))
 
@@ -194,6 +195,39 @@ describe('OAuth sign-in from the client', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="mcp-oauth"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Sign in from your client')
+    wrapper.unmount()
+  })
+})
+
+describe('Agents in this browser (WebMCP)', () => {
+  beforeEach(() => useWebMcp()._reset())
+
+  it('says this browser has no WebMCP and shows no switch', async () => {
+    const wrapper = mount(MCPTab, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+    const card = wrapper.get('[data-testid="mcp-browser-agents"]')
+    expect(card.text()).toContain('does not offer WebMCP')
+    expect(card.find('input[type="checkbox"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('lists the read-only tools it offers once the API is there', async () => {
+    const context = { registerTool: vi.fn(() => new Promise(() => {})) }
+    const client = {
+      initialize: vi.fn(async () => ({})),
+      listTools: vi.fn(async () => [
+        { name: 'search_documents', annotations: { readOnlyHint: true } },
+        { name: 'write_document', annotations: { readOnlyHint: false } },
+      ]),
+      callTool: vi.fn(),
+    }
+    await useWebMcp().start({ modelContext: context, client, win: { document: {}, navigator: { userAgent: 'Chrome/157.0.0.0' }, isSecureContext: true } })
+    const wrapper = mount(MCPTab, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+    const card = wrapper.get('[data-testid="mcp-browser-agents"]')
+    expect(card.text()).toContain('1 read-only tool offered')
+    expect(card.get('[data-testid="mcp-browser-agents-tools"]').text()).toBe('search_documents')
+    expect(card.find('input[type="checkbox"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })

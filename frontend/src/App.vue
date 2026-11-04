@@ -1325,6 +1325,7 @@ import { isTypingTarget, isMod, MOD } from './utils/shortcuts'
 import { useChatStore } from './stores/chatStore'
 import http from './utils/http'
 import { useModal } from './composables/useModal'
+import { useWebMcp } from './composables/useWebMcp'
 import { lazyView } from './utils/lazyView'
 
 const chatTabEnabled = ref(true)
@@ -2395,6 +2396,11 @@ onMounted(async () => {
 
   // Load collections first
   await collectionStore.loadCollections()
+
+  // Offer the read-only MCP tools to an agent built into this browser
+  // (WebMCP). A no-op in browsers without the API; the Connect tab says
+  // which. After the collections, so the first call already has one.
+  useWebMcp().start()
 
   // Then load stats for current collection
   statsStore.fetchStats()

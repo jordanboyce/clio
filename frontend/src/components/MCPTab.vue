@@ -560,6 +560,57 @@
         </div>
       </div>
 
+      <!-- Agents in this browser (WebMCP). The page offers the same read-only
+           tools to an agent built into the browser: no URL, no token, the
+           person's own session. Decided by feature detection; the browser's
+           name and version only word the hint when the API is missing. -->
+      <div class="card bg-base-200" data-testid="mcp-browser-agents">
+        <div class="card-body space-y-3">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <h3 class="card-title text-base">
+                Agents in this browser
+                <span class="badge badge-ghost badge-sm font-normal">Experimental</span>
+              </h3>
+              <p class="mt-1 text-sm text-base-content/60">
+                Browsers are starting to carry their own AI agents. With WebMCP, this page offers them Clio's read-only
+                tools directly: no server URL, no token, and your collections exactly as you see them here.
+              </p>
+            </div>
+            <input
+              v-if="webmcp.support === 'available'"
+              type="checkbox"
+              class="toggle toggle-primary shrink-0"
+              :checked="webmcp.enabled"
+              aria-label="Offer tools to agents in this browser"
+              @change="setWebMcpEnabled($event.target.checked)"
+            />
+          </div>
+          <div class="flex items-start gap-2 text-sm" data-testid="mcp-browser-agents-status">
+            <span
+              class="mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full"
+              :class="{ 'bg-success': webmcpStatus.tone === 'ok', 'bg-error': webmcpStatus.tone === 'error', 'bg-base-content/30': webmcpStatus.tone === 'neutral' }"
+              aria-hidden="true"
+            ></span>
+            <div>
+              <p>{{ webmcpStatus.text }}</p>
+              <p v-if="webmcpStatus.hint" class="mt-0.5 text-xs text-base-content/55 leading-relaxed">{{ webmcpStatus.hint }}</p>
+            </div>
+          </div>
+          <div v-if="webmcp.status === 'ready' && webmcp.tools.length" class="flex flex-wrap gap-1.5" data-testid="mcp-browser-agents-tools">
+            <span v-for="tool in webmcp.tools" :key="tool.name" class="badge badge-outline badge-sm font-mono" :title="tool.title">{{ tool.name }}</span>
+          </div>
+          <ul v-if="webmcp.calls.length" class="divide-y divide-base-300/50 text-xs" data-testid="mcp-browser-agents-calls">
+            <li v-for="call in webmcp.calls.slice(0, 5)" :key="call.at + call.name" class="flex items-center gap-2 py-1">
+              <Wrench class="h-3 w-3 shrink-0 text-base-content/50" aria-hidden="true" />
+              <span class="font-mono">{{ call.name }}</span>
+              <span class="text-base-content/50">{{ collectionName(call.collectionId) }}</span>
+              <span class="ml-auto text-base-content/50">{{ call.ok === false ? 'failed' : ago(call.at / 1000) }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
     </template>
 
     <!-- What this server exposes: read live from the server so the list is
@@ -630,6 +681,8 @@ import { useCollectionStore } from '../stores/collectionStore'
 import { MCP_CLIENT_GROUPS, MCP_CLIENTS, buildClientConfig } from '../utils/mcpClients'
 import { SAMPLE_COLLECTION_NAME, loadSampleCollection } from '../utils/sampleSources'
 import { firstTaskPrompt } from '../utils/mcpTryIt'
+import { describeWebMcpState } from '../utils/webmcp'
+import { useWebMcp } from '../composables/useWebMcp'
 const userStore = useUserStore()
 const layoutStore = useLayoutStore()
 
@@ -1122,6 +1175,23 @@ onMounted(() => {
   activityTimer = setInterval(pollActivity, ACTIVITY_POLL_MS)
 })
 onBeforeUnmount(() => clearInterval(activityTimer))
+
+// ── Agents in this browser (WebMCP) ──────────────────────────────────────
+// The registration lives for the page (composables/useWebMcp.js); this tab
+// only reads its state and holds the switch. start() is idempotent, so a
+// person who opens Connect before App.vue got there still sees the state.
+const { state: webmcp, start: startWebMcp, setEnabled: setWebMcpEnabled } = useWebMcp()
+const webmcpStatus = computed(() => describeWebMcpState({
+  support: webmcp.support,
+  browser: webmcp.browser,
+  enabled: webmcp.enabled,
+  status: webmcp.status,
+  tools: webmcp.tools,
+  failed: webmcp.failed,
+  error: webmcp.error,
+  mcpEnabled: mcpSettings.value.enable_mcp,
+}))
+onMounted(() => { startWebMcp() })
 
 onMounted(() => {
   loadMcpCollections()

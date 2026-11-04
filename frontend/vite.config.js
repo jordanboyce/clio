@@ -101,6 +101,12 @@ export default defineConfig(({ command }) => ({
         target: apiTarget,
         changeOrigin: true,
       },
+      // The page itself calls the MCP endpoint when it offers tools to a
+      // browser agent (composables/useWebMcp.js).
+      '/mcp': {
+        target: apiTarget,
+        changeOrigin: true,
+      },
     },
   },
 }))
