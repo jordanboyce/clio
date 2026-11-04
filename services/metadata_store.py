@@ -1432,6 +1432,17 @@ class MetadataStore:
             docs = self._attach_replacement_names(conn, [self._document_row_to_dict(r) for r in rows])
             return docs, int(total)
 
+    def count_held_documents(self) -> int:
+        """Documents withheld by content policy, which stats and exports leave out."""
+        from services.content_policy import HIDDEN_STATUSES
+
+        marks = ", ".join("?" for _ in HIDDEN_STATUSES)
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            return int(conn.execute(
+                f"SELECT COUNT(*) FROM documents WHERE COALESCE(policy_status, 'clear') IN ({marks})",
+                list(HIDDEN_STATUSES)).fetchone()[0])
+
     def collection_stats(self, document_ids: Optional[List[str]] = None,
                          top_extensions: int = 25, largest: int = 5) -> dict:
         """Aggregate description of the servable documents.

@@ -1409,6 +1409,19 @@ def _document_row_for_export(d: dict) -> dict:
 _EXPORT_FIELDS = ["document_id", "filename", "file_type", "bytes", "pages", "chunks",
                   "uploaded", "source_type", "source_path", "sensitivity"]
 _EXPORT_PAGE = 1000
+_EXPORT_MEDIA_TYPES = {
+    "csv": "text/csv; charset=utf-8",
+    "jsonl": "application/x-ndjson",
+    "txt": "text/plain; charset=utf-8",
+}
+
+
+def _export_filename(collection_id: str, ext: str) -> str:
+    # Collection ids are random, so name the download after the collection.
+    # ASCII only: this goes into a header as-is.
+    name = (collection_service.get_collection(collection_id) or {}).get("name") or collection_id
+    slug = "".join(c if c.isascii() and (c.isalnum() or c in "-_") else "-" for c in name).strip("-")
+    return f"documents-{slug or collection_id}.{ext}"
 
 
 @router.get(
@@ -1418,17 +1431,23 @@ _EXPORT_PAGE = 1000
 )
 def documents_stats(collection_id: str = "default") -> dict:
     """Totals, storage, upload range and per-extension/kind/sensitivity
-    breakdowns, computed in SQL over every servable document."""
+    breakdowns, computed in SQL over every servable document. `held_documents`
+    counts the quarantined ones those numbers leave out, so a reader can square
+    them with the source list, which still shows held documents."""
     try:
         indexer = get_indexer(collection_id)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    return {"collection_id": collection_id, **indexer.collection_stats()}
+    return {
+        "collection_id": collection_id,
+        **indexer.collection_stats(),
+        "held_documents": indexer.vector_store.metadata_store.count_held_documents(),
+    }
 
 
 @router.get(
     "/documents/export",
-    summary="Download the complete file list of a collection (CSV or JSON Lines)",
+    summary="Download the complete file list of a collection (CSV, JSON Lines or plain names)",
     tags=["documents"],
 )
 def export_documents(
@@ -1441,7 +1460,8 @@ def export_documents(
     """Stream every matching file's metadata, however many there are.
 
     The list is produced page by page, so memory stays flat for a collection of
-    tens of thousands of documents. `format` is `csv` (default) or `jsonl`;
+    tens of thousands of documents. `format` is `csv` (default), `jsonl` or
+    `txt` (one file name per line);
     `q` filters by filename substring and `file_type` by extension or family
     (docs, code, data, media, other). Quarantined documents are not listed.
     """
@@ -1451,9 +1471,9 @@ def export_documents(
     from services import file_kinds
 
     fmt = (format or "csv").lower()
-    if fmt not in ("csv", "jsonl"):
+    if fmt not in _EXPORT_MEDIA_TYPES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="format must be 'csv' or 'jsonl'")
+                            detail="format must be 'csv', 'jsonl' or 'txt'")
     try:
         indexer = get_indexer(collection_id)
     except ValueError as e:
@@ -1487,6 +1507,9 @@ def export_documents(
                            for k, v in row.items()}
                     writer.writerow(row)
                 yield buf.getvalue()
+            elif fmt == "txt":
+                # A filename with a line break in it must stay one line of the list.
+                yield "".join(" ".join((d.get("filename") or "").splitlines()) + "\n" for d in rows)
             else:
                 yield "".join(json.dumps(_document_row_for_export(d), ensure_ascii=False) + "\n"
                               for d in rows)
@@ -1495,11 +1518,9 @@ def export_documents(
                 break
 
     audit.record("documents.export", collection_id=collection_id, detail={"format": fmt})
-    ext = "csv" if fmt == "csv" else "jsonl"
-    media = "text/csv; charset=utf-8" if fmt == "csv" else "application/x-ndjson"
     return StreamingResponse(
-        generate(), media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="documents-{collection_id}.{ext}"'},
+        generate(), media_type=_EXPORT_MEDIA_TYPES[fmt],
+        headers={"Content-Disposition": f'attachment; filename="{_export_filename(collection_id, fmt)}"'},
     )
 
 

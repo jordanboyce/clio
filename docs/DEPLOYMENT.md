@@ -743,11 +743,17 @@ Agents need two things: a token and the skill.
 For batch indexing without a browser, the CLI does the whole path:
 `CLIO_URL=https://clio.example.internal CLIO_TOKEN=... python skills/clio/scripts/clio_cli.py upload ./handbook --collection Policies`.
 
-To answer "how many documents, how big, which files" exactly, use
+In the app, the chart icon on the Sources panel (or on a collection's row) opens
+the collection overview: totals, file types, largest files and an **Export files**
+download. `/stats` and `/export` do the same from the chat box. Anyone who can
+read the collection can use them; documents held for review are left out and
+counted separately.
+
+For agents and scripts, to answer "how many documents, how big, which files" exactly, use
 `get_collection_stats` and `list_documents` (MCP and in-app chat), or from a
 shell `clio_cli.py stats -c Policies` and `clio_cli.py files -c Policies --csv
 all-files.csv`. The same data is at `GET /documents/stats` and
-`GET /documents/export?format=csv|jsonl` (filters `q`, `file_type`, `sort`);
+`GET /documents/export?format=csv|jsonl|txt` (filters `q`, `file_type`, `sort`);
 the export streams page by page, so a collection of tens of thousands of files
 costs flat memory, and each export is written to the audit trail.
 

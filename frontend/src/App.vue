@@ -190,6 +190,7 @@
             @document-deleted="handleDocumentDeleted"
             @background-job-started="showJobsDrawer = true"
             @clone-collection="collectionStore.currentCollection && startClone(collectionStore.currentCollection)"
+            @open-overview="collectionStore.currentCollection && openOverviewModal(collectionStore.currentCollection)"
             @open="sourcesSidebarOpen = true"
           />
         </div>
@@ -447,6 +448,14 @@
                         <Copy v-else :size="13" />
                       </button>
                       <button
+                        @click.stop="openOverviewModal(collection)"
+                        class="btn btn-ghost btn-xs btn-square"
+                        title="Collection overview and file list"
+                        :aria-label="`Overview of ${collection.name}`"
+                      >
+                        <ChartColumn :size="13" />
+                      </button>
+                      <button
                         v-if="collectionStore.canConfigure(collection)"
                         @click.stop="openExportModal(collection)"
                         class="btn btn-ghost btn-xs btn-square"
@@ -563,6 +572,14 @@
                       >
                         <span v-if="cloningId === collection.id" class="loading loading-spinner loading-xs"></span>
                         <Copy v-else :size="13" />
+                      </button>
+                      <button
+                        @click.stop="openOverviewModal(collection)"
+                        class="btn btn-ghost btn-xs btn-square"
+                        title="Collection overview and file list"
+                        :aria-label="`Overview of ${collection.name}`"
+                      >
+                        <ChartColumn :size="13" />
                       </button>
                       <button
                         v-if="collectionStore.canConfigure(collection)"
@@ -1055,6 +1072,7 @@
 
     <!-- Export / import (portable .clio.zip bundles): both state which
          embedding model indexed the collection and what that means -->
+    <CollectionOverviewModal ref="overviewModal" />
     <ExportCollectionModal ref="exportModal" />
     <ImportCollectionModal ref="importModal" @imported="onCollectionImported" />
 
@@ -1298,7 +1316,7 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
 import { useOverlayFocus } from './composables/useOverlayFocus'
-import { Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig, Network, SlidersHorizontal } from 'lucide-vue-next'
+import { ChartColumn, Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig, Network, SlidersHorizontal } from 'lucide-vue-next'
 import CommandPalette from './components/CommandPalette.vue'
 import EmbeddingMismatchNotice from './components/EmbeddingMismatchNotice.vue'
 import ShortcutsDialog from './components/ShortcutsDialog.vue'
@@ -1324,6 +1342,7 @@ import ReviewBell from './components/ReviewBell.vue'
 import ChangesBell from './components/ChangesBell.vue'
 import ModelPicker from './components/ModelPicker.vue'
 import CollectionPicker from './components/CollectionPicker.vue'
+import CollectionOverviewModal from './components/CollectionOverviewModal.vue'
 import ExportCollectionModal from './components/ExportCollectionModal.vue'
 import ImportCollectionModal from './components/ImportCollectionModal.vue'
 import ChatTab from './components/ChatTab.vue'
@@ -1683,6 +1702,9 @@ const creatingCollection = ref(false)
 const exportModal = ref(null)
 const importModal = ref(null)
 const openExportModal = (collection) => exportModal.value?.open(collection)
+
+const overviewModal = ref(null)
+const openOverviewModal = (collection) => overviewModal.value?.open(collection)
 
 const onCollectionImported = async (data) => {
   await collectionStore.loadCollections()
