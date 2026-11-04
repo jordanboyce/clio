@@ -172,6 +172,17 @@ class ResearchStore:
             out[field] = _loads(out.get(field), [] if field != "provenance" else {})
         return out
 
+    def version_token(self) -> str:
+        """A cheap token that changes when analysis does. The corpus version
+        cannot stand in for it: analyzing, renaming and matching rewrite these
+        tables and leave the documents table untouched."""
+        with self._connect() as conn:
+            papers = conn.execute("SELECT COUNT(*), COALESCE(MAX(analyzed_at), ''), COALESCE(MAX(renamed_at), '') "
+                                  "FROM research_papers").fetchone()
+            references = conn.execute("SELECT COUNT(*), COUNT(matched_document_id), COALESCE(MAX(updated_at), '') "
+                                      "FROM research_references").fetchone()
+        return ":".join(str(value) for value in (*papers, *references))
+
     def get_paper(self, document_id: str) -> Optional[dict]:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM research_papers WHERE document_id = ?",

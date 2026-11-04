@@ -38,6 +38,11 @@ export const researchApi = {
     http.post(`/api/research/graph?${q(cid)}`, {
       include_external: includeExternal, min_citations: minCitations, document_ids: documentIds?.length ? documentIds : null,
     }).then(r => r.data),
+  network: (cid, { graph = 'citation', includeExternal = true, minCitations = 2, documentIds = null } = {}) =>
+    http.post(`/api/research/network?${q(cid)}`, {
+      graph, include_external: includeExternal, min_citations: minCitations,
+      document_ids: documentIds?.length ? documentIds : null,
+    }).then(r => r.data),
   assess: (cid, id, question, providerId) => {
     const { provider, headers } = modelArgs(providerId)
     return http.post(`/api/research/papers/${encodeURIComponent(id)}/assess?${q(cid)}`,

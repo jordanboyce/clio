@@ -15,7 +15,7 @@ import logging
 import time
 from typing import Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Response, status
+from fastapi import APIRouter, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 
 from api.deps import get_indexer, require_collection_access
@@ -23,7 +23,7 @@ from middleware.user_context import get_request_user
 from services import governance
 from services.research import briefs as briefs_service
 from services.research import jobs as jobs_service
-from services.research import library, lookup, naming, relevance
+from services.research import library, lookup, naming, network, relevance
 from services.research.graph import build_graph
 from services.usage_service import check_daily_budget, record_chat_usage
 
@@ -113,6 +113,11 @@ def _papers(indexer) -> List[dict]:
     """The collection's servable documents that can be papers."""
     return [d for d in indexer.list_documents()
             if library.is_paper(d) and not governance.is_hidden(d)]
+
+
+def _hidden_ids(indexer) -> List[str]:
+    """The quarantined documents, for dropping stale links that point at them."""
+    return [d["document_id"] for d in indexer.list_documents() if governance.is_hidden(d)]
 
 
 def _paper_doc(indexer, document_id: str) -> dict:
@@ -492,7 +497,54 @@ def citation_graph_for(body: GraphRequest, collection_id: str = "default") -> di
     store = library.research_store(indexer)
     docs = _select(indexer, body.document_ids) if body.document_ids else _papers(indexer)
     return build_graph(store, docs, include_external=body.include_external,
-                       min_citations=body.min_citations)
+                       min_citations=body.min_citations, hidden_ids=_hidden_ids(indexer))
+
+
+# ── network analysis ────────────────────────────────────────────────────
+
+class NetworkRequest(GraphRequest):
+    graph: Literal["citation", "authors", "entities"] = Field("citation", description="citation | authors | entities")
+    seed: int = Field(network.SEED, ge=0, description="Louvain and sampling seed, for checking how stable a result is")
+
+
+@router.get("/api/research/network", tags=["research"], summary="Network analysis of the collection's sources")
+def network_analysis(collection_id: str = "default", graph: Literal["citation", "authors", "entities"] = "citation",
+                     include_external: bool = True, min_citations: int = 2,
+                     seed: int = Query(network.SEED, ge=0)) -> dict:
+    return network_analysis_for(NetworkRequest(graph=graph, include_external=include_external, seed=seed,
+                                               min_citations=max(1, min(int(min_citations), 20))), collection_id)
+
+
+@router.post("/api/research/network", tags=["research"], summary="Network analysis of selected sources")
+def network_analysis_for(body: NetworkRequest, collection_id: str = "default") -> dict:
+    """Which papers, authors or concepts hold these sources together, with the
+    links behind each claim and a note on how far the graph can be trusted. The
+    documents are those of the citation graph, so a quarantined one is never in
+    it. Only the citation graph depends on ``include_external``/``min_citations``."""
+    indexer = _indexer(collection_id)
+    store = library.research_store(indexer)
+    docs = _select(indexer, body.document_ids) if body.document_ids else _papers(indexer)
+    hidden = _hidden_ids(indexer)
+    citation = body.graph == "citation"
+    key = (str(indexer.vector_store.metadata_db_path), indexer.vector_store.metadata_store.corpus_version(),
+           store.version_token(), body.graph, body.include_external if citation else None,
+           body.min_citations if citation else None, body.seed,
+           network.documents_digest((d["document_id"] for d in docs), hidden))
+
+    def compute() -> dict:
+        built = build_graph(store, docs, include_external=citation and body.include_external,
+                            min_citations=body.min_citations, hidden_ids=hidden)
+        if citation:
+            return network.citation_network(built, seed=body.seed)
+        if body.graph == "authors":
+            return network.author_network(built, seed=body.seed)
+        papers = [n for n in built["nodes"] if n["type"] == "paper"]
+        titles = {n["id"]: n["title"] or n["filename"] for n in papers}
+        return network.entity_network(
+            network.load_document_entities(indexer.vector_store.metadata_store, papers), titles, seed=body.seed,
+            exclude=network.author_name_forms(a for n in papers for a in n["authors"]))
+
+    return network.cached(key, compute)
 
 
 # ── assessment ──────────────────────────────────────────────────────────

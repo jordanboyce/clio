@@ -15,11 +15,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
   minCitations: 2,
   showOrphans: true,      // sources with no citation either way
   // Groups
-  colorBy: 'type',        // type | year | relevance | none
+  colorBy: 'type',        // type | year | relevance | community | none
   // Display
   arrows: false,
   textFade: 1.6,          // zoom level at which labels are fully visible
   nodeSize: 1,
+  sizeBy: 'citations',    // citations | pagerank | betweenness
   linkThickness: 1,
   // Forces
   centerForce: 0.1,
@@ -43,6 +44,16 @@ export const SLIDERS = {
   linkDistance: { min: 20, max: 300, step: 5 },
   localDepth: { min: 1, max: 3, step: 1 },
 }
+
+export const SIZE_OPTIONS = [
+  { id: 'citations', label: 'Citations' },
+  { id: 'pagerank', label: 'PageRank' },
+  { id: 'betweenness', label: 'Betweenness' },
+]
+const SIZE_IDS = SIZE_OPTIONS.map(o => o.id)
+
+// Community colours come from this many theme slots; the rest share one.
+export const COMMUNITY_SLOTS = 8
 
 const STORAGE_KEY = 'clio_graph_settings'
 
@@ -78,7 +89,9 @@ export function sanitize(settings) {
     } else if (typeof def === 'boolean') {
       out[key] = Boolean(value)
     } else if (key === 'colorBy') {
-      out[key] = ['type', 'year', 'relevance', 'none'].includes(value) ? value : def
+      out[key] = ['type', 'year', 'relevance', 'community', 'none'].includes(value) ? value : def
+    } else if (key === 'sizeBy') {
+      out[key] = SIZE_IDS.includes(value) ? value : def
     } else {
       out[key] = String(value)
     }
@@ -145,6 +158,31 @@ export function nodeRadius(node, degree, nodeSize = 1) {
   return (base + Math.sqrt(degree || 0) * 1.6) * nodeSize
 }
 
+// A dot sized by a network measure. The largest value reaches about what a
+// well-cited node (16 links) gets from nodeRadius; a missing value is the base.
+const METRIC_RADIUS_SPAN = 6.4
+export function metricRadius(node, value, maxValue, nodeSize = 1) {
+  const base = node?.type === 'external' ? 2.6 : 3.4
+  const v = Number(value)
+  const m = Number(maxValue)
+  const share = Number.isFinite(v) && Number.isFinite(m) && m > 0 && v > 0 ? Math.min(1, v / m) : 0
+  return (base + Math.sqrt(share) * METRIC_RADIUS_SPAN) * nodeSize
+}
+
+// Network rows by node id, and the largest value of each measure.
+export function metricIndex(network) {
+  const byId = {}
+  const max = { pagerank: 0, betweenness: 0 }
+  for (const row of network?.nodes || []) {
+    byId[row.id] = row
+    for (const key of Object.keys(max)) {
+      const v = Number(row[key])
+      if (Number.isFinite(v) && v > max[key]) max[key] = v
+    }
+  }
+  return { byId, max }
+}
+
 // Labels fade in as you zoom past the threshold (Obsidian's "text fade").
 export function labelAlpha(zoom, threshold) {
   const span = 0.4
@@ -161,8 +199,12 @@ export function matchesQuery(node, query) {
 
 // ── groups ──────────────────────────────────────────────────────────────
 
-export function groupOf(node, colorBy, verdicts = {}) {
+export function groupOf(node, colorBy, verdicts = {}, communityOf = null) {
   if (colorBy === 'none') return 'node'
+  if (colorBy === 'community') {
+    const c = communityOf?.[node.id]
+    return Number.isInteger(c) && c >= 0 && c < COMMUNITY_SLOTS ? `community-${c}` : 'community-other'
+  }
   if (colorBy === 'year') return 'year'
   if (colorBy === 'relevance') {
     if (node.type === 'external') return 'cited'
@@ -170,6 +212,17 @@ export function groupOf(node, colorBy, verdicts = {}) {
   }
   if (node.type === 'external') return node.in_collection ? 'outside' : 'cited'
   return node.kind === 'book' ? 'book' : 'article'
+}
+
+// One legend row per community that has a colour slot, then the shared one.
+export function communityLegend(network) {
+  const communities = network?.communities || []
+  const rows = communities.filter(c => Number.isInteger(c.id) && c.id >= 0 && c.id < COMMUNITY_SLOTS)
+    .sort((a, b) => a.id - b.id)
+    .map(c => ({ group: `community-${c.id}`, label: c.label, size: c.size }))
+  const other = (network?.nodes || []).filter(n => !(Number.isInteger(n.community) && n.community >= 0 && n.community < COMMUNITY_SLOTS)).length
+  if (other) rows.push({ group: 'community-other', label: 'Other or unconnected', size: other })
+  return rows
 }
 
 // The screening verdicts of Research → Screen, for one question.

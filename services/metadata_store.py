@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from services.sqlite_utils import sqlite_connect
-from typing import List, Optional, Dict, Any, Set
+from typing import List, Optional, Dict, Any, Set, Tuple
 import json
 import logging
 
@@ -646,6 +646,54 @@ class MetadataStore:
                 """, batch).fetchall()
                 for chunk_id, entity in rows:
                     result.setdefault(chunk_id, []).append(entity)
+        return result
+
+    def first_chunk_matching(self, document_ids: List[str], like_terms: Tuple[str, ...],
+                             pattern: "re.Pattern[str]") -> Dict[str, Tuple[int, int]]:
+        """Where each document first prints something matching ``pattern``, as
+        ``document_id -> (page_number, chunk_index)``. ``like_terms`` narrow the
+        scan in SQL, so only candidate chunks have their text read."""
+        if not document_ids or not like_terms:
+            return {}
+        result: Dict[str, Tuple[int, int]] = {}
+        wanted = list(dict.fromkeys(document_ids))
+        any_term = " OR ".join("text LIKE ?" for _ in like_terms)
+        likes = [f"%{term}%" for term in like_terms]
+        with sqlite_connect(self.db_path) as conn:
+            for start in range(0, len(wanted), self._IN_CLAUSE_BATCH):
+                batch = wanted[start:start + self._IN_CLAUSE_BATCH]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(f"""
+                    SELECT document_id, page_number, chunk_index, text FROM chunks
+                    WHERE document_id IN ({placeholders}) AND ({any_term})
+                    ORDER BY document_id, page_number, chunk_index
+                """, [*batch, *likes]).fetchall()
+                for document_id, page, index, text in rows:
+                    if document_id not in result and pattern.search(text or ""):
+                        result[document_id] = (page, index)
+        return result
+
+    def entities_by_document(self, document_ids: List[str],
+                             stop_at: Optional[Dict[str, Tuple[int, int]]] = None) -> Dict[str, Set[str]]:
+        """Each document's distinct entities, every asked document present even
+        with none. A document in ``stop_at`` counts only its chunks before that
+        ``(page_number, chunk_index)``."""
+        wanted = list(dict.fromkeys(document_ids))
+        result: Dict[str, Set[str]] = {doc: set() for doc in wanted}
+        stop_at = stop_at or {}
+        with sqlite_connect(self.db_path) as conn:
+            for start in range(0, len(wanted), self._IN_CLAUSE_BATCH):
+                batch = wanted[start:start + self._IN_CLAUSE_BATCH]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(f"""
+                    SELECT c.document_id, c.page_number, c.chunk_index, e.entity
+                    FROM chunk_entities e JOIN chunks c ON c.chunk_id = e.chunk_id
+                    WHERE c.document_id IN ({placeholders})
+                """, batch).fetchall()
+                for document_id, page, index, entity in rows:
+                    stop = stop_at.get(document_id)
+                    if stop is None or (page, index) < stop:
+                        result[document_id].add(entity)
         return result
 
     def set_chunk_boost(self, chunk_id: str, boost: float, note: str = "") -> None:

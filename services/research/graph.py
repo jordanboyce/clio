@@ -12,7 +12,7 @@ so two different works never merge on a guess.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from services.research.extract import title_guess
 from services.research.library import is_paper
@@ -42,7 +42,11 @@ def _external_key(ref: dict) -> Optional[str]:
 
 
 def build_graph(store: ResearchStore, documents: List[dict], include_external: bool = True,
-                min_citations: int = 2) -> dict:
+                min_citations: int = 2, hidden_ids: Iterable[str] = ()) -> dict:
+    """``hidden_ids`` are the collection's quarantined documents. A reference
+    matched before its target was quarantined still points at it, and that link
+    must not put the document back on the map as "outside the selection"."""
+    hidden = set(hidden_ids)
     docs = [d for d in documents if is_paper(d)]
     ids = {d["document_id"] for d in docs}
     papers = store.get_papers(ids)
@@ -91,7 +95,7 @@ def build_graph(store: ResearchStore, documents: List[dict], include_external: b
         groups: Dict[str, dict] = {}
         for ref in references:
             matched = ref.get("matched_document_id")
-            if matched in ids:
+            if matched in ids or matched in hidden:
                 continue
             # A source of the collection left out of the selection: grouped
             # by its id, and drawn as "in your collection".
