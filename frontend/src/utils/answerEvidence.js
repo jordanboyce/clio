@@ -11,6 +11,28 @@ export function sourceHref(source) {
   } catch { return '' }
 }
 
+// The thumbnail of the cited page, on this deployment. Empty when the server
+// sent none (formats with no page rendering) or the URL is not the preview
+// endpoint for this document.
+export function previewHref(source) {
+  if (!source?.preview_url) return ''
+  try {
+    const url = new URL(source.preview_url, window.location.origin)
+    const expected = `/documents/${encodeURIComponent(source.document_id)}/preview`
+    if (url.pathname !== expected || !['http:', 'https:'].includes(url.protocol)) return ''
+    return `${url.pathname}${url.search}`
+  } catch { return '' }
+}
+
+// Alt text for a page thumbnail: what the picture is of, for a reader who
+// cannot see it. The passage itself is read out next to it.
+export function previewAlt(source) {
+  const page = source?.page_number
+  return page && source?.source_format === 'pdf'
+    ? `Page ${page} of ${source.filename}`
+    : `Preview of ${source?.filename || 'the source'}`
+}
+
 // A bracket that starts with "Source N" and may continue with more sources or
 // a restated location. Bare numbers in brackets ("[2]") are left alone: they
 // are too ambiguous to turn into evidence links.

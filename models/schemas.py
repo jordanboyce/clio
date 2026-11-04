@@ -91,6 +91,9 @@ class SearchResult(BaseModel):
     chunk_id: str = Field(..., description="Chunk identifier")
     pdf_url: str = Field(..., description="URL to download the document")
     page_url: str = Field(..., description="URL to view the specific page")
+    preview_url: Optional[str] = Field(
+        None, description="URL of a thumbnail of the cited page; None for formats with no page rendering"
+    )
 
     # v3.0: Format-aware result metadata
     source_format: Optional[str] = Field(None, description="Source format: pdf, txt, docx, csv, md, json")
@@ -374,6 +377,10 @@ class ChatSource(BaseModel):
     document_id: str = Field(..., description="Document identifier")
     pdf_url: str = Field(..., description="URL to download the document")
     page_url: str = Field(..., description="URL to view the specific page")
+    preview_url: Optional[str] = Field(
+        None, description="URL of a thumbnail of the cited page; None for formats with no page rendering"
+    )
+    source_format: Optional[str] = Field(None, description="Source format: pdf, png, docx, …")
     sensitivity: Optional[str] = Field(None, description="Sensitivity label in force for the source")
     superseded_by: Optional[Dict[str, str]] = Field(
         None, description="Set when this passage is from a document replaced by a newer one"

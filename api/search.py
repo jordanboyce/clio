@@ -7,7 +7,7 @@ import asyncio
 from services.embedder import EmbeddingUnavailable
 from fastapi import Header, HTTPException, status, Request
 
-from services import table_row_search
+from services import page_preview, table_row_search
 from services.ai_service import AIService, create_provider, DEFAULT_OLLAMA_MODEL
 from services.collection_overview import build_collection_overview as _build_collection_overview
 from services.structured_chat import (
@@ -180,6 +180,9 @@ async def search_documents(
         for result in results:
             result.pdf_url = f"{base_url}/documents/{result.document_id}/pdf?collection_id={collection_id}"
             result.page_url = f"{base_url}/documents/{result.document_id}/pdf?collection_id={collection_id}#page={result.page_number}"
+            result.preview_url = page_preview.preview_url(
+                base_url, result.document_id, collection_id, result.page_number, result.source_format
+            )
             result.sensitivity = effective_sensitivity(collection, result.sensitivity)
             # Wording that addresses an AI is shown as quoted data, not hidden.
             result.instruction_text = mark_passage(result.text_snippet)

@@ -2,6 +2,7 @@
   <article class="py-5 min-w-0">
     <div class="flex items-start gap-3">
       <span class="text-sm text-base-content/70 tabular-nums pt-0.5 shrink-0">{{ index + 1 }}.</span>
+      <PagePreview :source="result" :href="href" class="hidden sm:block" />
       <div class="min-w-0 flex-1">
         <h4 class="font-semibold text-base break-words">{{ displayName }}</h4>
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-sm text-base-content/75">
@@ -40,6 +41,7 @@ import { sourceHref } from '../utils/answerEvidence'
 import { highlightSnippet } from '../utils/searchPresentation'
 import SupersedeNote from './SupersedeNote.vue'
 import InstructionTextNote from './InstructionTextNote.vue'
+import PagePreview from './PagePreview.vue'
 const props = defineProps({ result: { type: Object, required: true }, index: { type: Number, required: true }, query: { type: String, default: '' } })
 const href = computed(() => sourceHref(props.result))
 // Text pasted into the collection is stored as "<title>.html"; show the title.

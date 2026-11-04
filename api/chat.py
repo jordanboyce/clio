@@ -13,7 +13,7 @@ from middleware.user_context import get_request_user
 from services.usage_service import check_daily_budget, record_chat_usage
 
 from services.ai_service import AIService, AnthropicProvider, DEFAULT_OLLAMA_MODEL, create_provider
-from services import authored_text
+from services import authored_text, page_preview
 from services.agent_tools import anthropic_tools, openai_tools
 from services.collection_overview import build_collection_overview as _build_collection_overview
 from services.collection_service import collection_service
@@ -348,6 +348,7 @@ def _cache_store(cache_ctx, answer_text: str, filtered_results, provider: str,
             "similarity_score": r.similarity_score,
             "document_id": r.document_id,
             "collection_id": cid,
+            "source_format": getattr(r, "source_format", None),
             "sensitivity": _source_sensitivity(cid, r, label_cache),
         })
         if (cid, r.document_id) not in seen:
@@ -378,6 +379,10 @@ def _cached_sources(entry, base_url: str) -> list[dict]:
             "document_id": s["document_id"],
             "pdf_url": f"{base_url}/documents/{s['document_id']}/pdf?collection_id={s['collection_id']}",
             "page_url": f"{base_url}/documents/{s['document_id']}/pdf?collection_id={s['collection_id']}#page={s['page_number']}",
+            "preview_url": page_preview.preview_url(
+                base_url, s["document_id"], s["collection_id"], s["page_number"], s.get("source_format")
+            ),
+            "source_format": s.get("source_format"),
             "sensitivity": s.get("sensitivity"),
         }
         for s in entry["sources"]
@@ -546,6 +551,10 @@ def _source_dicts(results, base_url: str) -> list[dict]:
             "document_id": r.document_id,
             "pdf_url": f"{base_url}/documents/{r.document_id}/pdf?collection_id={cid}",
             "page_url": f"{base_url}/documents/{r.document_id}/pdf?collection_id={cid}#page={r.page_number}",
+            "preview_url": page_preview.preview_url(
+                base_url, r.document_id, cid, r.page_number, getattr(r, "source_format", None)
+            ),
+            "source_format": getattr(r, "source_format", None),
             "sensitivity": _source_sensitivity(cid, r, label_cache),
             **_supersede_fields(r),
             **({"instruction_text": mark} if (mark := _instruction_text(r)) else {}),

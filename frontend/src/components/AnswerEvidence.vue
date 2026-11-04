@@ -41,10 +41,15 @@
           </div>
           <SupersedeNote :source="source" />
           <InstructionTextNote :source="source" />
-          <p class="text-sm leading-relaxed whitespace-pre-wrap break-words mt-2 max-w-prose" :class="{ 'quoted-passage': source.instruction_text }">{{ source.text_snippet || 'No passage preview available.' }}</p>
-          <a v-if="sourceHref(source)" :href="sourceHref(source)" target="_blank" rel="noopener noreferrer"
-            class="link link-primary inline-flex items-center min-h-9 text-sm mt-1"
-            :aria-label="`Open ${source.filename}, page or section ${source.page_number || 1}, in a new tab`">Open original ↗</a>
+          <div class="flex items-start gap-3 mt-2">
+            <PagePreview :source="source" :href="sourceHref(source)" />
+            <div class="min-w-0 flex-1">
+              <p class="text-sm leading-relaxed whitespace-pre-wrap break-words max-w-prose" :class="{ 'quoted-passage': source.instruction_text }">{{ source.text_snippet || 'No passage preview available.' }}</p>
+              <a v-if="sourceHref(source)" :href="sourceHref(source)" target="_blank" rel="noopener noreferrer"
+                class="link link-primary inline-flex items-center min-h-9 text-sm mt-1"
+                :aria-label="`Open ${source.filename}, page or section ${source.page_number || 1}, in a new tab`">Open original ↗</a>
+            </div>
+          </div>
         </li>
       </ol>
     </details>
@@ -60,6 +65,7 @@ import { renderEvidenceMarkdown, sourceHref } from '../utils/answerEvidence'
 import { locationLabel } from '../utils/fileTypes'
 import SupersedeNote from './SupersedeNote.vue'
 import InstructionTextNote from './InstructionTextNote.vue'
+import PagePreview from './PagePreview.vue'
 
 const props = defineProps({
   content: { type: String, default: '' },

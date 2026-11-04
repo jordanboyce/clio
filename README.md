@@ -476,7 +476,10 @@ curl -X POST "http://localhost:8473/search?collection_id=default" \
 Each result carries `filename`, `page_number`, `text_snippet`,
 `similarity_score`, `document_id`, `chunk_id` and a `page_url` that opens the
 original file at that page; `retrieval` says how the query was searched
-(the hybrid balance chosen, whether it was reranked).
+(the hybrid balance chosen, whether it was reranked). PDF pages and image
+files also carry a `preview_url`, a thumbnail of the cited page
+(`GET /documents/{id}/preview?page=N&width=320`); the app shows it beside
+the passage. Other formats have no faithful page to draw and leave it null.
 
 **Ask** — a grounded answer with its sources. `provider` names the model
 provider and `X-AI-Key` carries your key; leave the header out when a team key

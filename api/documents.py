@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 from pathlib import Path
 import shutil
 
-from fastapi import HTTPException, Response, UploadFile, File, status
+from fastapi import HTTPException, Query, Response, UploadFile, File, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -41,7 +41,7 @@ from services.form_field_extractor import (
     estimate_form_likelihood,
     is_form_like_text,
 )
-from services import audit, git_source, governance, pasted_text, source_changes, source_watcher, storage_quota
+from services import audit, git_source, governance, page_preview, pasted_text, source_changes, source_watcher, storage_quota
 from services.content_policy import BlockedContentError, ContentRejectedError
 from services.storage_quota import StorageLimitExceeded
 from services.link_fetcher import LinkError, LinkRefused, link_indexing_available, validate_link
@@ -1673,6 +1673,99 @@ async def list_documents(
         )
 
 
+def _resolve_document_file(document_id: str, collection_id: str) -> tuple[dict, Path]:
+    """The document's record and the file on disk, for the serving endpoints.
+
+    Collection read access runs inside get_indexer; a quarantined document is
+    only served to a reviewer; a local reference is read from where it lives.
+    404 for every way the file can be missing.
+    """
+    try:
+        indexer = get_indexer(collection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    doc_info = indexer.vector_store.metadata_store.get_document_info(document_id)
+    if not doc_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+    governance.assert_document_servable(doc_info)
+
+    if doc_info.get("source_type") == "local_reference" and doc_info.get("source_path"):
+        doc_path = Path(doc_info["source_path"])
+        if not doc_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Source file no longer exists at: {doc_info['source_path']}. The file may have been moved or deleted.",
+            )
+    else:
+        doc_path = indexer_manager.get_documents_path(collection_id) / doc_info["filename"]
+        if not doc_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document file not found: {doc_info['filename']}",
+            )
+    return doc_info, doc_path
+
+
+@router.get(
+    "/documents/{document_id}/preview",
+    summary="Picture of a cited page",
+    tags=["documents"],
+    responses={
+        200: {"content": {"image/png": {}, "image/jpeg": {}}, "description": "The page as a thumbnail"},
+        304: {"description": "Unchanged since the ETag the client holds"},
+        404: {"description": "No such document or page, or a format with no page preview"},
+    },
+)
+async def get_page_preview(
+    document_id: str,
+    request: Request,
+    collection_id: str = "default",
+    page: int = Query(1, ge=1, description="Page to draw (1-indexed); ignored for image files"),
+    width: int = Query(page_preview.DEFAULT_WIDTH, ge=page_preview.MIN_WIDTH, le=page_preview.MAX_WIDTH,
+                       description="Thumbnail width in pixels"),
+):
+    """A small picture of the page a result or chat source cites.
+
+    PDF pages are rendered on request; image documents are scaled. Formats
+    without a faithful page rendering (DOCX, Markdown, spreadsheets, code)
+    answer 404, which is how a result's `preview_url` says there is nothing
+    to show. The response carries an ETag that changes with the file, so a
+    replaced or re-indexed source never shows a stale picture.
+    """
+    try:
+        doc_info, doc_path = _resolve_document_file(document_id, collection_id)
+        source_format = doc_info.get("source_format") or Path(doc_info["filename"]).suffix.lstrip(".")
+        if not page_preview.supports_preview(source_format):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No page preview for .{source_format} files",
+            )
+        page_number = page if source_format.lower() in page_preview.PDF_FORMATS else 1
+        etag = page_preview.etag_for(doc_path, page_number, width)
+        cache_headers = {"ETag": etag, "Cache-Control": "private, max-age=86400"}
+        if etag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
+            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=cache_headers)
+        try:
+            content, media_type = await asyncio.to_thread(
+                page_preview.render_preview, doc_path, source_format, page_number, width
+            )
+        except page_preview.PreviewUnavailable as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        return Response(content=content, media_type=media_type, headers=cache_headers)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to render preview for {document_id} page {page}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to render the page preview",
+        )
+
+
 @router.get(
     "/documents/{document_id}/pdf",
     summary="Download document file",
@@ -1693,46 +1786,7 @@ async def get_pdf(
     For PDFs, the URL can include #page=N to open at a specific page in the browser.
     """
     try:
-        # Get indexer for the collection
-        try:
-            indexer = get_indexer(collection_id)
-        except ValueError as e:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(e),
-            )
-
-        # Get document directory for this collection
-        document_dir = indexer_manager.get_documents_path(collection_id)
-
-        # Get document metadata to find filename and source info
-        doc_info = indexer.vector_store.metadata_store.get_document_info(document_id)
-
-        if not doc_info:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Document {document_id} not found",
-            )
-        # Quarantined documents are only served to a reviewer.
-        governance.assert_document_servable(doc_info)
-
-        # Determine file path based on source type
-        if doc_info.get("source_type") == "local_reference" and doc_info.get("source_path"):
-            # Local reference - serve from original location
-            doc_path = Path(doc_info["source_path"])
-            if not doc_path.exists():
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Source file no longer exists at: {doc_info['source_path']}. The file may have been moved or deleted.",
-                )
-        else:
-            # Uploaded file - serve from collection's documents directory
-            doc_path = document_dir / doc_info["filename"]
-            if not doc_path.exists():
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Document file not found: {doc_info['filename']}",
-                )
+        doc_info, doc_path = _resolve_document_file(document_id, collection_id)
 
         # Determine media type based on file extension
         file_ext = Path(doc_info["filename"]).suffix.lower()
