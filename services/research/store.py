@@ -305,9 +305,14 @@ class ResearchStore:
         """Replace a paper's parsed references and links in one transaction.
 
         A re-analysis keeps what the user already did with an entry (queued
-        for download, resolved) when the same raw text comes back."""
+        for download, resolved) when the same raw text comes back, and the
+        entry's row id: a download that read the ids before this ran still has
+        to mark the right rows."""
         stamp = now_iso()
         with self._connect() as conn:
+            # The write lock comes before the read, or a status written between
+            # the read and the delete would be lost.
+            conn.execute("BEGIN IMMEDIATE")
             previous = {
                 (row["kind"], row["raw_text"]): dict(row)
                 for row in conn.execute(
@@ -315,17 +320,22 @@ class ResearchStore:
                 ).fetchall()
             }
             conn.execute("DELETE FROM research_references WHERE document_id = ?", (document_id,))
+            kept_ids = set()
             for entry in entries:
                 row = {field: entry.get(field) for field in _REFERENCE_FIELDS}
                 row["status"] = row["status"] or "parsed"
                 before = previous.get((row["kind"], row["raw_text"]))
                 if before and before.get("status") == "queued" and row["status"] in ("parsed", "resolved"):
                     row["status"] = "queued"
-                cols = ["document_id", *row, "updated_at"]
+                values = {"document_id": document_id, **row, "updated_at": stamp}
+                # The same text can be printed twice; only the first keeps the id.
+                if before and before["id"] not in kept_ids:
+                    kept_ids.add(before["id"])
+                    values["id"] = before["id"]
                 conn.execute(
-                    f"INSERT INTO research_references ({', '.join(cols)}) "
-                    f"VALUES ({', '.join('?' for _ in cols)})",
-                    [document_id, *row.values(), stamp],
+                    f"INSERT INTO research_references ({', '.join(values)}) "
+                    f"VALUES ({', '.join('?' for _ in values)})",
+                    list(values.values()),
                 )
             conn.commit()
 

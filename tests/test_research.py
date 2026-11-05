@@ -365,6 +365,60 @@ def test_title_match_needs_the_full_title_printed(indexer):
     assert refs[0]["match_reason"] == "title printed in the reference" and refs[1]["matched_document_id"] is None
 
 
+def _reference(ordinal, raw_text):
+    return {"kind": "reference", "ordinal": ordinal, "raw_text": raw_text}
+
+
+def test_reanalysis_keeps_the_ids_of_references_that_come_back(indexer):
+    store = library.research_store(indexer)
+    store.replace_references("doc-1", [_reference(1, "Gone."), _reference(2, "Stays."), _reference(3, "Also stays.")])
+    before = {r["raw_text"]: r["id"] for r in store.list_references("doc-1")}
+
+    # A new entry first, in case a fresh id could land on one about to be reused.
+    store.replace_references("doc-1", [_reference(1, "New."), _reference(2, "Also stays."), _reference(3, "Stays.")])
+    after = {r["raw_text"]: r["id"] for r in store.list_references("doc-1")}
+
+    assert set(after) == {"New.", "Stays.", "Also stays."}
+    assert after["Stays."] == before["Stays."] and after["Also stays."] == before["Also stays."]
+    assert after["New."] not in before.values()
+
+
+def test_a_reference_printed_twice_survives_reanalysis(indexer):
+    store = library.research_store(indexer)
+    store.replace_references("doc-1", [_reference(1, "Twice.")])
+    first_id = store.list_references("doc-1")[0]["id"]
+
+    store.replace_references("doc-1", [_reference(1, "Twice."), _reference(2, "Twice.")])
+
+    refs = store.list_references("doc-1")
+    assert [r["ordinal"] for r in refs] == [1, 2]
+    assert refs[0]["id"] == first_id != refs[1]["id"]
+
+
+def test_a_download_is_not_lost_to_a_reanalysis_at_the_same_moment(indexer):
+    """The download reads ids, a re-analysis replaces the rows, the download marks them."""
+    store = library.research_store(indexer)
+    entry = _reference(1, "Wanted.")
+    store.replace_references("doc-1", [entry])
+    read_by_the_download = store.list_references("doc-1")[0]["id"]
+
+    store.replace_references("doc-1", [entry])
+    store.update_reference(read_by_the_download, status="queued")
+
+    assert store.list_references("doc-1")[0]["status"] == "queued"
+
+
+def test_a_reanalysis_after_a_download_keeps_it_queued(indexer):
+    store = library.research_store(indexer)
+    entry = _reference(1, "Wanted.")
+    store.replace_references("doc-1", [entry])
+    store.update_reference(store.list_references("doc-1")[0]["id"], status="queued")
+
+    store.replace_references("doc-1", [entry])
+
+    assert store.list_references("doc-1")[0]["status"] == "queued"
+
+
 # ── registry lookups (stubbed) ──────────────────────────────────────────
 
 class _Resp:
@@ -770,7 +824,7 @@ def test_api_rename_without_a_title_explains_itself(client):
 def test_api_download_queues_open_copies_and_explains_the_rest(client, monkeypatch):
     client.post("/api/research/papers/doc-1/analyze?collection_id=c1", json={})
     client.post("/api/research/papers/doc-2/analyze?collection_id=c1", json={})
-    client.post("/api/research/analyze?collection_id=c1", json={"only_new": False})
+    jobs.wait_for(client.post("/api/research/analyze?collection_id=c1", json={"only_new": False}).json()["job"]["job_id"])
     submitted = {}
     from services.upload_service import upload_service
     monkeypatch.setattr(upload_service, "start_link_index",
