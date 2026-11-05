@@ -82,7 +82,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 # serves the embedding model AND the search reranker, so nothing is lost for
 # indexing, search, chat and MCP. What goes: PyTorch, the sentence-transformers
 # catalog, Tesseract/Docling OCR of scanned PDFs and Whisper transcription.
-# About 40% of the size (1.6 GB vs 3.9 GB); the right image for a knowledge base that
+# About 40% of the size (1.6 GB vs 4.0 GB); the right image for a knowledge base that
 # serves agents:   docker compose build --build-arg SLIM=1
 # WITH_PII=1 adds Microsoft Presidio and the small English spaCy model for
 # personal-data detection (names, addresses, ids). Without it the built-in
@@ -173,7 +173,8 @@ ARG WITH_DOCLING=0
 RUN if [ "$SLIM" = "1" ]; then \
       python -c "import faiss, fastembed, onnxruntime, fastapi, uvicorn, mcp; from fastembed.rerank.cross_encoder import TextCrossEncoder; print('slim runtime deps ok')"; \
     else \
-      python -c "import torch, faiss, fastembed, sentence_transformers, fastapi, uvicorn, ctranslate2, pytesseract; print('runtime deps ok')"; \
+      python -c "import torch, faiss, fastembed, sentence_transformers, fastapi, uvicorn, ctranslate2, pytesseract; print('runtime deps ok')" \
+      && python -c "import io, wave; b = io.BytesIO(); w = wave.open(b, 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(bytes(3200)); w.close(); b.seek(0); from faster_whisper.audio import decode_audio; assert len(decode_audio(b)) > 0; print('audio decode ok')"; \
     fi \
     && if [ "$WITH_DOCLING" = "1" ] && [ "$SLIM" != "1" ]; then python -c "import cv2; print('docling deps ok')"; fi
 
@@ -202,6 +203,9 @@ ARG EMBEDDING_MODEL=all-MiniLM-L6-v2
 # yet at this layer). Override both together to bake a different model.
 ARG RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 ARG RERANKER_FASTEMBED_MODEL=Xenova/ms-marco-MiniLM-L-6-v2
+# The speech model rides along too, in the full image only, so recordings work
+# on a network that can never reach huggingface.co. About 145 MB.
+ARG WHISPER_MODEL=base
 ENV HF_HOME=/opt/hf-cache
 # Best effort: a build behind a firewall that blocks huggingface.co must
 # still produce a working image. If the bake cannot download, the build
@@ -214,15 +218,16 @@ RUN if [ "$BAKE_EMBEDDING" = "1" ]; then \
       ( python -c "from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder('${RERANKER_FASTEMBED_MODEL}', cache_dir='/opt/clio/models/fastembed')" \
         && ( [ "$SLIM" = "1" ] || python -c "from sentence_transformers import CrossEncoder; CrossEncoder('${RERANKER_MODEL}')" ) ) \
       || echo "WARNING: could not bake the reranker '${RERANKER_MODEL}'. Search still works, in retrieval order; the app fetches the reranker at first start when it can. See docs/AIRGAP.md to pre-seed."; \
+      [ "$SLIM" = "1" ] || python -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL}', device='cpu', compute_type='int8')" \
+      || echo "WARNING: could not bake Whisper model '${WHISPER_MODEL}'. Everything else works; recordings need the model fetched at run time or pre-seeded. See docs/AIRGAP.md."; \
     fi
 
 # Optional full offline bundle for air-gapped deployments: additionally bake
-# the reranker, Whisper (audio transcription), and Docling (local OCR) models
-# so nothing is ever fetched at runtime. Adds roughly 1 GB to the image.
+# the Docling (local OCR) models, and fail the build if any model cannot be
+# fetched, so nothing is ever needed at runtime. Adds roughly 500 MB.
 #   docker compose build --build-arg OFFLINE_BUNDLE=1
 # Pair with OFFLINE_MODE=1 at runtime; full walkthrough in docs/AIRGAP.md.
 ARG OFFLINE_BUNDLE=0
-ARG WHISPER_MODEL=base
 COPY scripts/prefetch_offline_models.py /tmp/prefetch_offline_models.py
 RUN if [ "$OFFLINE_BUNDLE" = "1" ]; then \
       python /tmp/prefetch_offline_models.py --whisper-model "$WHISPER_MODEL"; \

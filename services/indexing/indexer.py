@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any, List, Optional, Callable
 import hashlib
 import logging
+import threading
+import time
 from datetime import datetime
 
 from config import DEFAULT_SEMANTIC_WEIGHT, settings
@@ -18,7 +20,7 @@ from models.schemas import (
 )
 from services.document_extractor import DocumentExtractor, ExtractionResult
 from services.chunker import TextChunker
-from services.embedder import EmbeddingService
+from services.embedder import EmbeddingDimensionMismatch, EmbeddingService, EmbeddingUnavailable
 from services.vector_store import VectorStore
 from services import audit, content_policy, figure_extractor, figures
 from services.prompt_injection_detector import mark_passage as _mark_passage
@@ -27,6 +29,9 @@ from services.governance import content_hash_of
 from services.supersede import BACKFILL_MARGIN
 
 logger = logging.getLogger(__name__)
+
+# How long to wait after a failed attempt to add missing vectors.
+VECTOR_FILL_RETRY_SECONDS = 60.0
 
 # Type alias for progress callback
 # Signature: (phase: str, progress: int, detail: str, chunks_done: int, chunks_total: int)
@@ -123,6 +128,72 @@ class DocumentIndexer:
         self.document_extractor = document_extractor
         self.text_chunker = text_chunker
         self.figures_dir = figures_dir or figures.figures_root(vector_store.metadata_store)
+        self._fill_lock = threading.Lock()
+        self._fill_running = False
+        self._fill_not_before = 0.0
+
+    # ── Working without an embedding model ────────────────────────────
+
+    def _embed(self, texts: List[str], progress_callback=None):
+        """Vectors for texts, or None when no embedding model can be reached.
+
+        A locked-down network may never reach a model hub or provider. That
+        must not stop anyone adding sources: the chunks are stored and searched
+        by keyword, and get their vectors once a model is there. A model that
+        does not fit the index is a different thing, and still refuses, because
+        the fix is a re-index and not waiting.
+        """
+        try:
+            vectors = self.embedding_service.embed_texts(texts, progress_callback=progress_callback)
+        except EmbeddingDimensionMismatch:
+            raise
+        except EmbeddingUnavailable as e:
+            logger.warning(f"No embedding model available; indexing for keyword search only: {e}")
+            return None
+        self._catch_up_vectors()
+        return vectors
+
+    def _catch_up_vectors(self) -> None:
+        """Embeddings work: start giving keyword-only chunks their vectors."""
+        if not self.vector_store.vectors_pending:
+            return
+        with self._fill_lock:
+            if self._fill_running or time.monotonic() < self._fill_not_before:
+                return
+            self._fill_running = True
+        threading.Thread(target=self._run_vector_fill, name="vector-fill", daemon=True).start()
+
+    def _run_vector_fill(self) -> None:
+        try:
+            filled = self.fill_missing_vectors()
+            logger.info(f"Added vectors to {filled} chunks indexed without an embedding model")
+        except Exception as e:  # noqa: BLE001 - keyword search keeps working; tried again later
+            logger.warning(f"Could not add the missing vectors yet: {e}")
+            self._fill_not_before = time.monotonic() + VECTOR_FILL_RETRY_SECONDS
+        finally:
+            with self._fill_lock:
+                self._fill_running = False
+
+    def fill_missing_vectors(self, batch_size: int = 128) -> int:
+        """Embed every chunk that has no vector yet, from its stored text.
+
+        Holds no lock while embedding, so searches and uploads carry on.
+        Returns the number of chunks that got a vector.
+        """
+        store = self.vector_store
+        missing = store.chunks_without_vectors()
+        filled = 0
+        for start in range(0, len(missing), batch_size):
+            rows = store.metadata_store.get_chunks_by_rowids(missing[start:start + batch_size])
+            row_ids = list(rows)
+            if row_ids:
+                store.add_vectors(row_ids, self.embedding_service.embed_texts([rows[r]["text"] for r in row_ids]))
+                filled += len(row_ids)
+        if filled:
+            store.save()
+        # Anything uploaded keyword-only meanwhile stays pending for next time.
+        store.vectors_pending = bool(store.chunks_without_vectors())
+        return filled
 
     def index_document(
         self,
@@ -363,11 +434,14 @@ class DocumentIndexer:
             report("embedding", min(100, int(done / total * 100)),
                    f"Embedded {done}/{total} chunks", done, total)
 
-        embeddings = self.embedding_service.embed_texts(
+        embeddings = self._embed(
             chunk_texts,
             progress_callback=_embed_progress if progress_callback else None,
         )
-        report("embedding", 100, f"Embedded {num_chunks} chunks", num_chunks, num_chunks)
+        report("embedding", 100,
+               f"Embedded {num_chunks} chunks" if embeddings is not None
+               else "No embedding model available: indexing for keyword search",
+               num_chunks, num_chunks)
 
         # Phase 4: Add to vector store
         report("saving", 0, f"Saving {num_chunks} chunks to index")
@@ -565,7 +639,7 @@ class DocumentIndexer:
         )
 
         if embeddings is None:
-            embeddings = self.embedding_service.embed_texts(
+            embeddings = self._embed(
                 [chunk.text for chunk in all_chunks],
                 progress_callback=progress_callback,
             )
@@ -800,11 +874,14 @@ class DocumentIndexer:
             report("embedding", min(100, int(done / total * 100)),
                    f"Embedded {done}/{total} chunks", done, total)
 
-        embeddings = self.embedding_service.embed_texts(
+        embeddings = self._embed(
             chunk_texts,
             progress_callback=_embed_progress if progress_callback else None,
         )
-        report("embedding", 100, f"Embedded {num_chunks} chunks", num_chunks, num_chunks)
+        report("embedding", 100,
+               f"Embedded {num_chunks} chunks" if embeddings is not None
+               else "No embedding model available: indexing for keyword search",
+               num_chunks, num_chunks)
 
         report("saving", 0, f"Saving {num_chunks} chunks to index")
         self.vector_store.add_chunks(chunks, embeddings)
@@ -1034,7 +1111,7 @@ class DocumentIndexer:
         if mode == SearchMode.KEYWORD:
             # Pure BM25 keyword search. When filtering, pull the full ranked list
             # so post-filtering down to fetch_k stays exact.
-            bm25_k = self.vector_store.index.ntotal if allowed_chunk_ids is not None else fetch_k
+            bm25_k = self.vector_store.searchable_chunks() if allowed_chunk_ids is not None else fetch_k
             bm25_results = self.vector_store.bm25_index.search(query, max(bm25_k, 1))
             if allowed_chunk_ids is not None:
                 bm25_results = [
@@ -1059,6 +1136,9 @@ class DocumentIndexer:
             results = self.vector_store.search(
                 query_embedding, top_k=fetch_k, allowed_chunk_ids=allowed_chunk_ids
             )
+
+        if query_embedding is not None:
+            self._catch_up_vectors()
 
         # Entity-graph boost: fuse chunks that share entities with the query
         # into the result set. Cross-document matches enter as candidates

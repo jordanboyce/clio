@@ -1,9 +1,10 @@
 """Nothing about a missing or undownloadable embedding model may stop the
 person from opening the app, browsing sources, or choosing another provider.
 
-A collection whose model cannot be built opens read-only behind a deferred
-service; vectors raise EmbeddingUnavailable (503 with the reason) until the
-model is there, and the first successful build switches it over in place.
+A collection whose model cannot be built opens behind a deferred service;
+vectors raise EmbeddingUnavailable (503 with the reason) until the model is
+there, and the first successful build switches it over in place. Indexing and
+automatic search carry on by keyword: see test_index_without_embeddings.py.
 """
 
 import numpy as np

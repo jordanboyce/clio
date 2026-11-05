@@ -261,6 +261,11 @@ class VectorStore:
         return faiss.IndexIDMap2(faiss.IndexFlatIP(self.embedding_dim))
 
     def _load_or_create_index(self):
+        """Open the index and note whether any chunk still lacks a vector."""
+        self._open_index()
+        self.vectors_pending = self._index.ntotal < self.metadata_store.get_total_chunks()
+
+    def _open_index(self):
         """Load existing index from disk (migrating legacy formats) or create a new one."""
         self._dirty = False
         if self.index_path.exists():
@@ -372,22 +377,27 @@ class VectorStore:
         self._index = None
         self.metadata_store = None
 
-    def add_chunks(self, chunks: List[ChunkMetadata], embeddings: np.ndarray):
+    def add_chunks(self, chunks: List[ChunkMetadata], embeddings: Optional[np.ndarray]):
         """
         Add chunks and their embeddings to the index.
 
         Args:
             chunks: List of ChunkMetadata objects
-            embeddings: NumPy array of shape (len(chunks), embedding_dim)
+            embeddings: NumPy array of shape (len(chunks), embedding_dim), or
+                None when no embedding model can be reached. The chunks are
+                then searchable by keyword, and DocumentIndexer adds their
+                vectors from the stored text once a model is available.
         """
-        if len(chunks) != len(embeddings):
+        if embeddings is not None and len(chunks) != len(embeddings):
             raise ValueError("Number of chunks must match number of embeddings")
 
         if len(chunks) == 0:
             return
 
         # Normalize embeddings for cosine similarity
-        embeddings_normalized = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+        embeddings_normalized = None
+        if embeddings is not None:
+            embeddings_normalized = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
 
         # Re-indexed chunk_ids get a fresh row id from INSERT OR REPLACE, so
         # evict any existing vectors for them first to avoid orphaned ids.
@@ -401,11 +411,14 @@ class VectorStore:
             chunk_dicts = [chunk.model_dump() for chunk in chunks]
             self.metadata_store.add_chunks(chunk_dicts)
 
-            id_by_chunk = self.metadata_store.get_ids_for_chunk_ids(
-                [chunk.chunk_id for chunk in chunks]
-            )
-            ids = np.asarray([id_by_chunk[chunk.chunk_id] for chunk in chunks], dtype=np.int64)
-            self.index.add_with_ids(embeddings_normalized.astype(np.float32), ids)
+            if embeddings_normalized is None:
+                self.vectors_pending = True
+            else:
+                id_by_chunk = self.metadata_store.get_ids_for_chunk_ids(
+                    [chunk.chunk_id for chunk in chunks]
+                )
+                ids = np.asarray([id_by_chunk[chunk.chunk_id] for chunk in chunks], dtype=np.int64)
+                self.index.add_with_ids(embeddings_normalized.astype(np.float32), ids)
 
         # Add to BM25 index for keyword search
         bm25_docs = [(chunk.chunk_id, chunk.text) for chunk in chunks]
@@ -428,6 +441,34 @@ class VectorStore:
             logger.warning(f"Entity extraction skipped for batch: {exc}")
 
         logger.info(f"Added {len(chunks)} chunks to index")
+
+    def chunks_without_vectors(self) -> List[int]:
+        """Row ids of the chunks that are only searchable by keyword so far."""
+        with self._loaded_index_for_reading() as index:
+            if index is None:
+                return []
+            have = faiss.vector_to_array(faiss.downcast_index(index).id_map)
+        rows = np.asarray(self.metadata_store.get_all_rowids_ordered(), dtype=np.int64)
+        return np.setdiff1d(rows, have).tolist()
+
+    def add_vectors(self, row_ids: List[int], embeddings: np.ndarray) -> None:
+        """Give existing chunks their vectors, skipping any deleted meanwhile."""
+        normalized = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+        with self._index_lock:
+            present = self.metadata_store.get_chunks_by_rowids(row_ids)
+            keep = [i for i, row_id in enumerate(row_ids) if row_id in present]
+            if not keep:
+                return
+            ids = np.asarray([row_ids[i] for i in keep], dtype=np.int64)
+            self.index.remove_ids(ids)
+            self.index.add_with_ids(normalized[keep].astype(np.float32), ids)
+            self._dirty = True
+
+    def searchable_chunks(self) -> int:
+        """How many chunks a search can reach. Keyword-only chunks count too, and
+        the count only costs a query while some exist."""
+        total_vectors = self.index.ntotal
+        return self.metadata_store.get_total_chunks() if self.vectors_pending else total_vectors
 
     def _top_matches(self, query: np.ndarray, k: int, allowed_ids: Optional[set]):
         """The k most similar vectors, among allowed_ids when given.
@@ -541,7 +582,8 @@ class VectorStore:
         Returns:
             List of SearchResult objects, sorted by combined score (highest first)
         """
-        if self.index.ntotal == 0:
+        searchable = self.searchable_chunks()
+        if searchable == 0:
             logger.warning("Index is empty, returning no results")
             return []
 
@@ -559,19 +601,22 @@ class VectorStore:
                 return []
 
         # Get more candidates than top_k to allow for re-ranking.
-        candidate_limit = min(top_k * 3, self.index.ntotal)
+        candidate_limit = min(top_k * 3, searchable)
 
         # 1. Semantic search — collect (row id, score) pairs first, then
-        # batch-fetch metadata for just those.
-        query_normalized = query_embedding / np.linalg.norm(query_embedding)
-        query_normalized = query_normalized.reshape(1, -1).astype(np.float32)
-        semantic_sims, semantic_labels = self._top_matches(query_normalized, candidate_limit, allowed_ids)
-
-        semantic_hits: List[tuple] = [
-            (int(row_id), float(similarity))
-            for similarity, row_id in zip(semantic_sims[0], semantic_labels[0])
-            if row_id != -1
-        ]
+        # batch-fetch metadata for just those. No vectors yet means the chunks
+        # were indexed without a model: only the keyword half can match.
+        semantic_hits: List[tuple] = []
+        vector_limit = min(candidate_limit, self.index.ntotal)
+        if vector_limit:
+            query_normalized = query_embedding / np.linalg.norm(query_embedding)
+            query_normalized = query_normalized.reshape(1, -1).astype(np.float32)
+            semantic_sims, semantic_labels = self._top_matches(query_normalized, vector_limit, allowed_ids)
+            semantic_hits = [
+                (int(row_id), float(similarity))
+                for similarity, row_id in zip(semantic_sims[0], semantic_labels[0])
+                if row_id != -1
+            ]
 
         chunks_by_id = self.metadata_store.get_chunks_by_rowids([rid for rid, _ in semantic_hits])
 
@@ -585,7 +630,7 @@ class VectorStore:
                 chunk_data[chunk_id] = chunk
 
         # 2. BM25 keyword search
-        bm25_k = self.index.ntotal if filtering else candidate_limit
+        bm25_k = searchable if filtering else candidate_limit
         bm25_results = self.bm25_index.search(query, bm25_k)
         if filtering:
             bm25_results = [

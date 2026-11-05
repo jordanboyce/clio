@@ -70,6 +70,7 @@ const DATA = {
 const MEDIA = {
   png: ['png', Image], jpg: ['jpg', Image], jpeg: ['jpg', Image], gif: ['gif', Image], webp: ['webp', Image], bmp: ['bmp', Image], tif: ['tiff', Image], tiff: ['tiff', Image],
   mp3: ['mp3', Mic], wav: ['wav', Mic], m4a: ['m4a', Mic], ogg: ['ogg', Mic], flac: ['flac', Mic], webm: ['webm', Mic], mp4: ['mp4', Mic], aac: ['aac', Mic], wma: ['wma', Mic],
+  opus: ['opus', Mic], m4v: ['m4v', Mic], mov: ['mov', Mic], mkv: ['mkv', Mic], avi: ['avi', Mic], wmv: ['wmv', Mic],
 }
 
 export const FAMILIES = {

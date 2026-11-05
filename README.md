@@ -115,7 +115,7 @@ docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 \
   -v clio-data:/app/data ghcr.io/jordanboyce/clio:latest
 ```
 
-`:latest` is the full image (3.9 GB). `:slim` (1.6 GB) leaves out PyTorch,
+`:latest` is the full image (4.0 GB). `:slim` (1.6 GB) leaves out PyTorch,
 OCR for scanned PDFs and audio transcription, and keeps everything else:
 search, reranking, chat, research and every MCP tool. Both carry the version
 tags too (`:1.2.3`, `:1.2.3-slim`).
@@ -130,7 +130,7 @@ The image builds the frontend, bakes the embedding model and the search
 reranker in (nothing downloads at start), bundles OCR for scanned PDFs, and
 keeps documents and indexes in `./data`. After pulling new code, rebuild with
 `docker compose up -d --build`. For a lean image without PyTorch, OCR or audio
-transcription (1.6 GB instead of 3.9 GB, everything an agent-facing knowledge
+transcription (1.6 GB instead of 4.0 GB, everything an agent-facing knowledge
 base needs), build with `SLIM=1 docker compose build`.
 
 **Python 3.12 or newer**
@@ -157,8 +157,8 @@ pip install -r requirements-postgres.txt  # PostgreSQL for the app database
 1. **Add sources** — files, a folder, a git repository, links, or text you
    type or paste in. PDF, Office,
    Markdown, text, HTML, JSON, CSV/XLSX, sixty-plus programming languages,
-   audio (transcribed) and images (described by a vision model). A folder or
-   repository can be kept in sync.
+   audio and video recordings (the speech is transcribed) and images (described
+   by a vision model). A folder or repository can be kept in sync.
 2. **Ask** — pick a model in the top bar and ask; answers cite their sources
    and say when the sources do not establish something. **Find** searches
    passages and needs no model at all.
@@ -425,8 +425,8 @@ Full guide: [docs/ONPREM.md](docs/ONPREM.md).
 ### Air-gapped / offline deployment
 
 Clio runs fully disconnected: build with `--build-arg OFFLINE_BUNDLE=1` to
-bake the remaining runtime models (Whisper, Docling OCR) into the image next
-to the embedding model and reranker, transfer it with `docker save` /
+bake Docling OCR into the image next to the embedding model, reranker and
+Whisper model it already holds, transfer it with `docker save` /
 `docker load`, and run with `OFFLINE_MODE=1`, which disables cloud AI
 providers and every model download. `CLIO_PROFILE=secure` refuses to start in
 a weaker shape, and `scripts/preflight.py` reports exactly where data can go.
@@ -906,8 +906,8 @@ model you host.
 **Which file types does it read?**
 PDF, Word (DOCX), PowerPoint (PPTX), Markdown, text, HTML, JSON/JSONL,
 CSV/XLSX (as queryable tables), sixty-plus programming and configuration
-languages, audio (transcribed), and images (described by a vision model).
-Scanned PDFs are read with OCR when it is enabled, and Settings → Custom file
+languages, audio and video recordings (the speech is transcribed; what appears
+on screen is not read), and images (described by a vision model). Scanned PDFs are read with OCR when it is enabled, and Settings → Custom file
 types teaches it a format of your own.
 
 **How do I know an answer is right?**

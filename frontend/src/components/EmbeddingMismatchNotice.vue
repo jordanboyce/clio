@@ -36,7 +36,11 @@
       </template>
 
       <template v-else>
-        <p class="font-medium">The embedding model isn't available</p>
+        <p class="font-medium">Search is using keywords for now</p>
+        <p class="text-xs opacity-80">
+          The embedding model isn't available. You can still add sources, and they get search by
+          meaning by themselves once it is.
+        </p>
         <p class="text-xs opacity-80 break-words">{{ health.message }}</p>
       </template>
     </div>
@@ -44,8 +48,9 @@
 </template>
 
 <script setup>
-// Tells a person why nothing new can be indexed and, when the cause is a model
-// that no longer fits the index, offers the one action that fixes it. Used in
+// Tells a person when search is limited to keywords because the model is out of
+// reach, or nothing new can be indexed because it no longer fits the index, and
+// then offers the one action that fixes it. Used in
 // the background-jobs drawer (a failed job points here) and above the sources
 // list (so the state is visible before anyone tries to add something).
 import { ref, watch, onMounted } from 'vue'

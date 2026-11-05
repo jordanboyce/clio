@@ -11,10 +11,44 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import logging
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm", ".ogg", ".flac", ".mp4", ".mpeg", ".mpga"}
+# Video containers are listed too: only their audio track is decoded and
+# transcribed, so what appears on screen is not read. .ts is left out on purpose,
+# because in a source collection it means TypeScript, not an MPEG transport stream.
+AUDIO_EXTENSIONS = {
+    ".mp3", ".wav", ".m4a", ".aac", ".wma", ".opus", ".ogg", ".flac", ".mpga",
+    ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".mpeg",
+}
+
+
+def whisper_download_dir() -> Path:
+    """Where Whisper downloads land: under the data volume, the one place the
+    service user can write in the image, so a model fetched once survives
+    container recreation with the data directory."""
+    from config import settings
+    return Path(settings.data_dir) / "models" / "whisper"
+
+
+def model_on_disk(model_size: str) -> bool:
+    """Whether the model can load right now with no network at all."""
+    if Path(model_size).is_dir():
+        return True
+    from faster_whisper.utils import download_model
+
+    for cache_dir in (None, str(whisper_download_dir())):
+        try:
+            download_model(model_size, local_files_only=True, cache_dir=cache_dir)
+            return True
+        except Exception:  # noqa: BLE001 - not here, or not a model name at all
+            continue
+    return False
+
+
+class TranscriptionModelUnavailable(RuntimeError):
+    """The speech model is not on this machine and could not be fetched."""
 
 
 class TranscriptionResult:
@@ -34,6 +68,10 @@ class AudioTranscriber:
     transcribe() call; subsequent calls reuse it.
     """
 
+    # A blocked download can take 20 s to give up. A folder of recordings should
+    # not pay that for every file.
+    RETRY_AFTER_SECONDS = 60.0
+
     def __init__(
         self,
         model_size: str = "base",
@@ -45,6 +83,8 @@ class AudioTranscriber:
         self.compute_type = compute_type
         self._model = None
         self._load_lock = threading.Lock()
+        self._load_error: Optional[TranscriptionModelUnavailable] = None
+        self._retry_at = 0.0
 
     def _ensure_loaded(self):
         if self._model is not None:
@@ -52,6 +92,8 @@ class AudioTranscriber:
         with self._load_lock:
             if self._model is not None:
                 return
+            if self._load_error is not None and time.monotonic() < self._retry_at:
+                raise self._load_error.with_traceback(None)
             try:
                 from faster_whisper import WhisperModel
             except ImportError as e:
@@ -64,12 +106,37 @@ class AudioTranscriber:
                 f"Loading Whisper model '{self.model_size}' "
                 f"(device={self.device}, compute_type={self.compute_type})"
             )
-            self._model = WhisperModel(
-                self.model_size,
-                device=self.device,
-                compute_type=self.compute_type,
-            )
+            self._model = self._load_model(WhisperModel)
+            self._load_error = None
             logger.info("Whisper model loaded")
+
+    def _load_model(self, whisper_model):
+        """The model from disk if it is here, or else from the hub."""
+        from huggingface_hub.utils import LocalEntryNotFoundError
+
+        options = {"device": self.device, "compute_type": self.compute_type}
+        downloads = whisper_download_dir()
+        # A copy baked into the image or pre-seeded in HF_HOME, then an earlier
+        # download. Neither touches the network. HF_HOME is read-only to the
+        # service user in the image, so a download may never aim there.
+        for download_root in (None, str(downloads)):
+            try:
+                return whisper_model(self.model_size, local_files_only=True,
+                                     download_root=download_root, **options)
+            except LocalEntryNotFoundError:
+                continue
+        try:
+            return whisper_model(self.model_size, download_root=str(downloads), **options)
+        except Exception as e:
+            logger.warning(f"Could not download Whisper model '{self.model_size}': {e}")
+            self._load_error = TranscriptionModelUnavailable(
+                f"Recordings cannot be transcribed: the Whisper speech model '{self.model_size}' is not on "
+                f"this server and could not be downloaded. Other kinds of source are not affected. Use the "
+                f"full Clio image, which includes the 'base' model, or copy the model into {downloads} from "
+                f"a connected machine (see docs/AIRGAP.md)."
+            )
+            self._retry_at = time.monotonic() + self.RETRY_AFTER_SECONDS
+            raise self._load_error from e
 
     def transcribe(
         self,
@@ -80,7 +147,7 @@ class AudioTranscriber:
         """Transcribe an audio file to text with segment timestamps.
 
         Args:
-            audio_path: Path to audio file (mp3/wav/m4a/webm/ogg/flac/mp4).
+            audio_path: Path to an audio or video file (see AUDIO_EXTENSIONS).
             language: Optional language hint (e.g. "en"). None = auto-detect.
             vad_filter: Drop silent gaps via voice-activity detection.
         """

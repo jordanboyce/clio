@@ -23,7 +23,7 @@ from services.code_extractor import (
 )
 
 # OCR engine abstraction
-from services.ocr_engine import create_ocr_engine
+from services.ocr_engine import create_ocr_engine, get_available_engines
 
 # Audio transcription (meeting recordings)
 from services.audio_transcriber import AUDIO_EXTENSIONS, is_audio_file
@@ -283,16 +283,6 @@ def _sniff_dataframe_header(raw_df) -> Tuple[int, Dict[str, Any]]:
     if header_idx == 0:
         return 0, {}
     return header_idx, _extract_preamble_metadata(raw_rows[:header_idx])
-
-
-# Docling availability flag (free OCR fallback)
-DOCLING_AVAILABLE = False
-
-try:
-    from docling.document_converter import DocumentConverter
-    DOCLING_AVAILABLE = True
-except ImportError:
-    pass
 
 
 class ExtractionResult:
@@ -805,13 +795,17 @@ class DocumentExtractor:
                 except Exception as e:
                     logger.warning(f"Selective OCR failed for {pdf_path.name}: {e}")
 
-        if not page_texts:
+        if not page_texts and self._get_pdf_page_count(pdf_path) == 0:
             raise Exception(f"Failed to extract text from PDF {pdf_path.name}: all methods failed")
 
         if not any(text and text.strip() for text in page_texts.values()):
             if self.enable_ocr:
                 raise Exception(f"Failed to extract text from PDF {pdf_path.name}: OCR returned no text")
-            raise Exception(f"Failed to extract text from PDF {pdf_path.name}: PDF appears to be image-only and OCR is disabled")
+            raise Exception(
+                f"Failed to extract text from PDF {pdf_path.name}: PDF appears to be image-only and OCR "
+                f"is disabled. Turn OCR on in Settings to read scanned pages. The slim image has no OCR "
+                f"engine, so it also needs the full image or a vision model."
+            )
 
         return ExtractionResult(page_texts, method=method, ocr_pages=ocr_pages, cleanup_pages=cleanup_pages)
 
@@ -942,25 +936,34 @@ class DocumentExtractor:
             except Exception as e:
                 logger.warning(f"Vision OCR failed for {pdf_path.name}: {e}")
 
-        # Fallback: try Docling if available (free, no API key needed)
-        if DOCLING_AVAILABLE:
-            try:
-                docling_engine = create_ocr_engine(engine_name="docling", fallback=False)
-                if docling_engine:
-                    logger.info(f"Running Docling OCR on {pdf_path.name}")
-                    result = docling_engine.extract_text(str(pdf_path))
-                    page_texts = {
-                        p: self.normalize_ocr_text(t)
-                        for p, t in result.to_page_dict().items()
-                    }
-                    ocr_pages = [p for p, t in page_texts.items() if t and t.strip()]
-                    if ocr_pages:
-                        return page_texts, ocr_pages, []  # Docling has no LLM cleanup
-            except Exception as e:
-                logger.warning(f"Docling OCR failed for {pdf_path.name}: {e}")
+        # Fallback: the local engines (free, no API key, nothing leaves the machine)
+        page_texts = self._local_ocr(pdf_path)
+        if page_texts:
+            ocr_pages = [p for p, t in page_texts.items() if t and t.strip()]
+            return page_texts, ocr_pages, []  # local engines have no LLM cleanup
 
         logger.warning(f"No OCR engine available or all failed for {pdf_path.name}")
         return None
+
+    def _local_ocr(self, path: Path) -> Dict[int, str]:
+        """Text per page from the first local engine that can read the file.
+
+        Tries each in turn: Docling needs model files a locked-down site may
+        not have, and Tesseract can still read the page when it cannot.
+        """
+        for name in get_available_engines():
+            try:
+                engine = create_ocr_engine(engine_name=name, fallback=False)
+                logger.info(f"Running {name} OCR on {path.name}")
+                page_texts = {
+                    p: self.normalize_ocr_text(t)
+                    for p, t in engine.extract_text(str(path)).to_page_dict().items()
+                }
+                if any(t and t.strip() for t in page_texts.values()):
+                    return page_texts
+            except Exception as e:
+                logger.warning(f"{name} OCR failed for {path.name}: {e}")
+        return {}
 
     def _extract_image(self, image_path: Path) -> ExtractionResult:
         """Index a standalone image as a one-page document.
@@ -981,21 +984,9 @@ class DocumentExtractor:
             except Exception as e:
                 logger.warning(f"Vision description failed for {image_path.name}: {e}")
 
-        if DOCLING_AVAILABLE:
-            try:
-                docling_engine = create_ocr_engine(engine_name="docling", fallback=False)
-                if docling_engine:
-                    logger.info(f"Running Docling OCR on image {image_path.name}")
-                    result = docling_engine.extract_text(str(image_path))
-                    text = "\n".join(
-                        t for t in result.to_page_dict().values() if t and t.strip()
-                    )
-                    if text.strip():
-                        return ExtractionResult(
-                            {1: self.normalize_ocr_text(text)}, method="ocr", ocr_pages=[1]
-                        )
-            except Exception as e:
-                logger.warning(f"Docling OCR failed for image {image_path.name}: {e}")
+        text = "\n".join(t for t in self._local_ocr(image_path).values() if t and t.strip())
+        if text.strip():
+            return ExtractionResult({1: text}, method="ocr", ocr_pages=[1])
 
         raise Exception(
             f"Cannot index image {image_path.name}: no vision model produced a "
@@ -1006,19 +997,22 @@ class DocumentExtractor:
 
     def is_ocr_available(self) -> bool:
         """Check if OCR is available with current configuration."""
-        if self.vision_ocr_provider and self.vision_ocr_provider != "none":
-            return not _provider_needs_key(self.vision_ocr_provider) or bool(
-                self._resolve_vision_api_key(self.vision_ocr_provider)
-            )
-        return DOCLING_AVAILABLE
+        return self.vision_ocr_usable() or bool(get_available_engines())
+
+    def vision_ocr_usable(self) -> bool:
+        """A vision model is chosen, and has the key it needs if it needs one."""
+        if not self.vision_ocr_provider or self.vision_ocr_provider == "none":
+            return False
+        return not _provider_needs_key(self.vision_ocr_provider) or bool(
+            self._resolve_vision_api_key(self.vision_ocr_provider)
+        )
 
     def get_ocr_engine_name(self) -> Optional[str]:
         """Get the name of the active OCR engine."""
-        if self.vision_ocr_provider and self.vision_ocr_provider != "none":
+        if self.vision_ocr_usable():
             return f"vision_ai/{self.vision_ocr_provider}"
-        if DOCLING_AVAILABLE:
-            return "docling"
-        return None
+        engines = get_available_engines()
+        return engines[0] if engines else None
 
     def _extract_txt(self, txt_path: Path) -> Dict[int, str]:
         """
@@ -1831,7 +1825,8 @@ SUPPORTED_TYPES_SUMMARY = (
     "OpenDocument (.odt, .ods, .odp), EPUB, RTF, email (.eml, .mbox), Jupyter notebooks, "
     "HTML/XHTML/SVG, Markdown, JSON/JSONL, plain text and text markup "
     "(.txt, .rst, .adoc, .org, .tex, .bib, .log), subtitles (.srt, .vtt), "
-    "images, audio, and source code (by extension or well-known name such as Makefile)"
+    "images, audio and video recordings (speech is transcribed), "
+    "and source code (by extension or well-known name such as Makefile)"
 )
 
 # Formats people ask for that cannot be read, with the way round each.

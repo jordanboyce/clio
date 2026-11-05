@@ -187,7 +187,8 @@ def _embedding_check() -> Dict[str, Any]:
                       f"{model} is in the local cache ({backend}); nothing is downloaded at run time.")
     return _check("embedding", "models", "Embedding model", FAIL if embedder.hub_offline() else WARN,
                   f"{model} is not in the local cache" + ("; offline mode cannot download it." if embedder.hub_offline()
-                                                          else "; it will download on first use."),
+                                                          else "; it will download on first use.")
+                  + " Until it is there, sources still index and search works by keyword only.",
                   "Build the image with OFFLINE_BUNDLE=1, or run scripts/prefetch_offline_models.py on a connected "
                   "machine and carry the cache across.")
 
@@ -214,24 +215,50 @@ def _reranker_check() -> Dict[str, Any]:
                   "scripts/prefetch_offline_models.py on a connected machine and carry the cache across.")
 
 
-def _capability_checks() -> List[Dict[str, Any]]:
+def _audio_check() -> Dict[str, Any]:
     from importlib.util import find_spec
 
+    if find_spec("faster_whisper") is None:
+        return _check("audio", "models", "Audio transcription", WARN,
+                      "Audio and video recordings cannot be transcribed. Everything else works.",
+                      "Install requirements-audio.txt or use the full image.")
+
+    from services import audio_transcriber, embedder
+
+    model = settings.whisper_model
+    if audio_transcriber.model_on_disk(model):
+        return _check("audio", "models", "Audio transcription", PASS,
+                      f"Whisper model '{model}' is on disk; nothing is downloaded at run time.")
+    return _check("audio", "models", "Audio transcription", WARN,
+                  f"Whisper model '{model}' is not on disk"
+                  + ("; offline mode cannot download it, so recordings will be refused. Everything else works."
+                     if embedder.hub_offline()
+                     else "; it will download on the first recording, and recordings are refused if this "
+                          "network blocks that. Everything else works."),
+                  "Use the full image (it includes 'base'), build with OFFLINE_BUNDLE=1, or copy the model to "
+                  f"{audio_transcriber.whisper_download_dir()} from a connected machine.")
+
+
+def _capability_checks() -> List[Dict[str, Any]]:
+    from services.ocr_engine import get_available_engines
+
     out = []
-    tesseract = shutil.which("tesseract") is not None
-    docling = find_spec("docling") is not None
-    out.append(_check(
-        "ocr", "models", "Scanned-document OCR", PASS if (tesseract or docling) else WARN,
-        "Local OCR available (" + ", ".join(n for n, ok in (("Docling", docling), ("Tesseract", tesseract)) if ok) + ")."
-        if (tesseract or docling) else "No local OCR engine: scanned PDFs and images index without text.",
-        "" if (tesseract or docling) else "Install tesseract or use the full image.",
-    ))
-    whisper = find_spec("faster_whisper") is not None
-    out.append(_check(
-        "audio", "models", "Audio transcription", PASS if whisper else WARN,
-        "faster-whisper installed (local transcription)." if whisper else "Audio files cannot be transcribed.",
-        "" if whisper else "Install requirements-audio.txt or use the full image.",
-    ))
+    engines = ", ".join(get_available_engines())
+    if not settings.enable_ocr:
+        out.append(_check(
+            "ocr", "models", "Scanned-document OCR", WARN,
+            "Turned off: a PDF that is only scanned pages is refused, and scanned pages in other PDFs "
+            f"are skipped. Local engines that could run: {engines or 'none'}.",
+            "Turn OCR on in Settings, or set ENABLE_OCR=true.",
+        ))
+    else:
+        out.append(_check(
+            "ocr", "models", "Scanned-document OCR", PASS if engines else WARN,
+            f"Local OCR available ({engines})." if engines
+            else "No local OCR engine can run: scanned pages are not read unless a vision model is set.",
+            "" if engines else "Install Tesseract and Poppler, or use the full image.",
+        ))
+    out.append(_audio_check())
     from services import git_source
     git_ok = git_source.git_available()
     out.append(_check(

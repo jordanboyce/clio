@@ -28,7 +28,7 @@ from services.app_database import app_db
 from services.indexer_manager import indexer_manager
 from services.collection_service import collection_service
 from services.indexing import ChunkBatcher
-from services.embedder import ensure_embedding_ready
+from services.embedder import EmbeddingDimensionMismatch, EmbeddingUnavailable, ensure_embedding_ready
 from services.link_fetcher import fetch_link
 
 logger = logging.getLogger(__name__)
@@ -1514,8 +1514,15 @@ class UploadService:
             app_db.update_upload_job(job_id, status="running")
             indexer = indexer_manager.get_indexer(collection_id)
             # One clear job error up front beats fetching and extracting every
-            # file only to fail each at the embedding step.
-            ensure_embedding_ready(indexer.embedding_service)
+            # file only to fail each at the embedding step. A model that is
+            # merely out of reach is no reason to stop: the files index for
+            # keyword search and get their vectors when it is back.
+            try:
+                ensure_embedding_ready(indexer.embedding_service)
+            except EmbeddingDimensionMismatch:
+                raise
+            except EmbeddingUnavailable as e:
+                logger.warning(f"Job {job_id}: indexing for keyword search only: {e}")
 
             def fail_file(idx: int, work: _BulkFileWork, error: Exception):
                 nonlocal resolved

@@ -66,7 +66,7 @@ def test_image_routes_through_vision_engine(png, monkeypatch):
 def test_image_without_any_engine_fails_with_guidance(png, monkeypatch):
     ex = _extractor()
     monkeypatch.setattr(ex, "_get_vision_ocr_engine", lambda: None)
-    monkeypatch.setattr(de, "DOCLING_AVAILABLE", False)
+    monkeypatch.setattr(de, "get_available_engines", lambda: [])
 
     with pytest.raises(Exception, match="vision"):
         ex.extract_text(png)

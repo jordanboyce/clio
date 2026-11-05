@@ -200,8 +200,8 @@ class IndexerManager:
         # key missing) the collection still opens: a deferred service
         # carries the dimension from the catalog or the existing index and
         # builds the real one on the first embed, raising
-        # EmbeddingUnavailable (-> 503) until then. Browsing, settings and
-        # the onboarding never depend on a download finishing.
+        # EmbeddingUnavailable until then. Browsing, settings, the onboarding
+        # and indexing for keyword search never depend on a download finishing.
         try:
             embedding_service = self._get_embedding_service(embedding_model)
         except Exception as e:
@@ -210,7 +210,7 @@ class IndexerManager:
                 raise
             logger.warning(
                 f"Embedding model for collection '{collection_id}' is not available yet "
-                f"({e}); opening the collection read-only until it is."
+                f"({e}); search and new sources use keywords only until it is."
             )
             embedding_service = DeferredEmbeddingService(
                 model_name=embedding_model if settings.embedding_provider == "local"

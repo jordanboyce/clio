@@ -295,6 +295,8 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
     else:
         # Full success
         message = f"Successfully indexed {len(indexed_docs)} document(s) to collection '{collection_id}'"
+    if indexed_docs and indexer.vector_store.vectors_pending:
+        message += ". Searchable by keyword for now: no embedding model is available yet"
 
     return UploadResponse(
         message=message,

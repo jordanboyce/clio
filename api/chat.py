@@ -1098,6 +1098,8 @@ _STARTERS_SAMPLE_DOCS = 6
 def _build_provider(provider_name: str, x_ai_key, x_ollama_model, x_anthropic_model,
                     x_openai_model, x_ai_model, x_ai_base_url):
     """The provider a request runs on, resolved exactly as /api/chat does."""
+    from config import settings
+
     try:
         if provider_name == "ollama":
             # No hard-coded fallback model here: a request that names none
@@ -1115,7 +1117,12 @@ def _build_provider(provider_name: str, x_ai_key, x_ollama_model, x_anthropic_mo
         if not key and provider_name != "openai_compatible":
             raise HTTPException(
                 status_code=400,
-                detail=f"API key required for {provider_name} — pass X-AI-Key or store a team key via /api/agent/config",
+                detail=(
+                    f"Offline mode does not allow {provider_name}. Answers need a model on your own network: "
+                    "use local Ollama or an OpenAI-compatible server (AI_PROVIDER, AI_BASE_URL, AI_MODEL). "
+                    "Search works without one."
+                ) if settings.offline_mode else
+                f"API key required for {provider_name} — pass X-AI-Key or store a team key via /api/agent/config",
             )
         extra = {}
         model = x_ai_model or x_anthropic_model or x_openai_model

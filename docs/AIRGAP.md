@@ -22,8 +22,9 @@ Setting `OFFLINE_MODE=1` enforces, at runtime:
   LM Studio, llama.cpp server, TGI) remain available.
 - **No HuggingFace downloads.** `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`
   are set before any ML library loads. Embedding, reranker, Whisper, and
-  Docling models load from the local cache only; a missing model fails fast
-  with instructions instead of hanging on network retries.
+  Docling models load from the local cache only, and a missing model never
+  hangs on network retries or stops the rest of the app
+  ([what each one costs](#when-a-model-or-provider-is-out-of-reach)).
   The embedding model has two in-process backends — fastembed (ONNX, the
   default, cache under `DATA_DIR/models/fastembed`, or `/opt/clio/models/fastembed`
   in the image) and sentence-transformers (PyTorch, HF cache). Both read the
@@ -42,18 +43,18 @@ resources, zero telemetry, and zero analytics.
 docker compose build --build-arg OFFLINE_BUNDLE=1
 ```
 
-`OFFLINE_BUNDLE=1` bakes every runtime model into the image via the prefetch
-script, including the default embedding model (`all-MiniLM-L6-v2`) and the
-reranker (both are required; the run fails if either cannot be fetched). The
-embedding model is also gated separately by `BAKE_EMBEDDING`, but that arg
-only matters for the *default* image — it is already covered here, so you do
-not need to pass it with `OFFLINE_BUNDLE=1`:
+The default full image already holds the embedding model, the reranker and the
+Whisper `base` speech model, so it needs no network at run time for any of them.
+`OFFLINE_BUNDLE=1` adds what is left via the prefetch script, and unlike the
+default build it fails if a required model cannot be fetched, so a build behind
+a firewall cannot quietly produce an image without them:
 
-| Model | Purpose | Approx. size |
-|---|---|---|
-| `cross-encoder/ms-marco-MiniLM-L-6-v2` | Search reranker (fastembed ONNX export `Xenova/ms-marco-MiniLM-L-6-v2`, plus the PyTorch copy when sentence-transformers is installed) | ~90 MB each |
-| `faster-whisper base` | Audio transcription | ~150 MB |
-| Docling layout + TableFormer | Local OCR of scanned PDFs | ~500 MB |
+| Model | Purpose | Approx. size | In the default full image |
+|---|---|---|---|
+| `all-MiniLM-L6-v2` | Search by meaning | ~90 MB | Yes |
+| `cross-encoder/ms-marco-MiniLM-L-6-v2` | Search reranker (fastembed ONNX export `Xenova/ms-marco-MiniLM-L-6-v2`, plus the PyTorch copy when sentence-transformers is installed) | ~90 MB each | Yes |
+| `faster-whisper base` | Transcribing audio and video recordings | ~145 MB | Yes |
+| Docling layout + TableFormer | Local OCR of scanned PDFs, beside the Tesseract already included | ~500 MB | No |
 
 To bake a different Whisper size: `--build-arg WHISPER_MODEL=small`.
 
@@ -109,6 +110,9 @@ carry across.
    - `~/.cache/huggingface/` (or wherever `HF_HOME` points) — the
      sentence-transformers backend and the reranker, only when
      `requirements-torch.txt` is installed
+   - `<DATA_DIR>/models/whisper/` (if transcribing recordings). Seed it with
+     `python -c "from faster_whisper.utils import download_model; download_model('base', cache_dir='data/models/whisper')"`,
+     or set `WHISPER_MODEL` to a folder holding a model.
    - `~/.cache/docling/` (if using local OCR)
 
 3. Inside the air gap, set in `.env`:
@@ -171,8 +175,33 @@ first three boxes are not true.
 | Document indexing (PDF, DOCX, TXT, MD, CSV/XLSX, code) | ✅ | Fully local |
 | Semantic + keyword + hybrid search | ✅ | FAISS/BM25, local embeddings |
 | Reranking | ✅ | Automatic: on whenever the baked/pre-seeded model is present (`ENABLE_RERANKER` unset); the default image bakes it, and nothing downloads under `OFFLINE_MODE` |
-| OCR of scanned PDFs | ✅ | Docling/Tesseract locally; vision-LLM OCR only via local Ollama |
-| Audio transcription | ✅ | Local Whisper, with baked/pre-seeded model |
+| OCR of scanned PDFs | ✅ | Tesseract in the full image, Docling if baked, once `ENABLE_OCR=true`; vision-LLM OCR only via local Ollama |
+| Transcribing audio and video recordings | ✅ | Local Whisper; the full image includes the `base` model. Speech only: what appears on screen is not read |
 | Grounded chat | ✅ | Via local Ollama or self-hosted OpenAI-compatible server |
 | MCP endpoint for internal agents | ✅ | Embedded, in-process |
 | Cloud AI providers | 🚫 | Deliberately disabled in offline mode |
+
+## When a model or provider is out of reach
+
+A network can block a model hub or provider with or without `OFFLINE_MODE` being
+set. Losing one takes away only what depends on it. The rest keeps working, and
+`GET /api/system/readiness` reports what is missing.
+
+| Missing | What still works | What stops | How it comes back |
+|---|---|---|---|
+| Embedding model or server | Sources still index, and search works by keyword | Search by meaning. A search that asks for `semantic` explicitly answers 503 | When the model is there, the next search or upload in a collection starts adding the missing vectors from the stored text. Nothing is uploaded again |
+| Reranker | Everything; results come back in retrieval order | Slightly better ordering of the top results | On when the model is on disk |
+| Whisper model | Every other kind of source, including others in the same upload | Audio and video recordings are refused, with a message saying what to do | When the model is on disk, the next recording uses it (within a minute) |
+| AI provider (chat model) | Indexing, search, citations and the MCP search tools | Written answers, AI-written artifacts, vision OCR | Connect local Ollama or an OpenAI-compatible server on your network |
+| Vision or Docling OCR | Tesseract reads scanned pages in the full image, once OCR is turned on | Figure descriptions and Docling's layout analysis | Connect a vision model, or bake Docling |
+
+The status bar at the bottom of the app shows each of these as on, limited, off
+or unavailable; click it for the reason and the fix. `GET /api/features` returns
+the same list. It reads settings and the local disk only and contacts nothing.
+
+OCR is off until it is turned on in Settings or with `ENABLE_OCR=true`. While it
+is off, a PDF that is only scanned pages is refused, with a message saying so.
+
+A firewall that silently drops traffic is slower than `OFFLINE_MODE`: the first
+attempt to reach a missing model waits for a timeout (10 to 20 seconds). On a
+network that can never reach the hub, set `OFFLINE_MODE=1` so nothing tries.

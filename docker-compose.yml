@@ -24,8 +24,8 @@ services:
     image: ${CLIO_IMAGE:-clio:local}
     build:
       context: .
-      # Air-gapped deployments: bake ALL runtime models (reranker, Whisper,
-      # Docling OCR) into the image so nothing is downloaded after build.
+      # Air-gapped deployments: also bake Docling OCR, and fail the build if
+      # any model cannot be fetched, so nothing is downloaded after build.
       # Uncomment, build on a connected machine, then `docker save` the image
       # and `docker load` it inside the air gap — see docs/AIRGAP.md.
       # args:
@@ -36,7 +36,7 @@ services:
       # API instead.
       args:
         BAKE_EMBEDDING: "${BAKE_EMBEDDING:-1}"
-        # Lean image (1.6 GB instead of 3.9 GB): no PyTorch, OCR of scanned
+        # Lean image (1.6 GB instead of 4.0 GB): no PyTorch, OCR of scanned
         # PDFs or audio transcription; indexing, search, the reranker, chat
         # and MCP all stay. SLIM=1 docker compose build
         SLIM: "${SLIM:-0}"

@@ -199,6 +199,20 @@ async def get_capabilities():
 
 
 @router.get(
+    "/api/features",
+    summary="Which features work right now, for the footer",
+    tags=["system"],
+)
+def get_features():
+    """Each feature's state (on, limited, off, unavailable), why, and how to
+    fix it. Reads settings and the local disk only, so nothing leaves the
+    network; see services/feature_status.py."""
+    from services.feature_status import feature_status
+
+    return {"features": feature_status()}
+
+
+@router.get(
     "/api/about",
     summary="Version and deployment facts for the About dialog",
     tags=["system"],

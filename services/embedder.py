@@ -637,14 +637,20 @@ class OllamaEmbeddingService:
         # Batch in chunks of 64 to avoid oversized requests.
         results: List[List[float]] = []
         for i in range(0, len(texts), 64):
-            results.extend(self._call_api(texts[i : i + 64]))
+            try:
+                results.extend(self._call_api(texts[i : i + 64]))
+            except Exception as e:
+                raise EmbeddingUnavailable(f"Ollama at {self.base_url} could not embed: {e}") from e
             if progress_callback:
                 progress_callback(min(i + 64, len(texts)), len(texts))
         return np.array(results, dtype=np.float32)
 
     def embed_query(self, query: str) -> np.ndarray:
         logger.debug(f"Ollama embed_query: {query[:60]}…")
-        return np.array(self._call_api([query])[0], dtype=np.float32)
+        try:
+            return np.array(self._call_api([query])[0], dtype=np.float32)
+        except Exception as e:
+            raise EmbeddingUnavailable(f"Ollama at {self.base_url} could not embed: {e}") from e
 
 
 class EmbeddingService:
@@ -950,7 +956,7 @@ class OpenAICompatibleEmbeddingService:
             try:
                 results.extend(self._call_api(batch))
             except Exception as e:
-                raise RuntimeError(self._explain(e)) from e
+                raise EmbeddingUnavailable(self._explain(e)) from e
             if progress_callback:
                 progress_callback(min(i + len(batch), len(texts)), len(texts))
         return np.array(results, dtype=np.float32)
@@ -960,7 +966,7 @@ class OpenAICompatibleEmbeddingService:
         try:
             return np.array(self._call_api([query])[0], dtype=np.float32)
         except Exception as e:
-            raise RuntimeError(self._explain(e)) from e
+            raise EmbeddingUnavailable(self._explain(e)) from e
 
 
 # Re-exported for older imports; the catalog is the source of truth now.

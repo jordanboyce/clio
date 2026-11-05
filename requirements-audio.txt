@@ -3,3 +3,7 @@
 #   pip install -r requirements-audio.txt
 
 faster-whisper>=1.0.0
+# PyAV 19 removed the metadata_errors argument that faster-whisper 1.2.1 passes
+# to av.open(), so every transcription fails with a TypeError. PyAV also bundles
+# the FFmpeg libraries that decode recordings, so no ffmpeg binary is needed.
+av<19

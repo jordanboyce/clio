@@ -717,6 +717,9 @@ class Settings(BaseSettings):
     research_max_concurrent_jobs: int = 1
 
     # Audio transcription (meeting recordings via local Whisper)
+    # The full image includes the "base" model. Any other model is read from
+    # HF_HOME or DATA_DIR/models/whisper, or else downloaded to the latter on
+    # the first recording. WHISPER_MODEL can also be a folder holding a model.
     # Model size: tiny | base | small | medium | large-v3
     #   tiny   ~39MB   fastest, lowest accuracy
     #   base   ~142MB  good default for CPU

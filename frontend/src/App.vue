@@ -658,7 +658,7 @@
     <footer
       class="hidden md:flex items-center gap-3 px-3 h-6 bg-base-100 border-t border-base-300 text-[11px] text-base-content/55 flex-shrink-0"
       role="contentinfo"
-      aria-label="Background jobs status"
+      aria-label="Status"
     >
       <span class="flex items-center gap-1.5 text-base-content/45 flex-shrink-0">
         <span class="brand-art brand-art-mark h-3.5 w-3.5" aria-hidden="true"></span>
@@ -706,6 +706,10 @@
           aria-hidden="true"
         ></progress>
       </template>
+
+      <!-- What works right now -->
+      <span class="w-px h-3 bg-base-300" aria-hidden="true"></span>
+      <FeatureStatus />
 
       <div class="flex-1"></div>
 
@@ -1348,6 +1352,7 @@ import RibbonCustomizeDialog from './components/RibbonCustomizeDialog.vue'
 import { ribbonItems, visibleItems } from './utils/ribbon.js'
 import { useLayoutStore } from './stores/layoutStore'
 import ReviewBell from './components/ReviewBell.vue'
+import FeatureStatus from './components/FeatureStatus.vue'
 import ChangesBell from './components/ChangesBell.vue'
 import ModelPicker from './components/ModelPicker.vue'
 import CollectionPicker from './components/CollectionPicker.vue'
@@ -1795,7 +1800,7 @@ const embeddingWarming = ref(false)
 const embeddingBanner = computed(() => {
   const e = statsStore.embedding
   if (!e) return statsStore.embeddingModelMissing
-    ? { kind: 'missing', text: 'The search model is not on this server yet.', canDownload: false }
+    ? { kind: 'missing', text: 'The search model is not on this server yet. Sources still index, and search works by keyword.', canDownload: false }
     : null
   const model = e.model ? ` (${e.model})` : ''
   if (e.status === 'downloading') {
@@ -1810,11 +1815,11 @@ const embeddingBanner = computed(() => {
       kind: 'missing',
       text: e.can_download
         ? `The search model${model} is not on this server yet. Download it once and it stays with your data.`
-        : `The search model${model} is not on this server, and this network cannot download it. Choose another provider or pre-seed the model.`,
+        : `The search model${model} is not on this server, and this network cannot download it. Sources still index and search works by keyword. For search by meaning, choose another provider or pre-seed the model.`,
       canDownload: !!e.can_download,
     }
   }
-  if (e.status === 'error') return { kind: 'error', text: `The search model could not be prepared: ${e.error || 'unknown error'}`, canDownload: true }
+  if (e.status === 'error') return { kind: 'error', text: `Sources still index and search works by keyword, but the search model could not be prepared: ${e.error || 'unknown error'}`, canDownload: true }
   return null
 })
 // A new problem after a dismissal should show again.

@@ -568,9 +568,9 @@ def test_zip_stays_rejected_with_a_human_message(extractor, tmp_path):
 
 
 def test_unsupported_message_lists_supported_types_for_unknown_extensions():
-    message = unsupported_reason("movie.mkv")
-    assert message.startswith("Clio can't read .mkv files. Supported:")
-    for needle in ("PDF", ".docx", ".odt", "EPUB", ".eml", "TSV", "source code"):
+    message = unsupported_reason("scene.blend")
+    assert message.startswith("Clio can't read .blend files. Supported:")
+    for needle in ("PDF", ".docx", ".odt", "EPUB", ".eml", "TSV", "video", "source code"):
         assert needle in message
 
 

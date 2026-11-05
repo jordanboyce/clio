@@ -262,11 +262,27 @@ class LegacyOCREngine(OCREngine):
             return False
 
     def extract_text(self, pdf_path: str) -> OCRResult:
-        """Extract text from PDF with Tesseract."""
+        """Extract text from a PDF or a standalone image with Tesseract."""
         logger.info(f"Running legacy OCR ({self._engine}) on {pdf_path}")
 
         from pdf2image import convert_from_path
         import pytesseract
+
+        if Path(pdf_path).suffix.lower() != ".pdf":
+            from PIL import Image
+
+            if not _configure_pytesseract_binary():
+                raise RuntimeError(
+                    "Tesseract binary not found. Install Tesseract OCR and add it to PATH, "
+                    "or set TESSERACT_CMD."
+                )
+            with Image.open(pdf_path) as image:
+                text = pytesseract.image_to_string(image, lang=self._language).strip()
+            return OCRResult(
+                pages=[OCRPage(page_number=1, text=text, metadata={"engine": self._engine})],
+                engine=self.name,
+                metadata={"language": self._language, "source_file": pdf_path},
+            )
 
         if not _has_poppler_binaries():
             raise RuntimeError(
