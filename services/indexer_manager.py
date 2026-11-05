@@ -9,6 +9,8 @@ Each collection has its own:
 import asyncio
 import logging
 import threading
+from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Dict
 
@@ -17,7 +19,7 @@ from services.document_extractor import DocumentExtractor
 from services.chunker import TextChunker
 from services.embedder import (
     DeferredEmbeddingService, create_embedding_service, describe_embedding, index_dimension,
-    embedding_signature, known_embedding_dim,
+    embedding_signature, known_embedding_dim, local_model_cached,
 )
 from services.vector_store import VectorStore
 from services.indexing import DocumentIndexer
@@ -26,6 +28,11 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 _UNLOAD_SWEEP_INTERVAL_S = 60
+
+# How long opening a collection or a first embed waits for a model that has to
+# come over a network. A healthy endpoint answers within this; a blocked one
+# carries on in the background while the collection works by keyword.
+EMBEDDING_BUILD_WAIT_SECONDS = 5.0
 
 
 class IndexerManager:
@@ -41,6 +48,8 @@ class IndexerManager:
         # collection each construct a VectorStore over the same directory and
         # the loser's in-memory FAISS index silently wins the next save().
         self._creation_lock = threading.Lock()
+        self._builds: Dict[str, Future] = {}
+        self._builds_lock = threading.Lock()
 
         # Apply any DB config overrides to settings before creating the extractor
         self._apply_db_config()
@@ -149,6 +158,52 @@ class IndexerManager:
             self._embedding_services[key] = create_embedding_service(collection_model=model)
         return self._embedding_services[key]
 
+    def _reach_embedding_service(self, collection_embedding_model: str):
+        """_get_embedding_service, for callers that must not wait on a network.
+
+        A firewall that drops packets can hold a hub client or a remote probe
+        for minutes, and opening a collection blocks every other request that
+        needs one. A model already on disk loads here as before. Anything else
+        is built in the background, one attempt at a time, and raises after a
+        short wait; the model is in the cache when that attempt succeeds.
+        """
+        model = collection_embedding_model
+        local = settings.embedding_provider == "local"
+        if local and local_model_cached(model):
+            return self._get_embedding_service(model)
+
+        key = f"local::{model}" if local else embedding_signature()
+        with self._builds_lock:
+            if key in self._embedding_services:
+                return self._embedding_services[key]
+            build = self._builds.get(key)
+            started_here = build is None
+            if started_here:
+                build = Future()
+                self._builds[key] = build
+                threading.Thread(
+                    target=self._run_build, args=(key, model, build), name="embedding-build", daemon=True,
+                ).start()
+        try:
+            # Only the first caller waits, so opening many collections does not
+            # add up to minutes while one attempt is under way.
+            return build.result(timeout=EMBEDDING_BUILD_WAIT_SECONDS if started_here else 0)
+        except FutureTimeout:
+            name = model if local else (settings.remote_embedding_model or model)
+            raise RuntimeError(
+                f"Still trying to reach embedding model '{name}'. "
+                f"Behind a firewall this can take minutes to fail."
+            ) from None
+
+    def _run_build(self, key: str, model: str, build: Future) -> None:
+        try:
+            build.set_result(self._get_embedding_service(model))
+        except Exception as e:  # noqa: BLE001 - the waiter or the next attempt reports it
+            build.set_exception(e)
+        finally:
+            with self._builds_lock:
+                self._builds.pop(key, None)
+
     def reset_embedding_services(self):
         """Forget cached embedding services after the embedding settings change.
 
@@ -198,16 +253,14 @@ class IndexerManager:
         # Get or create embedding service. When the model cannot be built
         # right now (hub blocked behind a firewall, backend not installed,
         # key missing) the collection still opens: a deferred service
-        # carries the dimension from the catalog or the existing index and
-        # builds the real one on the first embed, raising
+        # carries the dimension from the catalog or the existing index, if
+        # either knows it, and builds the real one on the first embed, raising
         # EmbeddingUnavailable until then. Browsing, settings, the onboarding
         # and indexing for keyword search never depend on a download finishing.
         try:
-            embedding_service = self._get_embedding_service(embedding_model)
+            embedding_service = self._reach_embedding_service(embedding_model)
         except Exception as e:
             dim = known_embedding_dim(embedding_model, indexes_dir)
-            if dim is None:
-                raise
             logger.warning(
                 f"Embedding model for collection '{collection_id}' is not available yet "
                 f"({e}); search and new sources use keywords only until it is."
@@ -216,7 +269,7 @@ class IndexerManager:
                 model_name=embedding_model if settings.embedding_provider == "local"
                 else (settings.remote_embedding_model or embedding_model),
                 embedding_dim=dim,
-                factory=lambda m=embedding_model: self._get_embedding_service(m),
+                factory=lambda m=embedding_model: self._reach_embedding_service(m),
                 reason=str(e),
             )
 
@@ -249,6 +302,14 @@ class IndexerManager:
             embedding_dim=embedding_service.embedding_dim,
         )
         vector_store.embedding_info = describe_embedding(embedding_service)
+        if isinstance(embedding_service, DeferredEmbeddingService):
+            def model_arrived(real):
+                from services.embedding_status import embedding_status
+
+                vector_store.settle_embedding(describe_embedding(real))
+                embedding_status.model_arrived(real)
+
+            embedding_service.on_ready = model_arrived
 
         # Create text chunker with collection settings
         text_chunker = TextChunker(

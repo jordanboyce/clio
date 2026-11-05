@@ -229,9 +229,14 @@ def manager_factory(monkeypatch, tmp_path):
     return make
 
 
+def _save_a_vector(indexer, dim):
+    store = indexer.vector_store
+    store.index.add_with_ids(np.ones((1, dim), dtype=np.float32), np.asarray([1], dtype=np.int64))
+    store._write_index_atomic(store.index)
+
+
 def test_collection_with_an_older_index_opens_read_only_and_reports_the_mismatch(manager_factory):
-    old = manager_factory(384).get_indexer("default")
-    old.vector_store.save()                                  # a 384-dim index now exists on disk
+    _save_a_vector(manager_factory(384).get_indexer("default"), 384)  # a 384-dim index now exists on disk
 
     # The model now in use writes 2048-dim vectors. This used to fail the whole
     # open with a bare RuntimeError, leaving the collection unusable.
@@ -254,7 +259,7 @@ def test_matching_model_still_opens_normally(manager_factory):
 
 def test_reindex_resolves_it(manager_factory):
     """After the index is rebuilt at the new size the same model fits."""
-    manager_factory(384).get_indexer("default").vector_store.save()
+    _save_a_vector(manager_factory(384).get_indexer("default"), 384)
     manager = manager_factory(2048)
     manager.get_indexer("default")
     # What a re-index leaves behind: an index of the new size (discarded and rebuilt).

@@ -11,6 +11,7 @@ import sqlite3
 import time
 import zipfile
 
+import faiss
 import pytest
 
 import config
@@ -22,6 +23,7 @@ from services.indexer_manager import indexer_manager
 from services.research.store import ResearchStore
 from services.structured_store import StructuredStore
 from models.schemas import SearchMode
+from services.embedder import DeferredEmbeddingService, EmbeddingDimensionMismatch, EmbeddingUnavailable
 from tests.test_governance import FakeEmbedder
 
 SIG = "local::fake-embed"
@@ -474,6 +476,128 @@ def test_import_with_another_model_re_embeds_from_chunk_text(env, monkeypatch):
     chunk = new.vector_store.metadata_store.get_all_chunks_ordered()[0]
     hits = new.search(chunk["text"], top_k=1, mode=SearchMode.SEMANTIC)["results"]
     assert hits[0].text_snippet.startswith(chunk["text"][:40])
+
+
+def _other_model_bundle(env, monkeypatch):
+    """A bundle this server cannot reuse the vectors of."""
+    cid, _ = _source_collection(env)
+    path, _ = cb.export_collection(cid)
+    import services.embedder as embedder
+    monkeypatch.setattr(embedder, "service_signature", lambda **kw: "openrouter::x::other")
+    return path
+
+
+class BlockedEmbedder(SignedEmbedder):
+    """Built fine, as a remote service is, but its server has gone away."""
+
+    def __init__(self, after=0):
+        self.calls_left = after
+
+    def embed_texts(self, texts, progress_callback=None):
+        if self.calls_left <= 0:
+            raise EmbeddingUnavailable("the embedding server is down")
+        self.calls_left -= 1
+        return super().embed_texts(texts, progress_callback=progress_callback)
+
+
+def _assert_found_by_keyword_then_catches_up(result, monkeypatch):
+    new = indexer_manager.get_indexer(result["id"])
+    store = new.vector_store
+    total = store.metadata_store.get_total_chunks()
+    assert total > 0 and store.vectors_pending
+
+    assert new.search("holiday", top_k=3)["results"]
+    assert new.search("holiday", top_k=3, mode=SearchMode.KEYWORD)["results"]
+
+    # The model arrives, the way it does in production for each kind of service.
+    monkeypatch.setattr(indexer_manager, "_get_embedding_service", lambda model: SignedEmbedder())
+    monkeypatch.setattr(DeferredEmbeddingService, "RETRY_AFTER_SECONDS", 0.0)
+    if not isinstance(new.embedding_service, DeferredEmbeddingService):
+        new.embedding_service = SignedEmbedder()
+    new.fill_missing_vectors()
+    assert store.index.ntotal == total and not store.vectors_pending
+    assert new.search("holiday", top_k=3, mode=SearchMode.SEMANTIC)["results"]
+
+
+def test_import_with_no_model_at_all_lands_for_keyword_search(env, monkeypatch):
+    # Nothing in the catalog knows this model and it cannot be built, so the
+    # collection could not even open before.
+    path = _other_model_bundle(env, monkeypatch)
+
+    def unreachable(model):
+        raise RuntimeError("Cannot reach Ollama at http://ollama.internal:11434")
+
+    monkeypatch.setattr(indexer_manager, "_get_embedding_service", unreachable)
+
+    result = cb.import_collection(path, owner_id="default")
+    assert result["vectors"] == "re-embed"
+    job = _wait(result["job_id"])
+
+    assert job["status"] == "completed", job
+    summary = json.loads(job["result_summary"])
+    assert summary["vectors"] == "pending" and summary["embedded"] == 0
+    assert "Cannot reach Ollama" in summary["reason"]
+    assert not (collection_service.get_indexes_path(result["id"]) / "faiss.index").exists()
+
+    assert isinstance(indexer_manager.get_indexer(result["id"]).embedding_service, DeferredEmbeddingService)
+    _assert_found_by_keyword_then_catches_up(result, monkeypatch)
+
+
+def test_import_with_a_model_known_but_not_on_disk(env, monkeypatch):
+    path = _other_model_bundle(env, monkeypatch)
+    monkeypatch.setattr(indexer_manager, "_get_embedding_service", lambda model: BlockedEmbedder())
+
+    result = cb.import_collection(path, owner_id="default")
+    job = _wait(result["job_id"])
+
+    assert job["status"] == "completed", job
+    assert json.loads(job["result_summary"])["vectors"] == "pending"
+    _assert_found_by_keyword_then_catches_up(result, monkeypatch)
+
+
+def test_import_keeps_the_vectors_it_got_when_the_model_goes_away_midway(env, monkeypatch):
+    from services.metadata_store import MetadataStore
+
+    path = _other_model_bundle(env, monkeypatch)
+    monkeypatch.setattr(indexer_manager, "_get_embedding_service", lambda model: BlockedEmbedder(after=1))
+    batches_of_one = MetadataStore.iter_rowid_texts
+    monkeypatch.setattr(MetadataStore, "iter_rowid_texts",
+                        lambda self, batch_size=256: batches_of_one(self, batch_size=1))
+
+    result = cb.import_collection(path, owner_id="default")
+    job = _wait(result["job_id"])
+
+    assert job["status"] == "completed", job
+    assert json.loads(job["result_summary"])["embedded"] == 1
+    store = indexer_manager.get_indexer(result["id"]).vector_store
+    assert store.index.ntotal == 1
+    # It survives a restart, and only the rest are embedded later.
+    assert faiss.read_index(str(store.index_path)).ntotal == 1
+    assert len(store.chunks_without_vectors()) == store.metadata_store.get_total_chunks() - 1
+    _assert_found_by_keyword_then_catches_up(result, monkeypatch)
+
+
+def test_import_still_fails_on_a_model_that_does_not_fit(env, monkeypatch):
+    path = _other_model_bundle(env, monkeypatch)
+
+    class DoesNotFit(SignedEmbedder):
+        def embed_texts(self, texts, progress_callback=None):
+            raise EmbeddingDimensionMismatch("other", 768, 8)
+
+    monkeypatch.setattr(indexer_manager, "_get_embedding_service", lambda model: DoesNotFit())
+
+    job = _wait(cb.import_collection(path, owner_id="default")["job_id"])
+
+    assert job["status"] == "failed" and "768" in job["error"]
+
+
+def test_a_successful_re_embed_leaves_nothing_pending(env, monkeypatch):
+    path = _other_model_bundle(env, monkeypatch)
+
+    result = cb.import_collection(path, owner_id="default")
+    assert _wait(result["job_id"])["status"] == "completed"
+
+    assert not indexer_manager.get_indexer(result["id"]).vector_store.vectors_pending
 
 
 def _zip(entries):

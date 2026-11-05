@@ -2,8 +2,26 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field
+from typing import Annotated, List, Optional, Dict, Any, Literal
+from pydantic import BaseModel, BeforeValidator, Field
+
+
+def default_ai_provider() -> str:
+    """The provider a request means when it names none: the deployment's own
+    (AI_PROVIDER), so an API client on an on-prem install reaches its private
+    endpoint rather than a cloud provider it may be forbidden from using."""
+    from config import settings
+
+    return (settings.ai_provider or "").strip() or "anthropic"
+
+
+AIProviderName = Annotated[
+    str,
+    BeforeValidator(lambda name: name or default_ai_provider()),
+    Field(default_factory=default_ai_provider,
+          description="AI provider, such as 'anthropic', 'openai', 'openai_compatible' or 'ollama'. "
+                      "Omitted = the deployment's own (AI_PROVIDER)."),
+]
 
 
 class ChunkMetadata(BaseModel):
@@ -218,7 +236,7 @@ class UploadJobResponse(BaseModel):
 class AIOptions(BaseModel):
     """Optional AI enhancement settings for search."""
 
-    provider: str = Field("anthropic", description="AI provider: 'anthropic', 'openai', or 'ollama'")
+    provider: AIProviderName
     rerank: bool = Field(False, description="Rerank results using AI for better relevance")
     synthesize: bool = Field(False, description="Generate an AI summary with citations")
 
@@ -416,7 +434,7 @@ class ChatRequest(BaseModel):
     """Request body for the chat endpoint."""
 
     messages: List[ChatMessage] = Field(..., max_length=100, description="Conversation history including the latest user message")
-    provider: str = Field("anthropic", description="AI provider: 'anthropic', 'openai', or 'ollama'")
+    provider: AIProviderName
     mode: SearchMode = Field(SearchMode.AUTO, description="Search mode for context retrieval ('auto' picks per query)")
     scope: Literal["current", "all"] = Field("current", description="Collection scope: 'current' (single collection) or 'all' (search across all collections)")
     rerank: bool = Field(False, description="Rerank retrieved context chunks using AI before generating a response")
@@ -483,7 +501,7 @@ class ChatResponse(BaseModel):
 class StarterQuestionsRequest(BaseModel):
     """Request body for suggested opening questions about a collection."""
 
-    provider: str = Field("anthropic", description="AI provider used to write the questions")
+    provider: AIProviderName
     document_ids: Optional[List[str]] = Field(
         None, description="Limit the suggestions to these sources (document ids in the collection)"
     )
@@ -503,7 +521,7 @@ class ArtifactRequest(BaseModel):
     artifact_type: Literal["summary", "faq", "timeline", "briefing", "study_guide", "podcast_script"] = Field(
         ..., description="Artifact type: 'summary', 'faq', 'timeline', 'briefing', 'study_guide' or 'podcast_script'"
     )
-    provider: str = Field("anthropic", description="AI provider")
+    provider: AIProviderName
     # A saved artifact belongs to one collection, so it may only draw on that
     # collection: content from others would reach whoever can read this one.
     scope: Literal["current"] = Field("current", description="Always 'current': this collection")

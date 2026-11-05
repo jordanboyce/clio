@@ -24,6 +24,11 @@ def test_known_dim_falls_back_to_the_existing_index(tmp_path):
     import faiss
     index = faiss.IndexIDMap2(faiss.IndexFlatIP(8))
     faiss.write_index(index, str(tmp_path / "faiss.index"))
+    # An index with no vectors commits the collection to nothing.
+    assert known_embedding_dim("not-a-curated-model", tmp_path, provider="local") is None
+
+    index.add_with_ids(np.ones((1, 8), dtype=np.float32), np.asarray([1], dtype=np.int64))
+    faiss.write_index(index, str(tmp_path / "faiss.index"))
     assert known_embedding_dim("not-a-curated-model", tmp_path, provider="local") == 8
 
 

@@ -189,7 +189,7 @@ set. Losing one takes away only what depends on it. The rest keeps working, and
 
 | Missing | What still works | What stops | How it comes back |
 |---|---|---|---|
-| Embedding model or server | Sources still index, and search works by keyword | Search by meaning. A search that asks for `semantic` explicitly answers 503 | When the model is there, the next search or upload in a collection starts adding the missing vectors from the stored text. Nothing is uploaded again |
+| Embedding model or server | Sources still index, collection bundles still import, and search works by keyword | Search by meaning. A search that asks for `semantic` or `hybrid` explicitly answers 503 | When the model is there, the next search or upload in a collection starts adding the missing vectors from the stored text. Nothing is uploaded again |
 | Reranker | Everything; results come back in retrieval order | Slightly better ordering of the top results | On when the model is on disk |
 | Whisper model | Every other kind of source, including others in the same upload | Audio and video recordings are refused, with a message saying what to do | When the model is on disk, the next recording uses it (within a minute) |
 | AI provider (chat model) | Indexing, search, citations and the MCP search tools | Written answers, AI-written artifacts, vision OCR | Connect local Ollama or an OpenAI-compatible server on your network |
@@ -198,6 +198,23 @@ set. Losing one takes away only what depends on it. The rest keeps working, and
 The status bar at the bottom of the app shows each of these as on, limited, off
 or unavailable; click it for the reason and the fix. `GET /api/features` returns
 the same list. It reads settings and the local disk only and contacts nothing.
+
+**A custom embedding model.** All of this holds for a model no catalog knows,
+and for your own embedding server being down. Clio does not guess how large that
+model's vectors are. A collection writes no vector index until the model first
+answers, then takes the model's size. From then on the vectors on disk fix the
+size: a later model of another size is refused until you re-index, and the
+vectors stay as they were.
+
+**A firewall that drops packets** can take minutes to fail, where a refused
+connection takes a moment. Nothing waits for it: a model that is not on disk is
+fetched in the background, one attempt at a time, while the collection works by
+keyword.
+
+**Importing a collection bundle.** When a bundle's vectors can be reused, no
+model is needed at all. When they cannot and no model can be reached, the import
+still completes: its job reports `vectors: pending`, the collection is searchable
+by keyword, and the vectors arrive the same way as for any other source.
 
 The full image turns OCR on unless `ENABLE_OCR` is set or OCR was switched off
 in Settings. Elsewhere it is off until turned on. While it is off, a PDF that is

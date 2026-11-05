@@ -134,6 +134,30 @@ class EmbeddingStatus:
         with self._lock:
             return copy.deepcopy(self._state)
 
+    def model_arrived(self, service) -> None:
+        """A model out of reach at startup has since been built for a collection.
+
+        The warm-up only looks once, so without this the status keeps saying no
+        model is available while search by meaning works. A collection's own
+        choice of local model says nothing about the configured one.
+        """
+        from config import settings
+        from services.embedder import embedding_signature
+
+        if getattr(service, "signature", None) != embedding_signature():
+            return
+        with self._lock:
+            if not self.is_running():
+                self._set(
+                    provider=settings.embedding_provider,
+                    model=getattr(service, "model_name", None),
+                    backend=getattr(service, "backend", None),
+                    status="ready",
+                    progress=None,
+                    error=None,
+                    finished_at=_now(),
+                )
+
     def _set(self, **fields: Any) -> None:
         with self._lock:
             self._state.update(fields)

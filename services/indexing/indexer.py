@@ -20,7 +20,9 @@ from models.schemas import (
 )
 from services.document_extractor import DocumentExtractor, ExtractionResult
 from services.chunker import TextChunker
-from services.embedder import EmbeddingDimensionMismatch, EmbeddingService, EmbeddingUnavailable
+from services.embedder import (
+    EmbeddingDimensionMismatch, EmbeddingService, EmbeddingUnavailable, ensure_embedding_ready,
+)
 from services.vector_store import VectorStore
 from services import audit, content_policy, figure_extractor, figures
 from services.prompt_injection_detector import mark_passage as _mark_passage
@@ -985,6 +987,7 @@ class DocumentIndexer:
         )
 
         logger.info(f"Rebuilding vector index from metadata: {len(chunks)} chunks")
+        ensure_embedding_ready(self.embedding_service)  # which also settles an unknown dimension
         new_index = self.vector_store._new_index()
 
         for start in range(0, len(chunks), batch_size):

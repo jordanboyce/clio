@@ -672,6 +672,7 @@ def _run_import(job_id: int, collection_id: str, reuse: bool, source_model: Opti
     """Job body: rebuild keyword search, then reuse or re-embed the vectors."""
     from services.bm25_service import BM25Index
     from services.collection_service import collection_service
+    from services.embedder import EmbeddingDimensionMismatch, EmbeddingUnavailable
     from services.indexer_manager import indexer_manager
     from services.upload_service import upload_service
 
@@ -705,22 +706,36 @@ def _run_import(job_id: int, collection_id: str, reuse: bool, source_model: Opti
     with store._index_lock:
         store.index = store._new_index()
     done = 0
-    for rows in store.metadata_store.iter_rowid_texts(batch_size=256):
-        if upload_service.is_cancelled(job_id):
-            store.save()
-            upload_service.finish_job(job_id, {"chunks": total, "embedded": done}, cancelled=True)
-            return
-        ids = np.asarray([r[0] for r in rows], dtype=np.int64)
-        vectors = np.asarray(service.embed_texts([r[1] for r in rows]), dtype=np.float32)
-        vectors /= np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-12)
-        with store._index_lock:
-            store.index.add_with_ids(vectors, ids)
-        done += len(rows)
-        upload_service.report_progress(
-            job_id, "embedding", done / max(total, 1) * 100,
-            f"Embedding {done}/{total} chunks with {service.model_name}", done, total,
-        )
+    try:
+        for rows in store.metadata_store.iter_rowid_texts(batch_size=256):
+            if upload_service.is_cancelled(job_id):
+                store.save()
+                upload_service.finish_job(job_id, {"chunks": total, "embedded": done}, cancelled=True)
+                return
+            ids = np.asarray([r[0] for r in rows], dtype=np.int64)
+            vectors = np.asarray(service.embed_texts([r[1] for r in rows]), dtype=np.float32)
+            vectors /= np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-12)
+            with store._index_lock:
+                store.index.add_with_ids(vectors, ids)
+            done += len(rows)
+            upload_service.report_progress(
+                job_id, "embedding", done / max(total, 1) * 100,
+                f"Embedding {done}/{total} chunks with {service.model_name}", done, total,
+            )
+    except EmbeddingDimensionMismatch:
+        raise
+    except EmbeddingUnavailable as e:
+        # The collection is complete and keyword search was rebuilt above. What
+        # is left is what DocumentIndexer.fill_missing_vectors does once a model
+        # is there, so this job is finished, not failed.
+        logger.warning(f"Imported '{collection_id}' for keyword search only, {done}/{total} vectors: {e}")
+        store.vectors_pending = True
+        store.save()
+        upload_service.finish_job(job_id, {"chunks": total, "embedded": done, "vectors": "pending",
+                                           "source_model": source_model, "reason": str(e)})
+        return
     store.save()
+    store.vectors_pending = False
     upload_service.finish_job(job_id, {"chunks": total, "vectors": "re-embedded",
                                        "model": service.model_name, "source_model": source_model})
 
@@ -799,6 +814,8 @@ def inspect_bundle(zip_path: Path) -> Dict[str, Any]:
     else:
         reason = (f"This server uses a different model ({settings.embedding_model}), so the "
                   "bundle's text is embedded again here. Extraction and OCR are not redone.")
+    if not reuse:
+        reason += " If no embedding model can be reached, it is searchable by keyword until one is."
 
     blocked = sum(1 for d in docs if d.get("content_hash") and content_policy.is_hash_blocked(d["content_hash"]))
     name = meta.get("name") or "Imported collection"

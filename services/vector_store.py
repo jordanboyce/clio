@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 # 30,000 up to a tenth, and from 50,000 it starts to pay.
 SCAN_QUEUE_MIN_VECTORS = 50_000
 
+# The size of the empty stand-in index while a model's dimension is unknown.
+_PLACEHOLDER_DIM = 1
+
 _scan_slots: Optional[FifoSemaphore] = None
 _scan_slots_size = 0
 _scan_slots_lock = threading.Lock()
@@ -56,13 +59,17 @@ class VectorStore:
     - Better scalability for large collections
     """
 
-    def __init__(self, index_dir: Path, embedding_dim: int = 384, discard_mismatched_index: bool = False):
+    def __init__(self, index_dir: Path, embedding_dim: Optional[int] = 384, discard_mismatched_index: bool = False):
         """
         Initialize the vector store.
 
         Args:
             index_dir: Directory to store FAISS index and metadata
-            embedding_dim: Dimension of embedding vectors
+            embedding_dim: Dimension of embedding vectors, or None when nothing
+                knows it yet because a custom model is out of reach. The store
+                then holds no vectors and writes no index until
+                settle_embedding() says what the model produces, so no guess
+                can reach the disk.
             discard_mismatched_index: Start from an empty index instead of
                 refusing when the saved one has a different dimension. Only
                 a re-index, which is about to clear and rebuild everything,
@@ -257,8 +264,25 @@ class VectorStore:
                            f"and the rebuild is retried on next open: {e}")
 
     def _new_index(self) -> faiss.Index:
-        """Create an empty id-mapped index (cosine similarity via normalized IP)."""
-        return faiss.IndexIDMap2(faiss.IndexFlatIP(self.embedding_dim))
+        """Create an empty id-mapped index (cosine similarity via normalized IP).
+
+        With the dimension unknown it is a placeholder: nothing can add to it,
+        since vectors only come from a model, and the model's arrival replaces it.
+        """
+        return faiss.IndexIDMap2(faiss.IndexFlatIP(self.embedding_dim or _PLACEHOLDER_DIM))
+
+    def settle_embedding(self, info: Dict[str, Any]) -> None:
+        """The model behind a deferred service arrived: take its size and record it.
+
+        `info` is describe_embedding() of the service. Vectors on disk already
+        fixed the dimension if there are any, and then the service has checked
+        that the model fits before this is called.
+        """
+        with self._index_lock:
+            self.embedding_info = info
+            if self.embedding_dim is None:
+                self.embedding_dim = int(info["dimension"])
+                self._index = self._new_index()
 
     def _load_or_create_index(self):
         """Open the index and note whether any chunk still lacks a vector."""
@@ -272,13 +296,18 @@ class VectorStore:
             logger.info("Loading existing FAISS index")
             loaded = faiss.read_index(str(self.index_path))
 
+            if self.embedding_dim is None and loaded.ntotal:
+                self.embedding_dim = int(loaded.d)
+
             # Refuse a dimension mismatch up front. Without this check, an
             # embedding-model change fails deep inside add_with_ids — after
-            # the chunk metadata has already been committed to SQLite.
-            if loaded.d != self.embedding_dim and self.discard_mismatched_index:
+            # the chunk metadata has already been committed to SQLite. A file
+            # holding no vectors has nothing to protect, and only records the
+            # model that was configured when it was saved.
+            if loaded.d != self.embedding_dim and (self.discard_mismatched_index or not loaded.ntotal):
                 logger.warning(
-                    f"Discarding {loaded.d}-dim index at {self.index_path}; "
-                    f"re-indexing at {self.embedding_dim} dims"
+                    f"Starting an empty index in place of the {loaded.d}-dim one "
+                    f"({loaded.ntotal} vectors) at {self.index_path}"
                 )
                 self._index = self._new_index()
                 return
@@ -786,6 +815,10 @@ class VectorStore:
             # back to write it out again would make every shutdown load every
             # collection into memory.
             if self._index is None:
+                return
+            # No vectors yet, and a placeholder on disk would claim a dimension.
+            if self.embedding_dim is None:
+                self._dirty = False
                 return
             logger.info(f"Saving FAISS index with {self._index.ntotal} vectors")
             self._write_index_atomic(self._index)

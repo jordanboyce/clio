@@ -71,8 +71,9 @@ The settings that matter on-prem:
 Set it and **nobody configures a model in their browser**: chat, report
 generation, OCR of scanned pages and images, and the content-policy reviewer
 all use your endpoint, and Settings → AI Providers shows it as connected,
-labelled, with no key or URL to enter. Someone can still bring their own key
-for a different provider; a per-request key overrides the deployment's.
+labelled, with no key or URL to enter. An API request that names no provider
+uses it too. Someone can still bring their own key for a different provider; a
+per-request key overrides the deployment's.
 
 Leave `AI_*` empty and nothing changes from the laptop behaviour — each
 browser configures its own provider.

@@ -1133,7 +1133,8 @@ def known_embedding_dim(model_name: Optional[str] = None, index_dir=None,
     Tries the catalog first (every curated local and hosted model records
     its dimension), then an existing FAISS index in `index_dir` (vectors
     already on disk fix the dimension whatever the catalog says). None when
-    neither knows, in which case the model has to be loaded to find out.
+    neither knows, as for a custom model: nothing guesses, and the collection
+    takes the dimension from the model when it arrives (see VectorStore).
     """
     from config import settings
 
@@ -1154,12 +1155,18 @@ def known_embedding_dim(model_name: Optional[str] = None, index_dir=None,
 
 
 def index_dimension(index_dir) -> Optional[int]:
-    """The vector dimension of the FAISS index already on disk, if there is one."""
+    """The vector dimension the FAISS index on disk commits a collection to.
+
+    Only vectors commit it. Saving an empty or keyword-only collection writes a
+    file too, but that records the size of whichever model was configured then,
+    and must not stand in the way of the model that actually arrives.
+    """
     try:
         path = Path(index_dir) / "faiss.index"
         if path.exists() and path.stat().st_size > 0:
             import faiss
-            return int(faiss.read_index(str(path)).d)
+            index = faiss.read_index(str(path))
+            return int(index.d) if index.ntotal else None
     except Exception as e:  # unreadable index: let the loader deal with it
         logger.debug(f"Could not read index dimension from {index_dir}: {e}")
     return None
@@ -1171,20 +1178,20 @@ class DeferredEmbeddingService:
     Behind a corporate firewall the model download may fail, or a backend
     may be missing; that must not stop the person from opening the app,
     browsing what is already indexed, or choosing another provider. This
-    object carries the model name and dimension (known from the catalog or
-    the existing index) so the indexer and vector store can be constructed,
-    and builds the real service on the first call that needs vectors. If
-    that still fails it raises EmbeddingUnavailable with the reason, and
-    waits a little before trying the hub again so a search storm does not
-    turn into a download storm.
+    object carries the model name and dimension (from the catalog or the
+    existing index; None when neither knows) so the indexer and vector store
+    can be constructed, and builds the real service on the first call that
+    needs vectors. If that still fails it raises EmbeddingUnavailable with the
+    reason, and waits a little before trying the hub again so a search storm
+    does not turn into a download storm.
     """
 
     backend = None
     RETRY_AFTER_SECONDS = 20.0
 
-    def __init__(self, model_name: str, embedding_dim: int, factory, reason: str = ""):
+    def __init__(self, model_name: str, embedding_dim: Optional[int], factory, reason: str = ""):
         self.model_name = model_name
-        self.embedding_dim = int(embedding_dim)
+        self.embedding_dim = None if embedding_dim is None else int(embedding_dim)
         self._factory = factory
         self._real = None
         self._lock = threading.Lock()
@@ -1192,6 +1199,9 @@ class DeferredEmbeddingService:
         self._last_exc: Optional[EmbeddingUnavailable] = None
         self._last_attempt = 0.0
         self.signature = None
+        # Called once with the real service when it arrives, before any thread
+        # can get a vector from it.
+        self.on_ready: Optional[Callable[[object], None]] = None
 
     @property
     def available(self) -> bool:
@@ -1221,14 +1231,17 @@ class DeferredEmbeddingService:
                 self.last_error = str(e) or e.__class__.__name__
                 self._last_exc = EmbeddingUnavailable(self.last_error)
                 raise self._last_exc from e
-            real_dim = int(getattr(service, "embedding_dim", self.embedding_dim) or self.embedding_dim)
-            if real_dim != self.embedding_dim:
+            real_dim = getattr(service, "embedding_dim", None) or self.embedding_dim
+            if self.embedding_dim is not None and int(real_dim) != self.embedding_dim:
                 err = EmbeddingDimensionMismatch(
                     getattr(service, "model_name", self.model_name), real_dim, self.embedding_dim
                 )
                 self.last_error = str(err)
                 self._last_exc = err
                 raise err
+            self.embedding_dim = int(real_dim)
+            if self.on_ready is not None:
+                self.on_ready(service)
             self._real = service
             self._last_exc = None
             self.backend = getattr(service, "backend", None)

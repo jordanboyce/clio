@@ -9,10 +9,12 @@ weakened by it, and that the key never leaves the server.
 """
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import config
 from config import settings as _import_time_settings
+from models.schemas import AIOptions, ArtifactRequest, ChatRequest, StarterQuestionsRequest
 from services.ai_service import apply_deployment_defaults, create_provider
 from services.config_manager import MASKED_SECRET, VALID_CONFIG_FIELDS, config_manager
 
@@ -124,6 +126,90 @@ def client(monkeypatch, tmp_path):
     # Config writes normally mirror into the repo's .env — keep them here.
     monkeypatch.setattr(config_manager, "env_file", tmp_path / ".env")
     return TestClient(main.app)
+
+
+# ── a request that names no provider ──────────────────────────────────────
+
+
+REQUEST_MODELS = [
+    lambda **kw: ChatRequest(messages=[], **kw),
+    lambda **kw: AIOptions(**kw),
+    lambda **kw: StarterQuestionsRequest(**kw),
+    lambda **kw: ArtifactRequest(artifact_type="summary", **kw),
+]
+
+
+@pytest.mark.parametrize("request_model", REQUEST_MODELS)
+def test_a_request_that_names_no_provider_uses_the_deployments(private_endpoint, request_model):
+    assert request_model().provider == "openai_compatible"
+    assert request_model(provider=None).provider == "openai_compatible"
+    assert request_model(provider="").provider == "openai_compatible"
+
+
+@pytest.mark.parametrize("request_model", REQUEST_MODELS)
+def test_a_request_that_names_a_provider_keeps_it(private_endpoint, request_model):
+    assert request_model(provider="ollama").provider == "ollama"
+
+
+@pytest.mark.parametrize("request_model", REQUEST_MODELS)
+def test_a_deployment_with_no_provider_keeps_the_old_default(ai_settings, request_model):
+    ai_settings(ai_provider="")
+    assert request_model().provider == "anthropic"
+
+
+def test_the_default_follows_a_settings_change_without_a_restart(ai_settings):
+    ai_settings(ai_provider="ollama")
+    assert ChatRequest(messages=[]).provider == "ollama"
+    ai_settings(ai_provider="openai_compatible")
+    assert ChatRequest(messages=[]).provider == "openai_compatible"
+
+
+@pytest.fixture()
+def built_provider(monkeypatch):
+    """Records which provider /api/chat builds, and stops there."""
+    import api.chat as chat
+
+    names = []
+
+    def build(name, *a, **k):
+        names.append(name)
+        raise HTTPException(status_code=418, detail="stop here")
+
+    monkeypatch.setattr(chat, "_build_provider", build)
+    return names
+
+
+CHAT = {"messages": [{"role": "user", "content": "What does recharge depend on?"}], "use_cache": False}
+
+
+def test_chat_with_no_provider_reaches_the_deployments_endpoint(client, private_endpoint, built_provider):
+    client.post("/api/chat", json=CHAT)
+    assert built_provider == ["openai_compatible"]
+
+
+def test_chat_naming_a_provider_is_not_redirected(client, private_endpoint, built_provider):
+    client.post("/api/chat", json={**CHAT, "provider": "ollama"})
+    assert built_provider == ["ollama"]
+
+
+@pytest.mark.parametrize("route", ["/api/ai/validate-key", "/api/ai/models"])
+def test_provider_header_routes_default_to_the_deployments(client, private_endpoint, monkeypatch, route):
+    import api.chat as chat
+
+    seen = []
+
+    def from_headers(provider, *a, **k):
+        seen.append(provider)
+        raise ValueError("stop")
+
+    monkeypatch.setattr(chat, "_provider_from_headers", from_headers)
+
+    client.post(route)
+    assert seen == ["openai_compatible"]
+
+    seen.clear()
+    client.post(route, headers={"X-AI-Provider": "openai"})
+    assert seen == ["openai"]
 
 
 def test_deployment_endpoint_reports_the_endpoint_but_never_the_key(client, private_endpoint):

@@ -44,6 +44,7 @@ from models.schemas import (
     ChatSource,
     StarterQuestionsRequest,
     StarterQuestionsResponse,
+    default_ai_provider,
 )
 
 from fastapi import APIRouter
@@ -1270,7 +1271,7 @@ def _provider_from_headers(x_ai_provider: str, api_key, x_ai_base_url, model=Non
 )
 def validate_api_key(  # sync: provider round-trip runs in the threadpool
     x_ai_key: str = Header(None),
-    x_ai_provider: str = Header("anthropic"),
+    x_ai_provider: str = Header(None),
     x_ollama_model: str = Header(None),
     x_ai_model: str = Header(None),
     x_ai_base_url: str = Header(None),
@@ -1286,7 +1287,10 @@ def validate_api_key(  # sync: provider round-trip runs in the threadpool
     - Pass 'ollama' via X-AI-Provider header
     - Pass model name via X-Ollama-Model header
     - X-AI-Key is not required
+
+    With no X-AI-Provider header, this checks the deployment's own provider.
     """
+    x_ai_provider = x_ai_provider or default_ai_provider()
     try:
         if x_ai_provider not in ALL_AI_PROVIDERS:
             return {
@@ -1351,7 +1355,7 @@ def validate_api_key(  # sync: provider round-trip runs in the threadpool
 )
 def list_provider_models(  # sync: provider round-trip runs in the threadpool
     x_ai_key: str = Header(None),
-    x_ai_provider: str = Header("anthropic"),
+    x_ai_provider: str = Header(None),
     x_ai_base_url: str = Header(None),
 ):
     """
@@ -1362,6 +1366,7 @@ def list_provider_models(  # sync: provider round-trip runs in the threadpool
     its curated recommendations. Missing X-AI-Key falls back to a
     server-stored team key for that provider, if one exists.
     """
+    x_ai_provider = x_ai_provider or default_ai_provider()
     try:
         if x_ai_provider not in ALL_AI_PROVIDERS:
             return {"models": [], "error": f"Invalid provider: {x_ai_provider}"}
