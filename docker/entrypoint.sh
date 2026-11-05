@@ -17,6 +17,12 @@ set -e
 # directory, where `main` would not import (or a job's own main.py would).
 cd /app
 
+# The full image ships Tesseract, so scanned PDFs are read unless the site says
+# otherwise. The slim image has no OCR engine and keeps the app's default of off.
+if [ -z "${ENABLE_OCR+set}" ] && command -v tesseract >/dev/null 2>&1; then
+    export ENABLE_OCR=true
+fi
+
 CA_DIR="${EXTRA_CA_CERTS_DIR:-/certs/ca}"
 
 ca_files() {

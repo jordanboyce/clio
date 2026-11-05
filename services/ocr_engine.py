@@ -145,12 +145,15 @@ class OCREngine(ABC):
         pass
 
     @abstractmethod
-    def extract_text(self, pdf_path: str) -> OCRResult:
+    def extract_text(self, pdf_path: str, pages: Optional[List[int]] = None) -> OCRResult:
         """
         Extract text from a PDF using OCR.
 
         Args:
             pdf_path: Path to the PDF file
+            pages: Optional 1-based page numbers to read. An engine that cannot
+                read part of a document may return every page, so callers merge
+                only the pages they asked for.
 
         Returns:
             OCRResult with extracted text and metadata
@@ -201,8 +204,8 @@ class DoclingOCREngine(OCREngine):
                 raise
         return self._converter
 
-    def extract_text(self, pdf_path: str) -> OCRResult:
-        """Extract text from PDF using Docling."""
+    def extract_text(self, pdf_path: str, pages: Optional[List[int]] = None) -> OCRResult:
+        """Extract text from PDF using Docling, which always reads every page."""
         logger.info(f"Running Docling OCR on {pdf_path}")
 
         converter = self._get_converter()
@@ -261,11 +264,11 @@ class LegacyOCREngine(OCREngine):
         except ImportError:
             return False
 
-    def extract_text(self, pdf_path: str) -> OCRResult:
+    def extract_text(self, pdf_path: str, pages: Optional[List[int]] = None) -> OCRResult:
         """Extract text from a PDF or a standalone image with Tesseract."""
         logger.info(f"Running legacy OCR ({self._engine}) on {pdf_path}")
 
-        from pdf2image import convert_from_path
+        from pdf2image import convert_from_path, pdfinfo_from_path
         import pytesseract
 
         if Path(pdf_path).suffix.lower() != ".pdf":
@@ -295,14 +298,20 @@ class LegacyOCREngine(OCREngine):
                 "or set TESSERACT_CMD."
             )
 
-        # Convert PDF pages to images
+        # One page at a time, and only the pages asked for. A page is about 25 MB
+        # at this resolution, so rendering a long document up front to read a
+        # few of its pages would exhaust memory.
         poppler_path = _find_poppler_path()
-        images = convert_from_path(str(pdf_path), dpi=300, poppler_path=poppler_path)
+        if pages is None:
+            total = pdfinfo_from_path(str(pdf_path), poppler_path=poppler_path)["Pages"]
+            pages = list(range(1, total + 1))
 
-        pages = []
-        for page_num, image in enumerate(images, start=1):
+        results = []
+        for page_num in pages:
+            image = convert_from_path(str(pdf_path), dpi=300, first_page=page_num, last_page=page_num,
+                                      poppler_path=poppler_path)[0]
             text = pytesseract.image_to_string(image, lang=self._language)
-            pages.append(OCRPage(
+            results.append(OCRPage(
                 page_number=page_num,
                 text=text.strip(),
                 metadata={"engine": self._engine}
@@ -310,7 +319,7 @@ class LegacyOCREngine(OCREngine):
             logger.debug(f"OCR extracted {len(text)} chars from page {page_num}")
 
         return OCRResult(
-            pages=pages,
+            pages=results,
             engine=self.name,
             metadata={
                 "language": self._language,

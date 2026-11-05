@@ -34,8 +34,10 @@ def _scan(tmp_path, name="scan.pdf"):
 class _Engine:
     def __init__(self, text=None, error=None):
         self.text, self.error = text, error
+        self.pages = None
 
-    def extract_text(self, path):
+    def extract_text(self, path, pages=None):
+        self.pages = pages
         if self.error:
             raise self.error
         return OCRResult(pages=[OCRPage(page_number=1, text=self.text)], engine="fake")
@@ -63,6 +65,15 @@ def test_an_engine_that_finds_nothing_gives_way_to_the_next(monkeypatch, tmp_pat
     _engines(monkeypatch, docling=_Engine("   "), pytesseract=_Engine("read by tesseract"))
 
     assert DocumentExtractor(enable_ocr=True)._local_ocr(tmp_path / "a.pdf") == {1: "read by tesseract"}
+
+
+def test_selective_ocr_asks_the_local_engine_for_only_the_weak_pages(monkeypatch, tmp_path):
+    engine = _Engine("read by tesseract")
+    _engines(monkeypatch, pytesseract=engine)
+
+    DocumentExtractor(enable_ocr=True)._extract_pdf_with_ocr(tmp_path / "a.pdf", pages=[7])
+
+    assert engine.pages == [7]
 
 
 def test_availability_follows_the_engines_that_can_run(monkeypatch):
@@ -105,6 +116,39 @@ def test_a_real_scanned_pdf_is_read(tmp_path):
 
     assert "turbine" in result.page_texts[1].lower()
     assert result.method == "ocr"
+
+
+@needs_tesseract
+def test_tesseract_renders_only_the_pages_asked_for(tmp_path, monkeypatch):
+    from PIL import Image, ImageDraw, ImageFont
+    import pdf2image
+
+    font = ImageFont.load_default(size=80)
+    sheets = []
+    for word in ("alpha", "bravo", "charlie"):
+        sheet = Image.new("RGB", (1700, 800), "white")
+        ImageDraw.Draw(sheet).text((80, 200), f"Page about {word}", fill="black", font=font)
+        sheets.append(sheet)
+    path = tmp_path / "three.pdf"
+    sheets[0].save(path, "PDF", resolution=200, save_all=True, append_images=sheets[1:])
+
+    rendered = []
+    real = pdf2image.convert_from_path
+
+    def spy(*args, **kwargs):
+        rendered.append((kwargs.get("first_page"), kwargs.get("last_page")))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pdf2image, "convert_from_path", spy)
+    engine = ocr_engine.LegacyOCREngine()
+
+    only_second = engine.extract_text(str(path), pages=[2]).to_page_dict()
+    assert list(only_second) == [2] and "bravo" in only_second[2].lower()
+    assert rendered == [(2, 2)]
+
+    rendered.clear()
+    assert list(engine.extract_text(str(path)).to_page_dict()) == [1, 2, 3]
+    assert rendered == [(1, 1), (2, 2), (3, 3)]
 
 
 @needs_tesseract

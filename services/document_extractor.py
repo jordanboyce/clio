@@ -903,14 +903,13 @@ class DocumentExtractor:
         pdf_path: Path,
         pages: Optional[List[int]] = None,
     ) -> Optional[Tuple[Dict[int, str], List[int], List[int]]]:
-        """Extract text from PDF using Vision AI OCR or Docling fallback.
+        """Extract text from PDF using Vision AI OCR or a local engine.
 
         Args:
             pages: Optional 1-based page numbers to restrict OCR to (the
-                selective path). The vision engine renders only those pages;
-                the Docling fallback always processes the whole document, so
-                callers in selective mode must merge only the pages they asked
-                for.
+                selective path). The vision engine and Tesseract read only those
+                pages; Docling always processes the whole document, so callers
+                in selective mode must merge only the pages they asked for.
 
         Returns:
             Tuple of (page_texts, ocr_pages, cleanup_pages) or None.
@@ -937,7 +936,7 @@ class DocumentExtractor:
                 logger.warning(f"Vision OCR failed for {pdf_path.name}: {e}")
 
         # Fallback: the local engines (free, no API key, nothing leaves the machine)
-        page_texts = self._local_ocr(pdf_path)
+        page_texts = self._local_ocr(pdf_path, pages=pages)
         if page_texts:
             ocr_pages = [p for p, t in page_texts.items() if t and t.strip()]
             return page_texts, ocr_pages, []  # local engines have no LLM cleanup
@@ -945,7 +944,7 @@ class DocumentExtractor:
         logger.warning(f"No OCR engine available or all failed for {pdf_path.name}")
         return None
 
-    def _local_ocr(self, path: Path) -> Dict[int, str]:
+    def _local_ocr(self, path: Path, pages: Optional[List[int]] = None) -> Dict[int, str]:
         """Text per page from the first local engine that can read the file.
 
         Tries each in turn: Docling needs model files a locked-down site may
@@ -957,7 +956,7 @@ class DocumentExtractor:
                 logger.info(f"Running {name} OCR on {path.name}")
                 page_texts = {
                     p: self.normalize_ocr_text(t)
-                    for p, t in engine.extract_text(str(path)).to_page_dict().items()
+                    for p, t in engine.extract_text(str(path), pages=pages).to_page_dict().items()
                 }
                 if any(t and t.strip() for t in page_texts.values()):
                     return page_texts

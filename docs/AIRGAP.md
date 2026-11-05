@@ -175,7 +175,7 @@ first three boxes are not true.
 | Document indexing (PDF, DOCX, TXT, MD, CSV/XLSX, code) | ✅ | Fully local |
 | Semantic + keyword + hybrid search | ✅ | FAISS/BM25, local embeddings |
 | Reranking | ✅ | Automatic: on whenever the baked/pre-seeded model is present (`ENABLE_RERANKER` unset); the default image bakes it, and nothing downloads under `OFFLINE_MODE` |
-| OCR of scanned PDFs | ✅ | Tesseract in the full image, Docling if baked, once `ENABLE_OCR=true`; vision-LLM OCR only via local Ollama |
+| OCR of scanned PDFs | ✅ | Tesseract in the full image, on by default; Docling if baked; vision-LLM OCR only via local Ollama |
 | Transcribing audio and video recordings | ✅ | Local Whisper; the full image includes the `base` model. Speech only: what appears on screen is not read |
 | Grounded chat | ✅ | Via local Ollama or self-hosted OpenAI-compatible server |
 | MCP endpoint for internal agents | ✅ | Embedded, in-process |
@@ -193,14 +193,16 @@ set. Losing one takes away only what depends on it. The rest keeps working, and
 | Reranker | Everything; results come back in retrieval order | Slightly better ordering of the top results | On when the model is on disk |
 | Whisper model | Every other kind of source, including others in the same upload | Audio and video recordings are refused, with a message saying what to do | When the model is on disk, the next recording uses it (within a minute) |
 | AI provider (chat model) | Indexing, search, citations and the MCP search tools | Written answers, AI-written artifacts, vision OCR | Connect local Ollama or an OpenAI-compatible server on your network |
-| Vision or Docling OCR | Tesseract reads scanned pages in the full image, once OCR is turned on | Figure descriptions and Docling's layout analysis | Connect a vision model, or bake Docling |
+| Vision or Docling OCR | Tesseract reads scanned pages in the full image | Figure descriptions and Docling's layout analysis | Connect a vision model, or bake Docling |
 
 The status bar at the bottom of the app shows each of these as on, limited, off
 or unavailable; click it for the reason and the fix. `GET /api/features` returns
 the same list. It reads settings and the local disk only and contacts nothing.
 
-OCR is off until it is turned on in Settings or with `ENABLE_OCR=true`. While it
-is off, a PDF that is only scanned pages is refused, with a message saying so.
+The full image turns OCR on unless `ENABLE_OCR` is set or OCR was switched off
+in Settings. Elsewhere it is off until turned on. While it is off, a PDF that is
+only scanned pages is refused, with a message saying so. OCR takes a few seconds
+per page, and `OCR_MAX_PAGES` and `OCR_MAX_FILE_MB` cap the cost.
 
 A firewall that silently drops traffic is slower than `OFFLINE_MODE`: the first
 attempt to reach a missing model waits for a timeout (10 to 20 seconds). On a

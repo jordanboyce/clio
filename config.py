@@ -610,7 +610,7 @@ class Settings(BaseSettings):
     # Scanned pages either go through a vision-capable LLM (best quality) or the
     # free local engine (Docling/Tesseract) when no provider is set. Rendering
     # and image-prep details are fixed at sensible defaults in the extractor.
-    enable_ocr: bool = False  # OCR scanned PDFs during indexing
+    enable_ocr: bool = False  # OCR scanned PDFs during indexing. The full image's entrypoint sets it on.
     ocr_max_pages: int = 25  # Cost guard: skip OCR for PDFs with more pages (0 = no limit; env-only)
     ocr_max_file_mb: int = 50  # Cost guard: skip OCR for files larger than this in MB (0 = no limit; env-only)
 
