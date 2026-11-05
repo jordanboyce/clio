@@ -9,7 +9,7 @@ change the assistant's rules.  A pack is scanned for prompt-injection wording
 on save; the verdict is stored in ``flag`` (JSON, ``''`` = clean, ``NULL`` =
 written before scanning existed).
 
-Storage lives in the same ``data/app.db`` SQLite used by :mod:`app_database`
+Storage lives in the same ``DATA_DIR/app.db`` SQLite used by :mod:`app_database`
 so no extra migration machinery is needed.
 """
 
@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from config import settings
 from services import authored_text
 from services.sqlite_utils import sqlite_connect
 from models.schemas import (
@@ -30,14 +31,71 @@ from models.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# Where packs lived before the store followed DATA_DIR: relative to the working
+# directory, whatever DATA_DIR said.
+_OLD_DB_PATH = Path("data/app.db")
+
 
 class ExpertiseStore:
     """Thin CRUD layer over the app SQLite database for expertise packs."""
 
-    def __init__(self, db_path: Path = Path("data/app.db")):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[Path] = None):
+        follows_data_dir = db_path is None
+        self.db_path = Path(settings.data_dir) / "app.db" if follows_data_dir else db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        first_start_here = not self._has_tables()
         self._ensure_tables()
+        if follows_data_dir and first_start_here:
+            self._copy_packs_from(_OLD_DB_PATH)
+
+    def _has_tables(self) -> bool:
+        with sqlite_connect(self.db_path) as conn:
+            return conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'expertise_packs'"
+            ).fetchone() is not None
+
+    def _copy_packs_from(self, old_path: Path) -> None:
+        """Bring packs across from the old location, once.
+
+        Runs only when this database has never held the store's tables, so a
+        pack deleted later does not come back. The old file is only read: it
+        may be someone's backup, or another install's working database. A
+        failure here costs the old packs, not the server's start.
+        """
+        if not old_path.is_file() or old_path.resolve() == self.db_path.resolve():
+            return
+        try:
+            old = sqlite3.connect(f"{old_path.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                tables = {row[0] for row in old.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )}
+                if "expertise_packs" not in tables:
+                    return
+                packs = old.execute(
+                    f"SELECT {self._COLUMNS} FROM expertise_packs"
+                ).fetchall()
+                links = old.execute(
+                    "SELECT collection_id, pack_id, attached_at FROM collection_expertise"
+                ).fetchall()
+            finally:
+                old.close()
+            with sqlite_connect(self.db_path) as conn:
+                conn.executemany(
+                    f"INSERT OR IGNORE INTO expertise_packs ({self._COLUMNS}) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    packs,
+                )
+                conn.executemany(
+                    "INSERT OR IGNORE INTO collection_expertise VALUES (?, ?, ?)",
+                    links,
+                )
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.warning(f"Could not copy expertise packs from {old_path}: {e}")
+            return
+        if packs:
+            logger.info(f"Copied {len(packs)} expertise pack(s) from {old_path} to {self.db_path}")
 
     def _ensure_tables(self) -> None:
         """Create expertise tables if they don't exist yet.

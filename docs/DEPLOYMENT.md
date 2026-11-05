@@ -212,9 +212,9 @@ ssh -J <login-node> -L 8473:127.0.0.1:8473 <compute-node>
 - **Keep `HOST=127.0.0.1` on a shared node.** The image otherwise listens on
   every interface, and other users of the cluster could reach it. If you need
   it reachable from elsewhere, set `AUTH_PASSWORD` too.
-- **Bind to `/app/data`.** Setting `DATA_DIR` to another path stops the server
-  from starting on a read-only image, because one store still opens
-  `data/app.db` relative to `/app`.
+- **A path that is already visible works too.** Instead of the bind, you can
+  set `--env DATA_DIR=<path>` to a folder Apptainer already mounts, such as one
+  under your home directory.
 - **Choose the disk with care.** Clio keeps SQLite databases in WAL mode, which
   SQLite does not support on network filesystems such as NFS or Lustre. Prefer
   a local disk, and test first if your only option is shared storage.
