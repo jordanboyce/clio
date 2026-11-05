@@ -478,7 +478,7 @@ of them. The ones that matter most:
 | `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` | The model the whole deployment uses; leave empty and each person picks one in Settings → AI Providers |
 | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL` | Where the search index runs: the built-in local model (default), an Ollama you run, or a hosted embedding API. Changing it means re-indexing |
 | `ENABLE_RERANKER`, `RERANKER_MODEL`, `RERANK_MAX_CONCURRENT` | The local cross-encoder that reorders the best candidates of every search; automatic by default |
-| `WORKER_THREADS`, `RATE_LIMIT_*`, `RESEARCH_MAX_CONCURRENT` | How much concurrent work one host takes before callers queue ([Capacity](docs/DEPLOYMENT.md#capacity--scaling)) |
+| `WORKER_THREADS`, `RATE_LIMIT_*`, `RESEARCH_MAX_CONCURRENT`, `SCAN_MAX_CONCURRENT` | How much concurrent work one host takes before callers queue ([Capacity](docs/DEPLOYMENT.md#capacity--scaling)) |
 | `RESEARCH_LOOKUP_ENABLED`, `RESEARCH_CONTACT_EMAIL` | Whether the Research workspace may look up printed DOIs, arXiv ids and ISBNs in OpenAlex, Crossref, arXiv and Open Library ([Research](docs/RESEARCH.md#settings)) |
 | `COLLECTION_STORAGE_LIMIT_BYTES` | Most a single collection may hold (5 GiB default); extracted figures count toward it |
 | `EXTRACT_FIGURES`, `VISION_OCR_PROVIDER` | Whether pictures embedded in documents are pulled out and shown with results (on by default), and whether a vision model describes them so charts are findable by content (off unless a provider is set) |

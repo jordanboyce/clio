@@ -28,6 +28,12 @@ SECURE_PROFILE_DEFAULTS = {
 DEFAULT_SEMANTIC_WEIGHT = 0.7
 
 
+def _half_the_cpus() -> int:
+    """About one per physical core, on the CPUs this process may actually use."""
+    usable = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
+    return max(1, (usable or 2) // 2)
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables or .env file."""
 
@@ -200,6 +206,15 @@ class Settings(BaseSettings):
     # no measured recall cost.
     rerank_max_concurrent: int = 2
     rerank_queue_timeout_seconds: float = 1.0
+
+    # Vector scans of large collections running at once, across all collections
+    # (0 = unbounded). Default: half the usable CPUs, measured on 6 cores, 12
+    # threads. Past that, scans only take CPU from each other and from the
+    # embedding every search needs first, and that is what other collections and
+    # writes feel: with 64 callers on a million vectors, a search of a small
+    # neighbouring collection fell from 630-2300 ms to 6-12 ms. See Capacity &
+    # scaling in docs/DEPLOYMENT.md, including what it costs.
+    scan_max_concurrent: int = Field(default_factory=_half_the_cpus)
 
     # Entity-graph retrieval boost (services/entity_graph.py). Entities are
     # extracted heuristically per chunk at index time (proper nouns, acronyms,

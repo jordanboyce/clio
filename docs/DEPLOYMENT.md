@@ -608,7 +608,8 @@ several MCP calls at once, so plan for calls, not seats. Two shared
 chokepoints define it — the worker-thread pool (`WORKER_THREADS`, 64 by
 default: every MCP tool call, chat turn and upload runs in one; a chat turn
 holds its slot for the whole agent loop, up to ~11 provider round-trips) and
-the CPU-bound inference every query passes through (one embedding lock, and
+the CPU-bound work every query passes through (one embedding lock, at most
+`SCAN_MAX_CONCURRENT` scans of a large collection, and
 at most `RERANK_MAX_CONCURRENT` cross-encoder passes). The event loop itself
 only accepts connections and relays results, so a slow query never freezes
 the UI or other clients. There is no seat limit; the host is the limit.
@@ -636,6 +637,7 @@ What protects the deployment when many people share it:
 | `RESEARCH_MAX_CONCURRENT` | 3 | Parallel `research_documents` calls; extra callers queue |
 | `RESEARCH_QUEUE_TIMEOUT_SECONDS` | 60 | How long a queued research call waits before a retryable "busy" error |
 | `WORKER_THREADS` | 64 | Worker threads shared by every MCP tool call, chat turn, upload and document read; callers queue beyond it |
+| `SCAN_MAX_CONCURRENT` | half the CPUs | Vector scans of large collections (50,000 chunks or more) running at once across all collections; extra searches wait in arrival order and smaller collections skip the line. `0` = unbounded. The default cannot see a container CPU quota such as `docker --cpus`, so set it by hand there |
 | `RERANK_MAX_CONCURRENT` | 2 | Cross-encoder reranking passes in flight at once (each uses every core); `0` = unbounded |
 | `RERANK_QUEUE_TIMEOUT_SECONDS` | 1 | A search that waits longer than this for a reranking slot answers in retrieval order and says so (`retrieval.reranked: false`) |
 | `CHAT_DAILY_TOKEN_BUDGET` | 0 (off) | Provider tokens one identity may spend on chat per UTC day. Cached answers stay free once capped. |
@@ -685,11 +687,12 @@ your own host.
 What else the same runs showed, at 1,000,000 vectors on Windows unless stated:
 
 - **Eight callers do not make eight times the throughput.** Each search takes
-  longer as more run at once, at 96 ms alone and about 250 ms with eight. Why the
-  gain is smaller in the Linux container was not investigated.
-- **More searches than that lowers throughput.** It peaked at 8 callers (32 /s) and
-  fell to 20 /s at 12 and at 16, still above the old lock. Nothing limits concurrent
-  searches today, so a burst well past the core count gets slower for everyone.
+  longer as more run at once, at 96 ms alone and about 250 ms with eight. The
+  smaller gain in the Linux container is explained under
+  [Why Linux gains less than Windows](#why-linux-gains-less-than-windows).
+- **More searches than that lowers throughput.** With no limit on scans it peaked at
+  8 callers (32 /s) and fell to 20 /s at 12 and at 16, still above the old lock.
+  `SCAN_MAX_CONCURRENT` now holds it near the peak, as described below.
 - **OpenMP has to stay capped.** A single-query search gains nothing from OpenMP
   threads: one caller takes the same time either way, but uncapped it keeps about
   11 cores busy instead of 1.3. Each searching thread also gets its own team, 136 OS
@@ -703,6 +706,141 @@ What else the same runs showed, at 1,000,000 vectors on Windows unless stated:
   collection, eight callers went from 15.5 /s to 67 /s.
 - **Searches still wait for writes.** A save of a 1.44 GiB index holds the lock for
   about 1.5 seconds, and removing 1,000 ids for about 0.4 seconds.
+
+### Taking turns on large scans
+
+`SCAN_MAX_CONCURRENT` caps how many scans of large collections run at once, across
+all collections. It defaults to half the CPUs the process may use. Further searches
+wait in arrival order. Collections under 50,000 chunks skip the line, and `0` turns
+the limit off.
+
+A search takes its turn before it asks for the collection's lock, so a queue of
+searches never holds back a write. If a write is under way on its collection, the
+search gives up its turn so other collections can use it, then returns to the same
+place in line.
+
+**Why it exists:** it protects everyone else on the host when a large collection is
+busy. It does not make large searches much faster when Clio embeds queries locally,
+because embedding and scanning compete for the same cores. Without the limit, surplus
+scans take CPU from the embedding model while it holds the embedding lock, so every
+search waits there, whichever collection it is for. At 1,000,000 vectors and 64
+callers, the median wait for that lock fell from 2178 to 8 ms on Linux and from 426
+to 6 ms on Windows.
+
+The table shows the shipped code with real local embedding. Callers search a
+1,000,000-vector collection as fast as they can, while 4 other callers search a
+1,000-vector collection, each pausing about 0.25 s between searches. Where a writer
+is shown, it takes the large collection's lock once a second. Each cell is the median
+of 3 runs of 20 seconds, as off → on, with the limit at 6.
+
+| Platform | Callers | Writer | Large searches /s | Small search p50 | Small search p99 | Writer's median wait |
+|---|---|---|---|---|---|---|
+| Linux | 16 | no | 18.5 → 17.4 | 91 → 12 ms | 232 → 42 ms | |
+| Linux | 16 | yes | 18.7 → 19.1 | 55 → 12 ms | 247 → 53 ms | 430 → 206 ms |
+| Linux | 64 | no | 19.1 → 17.3 | 2300 → 12 ms | 2487 → 42 ms | |
+| Linux | 64 | yes | 18.6 → 19.2 | 1801 → 11 ms | 2038 → 53 ms | 1104 → 233 ms |
+| Windows | 16 | no | 18.8 → 18.7 | 30 → 6 ms | 177 → 19 ms | |
+| Windows | 16 | yes | 19.5 → 23.9 | 19 → 6 ms | 161 → 30 ms | 523 → 164 ms |
+| Windows | 64 | no | 19.9 → 18.2 | 638 → 6 ms | 1529 → 32 ms | |
+| Windows | 64 | yes | 19.7 → 24.4 | 173 → 6 ms | 1431 → 28 ms | 1836 → 182 ms |
+
+What the limit costs:
+
+- **Large searches slow slightly when nothing is writing:** up to 9% in the table,
+  and 13% in an earlier run of the same test.
+- **A mid-sized collection now shares the line with the large one.** With a
+  1,000,000-vector collection saving every 5 seconds and 16 callers on each
+  collection, a 100,000-vector neighbour's median nearly halved but its tail grew,
+  because it waits behind slower scans. It also completed fewer searches.
+
+  | Platform | 100,000-vector neighbour /s | Its p50 | Its p99 | Searches of the saving collection /s |
+  |---|---|---|---|---|
+  | Linux | 135 → 93 | 113 → 64 ms | 241 → 784 ms | 6.9 → 14.8 |
+  | Windows | 152 → 109 | 93 → 52 ms | 215 → 710 ms | 7.6 → 17.1 |
+
+**Scans alone.** This table leaves out embedding, so it is an upper bound for what a
+hosted embedding provider or Ollama could see; neither was measured. It shows
+searches per second, with p99 in brackets, using the limit at 6 in a benchmark
+wrapper that queues the same way, over 2 or 3 runs per cell. The exception is
+Windows at 100,000 vectors with 8 callers and no limit, which has one clean run.
+
+| Vectors | Callers | Windows, no limit | Windows, limit | Linux, no limit | Linux, limit |
+|---|---|---|---|---|---|
+| 100,000 | 8 | 354 (35 ms) | 331 (39 ms) | 336 (41 ms) | 308 (45 ms) |
+| 100,000 | 16 | 233 (109 ms) | 330 (68 ms) | 211 (133 ms) | 289 (83 ms) |
+| 100,000 | 32 | 220 (221 ms) | 328 (144 ms) | 209 (250 ms) | 329 (162 ms) |
+| 100,000 | 64 | 236 (495 ms) | 330 (339 ms) | 213 (384 ms) | 306 (296 ms) |
+| 1,000,000 | 8 | 30.6 (460 ms) | 32.5 (401 ms) | 22.4 (455 ms) | 24.2 (551 ms) |
+| 1,000,000 | 16 | 21.1 (1045 ms) | 30.2 (1158 ms) | 19.4 (1195 ms) | 21.7 (935 ms) |
+| 1,000,000 | 32 | 21.1 (1806 ms) | 32.6 (1274 ms) | 19.2 (2143 ms) | 20.6 (1773 ms) |
+| 1,000,000 | 64 | 20.4 (3527 ms) | 32.3 (2221 ms) | 19.8 (4155 ms) | 20.8 (3449 ms) |
+
+Validating the shipped code at 16 and 64 callers gave similar results, for example
+20.5 → 30.4 /s on Windows and 19.8 → 22.0 /s on Linux at 1,000,000 vectors and 64
+callers. On scans alone, a limit of 8 beat 6 by up to 19% on Windows and 9% on Linux.
+A limit of 4 was slower than 6, except at 1,000,000 vectors on Linux, where they were
+about equal. The default stays at 6 on this host, because only 6 was tested with real
+embedding, where scans compete with the model for the same cores.
+
+With real embedding and no other collection in use, measured with the wrapper,
+throughput barely moved: at 1,000,000 vectors and 64 callers, Linux went
+19.2 → 18.8 /s and Windows 19.7 → 18.1 /s. The p99 improved from 3881 to 3632 ms on
+Linux and from 4141 to 3816 ms on Windows.
+
+**Why it is process-wide.** With two 1,000,000-vector collections and 64 callers, a
+limit per collection left 12 cores scanning and totals no better than no limit
+(Windows 20.7 /s, against 20.8 /s). One limit across both reached 25.8 /s on 6 cores.
+On Linux the totals were 20.1 /s with one limit, 19.4 /s per collection and 19.7 /s
+with none.
+
+**Why small collections skip the line.** Queueing a 1,000-vector search behind
+1,000,000-vector scans took its median from under 1 ms to between 0.4 and 3 seconds,
+on scans alone. Their own scans also gain little or lose from a limit, as this table
+of searches per second with no limit → limit 6 shows. 50,000 is about where it stops
+costing throughput.
+
+| Vectors | Windows, 16 callers | Windows, 64 callers | Linux, 16 callers | Linux, 64 callers |
+|---|---|---|---|---|
+| 10,000 | 4399 → 3175 | 4369 → 3241 | 3194 → 2397 | 3294 → 2361 |
+| 30,000 | 1143 → 1095 | 1159 → 1073 | 924 → 967 | 1068 → 937 |
+| 50,000 | 551 → 651 | 559 → 643 | 468 → 567 | 599 → 569 |
+
+**Method and limits.** All of this comes from the one host described above, a
+thermally limited laptop CPU, so treat the shape as more reliable than the figures.
+Runs took turns in shuffled order. Any run where other work on the host used more
+than 2.5 cores was dropped and rerun. A filtered search of a large collection also
+takes a slot. The default cannot see a container CPU quota such as `docker --cpus`,
+so set `SCAN_MAX_CONCURRENT` by hand there, to about half the quota.
+
+### Why Linux gains less than Windows
+
+The 1.7× and 3.6× gains at 1,000,000 vectors in the first table differ by a factor of
+2.1. Most of that is explained, by two things. The evidence for the second is
+consistent with its cause but does not prove it, and this is one host.
+
+- **The "before" figure, about 1.35× of the gap** (11.5 against 8.5 /s). The old code
+  left OpenMP uncapped, which slowed Windows and sped up Linux: a rerun gave 9 and
+  13 /s at 8 callers taking turns. With OpenMP capped, the same serial test gives
+  about 11 /s on both.
+- **The "after" figure, about 1.6×** (31 against 19.5 /s). This is not raw memory
+  bandwidth: six callers
+  with separate copies of the index reach 20.1 /s on Windows and 18.7 /s on Linux, only
+  7% apart. Sharing one index adds a large gain from the shared cache, which Windows
+  keeps steadily (28–32 /s at 6 callers) and Linux only sometimes (20–27 /s).
+
+  The likely reason is that the Windows FAISS build runs without AVX2 and the Linux
+  build runs with it. Turning AVX2 off at runtime on Linux raised 1,000,000 vectors
+  at 8 callers from 21 to 29 /s, and the clock across the host from 2.27 to 2.61 GHz.
+  When memory is the bottleneck, AVX2 appears to keep its clock penalty and lose its
+  compute advantage.
+
+A remaining gap of about 1.2× is unexplained: Windows reached 34–37 /s at 8 callers
+and Linux without AVX2 about 29 /s. Some of that may be the 7% above. Huge pages,
+staggered starts, pinning threads to physical cores and differences between process
+launches were tested and did not account for it.
+
+Clio does not turn AVX2 off on Linux: for one caller that costs 18% at 1,000,000
+vectors and 40% at 3,000 vectors.
 
 ### Monitoring
 

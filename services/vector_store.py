@@ -10,14 +10,40 @@ import logging
 import numpy as np
 import faiss
 
-from config import DEFAULT_SEMANTIC_WEIGHT
+from config import DEFAULT_SEMANTIC_WEIGHT, settings
 from models.schemas import ChunkMetadata, SearchResult
 from services.metadata_store import MetadataStore
 from services.bm25_service import BM25Index
-from services.rw_lock import ReadWriteLock
+from services.rw_lock import FifoSemaphore, ReadWriteLock
 from services.structured_store import StructuredStore
 
 logger = logging.getLogger(__name__)
+
+# Collections smaller than this scan without taking a turn. Queueing them behind
+# a big collection's scans would make a millisecond search wait seconds, and a
+# limit loses them throughput anyway: at 10,000 vectors it cost a quarter, at
+# 30,000 up to a tenth, and from 50,000 it starts to pay.
+SCAN_QUEUE_MIN_VECTORS = 50_000
+
+_scan_slots: Optional[FifoSemaphore] = None
+_scan_slots_size = 0
+_scan_slots_lock = threading.Lock()
+
+
+def _current_scan_slots() -> Optional[FifoSemaphore]:
+    """The process-wide turns for large scans, or None when unbounded.
+
+    Process-wide because the contention is for memory bandwidth and CPU, which
+    collections share: per-collection limits on two large collections did nothing.
+    """
+    global _scan_slots, _scan_slots_size
+    size = int(settings.scan_max_concurrent or 0)
+    if size <= 0:
+        return None
+    with _scan_slots_lock:
+        if _scan_slots is None or _scan_slots_size != size:
+            _scan_slots, _scan_slots_size = FifoSemaphore(size), size
+        return _scan_slots
 
 
 class VectorStore:
@@ -140,6 +166,39 @@ class VectorStore:
             yield index
         finally:
             self._index_lock.release_shared()
+
+    @contextmanager
+    def _loaded_index_for_scanning(self) -> Iterator[Optional[faiss.Index]]:
+        """_loaded_index_for_reading, except that a large scan takes a turn first.
+
+        A search waiting for its turn holds no shared access, so a queue of them
+        does not delay a writer. A search holding a turn never waits for the lock:
+        behind a save here it would stall every other collection for the length of
+        the save. It gives the turn back, waits for the writer, and queues again in
+        its old place.
+        """
+        slots = _current_scan_slots()
+        index = self.index  # reading a released index back is slow, so not during a turn
+        if slots is None or index is None or index.ntotal < SCAN_QUEUE_MIN_VECTORS:
+            with self._loaded_index_for_reading() as index:
+                yield index
+            return
+        place = None
+        while True:
+            place = slots.acquire(place)
+            try:
+                if self._index_lock.try_acquire_shared():
+                    try:
+                        index = self._index
+                        if index is not None or self._closed:
+                            yield index
+                            return
+                    finally:
+                        self._index_lock.release_shared()
+            finally:
+                slots.release()
+            self._index_lock.wait_until_no_writers()
+            self.index  # noqa: B018 - a release may have slipped in, as above
 
     def unload_if_idle(self, idle_seconds: float) -> bool:
         """Release the vectors from memory if nothing has used them for a while.
@@ -386,7 +445,7 @@ class VectorStore:
         # capped (see Capacity & scaling in docs/DEPLOYMENT.md). This thread's
         # setting is what counts on Linux, hence here and not once at startup.
         faiss.omp_set_num_threads(1)
-        with self._loaded_index_for_reading() as index:
+        with self._loaded_index_for_scanning() as index:
             return index.search(query, k, params=params)
 
     def reconstruct_vector(self, row_id: int) -> np.ndarray:

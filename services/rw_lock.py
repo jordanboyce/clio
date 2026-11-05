@@ -1,6 +1,6 @@
-"""A reentrant readers-writer lock, written for guarding a FAISS index.
+"""A reentrant readers-writer lock for guarding a FAISS index, and a fair semaphore.
 
-The standard library has none. FAISS allows any number of concurrent searches
+The standard library has no readers-writer lock. FAISS allows any number of concurrent searches
 but nothing alongside a mutation (a crash, not an exception), so searches share
 this lock and everything else takes it alone.
 
@@ -21,9 +21,52 @@ Rules that keep it from deadlocking:
   from a few jobs that spend most of their time embedding between batches.
 """
 
+import heapq
+import itertools
 import threading
 from contextlib import contextmanager
-from typing import Dict, Iterator, Optional
+from typing import Dict, Iterator, List, Optional, Tuple
+
+
+class FifoSemaphore:
+    """A semaphore that serves waiters strictly in the order they arrived.
+
+    threading.Semaphore lets a thread that is already running take a slot ahead
+    of the ones asleep waiting for it. Under a long queue of slow scans that
+    leaves some callers served again and again while others get almost nothing,
+    and their latency never reaches a percentile because they never finish.
+
+    A caller that has to step out of line can come back to its old place by
+    passing it to acquire() again. Otherwise everyone who stepped out together
+    would rejoin in whatever order they woke, losing the fairness above.
+    """
+
+    def __init__(self, slots: int) -> None:
+        self._guard = threading.Lock()
+        self._free = slots
+        self._arrivals = itertools.count()
+        self._waiting: List[Tuple[int, threading.Lock]] = []  # a heap, earliest place first
+
+    def acquire(self, place: Optional[int] = None) -> int:
+        """Wait for a slot, and return this caller's place in line."""
+        with self._guard:
+            if place is None:
+                place = next(self._arrivals)
+            if self._free:
+                self._free -= 1
+                return place
+            ticket = threading.Lock()
+            ticket.acquire()
+            heapq.heappush(self._waiting, (place, ticket))
+        ticket.acquire()  # released by release(), which hands its slot straight to this thread
+        return place
+
+    def release(self) -> None:
+        with self._guard:
+            if self._waiting:
+                heapq.heappop(self._waiting)[1].release()
+            else:
+                self._free += 1
 
 
 class ReadWriteLock:
@@ -91,6 +134,24 @@ class ReadWriteLock:
                 while self._writer is not None or self._writers_waiting:
                     self._changed.wait()
             self._readers[me] = self._readers.get(me, 0) + 1
+
+    def try_acquire_shared(self) -> bool:
+        """Take shared access if that needs no waiting; False if it would."""
+        me = threading.get_ident()
+        with self._changed:
+            if self._writer == me:
+                self._writer_depth += 1
+                return True
+            if me not in self._readers and (self._writer is not None or self._writers_waiting):
+                return False
+            self._readers[me] = self._readers.get(me, 0) + 1
+            return True
+
+    def wait_until_no_writers(self) -> None:
+        """Block until no writer holds or awaits the lock. Takes nothing."""
+        with self._changed:
+            while self._writer is not None or self._writers_waiting:
+                self._changed.wait()
 
     def release_shared(self) -> None:
         """Give back shared access."""

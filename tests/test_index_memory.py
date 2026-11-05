@@ -13,8 +13,11 @@ import faiss
 import numpy as np
 import pytest
 
+import config
+from config import settings
 from models.schemas import ChunkMetadata
-from services.rw_lock import ReadWriteLock
+from services import vector_store as vector_store_module
+from services.rw_lock import FifoSemaphore, ReadWriteLock
 from services.vector_store import VectorStore
 
 DIM = 8
@@ -686,13 +689,16 @@ def test_a_writer_gets_in_under_constant_searching(tmp_path, calls):
     assert not calls.overlaps
 
 
-def test_mixed_load_keeps_searches_right_and_writes_alone(tmp_path, calls):
+@pytest.mark.parametrize("scan_slots", [0, 2])
+def test_mixed_load_keeps_searches_right_and_writes_alone(tmp_path, calls, monkeypatch, scan_slots):
     """Searches, adds, deletes, saves and releases all at once, on one collection.
 
     A write overlapping a search is a native crash when it goes badly, so the
     pass condition is not just surviving: `calls` sees every FAISS call and fails
-    this on any overlap, even one that happened not to crash.
+    this on any overlap, even one that happened not to crash. It runs both with
+    and without the limit on concurrent scans, which has its own path to the lock.
     """
+    _limit_scans(monkeypatch, scan_slots)
     stable = 200
     vectors = _vectors(stable)
     store = _saved_store(tmp_path, count=stable)
@@ -756,6 +762,333 @@ def test_mixed_load_keeps_searches_right_and_writes_alone(tmp_path, calls):
     assert sorted(vector_ids.tolist()) == sorted(reopened.metadata_store.get_all_rowids_ordered())
     documents_kept = 2 * (30 - 2 * 10)  # two writers, each deleting two of its 30 documents ten times
     assert reopened.get_total_chunks() == stable + documents_kept * 10
+
+
+# ── Taking turns on large scans ─────────────────────────────────────────────
+
+
+def _limit_scans(monkeypatch, slots, min_vectors=0):
+    """Set the scan limit, by default treating every collection as a large one."""
+    monkeypatch.setattr(settings, "scan_max_concurrent", slots)
+    monkeypatch.setattr(vector_store_module, "SCAN_QUEUE_MIN_VECTORS", min_vectors)
+    monkeypatch.setattr(vector_store_module, "_scan_slots", None)  # a failed test keeps its own
+
+
+def _search_on(store, seed=5):
+    return _background(lambda: store.search(_vectors(1, seed=seed)[0], top_k=5))
+
+
+def _waiting_for_a_slot(count=1):
+    """Until count threads are queued for the current scan slots."""
+    _until(lambda: len(vector_store_module._current_scan_slots()._waiting) == count)
+
+
+def test_the_semaphore_serves_waiters_in_arrival_order():
+    semaphore = FifoSemaphore(1)
+    served = []
+    semaphore.acquire()
+
+    def wait_in_line(number):
+        semaphore.acquire()
+        served.append(number)
+        semaphore.release()
+
+    threads = []
+    for number in range(5):
+        threads.append(_background(lambda n=number: wait_in_line(n)))
+        _until(lambda n=number: len(semaphore._waiting) == n + 1)
+    semaphore.release()
+
+    _finish(*threads)
+    assert served == [0, 1, 2, 3, 4]
+
+
+def test_a_caller_that_stepped_out_of_line_comes_back_to_its_old_place():
+    """Everyone a writer sends out of line rejoins at once, in no particular order."""
+    semaphore = FifoSemaphore(1)
+    stepped_out = semaphore.acquire()
+    semaphore.release()
+    semaphore.acquire()  # someone else has the slot now
+    served = []
+
+    def wait_in_line(name, place=None):
+        semaphore.acquire(place)
+        served.append(name)
+        semaphore.release()
+
+    later = _background(lambda: wait_in_line("arrived later"))
+    _until(lambda: len(semaphore._waiting) == 1)
+    returning = _background(lambda: wait_in_line("stepped out", stepped_out))
+    _until(lambda: len(semaphore._waiting) == 2)
+    semaphore.release()
+
+    _finish(later, returning)
+    assert served == ["stepped out", "arrived later"]
+
+
+def test_a_freed_slot_cannot_be_taken_ahead_of_the_queue():
+    """The fault in threading.Semaphore this class exists to avoid."""
+    semaphore = FifoSemaphore(1)
+    semaphore.acquire()
+    waiter_inside, waiter_leaves = threading.Event(), threading.Event()
+
+    def wait_in_line():
+        semaphore.acquire()
+        waiter_inside.set()
+        waiter_leaves.wait(TIMEOUT)
+        semaphore.release()
+
+    waiter = _background(wait_in_line)
+    _until(lambda: len(semaphore._waiting) == 1)
+    semaphore.release()
+
+    late = _background(semaphore.acquire)
+    _until(lambda: len(semaphore._waiting) == 1)  # queued, though a slot was just released
+    assert waiter_inside.wait(TIMEOUT)
+    waiter_leaves.set()
+    _finish(waiter, late)
+
+
+def test_trying_for_shared_access_never_waits():
+    lock = ReadWriteLock()
+    assert lock.try_acquire_shared() is True
+    assert lock.try_acquire_shared() is True  # again, while already reading
+    lock.release_shared()
+    lock.release_shared()
+
+    with lock:
+        assert lock.try_acquire_shared() is True  # a writer that searches stays a writer
+        lock.release_shared()
+        outcome = []
+        _finish(_background(lambda: outcome.append(lock.try_acquire_shared())))
+        assert outcome == [False]
+
+    reader, let_reader_go = _holding_shared(lock)
+    writer = _background(lambda: _enter(lock, []))
+    _until(lambda: lock._writers_waiting == 1)
+    outcome = []
+    _finish(_background(lambda: outcome.append(lock.try_acquire_shared())))
+    assert outcome == [False]  # a waiting writer holds back new readers here too
+    let_reader_go.set()
+    _finish(reader, writer)
+
+
+def test_waiting_for_writers_takes_nothing_and_returns_once_they_are_gone():
+    lock = ReadWriteLock()
+    lock.wait_until_no_writers()  # none: returns at once
+    returned = threading.Event()
+    with lock:
+        waiter = _background(lambda: (lock.wait_until_no_writers(), returned.set()))
+        assert not returned.wait(0.05)
+    _finish(waiter)
+    assert returned.is_set()
+    assert not lock._readers and lock._writer is None
+
+
+def test_large_scans_across_collections_share_the_limit(tmp_path, monkeypatch):
+    """Memory bandwidth is shared by every collection, so the limit has to be too."""
+    _limit_scans(monkeypatch, 2)
+    stores = [_saved_store(tmp_path / str(i)) for i in range(2)]
+    guard = threading.Lock()
+    scanning = []
+    most_scanning = []
+    let_go = threading.Event()
+    real = faiss.IndexIDMap2.search
+
+    def search(*args, **kwargs):
+        with guard:
+            scanning.append(1)
+            most_scanning.append(len(scanning))
+        let_go.wait(TIMEOUT)
+        with guard:
+            scanning.pop()
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(faiss.IndexIDMap2, "search", search)
+
+    searches = [_search_on(stores[i % 2]) for i in range(6)]
+    _waiting_for_a_slot(4)
+    _until(lambda: len(scanning) == 2)
+    let_go.set()
+    _finish(*searches)
+    assert max(most_scanning) == 2
+    assert len(most_scanning) == 6
+
+
+def test_a_small_collection_does_not_queue_behind_large_scans(tmp_path, monkeypatch):
+    large_store = _saved_store(tmp_path / "large", count=20)
+    small_store = _saved_store(tmp_path / "small", count=19)
+    _limit_scans(monkeypatch, 1, min_vectors=20)
+    inside, let_go = threading.Event(), threading.Event()
+    real = faiss.IndexIDMap2.search
+
+    def search(index, *args, **kwargs):
+        if index.ntotal >= 20:
+            inside.set()
+            let_go.wait(TIMEOUT)
+        return real(index, *args, **kwargs)
+
+    monkeypatch.setattr(faiss.IndexIDMap2, "search", search)
+
+    large = _search_on(large_store)
+    assert inside.wait(TIMEOUT)
+    queued = _search_on(large_store)
+    _waiting_for_a_slot()
+
+    _finish(_search_on(small_store))  # with the only slot taken and a search queued for it
+
+    let_go.set()
+    _finish(large, queued)
+
+
+def test_zero_means_no_limit(tmp_path, monkeypatch):
+    _limit_scans(monkeypatch, 0)
+    store = _saved_store(tmp_path)
+    together = threading.Barrier(4, timeout=TIMEOUT)
+    real = faiss.IndexIDMap2.search
+
+    def search(*args, **kwargs):
+        together.wait()  # only passes with all four inside FAISS at once
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(faiss.IndexIDMap2, "search", search)
+    _finish(*[_search_on(store) for _ in range(4)])
+
+
+def test_a_queued_search_does_not_delay_a_writer(tmp_path, monkeypatch):
+    _limit_scans(monkeypatch, 1)
+    store = _saved_store(tmp_path)
+    inside, let_go = _block_searches(monkeypatch)
+
+    running = _search_on(store)
+    assert inside.wait(TIMEOUT)
+    queued = _search_on(store)
+    _waiting_for_a_slot()
+    assert len(store._index_lock._readers) == 1  # only the one actually scanning
+
+    writer = _background(lambda: store.add_chunks(_chunks(5, "new"), _vectors(5, seed=2)))
+    _until(lambda: store._index_lock._writers_waiting == 1)
+    let_go.set()
+    _finish(running, writer, queued)
+    assert store.memory_stats()["vectors"] == 25
+
+
+def test_a_writer_on_one_collection_does_not_stall_scans_of_another(tmp_path, monkeypatch):
+    """Holding a slot while waiting for its own collection's lock would stall all of them."""
+    _limit_scans(monkeypatch, 1)
+    written, other = _saved_store(tmp_path / "written"), _saved_store(tmp_path / "other")
+    lock = written._index_lock
+    stepped_aside = threading.Event()
+    real_wait = lock.wait_until_no_writers
+
+    def wait_until_no_writers():
+        stepped_aside.set()
+        real_wait()
+
+    monkeypatch.setattr(lock, "wait_until_no_writers", wait_until_no_writers)
+
+    with lock:
+        behind_the_writer = _search_on(written)
+        assert stepped_aside.wait(TIMEOUT)
+        _finish(_search_on(other))  # with the one slot this search just gave back
+
+    _finish(behind_the_writer)
+
+
+def test_a_search_sent_away_by_a_writer_keeps_its_place_in_line(tmp_path, monkeypatch):
+    _limit_scans(monkeypatch, 1)
+    store = _saved_store(tmp_path)
+    slots = vector_store_module._current_scan_slots()
+    asked_for, given = [], []
+    real_acquire = slots.acquire
+
+    def acquire(place=None):
+        asked_for.append(place)
+        given.append(real_acquire(place))
+        return given[-1]
+
+    monkeypatch.setattr(slots, "acquire", acquire)
+
+    with store._index_lock:
+        search = _search_on(store)
+        _until(lambda: len(given) == 1)
+        _until(lambda: slots._free == 1)  # stepped aside, slot back
+    _finish(search)
+
+    assert asked_for == [None, given[0]]
+
+
+def test_a_writer_that_searches_gets_a_turn_without_deadlock(tmp_path, monkeypatch):
+    """Other searches queued on the same collection step aside for it, and so must not block it."""
+    _limit_scans(monkeypatch, 1)
+    store = _saved_store(tmp_path)
+    query = _vectors(1, seed=5)[0]
+    stop = threading.Event()
+
+    def keep_searching():
+        while not stop.is_set():
+            store.search(query, top_k=5)
+
+    others = [_background(keep_searching) for _ in range(4)]
+
+    def nested():
+        for _ in range(10):
+            with store._index_lock:
+                store.add_chunks(_chunks(1, "new"), _vectors(1, seed=2))
+                assert store.search(query, top_k=5)
+                store.delete_documents(["new"])
+
+    try:
+        _finish(_background(nested))
+    finally:
+        stop.set()
+    _finish(*others)
+
+
+def test_a_released_index_is_read_back_without_holding_a_slot(tmp_path, monkeypatch):
+    _limit_scans(monkeypatch, 1)
+    store = _saved_store(tmp_path)
+    assert store.unload_if_idle(0) is True
+    slots = vector_store_module._current_scan_slots()
+    free_during_load = []
+    real_load = store._load_or_create_index
+
+    def load():
+        free_during_load.append(slots._free)
+        real_load()
+
+    monkeypatch.setattr(store, "_load_or_create_index", load)
+    # Not store.search(), whose empty-index check would read it back first.
+    similarities, _ = store._top_matches(_vectors(1, seed=5)[:1], 5, None)
+    assert similarities.shape == (1, 5)
+    assert free_during_load == [1]
+    assert slots._free == 1
+
+
+def test_a_slot_is_given_back_when_a_scan_fails(tmp_path, monkeypatch):
+    _limit_scans(monkeypatch, 1)
+    store = _saved_store(tmp_path)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("scan failed")
+
+    monkeypatch.setattr(faiss.IndexIDMap2, "search", broken)
+    with pytest.raises(RuntimeError):
+        store.search(_vectors(1, seed=5)[0], top_k=5)
+    assert vector_store_module._current_scan_slots()._free == 1
+    assert not store._index_lock._readers
+
+
+def test_default_limit_is_half_the_usable_cpus(monkeypatch):
+    def usable(count):
+        if hasattr(config.os, "sched_getaffinity"):
+            monkeypatch.setattr(config.os, "sched_getaffinity", lambda pid: set(range(count)))
+        monkeypatch.setattr(config.os, "cpu_count", lambda: count)
+
+    usable(12)
+    assert config._half_the_cpus() == 6
+    usable(1)
+    assert config._half_the_cpus() == 1
 
 
 # ── The sweep across collections ────────────────────────────────────────────
