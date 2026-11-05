@@ -1,5 +1,6 @@
 """Custom file types over HTTP: admin-only changes, open read, end-to-end indexing."""
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -92,6 +93,27 @@ def test_oversized_samples_are_refused(client):
     r = client.post("/api/custom-file-types/suggest", data={"extension": ".acme", "use_ai": "false"},
                     files={"file": ("a.acme", b"x" * (2 * 1024 * 1024 + 10))})
     assert r.status_code == 413
+
+
+def test_suggest_waits_for_the_model_off_the_event_loop(client, monkeypatch):
+    """A model can take minutes, and waiting on the loop would stall every other request."""
+    on_loop = []
+
+    def suggest(*a, **k):
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return {"extension": ".acme", "source": "heuristic"}
+
+    monkeypatch.setattr(client.api.suggest_mod, "suggest", suggest)
+
+    r = client.post("/api/custom-file-types/suggest", data={"extension": ".acme"},
+                    files={"file": ("sample.acme", PUMPS.encode())})
+
+    assert r.status_code == 200
+    assert on_loop == [False]
 
 
 def test_suggest_returns_a_profile_and_preview_without_the_model(client):

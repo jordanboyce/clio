@@ -946,14 +946,14 @@ def create_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProv
         raise ValueError(f"Unknown provider: {provider_name}")
 
 
-def resolve_default_provider(provider: str = "", model: str = None, purpose: str = "AI feature"):
-    """The ``(provider, model)`` pair for a server-side, one-shot model call.
+def choose_default_provider(provider: str = "") -> tuple:
+    """Which provider a server-side, one-shot model call goes to.
 
-    An explicit `provider` wins; otherwise the deployment's default chat
-    provider (Settings -> AI). Keys come from the team key store, with the
-    Ollama Cloud key falling back to the app-wide one. Returns ``(None, None)``
-    when no provider is configured or it cannot be built (air-gapped mode
-    refuses cloud providers inside ``create_provider``); never raises.
+    An explicit `provider` wins; then the stored ``default_provider``
+    preference, where "none" means no model; then the deployment's own
+    AI_PROVIDER. Returns ``(name, from_deployment)``, with an empty name when
+    no model is to be called. The egress report reads this too, so what it says
+    is where these calls really go. Never raises.
     """
     from config import settings
     from services.app_database import app_db
@@ -965,7 +965,30 @@ def resolve_default_provider(provider: str = "", model: str = None, purpose: str
             provider = (prefs.get("default_provider") or "").strip()
         except Exception:
             provider = ""
-    if not provider or provider == "none":
+    # Unlike default_ai_provider, nothing configured stays nothing: these calls
+    # run on their own, and must not guess a cloud provider nobody chose.
+    from_deployment = not provider
+    if from_deployment:
+        provider = (settings.ai_provider or "").strip()
+    return ("" if provider == "none" else provider), from_deployment
+
+
+def resolve_default_provider(provider: str = "", model: str = None, purpose: str = "AI feature"):
+    """The ``(provider, model)`` pair for a server-side, one-shot model call.
+
+    The provider comes from ``choose_default_provider``, and when that is the
+    deployment's, so do AI_BASE_URL and AI_MODEL: an on-prem install configured
+    only in the environment gets its private endpoint here as well. Keys come
+    from the team key store, with the Ollama Cloud key falling back to the
+    app-wide one. Returns ``(None, None)`` when no provider is configured or it
+    cannot be built (air-gapped mode refuses cloud providers inside
+    ``create_provider``); never raises.
+    """
+    from config import settings
+    from services.app_database import app_db
+
+    provider, from_deployment = choose_default_provider(provider)
+    if not provider:
         return None, None
 
     api_key = ""
@@ -979,9 +1002,13 @@ def resolve_default_provider(provider: str = "", model: str = None, purpose: str
     kwargs: dict = {}
     if model:
         kwargs["model"] = model
+    if from_deployment:
+        # Now rather than in create_provider, or the Ollama defaults below
+        # would count as the caller's choice and shut out AI_BASE_URL / AI_MODEL.
+        api_key, kwargs = apply_deployment_defaults(provider, api_key, kwargs)
     if provider == "ollama":
-        kwargs["base_url"] = settings.ollama_base_url
-        kwargs["model"] = model or settings.mcp_ollama_model or DEFAULT_OLLAMA_MODEL
+        kwargs.setdefault("base_url", settings.ollama_base_url)
+        kwargs["model"] = kwargs.get("model") or settings.mcp_ollama_model or DEFAULT_OLLAMA_MODEL
     try:
         return create_provider(provider, api_key or None, **kwargs), kwargs.get("model")
     except Exception as e:

@@ -5,6 +5,7 @@ dialog needs to know which extensions are accepted. Everything that changes
 what the server will read, or sends a sample to a model, is admin-only.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional
 
@@ -209,7 +210,9 @@ async def suggest_custom_file_type(
     except UnicodeDecodeError:
         text = raw.decode("latin-1")
     try:
-        result = suggest_mod.suggest(text, extension, use_ai=use_ai)
+        # The AI pass waits on a model, which can take minutes: not on the event
+        # loop, where it would hold up every other request.
+        result = await asyncio.to_thread(suggest_mod.suggest, text, extension, use_ai=use_ai)
     except cft.ProfileError as e:
         raise _bad_request(e)
     audit.record("custom_file_type.suggest", target=result["extension"],

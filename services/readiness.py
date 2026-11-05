@@ -398,10 +398,13 @@ def egress_paths() -> List[Dict[str, str]]:
         local = settings.vision_ocr_provider == "ollama"
         add("Image OCR", settings.vision_ocr_provider, "internal" if local else ("blocked" if offline else "open"),
             "Page images are sent to the model." )
-    if settings.content_policy_llm_review and settings.content_policy_llm_provider:
-        add("Content review", settings.content_policy_llm_provider, "blocked" if offline and
-            settings.content_policy_llm_provider not in ("ollama", "openai_compatible") else "internal",
-            "Sampled pages are sent for review.")
+    if settings.content_policy_llm_review:
+        from services.ai_service import choose_default_provider
+        reviewer, _ = choose_default_provider(settings.content_policy_llm_provider)
+        if reviewer:
+            local = reviewer in ("ollama", "openai_compatible")
+            add("Content review", reviewer, "internal" if local else ("blocked" if offline else "open"),
+                "Sampled pages are sent for review.")
 
     add("Model downloads", "huggingface.co", "blocked" if offline else "open",
         "Models load from the local cache only." if offline else "Models download on first use if missing.")
