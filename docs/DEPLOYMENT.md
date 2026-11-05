@@ -191,6 +191,40 @@ get a real actor, and `MCP_AUDIT_TOOL_CALLS=true` extends that to what agents
 read. This is optional and only for organisations that already run sign-in;
 Clio does not provide accounts itself.
 
+### F. HPC cluster with Apptainer
+
+Apptainer and Singularity run the published image as your own user, on a
+read-only copy of it, so your data lives in a folder you bind in:
+
+```bash
+apptainer pull clio.sif docker://ghcr.io/jordanboyce/clio:slim
+mkdir -p /path/to/clio-data
+apptainer run --cleanenv --env HOST=127.0.0.1 \
+  --bind /path/to/clio-data:/app/data clio.sif
+```
+
+Then tunnel to the node running it, and open `http://localhost:8473`:
+
+```bash
+ssh -J <login-node> -L 8473:127.0.0.1:8473 <compute-node>
+```
+
+- **Keep `HOST=127.0.0.1` on a shared node.** The image otherwise listens on
+  every interface, and other users of the cluster could reach it. If you need
+  it reachable from elsewhere, set `AUTH_PASSWORD` too.
+- **Bind to `/app/data`.** Setting `DATA_DIR` to another path stops the server
+  from starting on a read-only image, because one store still opens
+  `data/app.db` relative to `/app`.
+- **Choose the disk with care.** Clio keeps SQLite databases in WAL mode, which
+  SQLite does not support on network filesystems such as NFS or Lustre. Prefer
+  a local disk, and test first if your only option is shared storage.
+- **Set `--env PORT=<port>`** if another user already holds 8473.
+- **Short on home quota?** Point `APPTAINER_CACHEDIR` and `APPTAINER_TMPDIR` at
+  scratch before pulling.
+
+Use `:latest` instead of `:slim` for OCR of scanned PDFs and audio
+transcription. Both images run on CPU.
+
 ## MCP clients
 
 `/mcp` is part of the same app, so it sits behind the same door - with one

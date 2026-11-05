@@ -13,6 +13,10 @@
 #   3. Hand over to the CMD (uvicorn).
 set -e
 
+# Apptainer and Singularity ignore the image's WORKDIR and keep the caller's
+# directory, where `main` would not import (or a job's own main.py would).
+cd /app
+
 CA_DIR="${EXTRA_CA_CERTS_DIR:-/certs/ca}"
 
 ca_files() {
@@ -75,4 +79,11 @@ if [ -d "$CA_DIR" ] && [ -n "$(ca_files)" ]; then
     echo "entrypoint: WARNING: started as a non-root user, cannot install CA certificates from $CA_DIR"
 fi
 mkdir -p "$DATA/documents" "$DATA/indexes" 2>/dev/null || true
+# Apptainer's image is read-only, so a run with no data mount lands here.
+if [ ! -w "$DATA" ]; then
+    echo "entrypoint: $DATA is not writable. Mount a writable folder there:" >&2
+    echo "  docker run -v /path/to/clio-data:$DATA ..." >&2
+    echo "  apptainer run --bind /path/to/clio-data:$DATA ..." >&2
+    exit 1
+fi
 exec "$@"
