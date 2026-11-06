@@ -6,6 +6,8 @@ import asyncio
 import functools
 import json
 import logging
+import os
+import tempfile
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -27,6 +29,7 @@ from models.schemas import SearchMode
 from services import authored_text, pii_detector
 from services.prompt_injection_detector import mark_passage
 from services.app_database import app_db
+from services.collection_locks import collection_write_lock
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
 from services.structured_chat import (
@@ -1856,6 +1859,7 @@ def get_document_context(
     When NOT to use this tool:
       - To search for a concept or topic — use `search_collection` instead.
         This tool assumes you already know the `document_id`.
+      - To edit a source — chunks overlap, so use `read_document` for its exact text.
       - For numeric / aggregation questions about CSV or Excel data — use
         `get_table_rows` or `query_table`; this tool returns chunk text
         which is truncated for tabular sources.
@@ -1867,6 +1871,117 @@ def get_document_context(
             max_chars=max_chars, collection_id=collection_id,
         ),
         "get_document_context",
+    )
+
+
+def read_document_sync(
+    document: str,
+    collection_id: str | None = None,
+    offset: int = 0,
+    max_chars: int = _DOC_CONTEXT_MAX_CHARS_CAP,
+) -> dict[str, Any]:
+    """Synchronous implementation of read_document; docs on the MCP wrapper."""
+    import hashlib
+
+    from services.governance import effective_sensitivity
+
+    resolved = _resolve_collection_id(collection_id)
+    store = indexer_manager.get_indexer(resolved).vector_store.metadata_store
+    doc_info = store.get_document_info(document) or next(
+        (row for row in store.find_documents_by_filename(document) if row.get("filename") == document),
+        None,
+    )
+    if not doc_info or _is_hidden_doc(doc_info):
+        raise ValueError(
+            f"No source '{document}' in collection '{resolved}'. Pass a document_id or an "
+            "exact filename, as `list_documents` shows them."
+        )
+    filename = doc_info.get("filename")
+    if Path(filename).suffix.lower() not in _WRITABLE_EXTENSIONS:
+        raise ValueError(
+            f"'{filename}' is not a text file. Use get_document_context to read its extracted text."
+        )
+    try:
+        raw = _document_source_path(resolved, doc_info).read_bytes()
+    except FileNotFoundError:
+        raise ValueError(f"The stored file for '{filename}' is no longer on disk.")
+    try:
+        # Bytes, not read_text: an exact read keeps the file's line endings.
+        full_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(
+            f"'{filename}' is not UTF-8 text. Use get_document_context to read its extracted text."
+        )
+
+    offset = max(0, int(offset))
+    end = offset + max(500, min(int(max_chars), _DOC_CONTEXT_MAX_CHARS_CAP))
+    original = full_text[offset:end]
+    text = pii_detector.redact_if_enabled(original)
+    # The id of the bytes just read, not of the row: during a swap the two can
+    # differ for a moment, and this is the version the caller is holding.
+    version = hashlib.sha256(raw).hexdigest()[:16]
+    payload: dict[str, Any] = {
+        "collection_id": resolved,
+        "document_id": version,
+        "filename": filename,
+        "source_type": doc_info.get("source_type"),
+        "text": text,
+        "offset": offset,
+        "total_chars": len(full_text),
+        "next_offset": end if end < len(full_text) else None,
+        "sensitivity": effective_sensitivity(
+            collection_service.get_collection(resolved), doc_info.get("sensitivity")
+        ),
+    }
+    mark = mark_passage(text)
+    if mark:
+        payload["instruction_text"] = mark
+    if text != original:
+        payload["redacted"] = True
+        payload["note"] = "Personal data was masked in this text, so writing it back would store the masks."
+    if not store.get_document_info(version):
+        payload["note"] = (
+            "The file on disk differs from what is indexed, so search still reflects other text. "
+            "Re-index or re-sync it to bring them together."
+        )
+    return payload
+
+
+@_threaded_tool(title="Read document exactly", annotations=_read_only("Read document exactly"))
+def read_document(
+    document: str,
+    collection_id: str | None = None,
+    offset: int = 0,
+    max_chars: int = _DOC_CONTEXT_MAX_CHARS_CAP,
+) -> dict[str, Any]:
+    """Read a text source exactly as it is stored, for editing it.
+
+    Unlike `get_document_context`, which returns overlapping chunks for reading
+    and quoting, this returns the file's own text, byte for byte. Use it before
+    changing a source with `write_document`: pass the returned `document_id` as
+    `expected_document_id`, and the write is refused if the source changed since.
+
+    Parameters:
+      - document: A filename or a document_id. A filename keeps working after
+        edits; a document_id changes whenever the text does.
+      - collection_id: Optional. If omitted, uses the server's default collection.
+      - offset: Character to start from. Follow `next_offset` to read a long file.
+      - max_chars: Most characters to return in this call (at most 40000).
+
+    Returns:
+      - document_id: The version you just read
+      - filename, source_type, sensitivity
+      - text, offset, total_chars
+      - next_offset: Where to continue, or null at the end
+      - redacted: true if personal data was masked. Do not write that text back.
+      - note: Present when something about this text needs care
+
+    Only text files can be read this way. For a PDF, Word file or image, use
+    `get_document_context`.
+    """
+    return _tool_response(
+        read_document_sync(document, collection_id=collection_id, offset=offset, max_chars=max_chars),
+        "read_document",
     )
 
 
@@ -2667,6 +2782,14 @@ from services.code_extractor import SUPPORTED_CODE_EXTENSIONS as _CODE_EXTS
 _WRITABLE_EXTENSIONS = {".md", ".txt", ".json", ".jsonl", ".csv", ".html", ".htm"} | set(_CODE_EXTS)
 _WRITE_MAX_CHARS = 2_000_000
 _WRITE_MODES = ("create", "replace", "append")
+# Refused everywhere, not only where they break: a collection moves between
+# Linux and Windows in a bundle. On NTFS a colon writes an alternate stream, and
+# the visible file stays empty. Most file systems stop at 255 bytes per name.
+_UNPORTABLE_FILENAME_CHARS = '<>:"|?*'
+_WRITE_MAX_FILENAME_BYTES = 200
+# Long enough for the largest write to index on a CPU; a caller past it is told
+# to retry rather than holding a worker thread indefinitely.
+_WRITE_LOCK_TIMEOUT_SECONDS = 120.0
 
 
 def _safe_source_filename(filename: str) -> str:
@@ -2684,6 +2807,10 @@ def _safe_source_filename(filename: str) -> str:
     safe = raw.replace("/", "_")
     if safe in (".", "..") or safe.startswith(".."):
         raise ValueError("filename must not be a relative path")
+    if any(ch in _UNPORTABLE_FILENAME_CHARS for ch in safe):
+        raise ValueError(
+            f"filename must not contain any of these characters: {' '.join(_UNPORTABLE_FILENAME_CHARS)}"
+        )
     from pathlib import PurePosixPath
 
     suffix = PurePosixPath(safe).suffix.lower()
@@ -2696,6 +2823,8 @@ def _safe_source_filename(filename: str) -> str:
             ".md, .txt, .json, .jsonl, .csv, .html, or a source-code extension. "
             "Binary formats (PDF, DOCX, images, audio) must be uploaded as files."
         )
+    if len(safe.encode("utf-8")) > _WRITE_MAX_FILENAME_BYTES:
+        raise ValueError(f"filename is too long; the limit is {_WRITE_MAX_FILENAME_BYTES} bytes.")
     return safe
 
 
@@ -2738,13 +2867,37 @@ def _require_mcp_write(collection_id: str | None, *, require_aup: bool = True) -
     return resolved
 
 
-def _find_document_by_filename(indexer, filename: str) -> dict[str, Any] | None:
-    """Exact-filename lookup within one collection (newest first if several)."""
-    store = indexer.vector_store.metadata_store
-    for row in store.list_documents_page(limit=50, offset=0, q=filename):
-        if row.get("filename") == filename:
-            return row
-    return None
+def _appended_text(file_path: Path, filename: str, content: str) -> str:
+    """The stored note plus ``content``, keeping the note's bytes as they are."""
+    if not file_path.exists():
+        raise ValueError(
+            f"The stored file for '{filename}' is missing on disk; use "
+            "mode='replace' to write it fresh."
+        )
+    try:
+        # Bytes, not read_text: that would rewrite the note's line endings.
+        previous = file_path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(
+            f"'{filename}' is not UTF-8 text, so appending could corrupt it. "
+            "Use mode='replace' with its full text."
+        )
+    separator = "" if previous.endswith("\n\n") else ("\n" if previous.endswith("\n") else "\n\n")
+    return previous + separator + content
+
+
+def _install_stored_file(staged: Path, file_path: Path) -> None:
+    """Atomically put the new bytes under the note's name."""
+    os.replace(staged, file_path)
+
+
+def _discard_indexed_version(indexer, document_id: str) -> None:
+    """Drop a new version that could not be finished; the old one is still whole."""
+    try:
+        indexer.delete_document(document_id)
+        indexer.save_index()
+    except Exception as e:  # noqa: BLE001 - the caller is already reporting the first failure
+        logger.warning("write_document: could not discard %s: %s", document_id, e)
 
 
 def write_document_sync(
@@ -2752,11 +2905,10 @@ def write_document_sync(
     content: str,
     collection_id: str | None = None,
     mode: Literal["create", "replace", "append"] = "create",
+    expected_document_id: str | None = None,
 ) -> dict[str, Any]:
     """Synchronous implementation of write_document; docs on the MCP wrapper."""
-    from middleware.user_context import get_request_user
-    from services import audit, governance
-    from services.content_policy import BlockedContentError, ContentRejectedError
+    from services.reindex_service import is_reindexing
 
     if mode not in _WRITE_MODES:
         raise ValueError(f"mode must be one of: {', '.join(_WRITE_MODES)}")
@@ -2769,90 +2921,180 @@ def write_document_sync(
             f"content is {len(content):,} characters; the limit per write is "
             f"{_WRITE_MAX_CHARS:,}. Split it into several documents."
         )
+    try:
+        content.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("content must be valid UTF-8 text")
 
     safe_filename = _safe_source_filename(filename)
     resolved = _require_mcp_write(collection_id)
+    with collection_write_lock(resolved, timeout=_WRITE_LOCK_TIMEOUT_SECONDS):
+        # A full re-index empties the index and refills it from a list made
+        # beforehand, so a note written meanwhile would drop out of search.
+        if is_reindexing(resolved):
+            raise ValueError(
+                f"Collection '{resolved}' is being re-indexed. Nothing was changed; "
+                "retry when that has finished."
+            )
+        return _write_document_locked(safe_filename, content, resolved, mode, expected_document_id)
+
+
+def _write_document_locked(
+    safe_filename: str, content: str, resolved: str, mode: str, expected_document_id: str | None,
+) -> dict[str, Any]:
+    """Store one note. The caller holds the collection's write lock.
+
+    The old version stays whole until the new one is finished: stage the bytes,
+    refuse what cannot be kept, index, swap the file in, and only then retire
+    the old rows. Any refusal or failure before the swap changes nothing.
+    """
+    from middleware.user_context import get_request_user
+    from services import audit, governance, storage_quota
+    from services.content_policy import BlockedContentError, ContentRejectedError
+    from services.storage_quota import StorageLimitExceeded
+    from services.upload_service import upload_service
+
     indexer = indexer_manager.get_indexer(resolved)
     store = indexer.vector_store.metadata_store
     document_dir = indexer_manager.get_documents_path(resolved)
+    file_path = document_dir / safe_filename
     uploaded_by = get_request_user()
 
-    existing = _find_document_by_filename(indexer, safe_filename)
-    replaced_id: str | None = None
-    final_content = content
-
-    if existing:
-        existing_id = existing.get("document_id")
-        if mode == "create":
-            raise ValueError(
-                f"A source named '{safe_filename}' already exists in collection "
-                f"'{resolved}' (document_id {existing_id}). Pass mode='replace' to "
-                "overwrite it or mode='append' to add to the end of it."
-            )
-        if mode == "append":
-            if existing.get("source_type") == "local_reference":
-                raise ValueError(
-                    f"'{safe_filename}' is indexed in place from "
-                    f"{existing.get('source_path')}; edit that file directly and "
-                    "re-index it rather than appending over MCP."
-                )
-            current_path = document_dir / safe_filename
-            if not current_path.exists():
-                raise ValueError(
-                    f"The stored file for '{safe_filename}' is missing on disk; use "
-                    "mode='replace' to write it fresh."
-                )
-            previous = current_path.read_text(encoding="utf-8", errors="replace")
-            separator = "" if previous.endswith("\n\n") else ("\n" if previous.endswith("\n") else "\n\n")
-            final_content = previous + separator + content
-        # replace and append both retire the old record; its chunks, file and
-        # collection membership go through the same path the delete button uses.
-        governance.remove_document(resolved, existing_id, actor=uploaded_by)
-        replaced_id = existing_id
-
-    file_path = document_dir / safe_filename
-    from services import storage_quota
-    from services.storage_quota import StorageLimitExceeded
-    try:
-        storage_quota.check(resolved, len(final_content.encode("utf-8")), safe_filename)
-    except StorageLimitExceeded as e:
-        raise ValueError(str(e))
-    # newline="\n": store exactly the bytes the agent sent (no CRLF
-    # translation on Windows), so the content hash is platform-independent.
-    file_path.write_text(final_content, encoding="utf-8", newline="\n")
-
-    # Identical bytes already indexed under another name: the document id is
-    # the content hash, so indexing again would collide. Say so instead.
-    content_hash = governance.content_hash_of(file_path)
-    duplicate = store.get_document_info(content_hash[:16])
-    if duplicate and duplicate.get("filename") != safe_filename:
-        file_path.unlink(missing_ok=True)
-        return _tool_response({
-            "status": "duplicate",
-            "collection_id": resolved,
-            "filename": safe_filename,
-            "document_id": duplicate.get("document_id"),
-            "existing_filename": duplicate.get("filename"),
-            "note": (
-                f"Identical content is already indexed as '{duplicate.get('filename')}'. "
-                "Nothing was written."
-            ),
-        }, "write_document")
-
-    try:
-        meta = indexer.index_document(
-            file_path, safe_filename, collection_id=resolved, uploaded_by=uploaded_by,
+    same_name = store.find_documents_by_filename(safe_filename)
+    # More than one row only where a race before this lock left them; a
+    # replace or append retires them all.
+    existing = [row for row in same_name if row.get("filename") == safe_filename]
+    if same_name and not existing:
+        raise ValueError(
+            f"'{safe_filename}' differs only by case from the existing source "
+            f"'{same_name[0].get('filename')}', and those are one file on some systems. "
+            "Use the existing name, or choose a different one."
         )
-    except (BlockedContentError, ContentRejectedError) as e:
-        file_path.unlink(missing_ok=True)
-        raise ValueError(str(e))
-    except Exception as e:
-        file_path.unlink(missing_ok=True)
-        logger.error("write_document: failed to index %s: %s", safe_filename, e)
-        raise ValueError(f"Failed to index '{safe_filename}': {e}")
+    if existing and mode == "create":
+        raise ValueError(
+            f"A source named '{safe_filename}' already exists in collection "
+            f"'{resolved}' (document_id {existing[0].get('document_id')}). Pass mode='replace' to "
+            "overwrite it or mode='append' to add to the end of it."
+        )
+    for row in existing:
+        if (row.get("source_type") or "upload") != "upload":
+            raise ValueError(
+                f"'{safe_filename}' comes from {row.get('source_path')}, so an edit here would "
+                "not reach that file and the next sync would bring the old text back. Edit the "
+                "file itself, then re-sync or re-index it."
+            )
+    if not existing and file_path.exists() and upload_service.has_running_job(resolved):
+        raise ValueError(
+            f"A job running on this collection is adding a file named '{safe_filename}'. "
+            "Nothing was changed; retry when the job has finished."
+        )
 
-    collection_service.add_document(resolved, meta.document_id)
-    indexer.save_index()
+    final_content = content
+    if existing and mode == "append":
+        final_content = _appended_text(file_path, safe_filename, content)
+    kept_note = " The existing source was not changed." if existing else ""
+
+    meta = None
+    try:
+        # ignore_cleanup_errors: a leftover folder is harmless, but failing a write
+        # over it after the swap would report a finished write as failed.
+        with tempfile.TemporaryDirectory(
+            dir=document_dir.parent, prefix=".write-", ignore_cleanup_errors=True,
+        ) as staging:
+            # The real name in a private folder: the extractors read the suffix.
+            # Bytes, so no newline translation: the hash is platform-independent.
+            staged = Path(staging) / safe_filename
+            staged.write_bytes(final_content.encode("utf-8"))
+
+            # The document id is the content hash, so the same bytes under another
+            # name cannot be indexed again. Find that out before touching anything.
+            document_id = governance.content_hash_of(staged)[:16]
+            current_ids = {row.get("document_id") for row in existing}
+            # Already holding this exact text is a retry of a write that landed.
+            if expected_document_id and not current_ids & {expected_document_id, document_id}:
+                now = f"it is now {existing[0].get('document_id')}" if existing else "it no longer exists"
+                raise ValueError(
+                    f"'{safe_filename}' changed since you read it: you expected "
+                    f"{expected_document_id} and {now}. Nothing was changed. Read it again with "
+                    "read_document, redo your edit on that text, and retry."
+                )
+            twin = store.get_document_info(document_id)
+            if twin and twin.get("filename") != safe_filename:
+                if existing:
+                    raise ValueError(
+                        f"Nothing changed: '{safe_filename}' keeps its current text. The new text "
+                        f"is identical to '{twin.get('filename')}' (document_id {document_id}), and "
+                        "a collection cannot hold two sources with identical text. Change the "
+                        "text, or write to that source instead."
+                    )
+                return _tool_response({
+                    "status": "duplicate",
+                    "collection_id": resolved,
+                    "filename": safe_filename,
+                    "document_id": document_id,
+                    "existing_filename": twin.get("filename"),
+                    "note": (
+                        f"Identical content is already indexed as '{twin.get('filename')}'. "
+                        "Nothing was written."
+                    ),
+                }, "write_document")
+
+            if not twin:
+                # The old version's space comes back when it retires.
+                freed = file_path.stat().st_size if existing and file_path.exists() else 0
+                growth = staged.stat().st_size - freed
+                if growth > 0:
+                    try:
+                        storage_quota.check(resolved, growth, safe_filename)
+                    except StorageLimitExceeded as e:
+                        raise ValueError(f"{e}{kept_note}")
+                try:
+                    meta = indexer.index_document(
+                        staged, safe_filename, collection_id=resolved, uploaded_by=uploaded_by,
+                    )
+                except (BlockedContentError, ContentRejectedError) as e:
+                    raise ValueError(f"{e}{kept_note}")
+                except Exception as e:
+                    logger.error("write_document: failed to index %s: %s", safe_filename, e)
+                    _discard_indexed_version(indexer, document_id)
+                    reason = e.strerror if isinstance(e, OSError) else e
+                    raise ValueError(f"Failed to index '{safe_filename}': {reason}.{kept_note}")
+
+            try:
+                _install_stored_file(staged, file_path)
+            except OSError as e:
+                logger.error("write_document: failed to store %s: %s", safe_filename, e)
+                if meta:
+                    _discard_indexed_version(indexer, document_id)
+                raise ValueError(f"Could not store '{safe_filename}': {e.strerror}.{kept_note}")
+    except OSError as e:
+        logger.error("write_document: failed to stage %s: %s", safe_filename, e)
+        raise ValueError(f"Could not store '{safe_filename}': {e.strerror}.{kept_note}")
+
+    if meta:
+        collection_service.add_document(resolved, document_id)
+    retired = governance.retire_older_versions(resolved, indexer, document_id, actor=uploaded_by)
+    if meta or retired:
+        indexer.save_index()
+    replaced_id = retired[0] if retired else None
+
+    if not meta:
+        # This exact text is already indexed under this name.
+        payload: dict[str, Any] = {
+            "status": "unchanged",
+            "collection_id": resolved,
+            "collection_name": _mcp_safe_name(collection_service.get_collection(resolved), resolved),
+            "document_id": document_id,
+            "filename": safe_filename,
+            "total_pages": twin.get("num_pages"),
+            "total_chunks": twin.get("num_chunks"),
+            "policy_status": twin.get("policy_status"),
+            "characters": len(final_content),
+        }
+        if replaced_id:
+            payload["replaced_document_id"] = replaced_id
+        return _tool_response(payload, "write_document")
+
     audit.record(
         "document.upload", collection_id=resolved, document_id=meta.document_id,
         detail={
@@ -2865,7 +3107,7 @@ def write_document_sync(
     status = {"create": "created", "replace": "replaced", "append": "appended"}[mode]
     if mode != "create" and replaced_id is None:
         status = "created"  # replace/append with nothing there yet
-    payload: dict[str, Any] = {
+    payload = {
         "status": status,
         "collection_id": resolved,
         "collection_name": _mcp_safe_name(collection_service.get_collection(resolved), resolved),
@@ -2892,6 +3134,7 @@ async def write_document(
     content: str,
     collection_id: str | None = None,
     mode: Literal["create", "replace", "append"] = "create",
+    expected_document_id: str | None = None,
 ) -> dict[str, Any]:
     """Add a new text source to a collection, or update one you added before.
 
@@ -2917,20 +3160,40 @@ async def write_document(
                       (re-indexed from scratch; the old document_id retires).
           "append"  — add `content` to the end of the existing source and
                       re-index it. Creates the source if it doesn't exist.
+      - expected_document_id: Optional. The document_id you got from
+        `read_document`. The write is refused if the source has changed since,
+        so an edit never overwrites one you did not see.
+
+    To edit a source: `read_document`, change that text, then `replace` with
+    `expected_document_id`. Do not rebuild the text from `get_document_context`:
+    its chunks overlap, so the overlaps would end up in the source.
 
     Returns:
-      - status: "created", "replaced", "appended", or "duplicate" (identical
-        content already indexed under another filename — nothing written)
+      - status: "created", "replaced", "appended", "unchanged" (this exact text
+        is already stored under this name), or "duplicate" (a new name whose
+        text is already indexed under another filename — nothing written)
       - document_id, filename, total_pages, total_chunks, policy_status
       - replaced_document_id: the retired id, for replace/append
 
     Rules and limits:
+      - Any error means the existing source was left exactly as it was. That
+        includes a replace or append whose resulting text is identical to
+        another source: a collection cannot hold two identical texts.
+      - Concurrent writes are safe: writes to one collection run one at a time,
+        so every append lands. A replace without `expected_document_id`
+        overwrites whatever is there. A search during a replace can briefly
+        return passages from both versions.
+      - The document_id changes with the text, so keep the filename to refer to
+        a source over time. `read_document` accepts either.
       - Writes need a token minted with writes enabled (Settings → MCP), or a
         signed-in session. A collection shared read-only refuses writes.
       - Content is scanned by the deployment's content policy and recorded
         against the caller's identity, like every upload.
       - One write holds at most 2,000,000 characters; split larger material.
-      - Sources indexed in place from a local path cannot be appended to.
+      - Sources that come from a synced folder, repository or local path cannot
+        be replaced or appended to here; edit the file itself and re-sync.
+      - A filename cannot contain < > : " | ? * or differ only by case from an
+        existing source.
 
     To remove a source, use the app; there is deliberately no delete tool.
     """
@@ -2940,6 +3203,7 @@ async def write_document(
         content,
         collection_id=collection_id,
         mode=mode,
+        expected_document_id=expected_document_id,
     )
 
 
@@ -3507,24 +3771,26 @@ def get_index_job(job_id: Annotated[int, Field(ge=1)]) -> dict[str, Any]:
     return _tool_response(payload, "get_index_job")
 
 
-def _run_reindex_document_job(
-    job_id: int,
-    collection_id: str,
-    document_id: str,
-    source_path: str,
-    filename: str,
-    source_type: str | None,
-    sensitivity: str | None,
-    uploaded_by: str | None,
-) -> None:
-    """Job-thread body for reindex_document: drop the chunks, index the file again.
+def _document_source_path(collection_id: str, doc_info: dict[str, Any]) -> Path:
+    """The file a document was indexed from: its stored copy, or its local original."""
+    from services import governance
+
+    return governance.document_file(indexer_manager.get_documents_path(collection_id), doc_info)
+
+
+def _run_reindex_document_job(job_id: int, collection_id: str, document_id: str, actor: str | None) -> None:
+    """Job-thread body for reindex_document: rebuild one document from its file.
 
     The document id is the content hash, so an unchanged file comes back
     under the same id; a changed file gets a new one and the old id retires.
-    The per-document sensitivity override and an in-place source reference
-    survive the round trip. Raising lets the dispatcher mark the job failed.
+    Its review decisions and an in-place source reference survive the swap, and
+    a failure while reading or embedding leaves the old version in place.
+    Raising lets the dispatcher mark the job failed.
     """
     from services import audit, governance
+    from services.reindex_service import (
+        _safe_restore_supersede_marks, _safe_supersede_marks, reindex_service,
+    )
     from services.upload_service import upload_service
 
     if upload_service.is_cancelled(job_id):
@@ -3532,28 +3798,33 @@ def _run_reindex_document_job(
                                            "failed_files": []}, cancelled=True)
         return
 
-    upload_service.report_progress(job_id, "extracting", 0.0, f"Re-indexing {filename}")
     indexer = indexer_manager.get_indexer(collection_id)
     store = indexer.vector_store.metadata_store
-    chunks_deleted = indexer.delete_document(document_id)
-    collection_service.remove_document(collection_id, document_id)
-    try:
-        meta = indexer.index_document(
-            Path(source_path), filename, collection_id=collection_id, uploaded_by=uploaded_by,
-        )
-    except Exception:
-        indexer.save_index()
-        raise
-    collection_service.add_document(collection_id, meta.document_id)
-    if source_type == "local_reference":
-        store.update_document_source(meta.document_id, source_path=source_path,
-                                     source_type="local_reference")
-    if sensitivity:
-        store.set_document_governance(meta.document_id, sensitivity=sensitivity)
-    indexer.save_index()
+    with collection_write_lock(collection_id):
+        # Read under the lock: a write since this was queued may have retired
+        # this version, and indexing the name again would add a second row.
+        doc_info = store.get_document_info(document_id)
+        if not doc_info:
+            raise ValueError(
+                f"Document {document_id} is no longer indexed; it was replaced or "
+                "removed after this job was queued."
+            )
+        filename = doc_info.get("filename")
+        chunks_deleted = doc_info.get("num_chunks") or 0
+        upload_service.report_progress(job_id, "extracting", 0.0, f"Re-indexing {filename}")
+        marks = _safe_supersede_marks(store)
+        try:
+            meta = reindex_service.replace_document(
+                indexer, {**doc_info, "path": _document_source_path(collection_id, doc_info)}, collection_id,
+            )
+            collection_service.remove_document(collection_id, document_id)
+            collection_service.add_document(collection_id, meta.document_id)
+            _safe_restore_supersede_marks(store, marks)
+        finally:
+            indexer.save_index()
     governance._invalidate_answers(collection_id)
     audit.record(
-        "document.reindex", actor=uploaded_by, collection_id=collection_id,
+        "document.reindex", actor=actor, collection_id=collection_id,
         document_id=meta.document_id,
         detail={"filename": filename, "previous_document_id": document_id,
                 "chunks_deleted": chunks_deleted, "total_chunks": meta.total_chunks,
@@ -3578,11 +3849,7 @@ def reindex_document_sync(document_id: str, collection_id: str | None = None) ->
     resolved = _require_mcp_write(collection_id)
     doc_info = _visible_document_info(resolved, document_id)
     filename = doc_info.get("filename") or document_id
-    source_type = doc_info.get("source_type")
-    if source_type == "local_reference" and doc_info.get("source_path"):
-        source = Path(doc_info["source_path"])
-    else:
-        source = indexer_manager.get_documents_path(resolved) / filename
+    source = _document_source_path(resolved, doc_info)
     if not source.is_file():
         raise ValueError(
             f"The source file for '{filename}' ({source}) is no longer on disk, so it "
@@ -3592,8 +3859,7 @@ def reindex_document_sync(document_id: str, collection_id: str | None = None) ->
     try:
         job_id = upload_service.submit_job(
             resolved, "reindex", 1, _run_reindex_document_job,
-            args=(resolved, document_id, str(source), filename, source_type,
-                  doc_info.get("sensitivity"), get_request_user()),
+            args=(resolved, document_id, get_request_user()),
         )
     except RuntimeError as e:
         raise ValueError(str(e))
@@ -3622,8 +3888,9 @@ def reindex_document(document_id: str, collection_id: str | None = None) -> dict
     Use this when a source's text looks stale or badly extracted (an OCR
     setting changed, the embedding model changed, a file indexed in place
     from a local folder was edited on disk). The document's chunks are
-    dropped and rebuilt from the file by a tracked background job that
-    shows in the app's jobs drawer like any upload.
+    rebuilt from the file by a tracked background job that shows in the
+    app's jobs drawer like any upload. If the file cannot be read or embedded,
+    the job fails and the existing chunks stay.
 
     Parameters:
       - document_id: The id from a search result or `get_collection_info`.

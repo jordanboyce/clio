@@ -281,8 +281,7 @@ def test_reindex_document_queues_a_tracked_job(indexer, monkeypatch):
     assert submitted["collection_id"] == "default"
     assert submitted["job_type"] == "reindex" and submitted["total_files"] == 1
     assert submitted["target"] is mcp._run_reindex_document_job
-    stored = indexer_manager.get_documents_path("default") / "sprint-notes.md"
-    assert submitted["args"][2] == str(stored)
+    assert submitted["args"][:2] == ("default", doc["document_id"])
 
 
 def test_reindex_document_refuses_missing_document_and_missing_file(indexer, monkeypatch):
@@ -320,10 +319,7 @@ def test_reindex_job_body_rebuilds_chunks_and_keeps_label(indexer, fresh_db):
     assert before
 
     job_id = fresh_db.create_upload_job("default", 1, job_type="reindex")
-    source = indexer_manager.get_documents_path("default") / "sprint-notes.md"
-    mcp._run_reindex_document_job(
-        job_id, "default", doc_id, str(source), "sprint-notes.md", "upload", "confidential", "tester",
-    )
+    mcp._run_reindex_document_job(job_id, "default", doc_id, "tester")
 
     after = store.get_document_info(doc_id)
     assert after and after["sensitivity"] == "confidential"

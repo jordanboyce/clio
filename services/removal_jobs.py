@@ -28,6 +28,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from services import audit, governance
 from services.app_database import app_db
+from services.collection_locks import collection_write_lock
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
 from services.upload_service import upload_service
@@ -149,12 +150,13 @@ def _run_removal(job_id: int, collection_id: str, document_ids: Optional[List[st
 
     # Read here, not when it was asked for: jobs queued ahead of this one have
     # added to the collection since, and "everything" has to include them.
-    existing = store.list_document_ids()
-    if document_ids is None or set(document_ids) >= set(existing):
-        documents = list(store.get_documents_info(existing).values())
-        _clear_collection(job_id, collection_id, documents, actor, requested_at,
-                          not_found=len(set(document_ids or []) - set(existing)))
-        return
+    with collection_write_lock(collection_id):
+        existing = store.list_document_ids()
+        if document_ids is None or set(document_ids) >= set(existing):
+            documents = list(store.get_documents_info(existing).values())
+            _clear_collection(job_id, collection_id, documents, actor, requested_at,
+                              not_found=len(set(document_ids or []) - set(existing)))
+            return
 
     found = store.get_documents_info(document_ids)
     documents = [found[d] for d in document_ids if d in found]

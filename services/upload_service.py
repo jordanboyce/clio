@@ -8,6 +8,7 @@ Handles:
 """
 
 import logging
+import os
 import threading
 import shutil
 import json
@@ -26,12 +27,32 @@ from config import settings
 from services import audit, git_source, pasted_text, source_changes, storage_quota
 from services.app_database import app_db
 from services.indexer_manager import indexer_manager
+from services.collection_locks import collection_write_lock
 from services.collection_service import collection_service
 from services.indexing import ChunkBatcher
 from services.embedder import EmbeddingDimensionMismatch, EmbeddingUnavailable, ensure_embedding_ready
 from services.link_fetcher import fetch_link
 
 logger = logging.getLogger(__name__)
+
+
+def _claim_stored_path(documents_dir: Path, filename: str) -> Path:
+    """An unused name in the library, created empty so that nothing else can take it.
+
+    A taken name gets a counter. A file there may belong to another source, and
+    its writer may be an agent or a worker of this same job, so writing over it
+    would leave that source's row describing bytes that are gone.
+    """
+    wanted = documents_dir / filename
+    candidate = wanted
+    counter = 0
+    while True:
+        try:
+            candidate.open("xb").close()
+            return candidate
+        except FileExistsError:
+            counter += 1
+            candidate = documents_dir / f"{wanted.stem}_{counter}{wanted.suffix}"
 
 
 class UploadPhase(str, Enum):
@@ -311,8 +332,11 @@ class UploadService:
         neither survives a restart, but their rows do. Until this ran, a
         restart mid-index left a job that showed as running forever in the
         drawer, and the guard that keeps one job per collection refused
-        every future job for that collection.
+        every future job for that collection. The uploads staged for those
+        jobs go too: nothing will index them now.
         """
+        for staged in collection_service.base_dir.glob("*/.staged"):
+            shutil.rmtree(staged, ignore_errors=True)
         try:
             counts = app_db.fail_interrupted_jobs(
                 "Interrupted - the server restarted while this job was running. "
@@ -528,6 +552,11 @@ class UploadService:
     def is_cancelled(self, job_id: int) -> bool:
         return self._is_cancelled(job_id)
 
+    def has_running_job(self, collection_id: str) -> bool:
+        """True while a job is working on this collection, as opposed to waiting."""
+        with self._lock:
+            return collection_id in self._active_collections.values()
+
     def is_live(self, job_id: int) -> bool:
         """True while a job is waiting for a slot or running."""
         with self._lock:
@@ -644,29 +673,39 @@ class UploadService:
         uploaded_by: Optional[str] = None,
     ):
         """Run local file indexing in background thread."""
-        documents_dir = indexer_manager.get_documents_path(collection_id) if copy_to_library else None
-        # Staging resolves filename collisions with an exists() loop; serialize
-        # it so two same-named files staged by different extraction workers
-        # can't race into the same destination path.
-        copy_lock = threading.Lock()
+        documents_dir = indexer_manager.get_documents_path(collection_id)
+        staging_dir = collection_service.get_staging_path(collection_id).resolve()
+
+        def is_staged(path: Path) -> bool:
+            return path.resolve().parent.parent == staging_dir
 
         def make_work(source_path: Path) -> _BulkFileWork:
-            if copy_to_library:
-                def stage() -> Path:
-                    with copy_lock:
-                        final_path = documents_dir / source_path.name
-                        counter = 1
-                        while final_path.exists():
-                            final_path = documents_dir / f"{source_path.stem}_{counter}{source_path.suffix}"
-                            counter += 1
-                        shutil.copy2(str(source_path), str(final_path))
-                    return final_path
-
-                return _BulkFileWork(display_name=source_path.name, stage=stage,
-                                     size_bytes=_size_of(source_path))
-
             def stage() -> Path:
                 return source_path
+
+            if is_staged(source_path):
+                # From /documents/upload-staged: it takes its name in the library only
+                # now that it is indexed, so a failure leaves what is there alone.
+                def finalize(indexer, doc_metadata):
+                    if not indexer.vector_store.metadata_store.get_document_info(doc_metadata.document_id):
+                        return  # replaced or deleted while it was being indexed
+                    try:
+                        os.replace(source_path, documents_dir / source_path.name)
+                    except OSError:
+                        indexer.delete_document(doc_metadata.document_id)
+                        raise
+
+                return _BulkFileWork(display_name=source_path.name, stage=stage, finalize=finalize,
+                                     size_bytes=_size_of(source_path))
+
+            if copy_to_library:
+                def stage_copy() -> Path:
+                    final_path = _claim_stored_path(documents_dir, source_path.name)
+                    shutil.copy2(str(source_path), str(final_path))
+                    return final_path
+
+                return _BulkFileWork(display_name=source_path.name, stage=stage_copy,
+                                     size_bytes=_size_of(source_path))
 
             def finalize(indexer, doc_metadata):
                 indexer.vector_store.metadata_store.update_document_source(
@@ -682,7 +721,13 @@ class UploadService:
             f"Starting local index job {job_id}: {len(file_paths)} files, copy={copy_to_library}"
         )
         works = [make_work(Path(fp)) for fp in file_paths]
-        self._process_bulk_job(job_id, works, collection_id, uploaded_by=uploaded_by)
+        try:
+            self._process_bulk_job(job_id, works, collection_id, uploaded_by=uploaded_by)
+        finally:
+            # Finished files have moved out. Any still here failed or were cancelled.
+            for path in map(Path, file_paths):
+                if is_staged(path):
+                    shutil.rmtree(path.parent, ignore_errors=True)
 
 
     def start_link_index(
@@ -728,7 +773,6 @@ class UploadService:
         """Run link fetching + indexing in the background thread."""
         documents_dir = indexer_manager.get_documents_path(collection_id)
         documents_dir.mkdir(parents=True, exist_ok=True)
-        save_lock = threading.Lock()
 
         def make_work(url: str) -> _BulkFileWork:
             saved: Dict[str, Path] = {}
@@ -742,14 +786,8 @@ class UploadService:
                 work.held_bytes += storage_quota.take(
                     collection_id, len(fetched.body), fetched.filename
                 )
-                with save_lock:
-                    final_path = documents_dir / fetched.filename
-                    stem, suffix = final_path.stem, final_path.suffix
-                    counter = 1
-                    while final_path.exists():
-                        final_path = documents_dir / f"{stem}_{counter}{suffix}"
-                        counter += 1
-                    final_path.write_bytes(fetched.body)
+                final_path = _claim_stored_path(documents_dir, fetched.filename)
+                final_path.write_bytes(fetched.body)
                 saved["path"] = final_path
                 return final_path
 
@@ -821,12 +859,7 @@ class UploadService:
 
         def stage() -> Path:
             # The pipeline has already held size_bytes against the storage cap.
-            final_path = documents_dir / document.filename
-            stem, suffix = final_path.stem, final_path.suffix
-            counter = 1
-            while final_path.exists():
-                final_path = documents_dir / f"{stem}_{counter}{suffix}"
-                counter += 1
+            final_path = _claim_stored_path(documents_dir, document.filename)
             final_path.write_bytes(document.body)
             saved["path"] = final_path
             return final_path
@@ -1392,14 +1425,15 @@ class UploadService:
                 safe_filename = str(rel_path).replace('/', '_').replace('\\', '_')
             except ValueError:
                 safe_filename = source_path.name
-            dest_path = documents_dir / safe_filename
+            saved: Dict[str, Path] = {}
             # Where the bytes came from, so a later sync of the same folder
             # can find this document again when the file changes or goes away.
             original = str(source_path.resolve())
 
             def stage() -> Path:
-                shutil.copy2(str(source_path), str(dest_path))
-                return dest_path
+                saved["path"] = _claim_stored_path(documents_dir, safe_filename)
+                shutil.copy2(str(source_path), str(saved["path"]))
+                return saved["path"]
 
             def finalize(indexer, doc_metadata):
                 indexer.vector_store.metadata_store.update_document_source(
@@ -1411,8 +1445,9 @@ class UploadService:
             def cleanup():
                 # Clean up copied file
                 try:
-                    if dest_path.exists():
-                        dest_path.unlink()
+                    path = saved.pop("path", None)
+                    if path is not None:
+                        path.unlink(missing_ok=True)
                 except Exception:
                     pass
 
@@ -1484,6 +1519,8 @@ class UploadService:
         submission order, so per-file progress events and the processed_files
         counter behave like the old one-file-at-a-time loop.
         """
+        from services import governance
+
         results = {
             "documents_processed": 0,
             "total_pages": 0,
@@ -1562,9 +1599,13 @@ class UploadService:
                 storage_quota.release(collection_id, work.held_bytes)
                 work.held_bytes = 0
                 try:
-                    if work.finalize:
-                        work.finalize(indexer, doc_metadata)
-                    collection_service.add_document(collection_id, doc_metadata.document_id)
+                    with collection_write_lock(collection_id):
+                        if work.finalize:
+                            work.finalize(indexer, doc_metadata)
+                        collection_service.add_document(collection_id, doc_metadata.document_id)
+                        governance.retire_older_versions(
+                            collection_id, indexer, doc_metadata.document_id, actor=uploaded_by,
+                        )
                 except Exception as e:
                     fail_file(idx, work, e)
                     return

@@ -29,6 +29,7 @@ ACTIONS: List[str] = [
     "document.upload",          # synchronous upload request (files + resulting ids)
     "document.index_job",       # background index job started (repo / local paths)
     "document.delete",
+    "document.replace",         # a new version of the file took this version's place
     "document.bulk_delete",     # delete job started; each document also gets its own document.delete
     "document.flagged",        # content policy: indexed with a warning badge
     "document.quarantined",     # content policy: indexed but hidden pending review

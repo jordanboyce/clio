@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 from typing import Optional, List, Callable, Dict, Any
 from services.app_database import app_db
+from services.collection_locks import collection_write_lock
 from services.document_extractor import DocumentExtractor, is_supported_filename
 from services.chunker import TextChunker
 from services.embedder import create_embedding_service, describe_embedding, ensure_embedding_ready
@@ -536,7 +537,8 @@ class ReindexService:
                     job_id, current_file=doc_path.name, processed_documents=idx - 1
                 )
                 try:
-                    self._replace_document(indexer, doc_info, collection_id)
+                    with collection_write_lock(collection_id):
+                        self.replace_document(indexer, doc_info, collection_id)
                     logger.info(f"Re-indexed ({idx}/{total_docs}): {doc_path.name}")
                 except Exception as e:
                     logger.error(f"Failed to re-index {doc_path.name}: {e}")
@@ -572,45 +574,57 @@ class ReindexService:
             self.current_job_id = None
             self.current_collection_id = None
 
-    def _replace_document(
+    def replace_document(
         self, indexer: DocumentIndexer, doc_info: Dict[str, Any], collection_id: str
-    ) -> None:
-        """Swap one document's chunks for freshly extracted ones."""
+    ) -> Any:
+        """Swap one document's chunks for freshly extracted ones; returns the new metadata.
+
+        Reading, the content policy and the embedding model can all refuse the
+        new version, and each does so while the old one is still whole. The
+        caller holds the collection's write lock.
+        """
         metadata_store = indexer.vector_store.metadata_store
         doc_path: Path = doc_info["path"]
         old_id = doc_info.get("document_id")
         prior = metadata_store.get_document_info(old_id) if old_id else None
+        uploaded_by = (prior or {}).get("uploaded_by")
 
         prepared = indexer.prepare_document(
-            doc_path, doc_path.name,
-            collection_id=collection_id,
-            uploaded_by=(prior or {}).get("uploaded_by"),
+            doc_path, doc_path.name, collection_id=collection_id, uploaded_by=uploaded_by,
         )
         if prepared is None:
-            raise ValueError("this kind of file is rebuilt by a full re-index of the collection")
-        embeddings = indexer.embedding_service.embed_texts([c.text for c in prepared.chunks])
+            # A table has no chunks to swap: indexing the same bytes rebuilds their
+            # tables in place, and changed bytes make new tables beside the old ones.
+            new = indexer.index_document(
+                doc_path, doc_path.name, collection_id=collection_id, uploaded_by=uploaded_by,
+            )
+            if old_id and old_id != new.document_id:
+                indexer.delete_document(old_id)
+        else:
+            embeddings = indexer.embedding_service.embed_texts([c.text for c in prepared.chunks])
 
-        # The old entry goes only now that the new one is ready, and the swap
-        # holds the index lock so a search never sees the document half-way.
-        with indexer.vector_store._index_lock:
-            for stale_id in {old_id, prepared.document_id} - {None}:
-                indexer.delete_document(stale_id)
-            try:
-                indexer.index_prepared_documents([prepared], embeddings=embeddings)
-            except Exception as e:
-                raise RuntimeError(
-                    f"{e} - the previous version was already removed, so run a full "
-                    f"re-index of the collection to bring this file back"
-                ) from e
+            # The old entry goes only now that the new one is ready, and the swap
+            # holds the index lock so a search never sees the document half-way.
+            with indexer.vector_store._index_lock:
+                for stale_id in {old_id, prepared.document_id} - {None}:
+                    indexer.delete_document(stale_id)
+                try:
+                    new = indexer.index_prepared_documents([prepared], embeddings=embeddings)[0]
+                except Exception as e:
+                    raise RuntimeError(
+                        f"{e} - the previous version was already removed, so run a full "
+                        f"re-index of the collection to bring this file back"
+                    ) from e
 
         source_type = doc_info.get("source_type", "upload")
         source_path = doc_info.get("source_path")
         if source_type in ("local_reference", "url") and source_path:
             metadata_store.update_document_source(
-                document_id=prepared.document_id, source_path=source_path, source_type=source_type
+                document_id=new.document_id, source_path=source_path, source_type=source_type
             )
         if prior:
-            self._carry_over_review(metadata_store, prepared, prior)
+            self._carry_over_review(metadata_store, new, prior)
+        return new
 
     @staticmethod
     def _carry_over_review(metadata_store: MetadataStore, prepared: Any, prior: Dict[str, Any]) -> None:

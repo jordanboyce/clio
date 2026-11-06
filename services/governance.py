@@ -35,6 +35,7 @@ from fastapi import HTTPException
 
 from config import settings
 from services import audit
+from services.collection_locks import holding_collection_lock
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,7 @@ def visible_documents(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 # ── Removal / review actions ──────────────────────────────────────────────
 
+@holding_collection_lock
 def remove_document(
     collection_id: str,
     document_id: str,
@@ -135,6 +137,7 @@ def remove_document(
     actor: Any = _UNSET,
     action: str = "document.delete",
     save: bool = True,
+    keep_file: bool = False,
 ) -> Dict[str, Any]:
     """Delete a document from its collection (index, tracking, file).
 
@@ -146,6 +149,9 @@ def remove_document(
     Saving rewrites the whole vector index, so a caller removing several
     documents passes ``save=False`` and calls ``save_index`` once at the end.
     For many documents, ``remove_documents`` is cheaper still.
+
+    ``keep_file`` is for retiring an old version whose stored file a new
+    version has already replaced: the name now holds the new bytes.
     """
     from services.collection_service import collection_service
     from services.indexer_manager import indexer_manager
@@ -191,7 +197,8 @@ def remove_document(
     invalidate_review_summary()
 
     is_local_reference = doc_info.get("source_type") == "local_reference"
-    file_deleted = remove_source_file(indexer_manager.get_documents_path(collection_id), doc_info)
+    file_deleted = False if keep_file else remove_source_file(
+        indexer_manager.get_documents_path(collection_id), doc_info)
     if save:
         indexer.save_index()
     _invalidate_answers(collection_id)
@@ -208,6 +215,60 @@ def remove_document(
         "was_local_reference": is_local_reference,
         "blocked": blocked,
     }
+
+
+def document_file(documents_dir: Path, doc_info: Dict[str, Any]) -> Path:
+    """Where a document's bytes are: its stored copy, or a local reference's original."""
+    if doc_info.get("source_type") == "local_reference" and doc_info.get("source_path"):
+        return Path(doc_info["source_path"])
+    return documents_dir / doc_info["filename"]
+
+
+@holding_collection_lock
+def retire_older_versions(collection_id: str, indexer: Any, document_id: str, *, actor: Any = _UNSET) -> List[str]:
+    """Leave one document for this document's file: the version the file holds now.
+
+    A document's id is its content hash, so a changed file indexes as a new
+    document beside the old one, and both would answer searches. Everything that
+    can put new bytes in a file calls this once the new document exists. It asks
+    the file rather than trusting the caller, because a local reference's original
+    can change again while its job runs.
+
+    A per-document label is a decision about the document, not about one version
+    of its text, so the strictest of them stays. Returns the retired ids; the
+    caller saves the index.
+    """
+    from services.collection_service import collection_service
+    from services.indexer_manager import indexer_manager
+
+    store = indexer.vector_store.metadata_store
+    documents_dir = indexer_manager.get_documents_path(collection_id)
+    doc_info = store.get_document_info(document_id)
+    if not doc_info:
+        # Replaced or deleted since it was indexed.
+        collection_service.remove_document(collection_id, document_id)
+        return []
+    path = document_file(documents_dir, doc_info)
+    versions = [row for row in store.find_documents_by_filename(doc_info["filename"])
+                if document_file(documents_dir, row) == path]
+    if len(versions) < 2:
+        return []
+    try:
+        current = content_hash_of(path)[:16]
+    except OSError:
+        return []
+    ids = [row["document_id"] for row in versions]
+    if current not in ids:
+        return []  # the file holds none of them, so nothing says which is right
+
+    labels = [row["sensitivity"] for row in versions if row.get("sensitivity") in SENSITIVITY_LEVELS]
+    if labels:
+        store.set_document_governance(current, sensitivity=max(labels, key=SENSITIVITY_LEVELS.index))
+    retired = [doc_id for doc_id in ids if doc_id != current]
+    for doc_id in retired:
+        remove_document(collection_id, doc_id, actor=actor, action="document.replace",
+                        save=False, keep_file=True)
+    return retired
 
 
 def remove_source_file(documents_dir: Path, doc_info: Dict[str, Any],
@@ -231,6 +292,7 @@ def remove_source_file(documents_dir: Path, doc_info: Dict[str, Any],
     return True
 
 
+@holding_collection_lock
 def remove_documents(
     collection_id: str,
     documents: List[Dict[str, Any]],

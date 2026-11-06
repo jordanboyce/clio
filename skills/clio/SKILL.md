@@ -103,7 +103,13 @@ enumerate from search results; they are the top few passages, not the corpus.
 
 - One note or result from your work: MCP `write_document`
   (`create` / `replace` / `append`). It needs a write-enabled token and
-  returns an error otherwise. There is deliberately no delete tool.
+  returns an error otherwise. An error means the source was left as it was.
+  Prefer `append` when several agents share a note: every append lands. To edit
+  a note, `read_document`, change that text, then `replace` with the
+  `expected_document_id` it gave you; if someone else changed the note first the
+  write is refused, so read it again and redo your edit. Do not rebuild a note
+  from `get_document_context`: its chunks overlap. A `document_id` changes with
+  the text, so remember notes by filename. There is deliberately no delete tool.
 - A folder or many files:
 
   ```bash

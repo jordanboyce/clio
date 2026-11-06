@@ -224,6 +224,7 @@ may see:
 | `search_collection`, `search_all_collections` | One quick lookup; retrieval strategy is chosen per query |
 | `research_documents` | A multi-part question: focused subqueries, literal checks, diverse cited passages, coverage gaps |
 | `find_in_documents`, `get_document_context` | Exact strings and identifiers; the surrounding text before quoting |
+| `read_document` | A text source exactly as stored, with the version to pass back when editing it |
 | `list_tables`, `get_table_schema`, `query_table`, `aggregate_table` | Counts, sums, filters and rankings over CSV/XLSX data, never guessed from passages |
 | `ask_documents` | A finished, cited answer in one call — present when the deployment runs a model of its own (`AI_PROVIDER`) |
 | `write_document`, `reindex_document`, `update_document_metadata` | Write-enabled tokens: save sources back, re-index one, set a sensitivity label |

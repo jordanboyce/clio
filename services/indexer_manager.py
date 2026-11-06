@@ -132,6 +132,9 @@ class IndexerManager:
 
             # Create indexer for this collection
             indexer = self._create_indexer(collection)
+            indexer.vector_store.metadata_store.adopt_staged_uploads(
+                collection_service.get_documents_path(collection_id)
+            )
             self._indexers[collection_id] = indexer
 
             logger.info(f"Created indexer for collection '{collection_id}'")

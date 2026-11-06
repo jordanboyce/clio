@@ -1,5 +1,6 @@
 """SQLite-based metadata storage for document chunks."""
 
+import os
 import sqlite3
 import threading
 from pathlib import Path
@@ -1732,6 +1733,26 @@ class MetadataStore:
             return self._attach_replacement_names(
                 conn, [self._document_row_to_dict(row) for row in cursor.fetchall()])
 
+    def find_documents_by_filename(self, filename: str) -> List[dict]:
+        """Every document with this name, ignoring ASCII case, newest first.
+
+        ``list_documents_page(q=...)`` is a capped substring search: past its
+        page of lookalikes a name that exists reads as free. Case is ignored
+        because names differing only by case are one file on Windows and macOS;
+        the caller decides what an inexact match means.
+        """
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(f"""
+                SELECT {self._DOC_LIST_COLUMNS}
+                FROM documents d
+                WHERE d.filename = ? COLLATE NOCASE
+                ORDER BY COALESCE(d.upload_timestamp, '1970-01-01') DESC, d.document_id
+            """, (filename,))
+            return self._attach_replacement_names(
+                conn, [self._document_row_to_dict(row) for row in cursor.fetchall()])
+
     def list_documents(self) -> List[dict]:
         """
         List all documents with their statistics.
@@ -2256,6 +2277,22 @@ class MetadataStore:
             """, (source_path, source_type, document_id))
             conn.commit()
             logger.info(f"Updated source for document {document_id}: {source_type} -> {source_path}")
+
+    def adopt_staged_uploads(self, documents_dir: Path) -> None:
+        """Label as uploads the files that were staged into the library and marked as references.
+
+        Background uploads used to be recorded as local references to their own
+        stored copy, so they were shown as folders, kept their file when deleted
+        and refused agent edits.
+        """
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            conn.execute("""
+                UPDATE documents
+                SET source_path = NULL, source_type = 'upload'
+                WHERE source_type = 'local_reference' AND source_path = ? || filename
+            """, (os.path.join(Path(documents_dir).absolute(), ""),))
+            conn.commit()
 
     def rename_document(self, document_id: str, filename: str) -> bool:
         """Change a document's display filename on its record and every chunk.

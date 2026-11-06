@@ -3,6 +3,8 @@
 import logging
 import json
 import asyncio
+import os
+import tempfile
 import time
 from typing import Dict, List, Optional
 from pathlib import Path
@@ -17,6 +19,7 @@ from services.document_extractor import is_supported_filename, unsupported_reaso
 from services import pii_detector
 from services.prompt_injection_detector import apply_suppressions
 from services.custom_file_types import registry as custom_types
+from services.collection_locks import collection_write_lock
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
 from models.schemas import (
@@ -211,7 +214,6 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
     uploaded_by = get_request_user()
 
     for file in files:
-        file_path = None  # per-iteration: the except block must never see a previous file's path
         try:
           # The cap is checked before a single byte lands in the collection,
           # and the reservation holds until the row is committed so parallel
@@ -231,20 +233,26 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
             # Neutralize path traversal / reserved names that survive flattening
             if safe_filename in ("..", ".") or safe_filename.startswith(".."):
                 safe_filename = safe_filename.replace("..", "_")
-            file_path = document_dir / safe_filename
-            with open(file_path, "wb") as f:
-                shutil.copyfileobj(file.file, f)
+            # Indexed from a private folder, and only then moved to its name: a
+            # re-upload that fails must leave the version already there.
+            with collection_write_lock(collection_id), tempfile.TemporaryDirectory(
+                dir=document_dir.parent, prefix=".upload-", ignore_cleanup_errors=True,
+            ) as staging:
+                staged = Path(staging) / safe_filename
+                with open(staged, "wb") as f:
+                    shutil.copyfileobj(file.file, f)
 
+                # Index the document
+                doc_metadata = indexer.index_document(
+                    staged, safe_filename,
+                    collection_id=collection_id, uploaded_by=uploaded_by,
+                )
+                os.replace(staged, document_dir / safe_filename)
+
+                # Register document with collection
+                collection_service.add_document(collection_id, doc_metadata.document_id)
+                governance.retire_older_versions(collection_id, indexer, doc_metadata.document_id, actor=uploaded_by)
             logger.info(f"Saved uploaded file: {safe_filename} to collection {collection_id}")
-
-            # Index the document
-            doc_metadata = indexer.index_document(
-                file_path, safe_filename,
-                collection_id=collection_id, uploaded_by=uploaded_by,
-            )
-
-            # Register document with collection
-            collection_service.add_document(collection_id, doc_metadata.document_id)
 
             indexed_docs.append(doc_metadata.document_id)
             total_pages += doc_metadata.total_pages
@@ -260,12 +268,6 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
             else:
                 logger.error(f"Failed to index {file.filename}: {e}")
             failed_docs.append({"filename": file.filename, "error": str(e)})
-            # Clean up this file's partial save if indexing failed
-            if file_path is not None:
-                try:
-                    file_path.unlink(missing_ok=True)
-                except Exception as cleanup_err:
-                    logger.warning(f"Could not remove partial upload {file_path}: {cleanup_err}")
             # Continue processing remaining files
 
     # Persist the index if any documents were successfully indexed
@@ -325,8 +327,8 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
     collection_id: str = "default",
 ) -> dict:
     """
-    Save uploaded files into the collection's documents directory WITHOUT
-    indexing them, and return the stored paths.
+    Save uploaded files into the collection's staging folder WITHOUT indexing
+    them, and return their paths.
 
     This is the transfer half of background uploads: the browser streams
     batches here (fast — no embedding in the request), then submits ONE
@@ -334,8 +336,9 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
     only has to stay open for the transfer; indexing continues server-side.
 
     Filename handling matches /documents/upload (folder paths flattened,
-    traversal neutralized); a re-staged filename overwrites the previous
-    staged copy, mirroring the sync endpoint.
+    traversal neutralized). Each file waits in a folder of its own under its
+    real name; the job moves it into the library once it is indexed, replacing
+    any earlier version, so a failed or refused file changes nothing.
     """
     if not files:
         raise HTTPException(
@@ -348,7 +351,7 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
-    document_dir = indexer_manager.get_documents_path(collection_id)
+    staging_dir = collection_service.get_staging_path(collection_id)
 
     # Staging is the transfer half of a background upload: refuse the batch
     # before writing it rather than accepting files the index job would then
@@ -371,8 +374,9 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
         safe_filename = raw_filename.replace('/', '_') if '/' in raw_filename else raw_filename
         if safe_filename in ("..", ".") or safe_filename.startswith(".."):
             safe_filename = safe_filename.replace("..", "_")
-        file_path = document_dir / safe_filename
         try:
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            file_path = Path(tempfile.mkdtemp(dir=staging_dir)) / safe_filename
             with open(file_path, "wb") as f:
                 shutil.copyfileobj(file.file, f)
             staged.append({"filename": safe_filename, "path": str(file_path)})
@@ -1169,8 +1173,8 @@ def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobRespons
     valid_paths = []
     skipped: List[dict] = []
     # A browser upload arrives as a path too: staged into this collection's own
-    # documents folder by /documents/upload-staged, which no limit should stop.
-    staging = indexer_manager.get_documents_path(request.collection_id) if local_roots.restricted() else None
+    # staging folder by /documents/upload-staged, which no limit should stop.
+    staging = collection_service.get_staging_path(request.collection_id) if local_roots.restricted() else None
     for file_path in request.file_paths:
         path = Path(file_path)
         # Before anything that touches the disk, so this cannot probe what exists.
