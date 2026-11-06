@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import tempfile
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -276,9 +276,14 @@ def _audit_tool_call(tool_name: str, response: dict[str, Any]) -> None:
     a summarisation bug must not turn a good tool call into an error.
     """
     try:
+        from middleware.user_context import get_request_app
+
+        app = get_request_app()
         detail: dict[str, Any] = {"tool": tool_name}
         token_id = get_request_mcp_token_id()
-        if token_id:
+        if app is not None:
+            detail["app_id"] = app["id"]
+        elif token_id:
             detail["token_id"] = token_id
 
         documents, counts = _collect_document_names(response)
@@ -299,8 +304,8 @@ def _audit_tool_call(tool_name: str, response: dict[str, Any]) -> None:
         from services import audit
 
         audit.record(
-            "mcp.tool_call",
-            actor=_request_mcp_identity.get(None),
+            "api.call" if app is not None else "mcp.tool_call",
+            actor=app["actor"] if app is not None else _request_mcp_identity.get(None),
             collection_id=str(collection_id) if collection_id else None,
             document_id=str(direct_doc) if direct_doc else None,
             target=tool_name,
@@ -3237,6 +3242,11 @@ _CONNECTOR_FETCH_WINDOW = 2
 # carries no per-user key.
 
 
+class DailyBudgetSpent(ValueError):
+    """The caller's daily token budget is gone. A ValueError to the MCP layer,
+    which reports it like any other tool failure; /api/v1 answers 429."""
+
+
 def ask_documents_sync(
     question: str,
     collection_id: str | None = None,
@@ -3288,7 +3298,7 @@ def ask_documents_sync(
     if cache_entry is None:
         over_budget = chat_api.check_daily_budget(get_request_user())
         if over_budget:
-            raise ValueError(str(over_budget.get("detail") or "daily token budget spent"))
+            raise DailyBudgetSpent(str(over_budget.get("detail") or "daily token budget spent"))
 
     # Document links in the answer's sources point at the app, not at /mcp.
     base_url = re.sub(r"/mcp/?$", "", (settings.mcp_public_url or "").strip()).rstrip("/")
@@ -4502,6 +4512,40 @@ def prompt_try_clio() -> str:
         "the table tools.\n\n"
         "Finish with three questions I could ask you about these sources next."
     )
+
+
+@contextmanager
+def app_request_scope(app: dict[str, Any]):
+    """Run a /api/v1 request under what a registered app may do.
+
+    /api/v1 calls the same functions as the MCP tools, so it inherits their
+    rules (allowlist as a hard boundary, quarantined documents hidden, the audit
+    seam) by setting the same request state an allowlisted token sets. The
+    profile pins the output settings an admin can change for agents in Settings:
+    an app's contract must not move when those do.
+    """
+    from middleware.user_context import reset_request_app, reset_request_identity, set_request_app, set_request_identity
+
+    tokens = (
+        (_request_mcp_profile, _request_mcp_profile.set(_APP_REQUEST_PROFILE)),
+        (_request_mcp_token_scope, _request_mcp_token_scope.set(list(app["collections"]))),
+        (_request_mcp_token_allowlist, _request_mcp_token_allowlist.set(True)),
+        (_request_mcp_can_write, _request_mcp_can_write.set(bool(app["can_write"]))),
+        (_request_mcp_token_id, _request_mcp_token_id.set(app["id"])),
+        (_request_mcp_identity, _request_mcp_identity.set(app["actor"])),
+    )
+    app_token = set_request_app(app)
+    identity_token = set_request_identity(app["actor"])
+    try:
+        yield
+    finally:
+        reset_request_identity(identity_token)
+        reset_request_app(app_token)
+        for variable, token in reversed(tokens):
+            variable.reset(token)
+
+
+_APP_REQUEST_PROFILE = {"include_sources": True, "max_source_length": 2000}
 
 
 class ToggleableMCPApp:

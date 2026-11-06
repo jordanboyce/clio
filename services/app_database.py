@@ -308,6 +308,34 @@ class SQLiteBackend(DatabaseBackend):
                 ON mcp_tokens(user_id)
             """)
 
+            # Registered apps: the credentials /api/v1 accepts
+            # (services/api_apps.py). Hashes only, as with MCP tokens.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS api_apps (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    key_hash TEXT UNIQUE,
+                    key_prefix TEXT,
+                    previous_key_hash TEXT,
+                    previous_key_expires_at TEXT,
+                    oidc_subject TEXT UNIQUE,
+                    collections TEXT NOT NULL,
+                    can_write INTEGER NOT NULL DEFAULT 0,
+                    search_per_minute INTEGER,
+                    ask_per_minute INTEGER,
+                    other_per_minute INTEGER,
+                    created_by TEXT,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    revoked_at TEXT,
+                    last_used_at TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_api_apps_previous_key
+                ON api_apps(previous_key_hash)
+            """)
+
             # ── Content governance ────────────────────────────
             # Append-only accountability trail (services/audit.py): who
             # uploaded, deleted, shared, minted a token, accepted the policy,
@@ -1303,6 +1331,49 @@ class SQLiteBackend(DatabaseBackend):
             )
             conn.commit()
             return cursor.rowcount > 0
+
+    # ── Registered apps ──────────────────────────────────────
+
+    def create_api_app(self, row: Dict[str, Any]) -> None:
+        columns = ", ".join(self.API_APP_COLUMNS)
+        marks = ", ".join("?" for _ in self.API_APP_COLUMNS)
+        with sqlite_connect(self.db_path) as conn:
+            conn.execute(
+                f"INSERT INTO api_apps ({columns}) VALUES ({marks})",
+                tuple(row[c] for c in self.API_APP_COLUMNS),
+            )
+            conn.commit()
+
+    def _select_api_app(self, where: str, params: tuple) -> Optional[Dict[str, Any]]:
+        with sqlite_connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(f"SELECT * FROM api_apps WHERE {where}", params).fetchone()
+            return dict(row) if row else None
+
+    def list_api_apps(self) -> List[Dict[str, Any]]:
+        with sqlite_connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            return [dict(r) for r in conn.execute("SELECT * FROM api_apps ORDER BY created_at DESC").fetchall()]
+
+    def get_api_app(self, app_id: str) -> Optional[Dict[str, Any]]:
+        return self._select_api_app("id = ?", (app_id,))
+
+    def get_api_app_by_key_hash(self, key_hash: str) -> Optional[Dict[str, Any]]:
+        return self._select_api_app("key_hash = ? OR previous_key_hash = ?", (key_hash, key_hash))
+
+    def get_api_app_by_subject(self, oidc_subject: str) -> Optional[Dict[str, Any]]:
+        return self._select_api_app("oidc_subject = ?", (oidc_subject,))
+
+    def update_api_app(self, app_id: str, fields: Dict[str, Any]) -> None:
+        unknown = set(fields) - self.API_APP_UPDATABLE
+        if unknown:
+            raise ValueError(f"Not updatable: {sorted(unknown)}")
+        if not fields:
+            return
+        assignments = ", ".join(f"{name} = ?" for name in fields)
+        with sqlite_connect(self.db_path) as conn:
+            conn.execute(f"UPDATE api_apps SET {assignments} WHERE id = ?", (*fields.values(), app_id))
+            conn.commit()
 
     # ── Audit trail ──────────────────────────────────────────
 

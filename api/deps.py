@@ -18,6 +18,10 @@ def mark_initialized() -> None:
     _initialized = True
 
 
+def is_initialized() -> bool:
+    return _initialized
+
+
 MAX_TOOL_RESULT_CHARS = 10000
 
 

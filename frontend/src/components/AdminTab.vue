@@ -599,6 +599,8 @@
     </section>
 
     <!-- ═══ Blocklist, acknowledgements, suspension ═══ -->
+    <ApiAppsPanel />
+
     <section aria-labelledby="admin-blocklist">
       <h2 id="admin-blocklist" class="text-sm font-semibold uppercase tracking-wider text-base-content/60 mb-3">Blocklist &amp; people</h2>
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -653,6 +655,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RefreshCw, ShieldCheck } from 'lucide-vue-next'
+import ApiAppsPanel from './ApiAppsPanel.vue'
 import http from '../utils/http'
 import { useUserStore } from '../stores/userStore'
 import { useUiStore } from '../stores/uiStore'

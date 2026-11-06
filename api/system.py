@@ -1,10 +1,14 @@
 """System, environment, and configuration endpoints."""
 
+import asyncio
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from pathlib import Path
 
 from fastapi import HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from config import settings
@@ -13,6 +17,7 @@ from services.config_manager import config_manager
 from services.indexer_manager import indexer_manager
 from services.embedder import embedding_availability
 from services.embedding_status import embedding_status
+from api import deps
 from api.deps import require_admin
 
 from fastapi import APIRouter
@@ -58,8 +63,34 @@ def deployment_readiness(probe: bool = False):
 
 
 @router.get("/health", tags=["health"])
-def health(collection_id: str = "default"):
-    """Health check endpoint."""
+def health(request: Request, collection_id: str = "default"):
+    """Is the app up, plus collection counts for a caller entitled to them.
+
+    Open to anyone, so a platform probe needs no credential. main.py works out
+    whether this caller could have seen the rest of the app, and anyone who
+    could not gets the bare status: no counts, no model, no deployment profile,
+    and no index loaded into memory on their say-so. Use /livez and /readyz for
+    probes, which never touch a collection.
+    """
+    if not getattr(request.state, "health_detail", False):
+        return {"status": "healthy"}
+    if settings.private_collections:
+        from services.sharing_service import sharing_service
+
+        identity = getattr(request.state, "auth_identity", None)
+        if not sharing_service.check_collection_access(collection_id, identity):
+            # The same answer as for a collection that does not exist.
+            collection_id = None
+    if collection_id is None:
+        return {
+            "status": "healthy",
+            "offline_mode": settings.offline_mode,
+            "profile": settings.clio_profile,
+            "indexed_chunks": 0,
+            "total_documents": 0,
+            "total_pages": 0,
+            "embedding": _health_embedding(),
+        }
     try:
         stats = indexer_manager.get_collection_stats(collection_id)
         return {
@@ -74,12 +105,58 @@ def health(collection_id: str = "default"):
         }
     except Exception as e:
         return {
-            "status": "healthy",
+            "status": "degraded",
             "offline_mode": settings.offline_mode,
             "indexed_chunks": 0,
             "error": str(e),
             "embedding": _health_embedding(),
         }
+
+
+@router.get("/livez", tags=["health"], summary="Is the process serving requests?")
+async def liveness():
+    """Liveness. async and touching nothing: it must answer even when every
+    worker thread is busy, because a busy server does not need restarting."""
+    return {"status": "alive"}
+
+
+# One thread of its own, so a full worker pool reads as busy rather than as a
+# dependency failure, which would take the only replica out of a load balancer.
+_readiness_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clio-readyz")
+_READINESS_TIMEOUT_SECONDS = 5.0
+
+
+def _readiness_problem() -> Optional[str]:
+    """What stops this process from doing its work, as a short code. No detail:
+    this answers anyone, and search-model state is not on the list because search
+    still works by keyword without it (see /api/system/readiness for all of that)."""
+    from services.app_database import app_db
+
+    if not deps.is_initialized():
+        return "initializing"
+    try:
+        app_db.get_collection("default")
+    except Exception as e:  # noqa: BLE001 - whichever way the database failed
+        logger.warning(f"Readiness: database check failed: {e}")
+        return "database"
+    if not os.access(settings.data_dir, os.W_OK):
+        return "storage"
+    return None
+
+
+@router.get("/readyz", tags=["health"], summary="Can this process do its work?")
+async def readiness_probe():
+    """Readiness: 200, or 503 with a short reason code."""
+    loop = asyncio.get_running_loop()
+    try:
+        problem = await asyncio.wait_for(
+            loop.run_in_executor(_readiness_pool, _readiness_problem), _READINESS_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        problem = "timeout"
+    if problem:
+        return JSONResponse({"status": "not_ready", "reason": problem}, status_code=503)
+    return {"status": "ready"}
 
 @router.post(
     "/api/file-picker",

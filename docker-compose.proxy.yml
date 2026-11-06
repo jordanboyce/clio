@@ -1,0 +1,72 @@
+# Clio - a TLS reverse proxy in front, and no other way in. The reference shape
+# for an enterprise VM. Layer it on the on-prem file, with or without hardening:
+#
+#   docker compose -f docker-compose.onprem.yml -f docker-compose.hardened.yml \
+#                  -f docker-compose.proxy.yml up -d
+#
+# One-time setup:
+#   1. Put the certificate and key at certs/tls/server.crt and certs/tls/server.key
+#      (the full chain, issued by your internal CA).
+#   2. In .env set CLIO_HOSTNAME=clio.corp.example, and an AUTH_PASSWORD or an
+#      identity provider: this makes the app reachable, so the secure profile
+#      and the startup checks will expect one.
+#
+# What it changes:
+#   * Clio publishes no port. It sits on a network only the proxy shares.
+#   * Clio trusts X-Forwarded-For and -Proto from the proxy's fixed address only,
+#     so rate limits see real clients and HSTS knows the request was HTTPS.
+#   * The proxy drops any X-Forwarded-User a client sends, and redirects port 80.
+#
+# Needs Docker Compose 2.24 or later for `!reset`. On an air-gapped host, carry
+# the proxy image in alongside Clio's and set PROXY_IMAGE. If 172.30.73.0/29 is in
+# use on your network, set PROXY_SUBNET, PROXY_IP and CLIO_PROXY_NET_IP. docs/ENTERPRISE.md has the
+# rest, including how to check that the bypass is closed.
+
+services:
+  clio:
+    ports: !reset []
+    environment:
+      # "proxy", not an address: the startup and secure-profile checks treat
+      # anything but loopback as reachable, which through this proxy it is.
+      - BIND_ADDRESS=proxy
+      - FORWARDED_ALLOW_IPS=${PROXY_IP:-172.30.73.2}
+      - MCP_ALLOWED_HOSTS=${CLIO_HOSTNAME:?Set CLIO_HOSTNAME in .env, e.g. clio.corp.example}
+    networks:
+      default: {}
+      # Fixed as well as the proxy's: Clio starts first, and would otherwise be
+      # handed the lowest free address, which is the one reserved for the proxy.
+      clio-proxy:
+        ipv4_address: ${CLIO_PROXY_NET_IP:-172.30.73.3}
+        # What nginx connects to. The service name also resolves on `default`,
+        # which would arrive from an address FORWARDED_ALLOW_IPS does not trust.
+        aliases: [clio-upstream]
+
+  proxy:
+    image: ${PROXY_IMAGE:-nginx:1.29-alpine}
+    pull_policy: ${PROXY_PULL_POLICY:-missing}
+    container_name: clio-proxy
+    depends_on:
+      - clio
+    ports:
+      - "${PROXY_BIND:-0.0.0.0}:${PROXY_HTTPS_PORT:-443}:443"
+      - "${PROXY_BIND:-0.0.0.0}:${PROXY_HTTP_PORT:-80}:80"
+    environment:
+      - CLIO_HOSTNAME=${CLIO_HOSTNAME}
+      # Largest single upload. Raise it with COLLECTION_STORAGE_LIMIT_BYTES.
+      - CLIO_MAX_UPLOAD=${CLIO_MAX_UPLOAD:-5g}
+    volumes:
+      - ./docker/nginx/clio.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./certs/tls:/certs/tls:ro
+    networks:
+      default: {}
+      clio-proxy:
+        ipv4_address: ${PROXY_IP:-172.30.73.2}
+    restart: unless-stopped
+
+networks:
+  # internal: nothing on it reaches or is reached from outside this host.
+  clio-proxy:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${PROXY_SUBNET:-172.30.73.0/29}

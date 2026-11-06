@@ -386,6 +386,32 @@ def test_chat_usage(db):
     assert db.delete_old_chat_usage(1) == 0
 
 
+def test_api_apps(db):
+    row = {column: None for column in db.API_APP_COLUMNS}
+    row.update(id="app-1", name="reports", key_hash="hash-1", key_prefix="clio_app_abc", collections='["c1"]',
+               can_write=True, search_per_minute=500, created_at="2026-11-06T00:00:00", oidc_subject="svc-1")
+    db.create_api_app(row)
+    db.create_api_app({**row, "id": "app-2", "name": "other", "key_hash": None, "oidc_subject": None})
+
+    found = db.get_api_app("app-1")
+    assert found["name"] == "reports" and bool(found["can_write"]) is True and found["search_per_minute"] == 500
+    assert db.get_api_app("nope") is None
+    assert {a["id"] for a in db.list_api_apps()} == {"app-1", "app-2"}
+    assert db.get_api_app_by_subject("svc-1")["id"] == "app-1"
+    assert db.get_api_app_by_subject("nope") is None
+    assert db.get_api_app_by_key_hash("hash-1")["id"] == "app-1"
+
+    db.update_api_app("app-1", {"key_hash": "hash-2", "previous_key_hash": "hash-1", "can_write": False})
+    assert db.get_api_app_by_key_hash("hash-1")["id"] == "app-1"
+    assert db.get_api_app_by_key_hash("hash-2")["id"] == "app-1"
+    assert bool(db.get_api_app("app-1")["can_write"]) is False
+
+    db.update_api_app("app-1", {})
+    with pytest.raises(ValueError):
+        db.update_api_app("app-1", {"name": "renamed; DROP TABLE api_apps"})
+    assert db.get_api_app("app-1")["name"] == "reports"
+
+
 def test_every_abstract_method_is_exercised_here():
     """A new database method has to join this file, or it is untested on Postgres."""
     root = Path(__file__).parent

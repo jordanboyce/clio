@@ -220,7 +220,10 @@ wrong one for a multi-tenant service. Pick one:
   beyond the host.
 - **An authenticating reverse proxy** in front (your SSO, mTLS, whatever the
   site already runs). Keep `BIND_ADDRESS=127.0.0.1` so the proxy is the only
-  route in.
+  route in. For a TLS proxy ready to run, see [ENTERPRISE.md](ENTERPRISE.md).
+- **`IDENTITY_PROVIDER` with `AUTH_REQUIRE_IDENTITY=true`** to turn away anyone
+  your IdP has not vouched for. `IDENTITY_PROVIDER` alone says who a caller is
+  and turns nobody away.
 - **`PRIVATE_COLLECTIONS=true`** for per-person ownership and sharing. It
   needs a verified identity on every request: point `IDENTITY_PROVIDER` at
   your own IdP (`oidc` — Keycloak, Entra ID, Okta, PingFederate) or at the
@@ -277,6 +280,6 @@ mid-write may need SQLite recovery.
 - [ ] `AUTH_PASSWORD` set, or an authenticating proxy in front
 - [ ] `certs/ca/` populated if the endpoint uses a private CA
 - [ ] `OFFLINE_MODE=1` if this deployment must not reach the internet
-      (verify: `/health` reports `"offline_mode": true`)
+      (verify: `/health`, with your credential, reports `"offline_mode": true`)
 - [ ] `DATA_PATH` on storage that is backed up
 - [ ] Storage cap and rate limits reviewed for the size of the group

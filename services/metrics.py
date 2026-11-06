@@ -43,13 +43,22 @@ http_request_seconds = Histogram(
 )
 
 
+api_app_requests = Counter(
+    "clio_api_app_requests",
+    "Requests from a registered app on /api/v1, by app name and status class.",
+    ["app", "status"],
+    registry=registry,
+)
+
+
 def route_label(request) -> str:
     """The route template this request matched, without any ids from the path."""
+    path = request.url.path
     route = request.scope.get("route")
     template = getattr(route, "path", None)
     if template:
-        return template
-    path = request.url.path
+        # A route inside the mounted /api/v1 app knows only its relative path.
+        return f"/api/v1{template}" if path.startswith("/api/v1/") and not template.startswith("/api/v1") else template
     if path == "/mcp" or path.startswith("/mcp/"):
         return "/mcp"
     return "unmatched"
@@ -57,8 +66,14 @@ def route_label(request) -> str:
 
 def observe_request(request, status_code: int, seconds: float) -> None:
     route = route_label(request)
-    http_requests.labels(request.method, route, f"{status_code // 100}xx").inc()
+    status_class = f"{status_code // 100}xx"
+    http_requests.labels(request.method, route, status_class).inc()
     http_request_seconds.labels(route).observe(seconds)
+    # An app is registered by an admin, so this label cannot grow unbounded, and
+    # it names a system rather than a person.
+    app = getattr(request.state, "api_app", None)
+    if app:
+        api_app_requests.labels(app["name"], status_class).inc()
 
 
 def _worker_pool_metrics() -> Iterable[Metric]:

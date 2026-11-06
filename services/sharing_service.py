@@ -9,6 +9,7 @@ import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 
+from middleware.user_context import get_request_app
 from services.app_database import app_db
 from config import settings
 
@@ -200,7 +201,18 @@ class SharingService:
           - An accepted share grants its 'read'/'readwrite' permission.
           - Anonymous callers (user_id None) reach team and published
             collections only.
+
+        A registered app (services/api_apps.py) is the exception to all of
+        that, in every mode: its admin-set allowlist is the whole answer. It
+        never owns anything, so it can add and remove sources at most, and can
+        never change how a collection is built.
         """
+        app = get_request_app()
+        if app is not None:
+            if collection_id not in app["collections"]:
+                return None
+            return "readwrite" if app["can_write"] else "read"
+
         if not settings.private_collections:
             return "owner"
 

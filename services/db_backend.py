@@ -286,6 +286,48 @@ class DatabaseBackend(ABC):
         """Admin suspension: revoke every live token of one identity. Returns count."""
         ...
 
+    # ── Registered apps ──────────────────────────────────────
+    # The credentials /api/v1 accepts (services/api_apps.py). Column names come
+    # only from these constants, never from a caller.
+
+    API_APP_COLUMNS = (
+        "id", "name", "key_hash", "key_prefix", "oidc_subject", "collections", "can_write",
+        "search_per_minute", "ask_per_minute", "other_per_minute",
+        "created_by", "created_at", "expires_at",
+    )
+    API_APP_UPDATABLE = frozenset({
+        "key_hash", "key_prefix", "previous_key_hash", "previous_key_expires_at", "oidc_subject",
+        "collections", "can_write", "search_per_minute", "ask_per_minute", "other_per_minute",
+        "expires_at", "revoked_at", "last_used_at",
+    })
+
+    @abstractmethod
+    def create_api_app(self, row: Dict[str, Any]) -> None:
+        """Insert an app. ``row`` holds every name in API_APP_COLUMNS."""
+        ...
+
+    @abstractmethod
+    def list_api_apps(self) -> List[Dict[str, Any]]:
+        ...
+
+    @abstractmethod
+    def get_api_app(self, app_id: str) -> Optional[Dict[str, Any]]:
+        ...
+
+    @abstractmethod
+    def get_api_app_by_key_hash(self, key_hash: str) -> Optional[Dict[str, Any]]:
+        """Matches the current key or a rotated-out one; the caller checks its grace."""
+        ...
+
+    @abstractmethod
+    def get_api_app_by_subject(self, oidc_subject: str) -> Optional[Dict[str, Any]]:
+        ...
+
+    @abstractmethod
+    def update_api_app(self, app_id: str, fields: Dict[str, Any]) -> None:
+        """Set columns named in API_APP_UPDATABLE; any other name raises ValueError."""
+        ...
+
     # ── Audit trail ──────────────────────────────────────────
     # Append-only accountability log (services/audit.py). Rows are only
     # ever removed by the retention sweep.

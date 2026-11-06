@@ -92,4 +92,4 @@ services:
     # Docker's 10s default can SIGKILL that mid-write on a large corpus, so give
     # it room; a healthy shutdown still exits as soon as the flush completes.
     stop_grace_period: 60s
-    # Healthcheck comes from the Dockerfile (curl /health).
+    # Healthcheck comes from the Dockerfile (curl /readyz).

@@ -275,7 +275,10 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 # PaaS platforms (Railway, Render, Heroku-style) inject PORT and expect the
 # app to listen on it; fall back to the documented default otherwise.
 # Shell form is deliberate — exec form would not expand ${PORT}.
-CMD uvicorn main:app --host ${HOST:-0.0.0.0} --port ${PORT:-8473}
+# SSL_CERTFILE and SSL_KEYFILE have to be passed on: uvicorn does not read them
+# itself, and a file that is missing should stop the start, not fall back to HTTP.
+CMD uvicorn main:app --host ${HOST:-0.0.0.0} --port ${PORT:-8473} --no-server-header \
+    ${SSL_CERTFILE:+--ssl-certfile "$SSL_CERTFILE"} ${SSL_KEYFILE:+--ssl-keyfile "$SSL_KEYFILE"}
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -fsS http://localhost:${PORT:-8473}/health || exit 1
+    CMD curl --noproxy '*' -fsSk "$([ -n "$SSL_CERTFILE" ] && echo https || echo http)://localhost:${PORT:-8473}/readyz" || exit 1

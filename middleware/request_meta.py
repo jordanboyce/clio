@@ -21,6 +21,7 @@ import time
 import uuid
 
 from config import settings
+from middleware import security_headers
 from services.provenance import LINEAGE_HEADER, LINEAGE_ID
 
 logger = logging.getLogger("clio.access")
@@ -30,6 +31,10 @@ _in_flight = 0
 _requests_total = 0
 _errors_total = 0  # responses >= 500
 _started_monotonic = time.monotonic()
+
+# What a person's or an app's work goes through. /health is probed every 30s by
+# Docker, and static assets are noise.
+_LOGGED_PREFIXES = ("/api/", "/documents", "/search", "/mcp")
 
 
 def stats() -> dict:
@@ -43,8 +48,7 @@ def stats() -> dict:
 
 
 def _should_log(path: str) -> bool:
-    # /health is probed every 30s by Docker; static assets are noise.
-    return path.startswith("/api/") and path != "/health"
+    return path.startswith(_LOGGED_PREFIXES)
 
 
 def _observe(request, status_code: int, started: float) -> None:
@@ -52,6 +56,28 @@ def _observe(request, status_code: int, started: float) -> None:
         from services import metrics
 
         metrics.observe_request(request, status_code, time.perf_counter() - started)
+
+
+def _log_access(request, status_code: int, started: float, request_id: str) -> None:
+    if not _should_log(request.url.path):
+        return
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    user = getattr(request.state, "auth_identity", None) or "-"
+    # The fields again under `extra`, for LOG_FORMAT=json. A path, never a query
+    # string: that is where collection ids and share tokens travel.
+    logger.info(
+        "%s %s %d %dms user=%s rid=%s",
+        request.method, request.url.path, status_code, duration_ms, user, request_id,
+        extra={
+            "http_method": request.method,
+            "http_path": request.url.path,
+            "http_status": status_code,
+            "duration_ms": duration_ms,
+            "user": user,
+            "auth_via": getattr(request.state, "auth_via", None),
+            "request_id": request_id,
+        },
+    )
 
 
 async def track_request(request, call_next):
@@ -71,13 +97,7 @@ async def track_request(request, call_next):
         with _lock:
             _errors_total += 1
         _observe(request, 500, started)
-        if _should_log(request.url.path):
-            duration_ms = int((time.perf_counter() - started) * 1000)
-            logger.info(
-                "%s %s 500 %dms user=%s rid=%s",
-                request.method, request.url.path, duration_ms,
-                getattr(request.state, "auth_identity", None) or "-", request_id,
-            )
+        _log_access(request, 500, started, request_id)
         raise
     finally:
         with _lock:
@@ -87,16 +107,11 @@ async def track_request(request, call_next):
         with _lock:
             _errors_total += 1
     _observe(request, response.status_code, started)
-    if _should_log(request.url.path):
-        duration_ms = int((time.perf_counter() - started) * 1000)
-        logger.info(
-            "%s %s %d %dms user=%s rid=%s",
-            request.method, request.url.path, response.status_code, duration_ms,
-            getattr(request.state, "auth_identity", None) or "-", request_id,
-        )
+    _log_access(request, response.status_code, started, request_id)
     response.headers["X-Request-ID"] = request_id
     # Lineage marker (services/provenance.py): says which project this
     # server descends from, on every response, so a derived product is
     # recognisable from the wire alone.
     response.headers[LINEAGE_HEADER] = LINEAGE_ID
+    security_headers.apply(request, response)
     return response

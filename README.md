@@ -28,7 +28,8 @@ be forgotten. That is the job here too. The record remembers.
 
 [Deployment](docs/DEPLOYMENT.md) · [Architecture](docs/ARCHITECTURE.md) ·
 [Research workspace](docs/RESEARCH.md) · [Agentic research](docs/AGENTIC_RESEARCH.md) ·
-[On-prem](docs/ONPREM.md) · [Roadmap](docs/ROADMAP.md) · [The name](docs/BRAND.md) ·
+[On-prem](docs/ONPREM.md) · [Enterprise hosting](docs/ENTERPRISE.md) · [App API](docs/APP_API.md) ·
+[Roadmap](docs/ROADMAP.md) · [The name](docs/BRAND.md) ·
 [Provenance](docs/PROVENANCE.md) · [Engineering conventions](docs/ENGINEERING.md)
 
 ---
@@ -308,7 +309,7 @@ read-only, unprivileged and without Linux capabilities
 | **A few people on your LAN** | Docker with `BIND_ADDRESS=0.0.0.0` and `AUTH_PASSWORD` set | Everyone who knows the shared password; one shared corpus | [DEPLOYMENT.md](docs/DEPLOYMENT.md) |
 | **A team over HTTPS** | Docker behind a TLS reverse proxy (Caddy, nginx, Traefik), or on a Tailscale / WireGuard network | The password, plus the proxy or private network as the only route in | [DEPLOYMENT.md](docs/DEPLOYMENT.md) |
 | **Agents, lots of them** | The same image (or `SLIM=1`), personal tokens per agent, `WORKER_THREADS` sized to the host | Each token sees the collections it was given; `scripts/mcp_load.py` tells you the host's envelope | [Connect an AI client](#connect-an-ai-client) |
-| **An organisation that already runs sign-in** | The portable image, your own IdP (`IDENTITY_PROVIDER=oidc` or an authenticating proxy), your own models (`AI_PROVIDER`) | Identities from Keycloak, Entra ID, Okta, mTLS or Kerberos; optional private collections; OAuth sign-in for connector clients; a full audit trail | [ONPREM.md](docs/ONPREM.md), [IDENTITY.md](docs/IDENTITY.md), [AGENCY_PILOT.md](docs/AGENCY_PILOT.md) |
+| **An organisation that already runs sign-in** | The portable image, your own IdP (`IDENTITY_PROVIDER=oidc` or an authenticating proxy), your own models (`AI_PROVIDER`) | Identities from Keycloak, Entra ID, Okta, mTLS or Kerberos; optional private collections; OAuth sign-in for connector clients; a full audit trail | [ENTERPRISE.md](docs/ENTERPRISE.md), [ONPREM.md](docs/ONPREM.md), [IDENTITY.md](docs/IDENTITY.md), [AGENCY_PILOT.md](docs/AGENCY_PILOT.md) |
 | **Fully air-gapped** | The offline bundle with `CLIO_PROFILE=secure` | As above, with cloud providers and model downloads disabled, refusal to start when unsafely exposed, and a `scripts/preflight.py` report of exactly where data can go | [AIRGAP.md](docs/AIRGAP.md), [SECURE_PROFILE.md](docs/SECURE_PROFILE.md) |
 | **A hosted PaaS (Railway, Render, Fly.io, Coolify)** | The Dockerfile, a volume at `/app/data`, `AUTH_PASSWORD` | The password, or an SSO proxy in front | [Hosting on a PaaS](#hosting-on-a-paas-railway-render-flyio-coolify-) |
 
@@ -494,6 +495,10 @@ deployment.
 ---
 
 ## API
+
+**Building an application on Clio?** Use [the app API](docs/APP_API.md): a small,
+versioned `/api/v1` with per-app credentials, limited to the collections an admin
+grants. The rest of this section is the web app's own API, which changes with it.
 
 Everything the app does is an HTTP call; http://localhost:8473/docs is the
 full, interactive reference. Endpoints that work on documents take a

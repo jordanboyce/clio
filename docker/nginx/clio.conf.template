@@ -1,0 +1,52 @@
+# Reverse proxy for Clio. The nginx image fills in ${CLIO_HOSTNAME} and
+# ${CLIO_MAX_UPLOAD} at start and leaves nginx's own variables alone.
+# Security headers come from Clio itself, so they are not repeated here.
+
+server_tokens off;
+
+server {
+    listen 80;
+    server_name ${CLIO_HOSTNAME};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${CLIO_HOSTNAME};
+
+    ssl_certificate     /certs/tls/server.crt;
+    ssl_certificate_key /certs/tls/server.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:clio:10m;
+    ssl_session_timeout 1h;
+
+    # Uploads go straight through, so a large file is not written to this
+    # container's disk first (it may be read-only, and it has no room).
+    client_max_body_size    ${CLIO_MAX_UPLOAD};
+    proxy_request_buffering off;
+
+    # Streamed chat answers and job progress must arrive as they are written.
+    proxy_buffering  off;
+    proxy_cache      off;
+
+    # A research answer can run for minutes between bytes.
+    proxy_read_timeout 900s;
+    proxy_send_timeout 900s;
+
+    location / {
+        proxy_pass http://clio-upstream:8473;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Replaced, not appended to: a client must not be able to choose the
+        # address it is rate limited under. With a load balancer in front of this
+        # proxy, use the realip module to recover the real client first.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        # Whatever a client claims. If your SSO terminates here, set this header
+        # from what it verified instead, and see docs/IDENTITY.md.
+        proxy_set_header X-Forwarded-User "";
+    }
+}

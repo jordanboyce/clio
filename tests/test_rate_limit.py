@@ -56,10 +56,55 @@ def test_classify():
     # Page-load reads under /api/chat are ordinary traffic, not answer turns.
     assert _classify("/api/chat/cache") == "default"
     assert _classify("/api/chat/starters") == "default"
-    assert _classify("/api/search") == "search"
+    # The real routes, not an /api/ prefix they do not have: these two went
+    # unlimited for as long as the limiter looked for /api/search.
+    assert _classify("/search") == "search"
+    assert _classify("/documents") == "documents"
+    assert _classify("/documents/upload-staged") == "documents"
+    assert _classify("/documents/upload/7/status") == "documents"
     assert _classify("/api/collections") == "default"
+    assert _classify("/api/v1/collections/c1/search") == "search"
+    assert _classify("/api/v1/collections/c1/ask") == "chat"
+    assert _classify("/api/v1/collections/c1/documents") == "default"
+    assert _classify("/api/v1/me") == "default"
     assert _classify("/health") is None
+    assert _classify("/livez") is None
     assert _classify("/assets/app.js") is None
+
+
+def test_every_route_with_a_cost_is_classified():
+    """Walks the real route table, so a limiter that looks for the wrong path
+    fails here. Exempt: probes, docs and well-known metadata."""
+    import main
+
+    exempt = ("/health", "/livez", "/readyz", "/docs", "/metrics", "/openapi.json", "/", "/.well-known/")
+    unlimited = [
+        route.path for route in main.app.routes
+        if getattr(route, "methods", None)
+        and _classify(route.path) is None
+        and not route.path.startswith(exempt[-1])
+        and route.path not in exempt
+    ]
+    assert unlimited == []
+
+
+def test_search_route_is_limited_over_http(limits):
+    import main
+
+    client = TestClient(main.app, raise_server_exceptions=False)
+    codes = [client.post("/search", json={"query": "x"}).status_code for _ in range(5)]
+    assert codes[3:] == [429, 429]
+    assert rate_limiter.stats()["search"]["rejected"] == 2
+
+
+def test_an_apps_own_budget_replaces_the_deployments(limits):
+    lim = RateLimiter()
+    assert all(lim.check("search", "app:a", per_minute=10) is None for _ in range(10))
+    assert lim.check("search", "app:a", per_minute=10) is not None
+    # Unset falls back to the deployment's limit of 3, in a bucket of its own.
+    assert all(lim.check("search", "app:b") is None for _ in range(3))
+    assert lim.check("search", "app:b") is not None
+    assert all(lim.check("search", "app:c", per_minute=0) is None for _ in range(100))
 
 
 # ── Bucket math ─────────────────────────────────────────────────────────────

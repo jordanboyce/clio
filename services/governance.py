@@ -860,7 +860,12 @@ def aup_text() -> str:
 
 def aup_required_for(user_id: Optional[str]) -> bool:
     """The AUP gate needs an identity to record against, so it is only live
-    under private collections and only for identified callers."""
+    under private collections and only for identified callers. A registered app
+    has nobody to click accept: the admin who registered it answers for it."""
+    from middleware.user_context import get_request_app
+
+    if get_request_app() is not None:
+        return False
     return bool(settings.aup_required and settings.private_collections and user_id)
 
 

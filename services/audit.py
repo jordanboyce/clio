@@ -60,6 +60,11 @@ ACTIONS: List[str] = [
     "mcp_token.create",
     "mcp_token.revoke",
     "mcp.tool_call",            # one agent tool call (MCP_AUDIT_TOOL_CALLS)
+    "api_app.create",           # a registered app and what it may reach
+    "api_app.update",
+    "api_app.rotate_key",
+    "api_app.revoke",
+    "api.call",                 # one read by a registered app (MCP_AUDIT_TOOL_CALLS)
     "aup.accept",
     "admin.block_hash",
     "admin.unblock_hash",

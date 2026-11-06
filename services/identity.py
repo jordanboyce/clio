@@ -254,6 +254,21 @@ class OIDCIdentity:
         return self._verify_token(token) if token else None
 
     def _verify_token(self, token: str) -> Optional[str]:
+        claims = self.verified_claims(token)
+        if claims is None:
+            return None
+        if not _claims_satisfy(claims, self.required):
+            return None
+        if self.required_scope and self.required_scope not in _token_scopes(claims):
+            raise InsufficientScope(self.required_scope)
+        return self.identity_from_claims(claims)
+
+    def verified_claims(self, token: str) -> Optional[Dict[str, Any]]:
+        """The token's claims if its signature, issuer, audience and expiry hold.
+
+        Says nothing about who may do what: ``_verify_token`` adds the admission
+        rules for people, and services/api_apps.py matches a registered app.
+        """
         import jwt
 
         try:
@@ -292,13 +307,7 @@ class OIDCIdentity:
                 continue
             except jwt.PyJWTError:
                 return None
-        if claims is None:
-            return None
-        if not _claims_satisfy(claims, self.required):
-            return None
-        if self.required_scope and self.required_scope not in _token_scopes(claims):
-            raise InsufficientScope(self.required_scope)
-        return self.identity_from_claims(claims)
+        return claims
 
     def identity_from_claims(self, claims: Dict[str, Any]) -> Optional[str]:
         value = claims.get(self.identity_claim)

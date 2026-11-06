@@ -1,0 +1,45 @@
+# Known vulnerabilities in what the image ships, weekly and whenever the
+# dependency lists change. It reports rather than blocks: an advisory published
+# overnight should not stop an unrelated commit, but someone should see it.
+name: Dependency audit
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  push:
+    branches: [master]
+    paths:
+      - "requirements*.txt"
+      - "frontend/package-lock.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pip-audit
+      - run: pip-audit -r requirements.txt -r requirements-postgres.txt -r requirements-audio.txt --progress-spinner off
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # --omit=dev: what reaches a browser or the image. Build tools stay out of
+      # this report; the one dev package that ships, Swagger UI, is audited below.
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm audit --audit-level=critical

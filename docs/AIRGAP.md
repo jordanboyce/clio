@@ -153,8 +153,8 @@ every model is already on the machine, and lists each outbound path the
 configuration allows. The profile also makes Clio refuse to start when the
 first three boxes are not true.
 
-- [ ] `OFFLINE_MODE=1` set (verify: `curl http://<host>:8473/health` reports
-      `"offline_mode": true`)
+- [ ] `OFFLINE_MODE=1` set (verify: `curl -H "Authorization: Bearer <password>"
+      http://<host>:8473/health` reports `"offline_mode": true`)
 - [ ] `AUTH_PASSWORD` set — without it every endpoint, including MCP, is open
       to anyone who can reach the port
 - [ ] `CORS_ALLOW_ORIGINS` left empty unless another web origin needs the API;

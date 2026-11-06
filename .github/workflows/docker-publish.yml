@@ -35,6 +35,8 @@ on:
 permissions:
   contents: read
   packages: write
+  # For keyless signing: GitHub's identity is what the signature attests to.
+  id-token: write
 
 jobs:
   publish:
@@ -83,10 +85,16 @@ jobs:
             type=raw,value=latest,enable=${{ matrix.variant == 'full' && startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=slim,suffix=,enable=${{ matrix.variant == 'slim' && startsWith(github.ref, 'refs/tags/v') }}
 
-      - uses: docker/build-push-action@v6
+      - id: build
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
+          # What a site's review asks for: what is in the image, and how it was
+          # made. Both travel with the image in the registry. docs/ENTERPRISE.md
+          # shows how to read them and check the signature below.
+          sbom: true
+          provenance: mode=max
           platforms: ${{ inputs.arm64 && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -99,6 +107,13 @@ jobs:
           # dependency install, and a shared scope would evict each other.
           cache-from: type=gha,scope=${{ matrix.variant }}
           cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign the image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY,,}@${DIGEST}"
 
       - name: Summarise
         run: |

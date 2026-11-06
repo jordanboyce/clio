@@ -37,7 +37,7 @@ configuration it cannot enforce.
 |---|---|---|
 | `HOST` | `127.0.0.1` | Which interfaces accept connections. Docker sets `0.0.0.0` inside the container; there the published port is the boundary. |
 | `BIND_ADDRESS` | `127.0.0.1` | Host interface published by Docker Compose. Set `0.0.0.0` to accept connections from other machines. |
-| `AUTH_PASSWORD` | empty | A shared secret required on every request except `/health`. Browsers prompt for it natively (HTTP Basic, any username); API and MCP clients send `Authorization: Bearer <password>`. |
+| `AUTH_PASSWORD` | empty | A shared secret required on every request except the probes (`/livez`, `/readyz`, and `/health`, which then says no more than its status). Browsers prompt for it natively (HTTP Basic, any username); API and MCP clients send `Authorization: Bearer <password>`. It does not open [`/api/v1`](APP_API.md), which takes a registered app's credential. |
 | `CORS_ALLOW_ORIGINS` | empty | Which *other* web origins may read responses in a browser. Empty is correct unless a separate web app calls the API. |
 | `PRIVATE_COLLECTIONS` | `false` | Per-person collections. Only for organisations that already run sign-in; requires `IDENTITY_PROVIDER`. See [IDENTITY.md](IDENTITY.md). |
 
@@ -631,7 +631,8 @@ What protects the deployment when many people share it:
 | Knob | Default | What it does |
 |---|---|---|
 | `RATE_LIMIT_CHAT_PER_MINUTE` | 6 | Per-identity chat requests/min |
-| `RATE_LIMIT_SEARCH_PER_MINUTE` | 30 | Per-identity searches/min |
+| `RATE_LIMIT_SEARCH_PER_MINUTE` | 60 | Per-identity calls to `/search`/min |
+| `RATE_LIMIT_DOCUMENTS_PER_MINUTE` | 600 | Per-identity calls under `/documents`/min: uploads, listings, page previews, job polling |
 | `RATE_LIMIT_DEFAULT_PER_MINUTE` | 120 | Everything else under `/api` |
 | `RATE_LIMIT_MCP_PER_MINUTE` | 0 | `/mcp` agent calls, keyed per personal token; 0 = unlimited |
 | `RESEARCH_MAX_CONCURRENT` | 3 | Parallel `research_documents` calls; extra callers queue |
@@ -855,6 +856,10 @@ scrape_configs:
     static_configs: [{ targets: ["clio.example.org:8473"] }]
 ```
 
+For load balancers and orchestrators, `/livez` and `/readyz` need no credential
+and never open a collection; see [ENTERPRISE.md](ENTERPRISE.md#health-probes).
+`LOG_FORMAT=json` writes one JSON object per log line for a log shipper.
+
 Metrics carry no identities, queries or document names, and routes are labelled
 by template (`/api/collections/{collection_id}/stats`), never by the raw path.
 The ones that tell you a deployment is reaching its limit:
@@ -868,6 +873,7 @@ The ones that tell you a deployment is reaching its limit:
 | `clio_index_jobs_queued` | Indexing is falling behind what people submit |
 | `clio_db_pool_in_use`, `clio_db_pool_waits_total`, `clio_db_pool_timeouts_total` | Postgres only. Timeouts are 503s people saw: raise `POSTGRES_POOL_MAX` |
 | `clio_rate_limit_rejected_total` | People hitting their limits, by class |
+| `clio_api_app_requests_total` | Traffic from each [registered app](APP_API.md), by app name and status class. The one label that names a caller: an app is a system an admin registered, not a person |
 
 Numbers belong to one process and reset when it restarts, which is what
 Prometheus counters expect.

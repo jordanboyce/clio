@@ -20,7 +20,9 @@ CLIO_PROFILE=secure
 **Things it refuses to start with.** The standard profile logs a warning for
 these; the secure profile exits with a message that names each problem:
 
-- listening beyond loopback with no `AUTH_PASSWORD` and no identity provider;
+- listening beyond loopback with nothing to turn an anonymous caller away:
+  `AUTH_PASSWORD`, `AUTH_REQUIRE_IDENTITY=true` or `PRIVATE_COLLECTIONS=true`
+  (`IDENTITY_PROVIDER` alone says who a caller is, and turns nobody away);
 - `CORS_ALLOW_ORIGINS=*` with no authentication requirement;
 - `OFFLINE_MODE` explicitly turned off;
 - a hosted `EMBEDDING_PROVIDER` or `AI_PROVIDER` (only `local`, `ollama` and
@@ -64,7 +66,7 @@ The report covers:
 
 The same report is available to administrators at
 `GET /api/system/readiness` and from **About → Check this deployment** in the
-app. `GET /health` reports the active `profile`.
+app. `GET /health` reports the active `profile` to a caller with a credential.
 
 ## Typical secure install
 

@@ -14,6 +14,9 @@ applies:
   sees the same corpus. See [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Agents need to connect.** Mint a personal MCP token in Settings -> MCP
   (prefix `asy_mcp_`). Tokens are read-only unless minted with writes allowed.
+- **An application needs to call Clio.** An admin registers it, and it gets a key
+  or uses your IdP's client credentials, limited to the collections you grant.
+  See [APP_API.md](APP_API.md).
 - **Your organisation already runs sign-in** (Keycloak, Entra ID, Okta, an
   SSO or mTLS proxy) and you want per-person collections and sharing. That is
   the advanced case, and the only one the rest of this page covers.
@@ -24,7 +27,9 @@ Two separate questions are easy to confuse:
 
 - **Can this caller get in at all?** The network (loopback, a VPN, a
   firewall) or `AUTH_PASSWORD`. `AUTH_REQUIRE_IDENTITY=true` additionally
-  demands a verified identity from the provider below.
+  demands a verified identity from the provider below. Setting
+  `IDENTITY_PROVIDER` does not answer this question: without one of these, or
+  `PRIVATE_COLLECTIONS=true`, a request with no credential is still served.
 - **Who is this caller?** `IDENTITY_PROVIDER`. It matters only when something
   acts on it: `PRIVATE_COLLECTIONS` (per-person ownership and sharing),
   `ADMIN_EMAILS` (who is an administrator) and the audit trail (`actor` on

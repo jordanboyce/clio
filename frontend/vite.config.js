@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process'
+import { copyFileSync, mkdirSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 
 import { defineConfig } from 'vite'
@@ -53,6 +54,23 @@ function lineageBanner() {
   }
 }
 
+// The API docs pages (services/api_docs.py) load Swagger UI from the server
+// itself: its usual CDN is an outbound call, and blocked on a locked-down network.
+function vendorSwaggerUi() {
+  return {
+    name: 'clio-vendor-swagger-ui',
+    apply: 'build',
+    closeBundle() {
+      const from = fileURLToPath(new URL('./node_modules/swagger-ui-dist/', import.meta.url))
+      const to = fileURLToPath(new URL('./dist/vendor/swagger-ui/', import.meta.url))
+      mkdirSync(to, { recursive: true })
+      for (const file of ['swagger-ui-bundle.js', 'swagger-ui.css', 'LICENSE']) {
+        copyFileSync(`${from}${file}`, `${to}${file}`)
+      }
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
   plugins: [
@@ -61,6 +79,7 @@ export default defineConfig(({ command }) => ({
     command === 'serve' && vueDevTools(),
     tailwindcss(),
     lineageBanner(),
+    vendorSwaggerUi(),
   ].filter(Boolean),
   resolve: {
     alias: {

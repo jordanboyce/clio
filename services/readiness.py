@@ -69,14 +69,42 @@ def reachable_beyond_host(cfg=None) -> bool:
 _reachable_beyond_host = reachable_beyond_host
 
 
-def _has_gate() -> Optional[str]:
+def auth_gate(cfg=None) -> Optional[str]:
+    """What turns an anonymous request away, if anything.
+
+    Naming an identity provider is not on this list. IDENTITY_PROVIDER says how
+    to work out who a caller is; on its own it admits callers with no credential,
+    as main.py's auth middleware does for any deployment with no gate.
+
+    ``cfg`` works as it does for ``reachable_beyond_host``.
+    """
+    cfg = cfg if cfg is not None else settings
+    if cfg.auth_password:
+        return "AUTH_PASSWORD"
+    if cfg.auth_require_identity:
+        return f"identity provider ({cfg.identity_provider})"
+    if cfg.private_collections:
+        return f"private collections, identity provider ({cfg.identity_provider})"
+    return None
+
+
+def _no_gate_problem() -> tuple[str, str]:
+    """(what is wrong, how to fix it) for a reachable deployment with no gate."""
     from services import identity
 
-    if settings.auth_password:
-        return "AUTH_PASSWORD"
-    if identity.requires_identity():
-        return f"identity provider ({settings.identity_provider})"
-    return None
+    if identity.active_provider():
+        return (
+            f"IDENTITY_PROVIDER={settings.identity_provider} is set, but nothing requires it: a request with "
+            f"no credential is still served, on {settings.host}. Anyone who can reach the port can read, "
+            "change and delete every document.",
+            "Set AUTH_REQUIRE_IDENTITY=true (or PRIVATE_COLLECTIONS=true), or set AUTH_PASSWORD.",
+        )
+    return (
+        f"Listening on {settings.host} with no password or identity provider: anyone who can "
+        "reach the port can read, change and delete every document.",
+        "Set AUTH_PASSWORD, set IDENTITY_PROVIDER with AUTH_REQUIRE_IDENTITY=true, or bind "
+        "HOST=127.0.0.1 behind a proxy.",
+    )
 
 
 # ── Posture ──────────────────────────────────────────────────────────────
@@ -97,14 +125,12 @@ def _posture_checks() -> List[Dict[str, Any]]:
                           "OFFLINE_MODE is off: cloud providers and downloads are permitted.",
                           "Set OFFLINE_MODE=1 (the secure profile does this for you)."))
 
-    gate = _has_gate()
+    gate = auth_gate()
     if gate:
         out.append(_check("auth", "posture", "Access control", PASS, f"Requests need a credential ({gate})."))
     elif _reachable_beyond_host():
-        out.append(_check("auth", "posture", "Access control", _secure_or(FAIL),
-                          f"Listening on {settings.host} with no password or identity provider: anyone who can "
-                          "reach the port can read, change and delete every document.",
-                          "Set AUTH_PASSWORD, set IDENTITY_PROVIDER, or bind HOST=127.0.0.1 behind a proxy."))
+        problem, fix = _no_gate_problem()
+        out.append(_check("auth", "posture", "Access control", _secure_or(FAIL), problem, fix))
     else:
         out.append(_check("auth", "posture", "Access control", PASS,
                           "Bound to loopback only; the machine's own users are the audience."))

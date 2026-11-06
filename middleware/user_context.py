@@ -37,8 +37,25 @@ _request_identity: ContextVar[Optional[str]] = ContextVar(
     "clio_request_identity", default=None
 )
 
+# The registered app behind this request, on /api/v1 only (services/api_apps.py).
+_request_app: ContextVar[Optional[dict]] = ContextVar("clio_request_app", default=None)
+
 # Users already upserted by this process — avoids a DB write per request.
 _provisioned_users: set[str] = set()
+
+
+def set_request_app(app: Optional[dict]) -> Token:
+    """Bind the registered app making this request."""
+    return _request_app.set(app)
+
+
+def reset_request_app(token: Token) -> None:
+    _request_app.reset(token)
+
+
+def get_request_app() -> Optional[dict]:
+    """The registered app making this request, or None for everyone else."""
+    return _request_app.get()
 
 
 def set_request_user(user_id: Optional[str]) -> Token:
@@ -64,7 +81,13 @@ def get_request_user() -> Optional[str]:
 
     Only meaningful in private-collections mode; callers gate on
     ``settings.private_collections`` before treating None as anonymous.
+
+    A registered app answers as itself in every mode, so whatever it does (an
+    upload, a deletion, tokens spent on an answer) is attributed to that app.
     """
+    app = _request_app.get()
+    if app is not None:
+        return app["actor"]
     if not settings.private_collections:
         return settings.default_user_id
     return _request_user_id.get()

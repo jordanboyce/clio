@@ -23,6 +23,15 @@ SECURE_PROFILE_DEFAULTS = {
 }
 
 
+# What the bundled frontend needs and nothing more. Inline styles are for Vue's
+# style bindings; data: and blob: images for page previews and generated figures.
+DEFAULT_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+)
+
+
 # Default hybrid-search balance (semantic vs keyword). Shared by the vector
 # store, the indexer and the retrieval planner so the three cannot drift.
 DEFAULT_SEMANTIC_WEIGHT = 0.7
@@ -350,6 +359,15 @@ class Settings(BaseSettings):
     metrics_enabled: bool = False
     metrics_token: str = ""
 
+    # "json" writes one JSON object per log line, for a log shipper or SIEM.
+    log_format: Literal["text", "json"] = "text"
+
+    # Response hardening (middleware/security_headers.py). Blank CSP sends none,
+    # for a site whose proxy sets its own. HSTS is only ever sent on a request
+    # that arrived over HTTPS; 0 turns it off.
+    content_security_policy: str = DEFAULT_CONTENT_SECURITY_POLICY
+    hsts_max_age_seconds: int = 31536000
+
     # Release a collection's vectors from memory after this many seconds without
     # a search or write, and read them back on the next use (about a second per
     # 400,000 chunks). Without it, every collection opened since the last
@@ -453,8 +471,12 @@ class Settings(BaseSettings):
     # everything else is cheap metadata traffic.
     rate_limit_enabled: bool = True
     rate_limit_chat_per_minute: int = 6
-    rate_limit_search_per_minute: int = 30
+    rate_limit_search_per_minute: int = 60
     rate_limit_default_per_minute: int = 120
+    # /documents/*: uploads, listings, page previews and job polling. High
+    # because one page of results or one folder upload is many requests, and
+    # every background job polls its status while it runs.
+    rate_limit_documents_per_minute: int = 600
     # /mcp is unlimited by default: an agent turn fans out several tool calls
     # at once and handles 429s badly (immediate retry or abandoning the
     # question). Set a per-token budget only for abuse protection on a shared

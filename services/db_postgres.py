@@ -318,6 +318,30 @@ class PostgresBackend(DatabaseBackend):
                 cur.execute("ALTER TABLE mcp_tokens ADD COLUMN IF NOT EXISTS allowlist BOOLEAN NOT NULL DEFAULT FALSE")
                 cur.execute("ALTER TABLE mcp_tokens ADD COLUMN IF NOT EXISTS use_count INTEGER NOT NULL DEFAULT 0")
 
+                # Registered apps — mirrors the SQLite backend.
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS api_apps (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL UNIQUE,
+                        key_hash TEXT UNIQUE,
+                        key_prefix TEXT,
+                        previous_key_hash TEXT,
+                        previous_key_expires_at TEXT,
+                        oidc_subject TEXT UNIQUE,
+                        collections TEXT NOT NULL,
+                        can_write BOOLEAN NOT NULL DEFAULT FALSE,
+                        search_per_minute INTEGER,
+                        ask_per_minute INTEGER,
+                        other_per_minute INTEGER,
+                        created_by TEXT,
+                        created_at TEXT NOT NULL,
+                        expires_at TEXT,
+                        revoked_at TEXT,
+                        last_used_at TEXT
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_api_apps_previous_key ON api_apps(previous_key_hash)")
+
                 # Content governance — mirrors the SQLite backend.
                 cur.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS sensitivity TEXT DEFAULT 'internal'")
                 # Published collections — mirrors the SQLite backend.
@@ -1309,6 +1333,65 @@ class PostgresBackend(DatabaseBackend):
                 affected = cur.rowcount
             conn.commit()
             return affected
+        finally:
+            self._put(conn)
+
+    # ── Registered apps ──────────────────────────────────────
+
+    def create_api_app(self, row: Dict[str, Any]) -> None:
+        columns = ", ".join(self.API_APP_COLUMNS)
+        marks = ", ".join("%s" for _ in self.API_APP_COLUMNS)
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"INSERT INTO api_apps ({columns}) VALUES ({marks})",
+                    tuple(row[c] for c in self.API_APP_COLUMNS),
+                )
+            conn.commit()
+        finally:
+            self._put(conn)
+
+    def _select_api_app(self, where: str, params: tuple) -> Optional[Dict[str, Any]]:
+        conn = self._conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute(f"SELECT * FROM api_apps WHERE {where}", params)
+                row = cur.fetchone()
+                return dict(row) if row else None
+        finally:
+            self._put(conn)
+
+    def list_api_apps(self) -> List[Dict[str, Any]]:
+        conn = self._conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute("SELECT * FROM api_apps ORDER BY created_at DESC")
+                return [dict(r) for r in cur.fetchall()]
+        finally:
+            self._put(conn)
+
+    def get_api_app(self, app_id: str) -> Optional[Dict[str, Any]]:
+        return self._select_api_app("id = %s", (app_id,))
+
+    def get_api_app_by_key_hash(self, key_hash: str) -> Optional[Dict[str, Any]]:
+        return self._select_api_app("key_hash = %s OR previous_key_hash = %s", (key_hash, key_hash))
+
+    def get_api_app_by_subject(self, oidc_subject: str) -> Optional[Dict[str, Any]]:
+        return self._select_api_app("oidc_subject = %s", (oidc_subject,))
+
+    def update_api_app(self, app_id: str, fields: Dict[str, Any]) -> None:
+        unknown = set(fields) - self.API_APP_UPDATABLE
+        if unknown:
+            raise ValueError(f"Not updatable: {sorted(unknown)}")
+        if not fields:
+            return
+        assignments = ", ".join(f"{name} = %s" for name in fields)
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE api_apps SET {assignments} WHERE id = %s", (*fields.values(), app_id))
+            conn.commit()
         finally:
             self._put(conn)
 

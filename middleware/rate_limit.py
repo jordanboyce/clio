@@ -21,7 +21,8 @@ run first, so the identity is already on request.state here.
 The 429 contract — shared with the daily token budget in
 services/usage_service.py so the frontend needs one handler:
 status 429, header ``Retry-After: <seconds>``, body
-``{"detail": str, "retry_after_seconds": int}``.
+``{"detail": str, "retry_after_seconds": int}``. /api/v1 adds ``code``, as
+every error on that surface carries one.
 """
 
 import logging
@@ -41,6 +42,8 @@ _PRUNE_THRESHOLD = 5000
 
 
 _CHAT_TURN_PATHS = frozenset({"/api/chat", "/api/chat/", "/api/chat/stream"})
+_APP_API_PREFIX = "/api/v1/"
+_CLASSES = ("chat", "search", "documents", "default", "mcp")
 
 
 def _classify(path: str) -> Optional[str]:
@@ -49,6 +52,16 @@ def _classify(path: str) -> Optional[str]:
     # fan-out of tool calls is never throttled by the human-facing classes.
     if path == "/mcp" or path.startswith("/mcp/"):
         return "mcp"
+    if path == "/search":
+        return "search"
+    if path == "/documents" or path.startswith("/documents/"):
+        return "documents"
+    if path.startswith(_APP_API_PREFIX):
+        if path.endswith("/ask"):
+            return "chat"
+        if path.endswith("/search"):
+            return "search"
+        return "default"
     if not path.startswith("/api/"):
         return None
     # Only the answer turns are "chat": each one is an agent loop on the
@@ -57,8 +70,6 @@ def _classify(path: str) -> Optional[str]:
     # spent a visitor's six answers on two refreshes.
     if path in _CHAT_TURN_PATHS:
         return "chat"
-    if path.startswith("/api/search"):
-        return "search"
     return "default"
 
 
@@ -69,21 +80,27 @@ class RateLimiter:
         self._lock = threading.Lock()
         # (class, key) -> [tokens, last_refill_monotonic]
         self._buckets: Dict[Tuple[str, str], list] = {}
-        self._allowed = {"chat": 0, "search": 0, "default": 0, "mcp": 0}
-        self._rejected = {"chat": 0, "search": 0, "default": 0, "mcp": 0}
+        self._allowed = {cls: 0 for cls in _CLASSES}
+        self._rejected = {cls: 0 for cls in _CLASSES}
 
     @staticmethod
     def _limit_for(cls: str) -> int:
         return {
             "chat": settings.rate_limit_chat_per_minute,
             "search": settings.rate_limit_search_per_minute,
+            "documents": settings.rate_limit_documents_per_minute,
             "default": settings.rate_limit_default_per_minute,
             "mcp": settings.rate_limit_mcp_per_minute,
         }[cls]
 
-    def check(self, cls: str, key: str) -> Optional[int]:
-        """None = allowed; otherwise seconds until a token frees up."""
-        per_minute = self._limit_for(cls)
+    def check(self, cls: str, key: str, per_minute: Optional[int] = None) -> Optional[int]:
+        """None = allowed; otherwise seconds until a token frees up.
+
+        ``per_minute`` replaces the deployment's limit for this caller: a
+        registered app can carry its own budget (services/api_apps.py).
+        """
+        if per_minute is None:
+            per_minute = self._limit_for(cls)
         if per_minute <= 0:  # 0 = this class unlimited
             with self._lock:
                 self._allowed[cls] += 1
@@ -166,18 +183,18 @@ async def enforce_rate_limit(request, call_next):
     if cls is None:
         return await call_next(request)
 
-    retry_after = rate_limiter.check(cls, resolve_limit_key(request))
+    overrides = getattr(request.state, "rate_limit_overrides", None) or {}
+    retry_after = rate_limiter.check(cls, resolve_limit_key(request), overrides.get(cls))
     if retry_after is not None:
         rate_limiter._prune()
-        return JSONResponse(
-            status_code=429,
-            content={
-                "detail": (
-                    "Rate limit reached — you're sending requests faster than "
-                    f"this deployment allows. Try again in {retry_after}s."
-                ),
-                "retry_after_seconds": retry_after,
-            },
-            headers={"Retry-After": str(retry_after)},
-        )
+        body = {
+            "detail": (
+                "Rate limit reached — you're sending requests faster than "
+                f"this deployment allows. Try again in {retry_after}s."
+            ),
+            "retry_after_seconds": retry_after,
+        }
+        if request.url.path.startswith(_APP_API_PREFIX):
+            body["code"] = "rate_limited"
+        return JSONResponse(status_code=429, content=body, headers={"Retry-After": str(retry_after)})
     return await call_next(request)

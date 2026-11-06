@@ -24,9 +24,13 @@ from services.indexer_manager import indexer_manager
 from services.reindex_service import reindex_service
 from services.mcp_server import embedded_mcp_app, mcp_server_lifespan
 from api import deps
+from services import api_apps, api_docs, log_format
 from services import identity as identity_service
+from services import mcp_server
+from api.v1 import v1_app
 from api import (
     admin,
+    apps,
     artifacts,
     chat,
     collections,
@@ -41,10 +45,7 @@ from api import (
     system,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+log_format.configure(settings.log_format)
 logger = logging.getLogger(__name__)
 
 
@@ -146,21 +147,19 @@ def _check_security_posture() -> None:
     # Inside Docker HOST is always 0.0.0.0; readiness also looks at the
     # published interface (BIND_ADDRESS) so a loopback-only container does
     # not warn about a network it is not on.
-    if readiness.reachable_beyond_host(settings) and not (
-        settings.auth_password or identity_service.requires_identity()
-    ):
+    if readiness.reachable_beyond_host(settings) and not readiness.auth_gate(settings):
         logger.warning(
             "SECURITY: bound to %s (reachable from the network) with no "
             "authentication requirement set. Anyone who can reach this port can read, "
             "modify and delete every document, and spend your AI provider "
-            "credits. Set AUTH_PASSWORD (python scripts/setup.py --password), or set "
-            "HOST=127.0.0.1 to bind loopback only. See docs/DEPLOYMENT.md.",
+            "credits. Set AUTH_PASSWORD (python scripts/setup.py --password), set "
+            "IDENTITY_PROVIDER with AUTH_REQUIRE_IDENTITY=true (IDENTITY_PROVIDER alone "
+            "turns nobody away), or set HOST=127.0.0.1 to bind loopback only. See "
+            "docs/DEPLOYMENT.md.",
             settings.host,
         )
 
-    if settings.cors_allow_origins.strip() == "*" and not (
-        settings.auth_password or identity_service.requires_identity()
-    ):
+    if settings.cors_allow_origins.strip() == "*" and not readiness.auth_gate(settings):
         logger.warning(
             "SECURITY: CORS_ALLOW_ORIGINS=* with no authentication requirement set. Any web "
             "page the user visits can read this API from their browser and "
@@ -298,6 +297,9 @@ app = FastAPI(
     version=_provenance.version(),
     license_info={"name": _provenance.LICENSE, "url": f"{_provenance.SOURCE_URL}/blob/master/LICENSE"},
     lifespan=lifespan,
+    # Served below from local files: the defaults load Swagger UI from a CDN.
+    docs_url=None,
+    redoc_url=None,
 )
 
 
@@ -307,7 +309,6 @@ app = FastAPI(
 from services.embedder import EmbeddingUnavailable  # noqa: E402
 
 
-@app.exception_handler(EmbeddingUnavailable)
 async def _embedding_unavailable(request, exc: EmbeddingUnavailable):
     return JSONResponse(
         status_code=503,
@@ -322,7 +323,6 @@ async def _embedding_unavailable(request, exc: EmbeddingUnavailable):
 from services.db_backend import DatabaseBusy  # noqa: E402
 
 
-@app.exception_handler(DatabaseBusy)
 async def _database_busy(request, exc: DatabaseBusy):
     logger.warning(f"Refused {request.method} {request.url.path}: {exc}")
     return JSONResponse(
@@ -330,6 +330,12 @@ async def _database_busy(request, exc: DatabaseBusy):
         content={"detail": "The server is busy. Try again shortly.", "code": "database_busy"},
         headers={"Retry-After": "5"},
     )
+
+
+# A mounted app handles its own exceptions, so /api/v1 needs them registered too.
+for _target in (app, v1_app):
+    _target.add_exception_handler(EmbeddingUnavailable, _embedding_unavailable)
+    _target.add_exception_handler(DatabaseBusy, _database_busy)
 
 
 # CORS: origins come from CORS_ALLOW_ORIGINS (comma-separated). Empty — the
@@ -384,10 +390,16 @@ def _password_from_auth_header(header: str) -> str:
     return ""
 
 
-# Paths a person can reach before they have any identity: the health probe.
+# Paths a person can reach before they have any identity: the probes. /health
+# is here too, but require_auth works out how much of it this caller may see.
 _PUBLIC_PATHS = {
     "/health",
+    "/livez",
+    "/readyz",
 }
+# On /api/v1 only an app's credential counts, apart from its description. Whoever
+# can reach the rest of the app can read that, to find out what /api/v1 offers.
+_APP_API_DESCRIPTION_PATHS = {"/api/v1/docs", "/api/v1/openapi.json"}
 # The built frontend bundle's hashed assets and brand files are public too,
 # so the browser can load them while it is still answering a Basic challenge. The
 # bundle holds no secrets — every fact about the deployment comes from the
@@ -412,6 +424,7 @@ def _is_public_path(path: str) -> bool:
         or path in _PUBLIC_STATIC
         or path.startswith("/assets/")
         or path.startswith("/icons/")
+        or path.startswith("/vendor/")
         # RFC 9728 protected-resource metadata: an MCP client reads it
         # before it has any credential. It names the authorization server
         # and nothing else (services/mcp_oauth.py).
@@ -419,8 +432,79 @@ def _is_public_path(path: str) -> bool:
     )
 
 
+def _password_matches(presented: str) -> bool:
+    # Bytes: compare_digest refuses a str with non-ASCII characters, which a
+    # header can hold, and that used to answer an unauthenticated caller with a 500.
+    return bool(presented) and secrets.compare_digest(presented.encode(), settings.auth_password.encode())
+
+
+async def _caller_may_see_health_details(request) -> bool:
+    """Whether this /health caller could have seen the rest of the app.
+
+    /health itself never refuses anyone. Works it out the way require_auth does,
+    and leaves the identity on the request for the per-collection check.
+    """
+    if not (settings.auth_password or identity_service.requires_identity() or settings.private_collections):
+        return True  # an open appliance has nothing to withhold
+    verifier = identity_service.get_identity_verifier()
+    if verifier is not None and verifier.has_candidate(request.headers):
+        who = await asyncio.to_thread(verifier.verify_request, request.headers, _client_ip(request))
+        if who:
+            request.state.auth_identity = who
+            return True
+    if settings.auth_password and not identity_service.requires_identity():
+        return _password_matches(_password_from_auth_header(request.headers.get("authorization", "")))
+    return False
+
+
+async def _carries_app_credential(request, presented: str) -> bool:
+    """Does this request present a registered app's key or IdP token?
+
+    Decides whose rules apply, not whether the credential is good. Such a request
+    is refused anywhere but /api/v1, and is never tried as a person's token.
+    """
+    if presented.startswith(api_apps.KEY_PREFIX):
+        return True
+    if identity_service.active_provider() != "oidc":
+        return False
+    token = identity_service.OIDCIdentity._bearer_jws(request.headers)
+    return bool(token) and await asyncio.to_thread(api_apps.jwt_subject_is_registered, token)
+
+
+async def _serve_registered_app(request, call_next, presented: str):
+    """/api/v1: a registered app's credential, and nothing else, on every deployment
+    shape. An open appliance is no exception, so every call names the app making it."""
+    app_record = None
+    if presented.startswith(api_apps.KEY_PREFIX):
+        app_record = await asyncio.to_thread(api_apps.verify_key, presented)
+        via = "app_key"
+    else:
+        token = identity_service.OIDCIdentity._bearer_jws(request.headers)
+        app_record = await asyncio.to_thread(api_apps.verify_jwt, token) if token else None
+        via = "app_oidc"
+    if app_record is None:
+        return JSONResponse(
+            {
+                "detail": "This API takes a registered app's key or IdP token. See /api/v1/docs.",
+                "code": "unauthenticated",
+            },
+            status_code=401,
+            headers={"WWW-Authenticate": 'Bearer realm="Clio App API"'},
+        )
+    request.state.api_app = app_record
+    request.state.auth_identity = app_record["actor"]
+    request.state.auth_via = via
+    request.state.rate_limit_key = f"app:{app_record['id']}"
+    request.state.rate_limit_overrides = api_apps.rate_limit_overrides(app_record)
+    with mcp_server.app_request_scope(app_record):
+        return await call_next(request)
+
+
 @app.middleware("http")
 async def require_auth(request, call_next):
+    if request.url.path == "/health":
+        request.state.health_detail = await _caller_may_see_health_details(request)
+        return await call_next(request)
     if _is_public_path(request.url.path):
         return await call_next(request)
     # CORS preflights are sent without credentials by spec, and this
@@ -428,6 +512,13 @@ async def require_auth(request, call_next):
     # preflight can be answered; the actual request still authenticates.
     if request.method == "OPTIONS":
         return await call_next(request)
+
+    presented = _password_from_auth_header(request.headers.get("authorization", ""))
+    app_credential = await _carries_app_credential(request, presented)
+    if request.url.path.startswith("/api/v1/") and (
+        app_credential or request.url.path not in _APP_API_DESCRIPTION_PATHS
+    ):
+        return await _serve_registered_app(request, call_next, presented)
 
     # A scraper's token opens /metrics and nothing else.
     if request.url.path == "/metrics" and settings.metrics_token:
@@ -447,7 +538,7 @@ async def require_auth(request, call_next):
     # authorization server the endpoint advertises (services/mcp_oauth.py).
     from services.identity import InsufficientScope, get_identity_verifier, is_mcp_path
     verifier = get_identity_verifier(request.url.path)
-    if verifier is not None and verifier.has_candidate(request.headers):
+    if not app_credential and verifier is not None and verifier.has_candidate(request.headers):
         try:
             who = await asyncio.to_thread(
                 verifier.verify_request, request.headers, _client_ip(request)
@@ -467,10 +558,8 @@ async def require_auth(request, call_next):
             request.state.auth_via = verifier.via
             return await _call_with_user_context(request, call_next)
 
-    presented = _password_from_auth_header(request.headers.get("authorization", ""))
-
     if settings.auth_password and not identity_service.requires_identity():
-        if presented and secrets.compare_digest(presented, settings.auth_password):
+        if _password_matches(presented):
             request.state.auth_identity = None
             request.state.auth_via = "password"
             return await _call_with_user_context(request, call_next)
@@ -501,16 +590,15 @@ async def require_auth(request, call_next):
             request.state.rate_limit_key = f"mcp-token:{token_record.get('id')}"
             return await _call_with_user_context(request, call_next)
 
-    # An explicit MCP credential must retain its permissions even on a
-    # local/open appliance. Never silently turn a revoked token into an
-    # anonymous (fully trusted) request.
+    # An explicit MCP or app credential must retain its limits even on a
+    # local/open appliance. Never silently turn a revoked token, or a key used
+    # outside /api/v1, into an anonymous (fully trusted) request.
     if (
         not settings.auth_password
         and not identity_service.requires_identity()
         and not settings.private_collections
-        and not (
-            presented and presented.startswith("asy_mcp_")
-        )
+        and not presented.startswith("asy_mcp_")
+        and not app_credential
     ):
         return await call_next(request)
 
@@ -553,8 +641,13 @@ async def _call_with_user_context(request, call_next):
             reset_request_user(user_token)
         reset_request_identity(identity_token)
 
-for module in (system, documents, search, chat, artifacts, collections, custom_file_types, mcp, sharing, expertise, admin, governance, research):
+for module in (system, documents, search, chat, artifacts, collections, custom_file_types, mcp, sharing, expertise, admin, apps, governance, research):
     app.include_router(module.router)
+
+
+@app.get("/docs", include_in_schema=False)
+async def api_reference():
+    return api_docs.docs_page(app.title, app.openapi_url)
 
 
 # ── Request metadata (ids, access log, in-flight counters) ─────────────────
@@ -623,6 +716,7 @@ async def web_interface():
 
 # Mounts must come after all routes so they don't override API routes.
 app.mount("/mcp", embedded_mcp_app, name="mcp")
+app.mount("/api/v1", v1_app, name="api-v1")
 
 
 class _MCPPathNormalizer:
@@ -667,6 +761,7 @@ if __name__ == "__main__":
         "host": settings.host,
         "port": settings.port,
         "reload": dev_reload,
+        "server_header": False,
     }
 
     cert_path = Path(settings.ssl_certfile).expanduser() if settings.ssl_certfile else None

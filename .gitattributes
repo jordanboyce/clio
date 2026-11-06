@@ -4,3 +4,6 @@
 # baffling way to discover a line-ending problem.
 *.sh text eol=lf
 docker/entrypoint.sh text eol=lf
+
+# Read by nginx inside a Linux container.
+*.template text eol=lf
