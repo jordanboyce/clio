@@ -38,7 +38,7 @@ from models.schemas import (
     SyncFolderRecord,
     SyncFoldersResponse,
 )
-from services.upload_service import upload_service
+from services.upload_service import new_staged_path, upload_service
 from services.form_field_extractor import (
     extract_form_fields,
     estimate_form_likelihood,
@@ -351,8 +351,6 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
-    staging_dir = collection_service.get_staging_path(collection_id)
-
     # Staging is the transfer half of a background upload: refuse the batch
     # before writing it rather than accepting files the index job would then
     # have to reject one by one (that job re-checks per file regardless).
@@ -375,8 +373,7 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
         if safe_filename in ("..", ".") or safe_filename.startswith(".."):
             safe_filename = safe_filename.replace("..", "_")
         try:
-            staging_dir.mkdir(parents=True, exist_ok=True)
-            file_path = Path(tempfile.mkdtemp(dir=staging_dir)) / safe_filename
+            file_path = new_staged_path(collection_id, safe_filename)
             with open(file_path, "wb") as f:
                 shutil.copyfileobj(file.file, f)
             staged.append({"filename": safe_filename, "path": str(file_path)})

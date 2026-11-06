@@ -225,7 +225,7 @@ def document_file(documents_dir: Path, doc_info: Dict[str, Any]) -> Path:
 
 
 @holding_collection_lock
-def retire_older_versions(collection_id: str, indexer: Any, document_id: str, *, actor: Any = _UNSET) -> List[str]:
+def retire_older_versions(collection_id: str, indexer: Any, document_id: str, *, actor: Any) -> List[str]:
     """Leave one document for this document's file: the version the file holds now.
 
     A document's id is its content hash, so a changed file indexes as a new
@@ -235,8 +235,10 @@ def retire_older_versions(collection_id: str, indexer: Any, document_id: str, *,
     can change again while its job runs.
 
     A per-document label is a decision about the document, not about one version
-    of its text, so the strictest of them stays. Returns the retired ids; the
-    caller saves the index.
+    of its text, so the strictest of them stays. A new version of a quarantined
+    document is held too, or editing one line would get it past its review and out
+    of the queue. An approval is not carried: it was of the old bytes. Returns the
+    retired ids; the caller saves the index.
     """
     from services.collection_service import collection_service
     from services.indexer_manager import indexer_manager
@@ -249,26 +251,34 @@ def retire_older_versions(collection_id: str, indexer: Any, document_id: str, *,
         collection_service.remove_document(collection_id, document_id)
         return []
     path = document_file(documents_dir, doc_info)
-    versions = [row for row in store.find_documents_by_filename(doc_info["filename"])
-                if document_file(documents_dir, row) == path]
+    versions = {row["document_id"]: row for row in store.find_documents_by_filename(doc_info["filename"])
+                if document_file(documents_dir, row) == path}
+    if doc_info.get("source_type") == "url":
+        # Another version of a link can be stored under another name.
+        versions.update((row["document_id"], row) for row in store.find_documents_by_source(
+            doc_info["source_path"], "url"))
     if len(versions) < 2:
         return []
     try:
         current = content_hash_of(path)[:16]
     except OSError:
         return []
-    ids = [row["document_id"] for row in versions]
-    if current not in ids:
+    if current not in versions:
         return []  # the file holds none of them, so nothing says which is right
 
-    labels = [row["sensitivity"] for row in versions if row.get("sensitivity") in SENSITIVITY_LEVELS]
+    labels = [row["sensitivity"] for row in versions.values() if row.get("sensitivity") in SENSITIVITY_LEVELS]
     if labels:
         store.set_document_governance(current, sensitivity=max(labels, key=SENSITIVITY_LEVELS.index))
-    retired = [doc_id for doc_id in ids if doc_id != current]
-    for doc_id in retired:
-        remove_document(collection_id, doc_id, actor=actor, action="document.replace",
-                        save=False, keep_file=True)
-    return retired
+    retired = [row for doc_id, row in versions.items() if doc_id != current]
+    held = next((row for row in retired if row.get("policy_status") == "quarantined"), None)
+    if held:
+        store.set_document_governance(current, policy_status="quarantined", policy_flags=held.get("policy_flags"))
+        audit.record("document.quarantined", actor=actor, collection_id=collection_id, document_id=current,
+                     detail={"filename": doc_info["filename"], "replaces": held["document_id"]})
+    for row in retired:
+        remove_document(collection_id, row["document_id"], actor=actor, action="document.replace",
+                        save=False, keep_file=document_file(documents_dir, row) == path)
+    return [row["document_id"] for row in retired]
 
 
 def remove_source_file(documents_dir: Path, doc_info: Dict[str, Any],

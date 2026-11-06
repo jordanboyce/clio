@@ -3107,6 +3107,8 @@ def _write_document_locked(
     status = {"create": "created", "replace": "replaced", "append": "appended"}[mode]
     if mode != "create" and replaced_id is None:
         status = "created"  # replace/append with nothing there yet
+    # Not the scan's verdict alone: a new version of a quarantined note is held too.
+    policy_status = store.get_document_info(document_id).get("policy_status")
     payload = {
         "status": status,
         "collection_id": resolved,
@@ -3115,14 +3117,14 @@ def _write_document_locked(
         "filename": safe_filename,
         "total_pages": meta.total_pages,
         "total_chunks": meta.total_chunks,
-        "policy_status": meta.policy_status,
+        "policy_status": policy_status,
         "characters": len(final_content),
     }
     if replaced_id:
         payload["replaced_document_id"] = replaced_id
-    if meta.policy_status and meta.policy_status != "clear":
+    if policy_status and policy_status != "clear":
         payload["note"] = (
-            "The content scan flagged this source; it may be held from search "
+            "This source was flagged; it may be held from search "
             "until an administrator reviews it."
         )
     return _tool_response(payload, "write_document")

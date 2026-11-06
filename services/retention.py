@@ -3,7 +3,8 @@
 search_history stores full result snippets — document text — so keeping it
 forever is a privacy liability, not a feature; before this task existed it
 was written on every search and never deleted (or read). chat_usage is
-small per row but grows with every turn.
+small per row but grows with every turn. The same sweep clears uploads that
+were staged but never given a job.
 
 One asyncio task, started from main.py's lifespan: first sweep 60 s after
 boot (not during startup, which is already busy loading models), then every
@@ -50,6 +51,13 @@ def _sweep() -> None:
                             f"{settings.audit_retention_days}d")
         except Exception as e:
             logger.warning(f"Retention sweep of audit_events failed: {e}")
+
+    from services.upload_service import upload_service
+
+    try:
+        upload_service.sweep_staged_uploads()
+    except Exception as e:
+        logger.warning(f"Retention sweep of staged uploads failed: {e}")
 
 
 async def retention_loop() -> None:

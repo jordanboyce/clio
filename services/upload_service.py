@@ -9,6 +9,7 @@ Handles:
 
 import logging
 import os
+import tempfile
 import threading
 import shutil
 import json
@@ -34,6 +35,45 @@ from services.embedder import EmbeddingDimensionMismatch, EmbeddingUnavailable, 
 from services.link_fetcher import fetch_link
 
 logger = logging.getLogger(__name__)
+
+# Long enough for a large transfer, whose job is only submitted when it ends.
+STAGED_UPLOAD_MAX_AGE_SECONDS = 24 * 60 * 60
+
+
+def new_staged_path(collection_id: str, filename: str) -> Path:
+    """A private place for a file to wait until it is indexed, under its real name.
+
+    It takes that name in the library only then (``_install_staged``), so a file
+    that fails or is refused leaves what is there alone.
+    """
+    staging = collection_service.get_staging_path(collection_id)
+    staging.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(dir=staging)) / filename
+
+
+def _is_staged(collection_id: str, path: Path) -> bool:
+    return path.resolve().parent.parent == collection_service.get_staging_path(collection_id).resolve()
+
+
+def _install_staged(indexer, document_id: str, staged: Path, documents_dir: Path) -> None:
+    """Move an indexed file to its name, unless its row was replaced or deleted meanwhile."""
+    try:
+        if not indexer.vector_store.metadata_store.get_document_info(document_id):
+            return
+        try:
+            os.replace(staged, documents_dir / staged.name)
+        except OSError:
+            indexer.delete_document(document_id)
+            raise
+    finally:
+        shutil.rmtree(staged.parent, ignore_errors=True)
+
+
+def _remove_staged(collection_id: str, paths: List[str]) -> None:
+    """Drop the uploads among these paths. Those a job indexed have moved out already."""
+    for path in map(Path, paths):
+        if _is_staged(collection_id, path):
+            shutil.rmtree(path.parent, ignore_errors=True)
 
 
 def _claim_stored_path(documents_dir: Path, filename: str) -> Path:
@@ -132,6 +172,8 @@ class _QueuedJob:
     # delete running beside an upload into the same collection is the race
     # the per-collection rule exists to prevent.
     light: bool = False
+    # What to give back if it is cancelled before it starts.
+    on_cancel: Optional[Callable[[], None]] = None
 
 
 def _size_of(path: Path) -> int:
@@ -335,8 +377,7 @@ class UploadService:
         every future job for that collection. The uploads staged for those
         jobs go too: nothing will index them now.
         """
-        for staged in collection_service.base_dir.glob("*/.staged"):
-            shutil.rmtree(staged, ignore_errors=True)
+        self.sweep_staged_uploads(max_age=0)
         try:
             counts = app_db.fail_interrupted_jobs(
                 "Interrupted - the server restarted while this job was running. "
@@ -351,6 +392,22 @@ class UploadService:
                 f"{counts['reindex_jobs']} interrupted re-index job(s) as failed"
             )
         return counts
+
+    def sweep_staged_uploads(self, max_age: float = STAGED_UPLOAD_MAX_AGE_SECONDS) -> None:
+        """Remove uploads no job came for: the browser closed after the transfer, say.
+
+        A collection with a job waiting or running is left alone, because a long
+        queue can keep that job's files waiting for longer than this.
+        """
+        cutoff = time.time() - max_age
+        with self._lock:
+            busy = set(self._active_collections.values()) | {q.collection_id for q in self._queue}
+        for staged in collection_service.base_dir.glob("*/.staged/*"):
+            try:
+                if staged.parent.parent.name not in busy and staged.stat().st_mtime <= cutoff:
+                    shutil.rmtree(staged, ignore_errors=True)
+            except OSError as e:
+                logger.warning(f"Could not check staged upload {staged}: {e}")
 
     def subscribe_to_events(self, job_id: int) -> queue.Queue:
         """Subscribe to real-time progress events for a job.
@@ -401,6 +458,8 @@ class UploadService:
                 self._queue.remove(waiting)
                 self._cancel_flags.pop(job_id, None)
         if waiting is not None:
+            if waiting.on_cancel:
+                waiting.on_cancel()
             logger.info(f"Cancelled queued job {job_id} before it started")
             app_db.update_upload_job(
                 job_id, status="cancelled", error="Cancelled before it started",
@@ -659,6 +718,7 @@ class UploadService:
             collection_id=collection_id,
             target=self._run_local_index,
             args=(job_id, file_paths, collection_id, copy_to_library, uploaded_by),
+            on_cancel=lambda: _remove_staged(collection_id, file_paths),
         ))
         logger.info(f"Submitted local index job {job_id}: {len(file_paths)} files")
 
@@ -674,26 +734,14 @@ class UploadService:
     ):
         """Run local file indexing in background thread."""
         documents_dir = indexer_manager.get_documents_path(collection_id)
-        staging_dir = collection_service.get_staging_path(collection_id).resolve()
-
-        def is_staged(path: Path) -> bool:
-            return path.resolve().parent.parent == staging_dir
 
         def make_work(source_path: Path) -> _BulkFileWork:
             def stage() -> Path:
                 return source_path
 
-            if is_staged(source_path):
-                # From /documents/upload-staged: it takes its name in the library only
-                # now that it is indexed, so a failure leaves what is there alone.
+            if _is_staged(collection_id, source_path):
                 def finalize(indexer, doc_metadata):
-                    if not indexer.vector_store.metadata_store.get_document_info(doc_metadata.document_id):
-                        return  # replaced or deleted while it was being indexed
-                    try:
-                        os.replace(source_path, documents_dir / source_path.name)
-                    except OSError:
-                        indexer.delete_document(doc_metadata.document_id)
-                        raise
+                    _install_staged(indexer, doc_metadata.document_id, source_path, documents_dir)
 
                 return _BulkFileWork(display_name=source_path.name, stage=stage, finalize=finalize,
                                      size_bytes=_size_of(source_path))
@@ -724,10 +772,7 @@ class UploadService:
         try:
             self._process_bulk_job(job_id, works, collection_id, uploaded_by=uploaded_by)
         finally:
-            # Finished files have moved out. Any still here failed or were cancelled.
-            for path in map(Path, file_paths):
-                if is_staged(path):
-                    shutil.rmtree(path.parent, ignore_errors=True)
+            _remove_staged(collection_id, file_paths)
 
 
     def start_link_index(
@@ -786,12 +831,21 @@ class UploadService:
                 work.held_bytes += storage_quota.take(
                     collection_id, len(fetched.body), fetched.filename
                 )
-                final_path = _claim_stored_path(documents_dir, fetched.filename)
+                # A link added before keeps its name, even if its page's title
+                # changed. governance.retire_older_versions retires what it replaces.
+                store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store
+                suffix = Path(fetched.filename).suffix
+                current = next((row["filename"] for row in store.find_documents_by_source(url, "url")
+                                if Path(row["filename"]).suffix == suffix), None)
+                final_path = (new_staged_path(collection_id, current) if current
+                              else _claim_stored_path(documents_dir, fetched.filename))
                 final_path.write_bytes(fetched.body)
                 saved["path"] = final_path
                 return final_path
 
             def finalize(indexer, doc_metadata):
+                if _is_staged(collection_id, saved["path"]):
+                    _install_staged(indexer, doc_metadata.document_id, saved["path"], documents_dir)
                 indexer.vector_store.metadata_store.update_document_source(
                     doc_metadata.document_id, source_path=url, source_type="url",
                 )
@@ -800,7 +854,11 @@ class UploadService:
 
             def cleanup():
                 path = saved.pop("path", None)
-                if path is not None:
+                if path is None:
+                    return
+                if _is_staged(collection_id, path):
+                    shutil.rmtree(path.parent, ignore_errors=True)
+                else:
                     path.unlink(missing_ok=True)
 
             work.stage = stage

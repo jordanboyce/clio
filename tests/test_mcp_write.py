@@ -1161,6 +1161,105 @@ def test_an_upload_gives_way_to_a_write_that_already_replaced_it(indexer, fresh_
     assert len(collection_service.get_collection_document_ids("default")) == 1
 
 
+# ── The same bytes again keep the decisions made about them ─────────────────
+
+
+def _decide(indexer, document_id):
+    from services import governance
+
+    label = governance.SENSITIVITY_LEVELS[-1]
+    indexer.vector_store.metadata_store.set_document_governance(
+        document_id, sensitivity=label, policy_status="quarantined", policy_flags={"categories": {"secrets": 1}},
+    )
+    return label
+
+
+def _assert_decided(indexer, document_id, label):
+    from services import governance
+
+    info = indexer.vector_store.metadata_store.get_document_info(document_id)
+    assert info["sensitivity"] == label
+    assert info["policy_status"] == "quarantined"
+    assert info["policy_flags"] == {"categories": {"secrets": 1}}
+    assert governance.is_hidden(info)
+
+
+def test_uploading_identical_bytes_keeps_a_quarantine_and_label(indexer, upload):
+    upload("note.md", NOTES.encode())
+    doc_id = _rows(indexer, "note.md")[0]["document_id"]
+    label = _decide(indexer, doc_id)
+
+    upload("note.md", NOTES.encode())
+
+    assert len(_rows(indexer, "note.md")) == 1
+    _assert_decided(indexer, doc_id, label)
+
+
+def test_identical_bytes_under_another_name_keep_a_quarantine_and_label(indexer, upload):
+    upload("note.md", NOTES.encode())
+    doc_id = _rows(indexer, "note.md")[0]["document_id"]
+    label = _decide(indexer, doc_id)
+
+    upload("copy.md", NOTES.encode())
+
+    _assert_decided(indexer, doc_id, label)
+
+
+def test_a_changed_copy_of_a_quarantined_file_stays_held(indexer, fresh_db, upload):
+    """One edited line must not get a held document past its review, or out of the queue."""
+    from services import governance
+
+    upload("note.md", NOTES.encode())
+    _decide(indexer, _rows(indexer, "note.md")[0]["document_id"])
+
+    upload("note.md", CHANGED.encode())
+
+    rows = _rows(indexer, "note.md")
+    assert len(rows) == 1 and _stored("note.md") == CHANGED
+    info = indexer.vector_store.metadata_store.get_document_info(rows[0]["document_id"])
+    assert info["policy_status"] == "quarantined" and governance.is_hidden(info)
+    assert info["policy_flags"] == {"categories": {"secrets": 1}}
+    held = fresh_db.list_audit_events(action="document.quarantined")
+    assert [e["document_id"] for e in held] == [rows[0]["document_id"]]
+
+
+def test_an_agent_is_told_its_replacement_of_a_quarantined_note_is_held(indexer):
+    first = mcp.write_document_sync("note.md", NOTES)
+    _decide(indexer, first["document_id"])
+
+    result = mcp.write_document_sync("note.md", CHANGED, mode="replace")
+
+    assert result["status"] == "replaced" and result["policy_status"] == "quarantined"
+
+
+def test_a_changed_copy_of_an_approved_file_is_reviewed_afresh(indexer, upload):
+    """An approval was of those bytes; it says nothing about new ones."""
+    upload("note.md", NOTES.encode())
+    indexer.vector_store.metadata_store.set_document_governance(
+        _rows(indexer, "note.md")[0]["document_id"], policy_status="approved")
+
+    upload("note.md", CHANGED.encode())
+
+    info = indexer.vector_store.metadata_store.get_document_info(_rows(indexer, "note.md")[0]["document_id"])
+    assert (info["policy_status"] or "clear") == "clear"
+
+
+def test_a_later_scan_verdict_stands_where_nobody_decided(indexer, monkeypatch):
+    """Keeping decisions must not freeze the row: a clear row takes what the new scan says."""
+    from services import content_policy
+
+    _upload("note.md", NOTES.encode())
+    doc_id = _rows(indexer, "note.md")[0]["document_id"]
+
+    monkeypatch.setattr(content_policy, "scanning_enabled", lambda: True)
+    monkeypatch.setattr(content_policy, "decide", lambda *a, **k: ("flagged", {"categories": {"x": 1}}, "internal"))
+    _upload("note.md", NOTES.encode())
+
+    info = indexer.vector_store.metadata_store.get_document_info(doc_id)
+    assert info["policy_status"] == "flagged"
+    assert info["sensitivity"] == "internal"
+
+
 # ── A background upload that does not finish changes nothing ───────────────
 
 
@@ -1272,6 +1371,209 @@ def test_a_restart_clears_uploads_no_job_will_index(indexer, fresh_db):
     upload_service.recover_orphaned_jobs()
 
     assert _nothing_staged()
+
+
+def _stage(name="note.md", body=NOTES):
+    from io import BytesIO
+    from pathlib import Path
+
+    from fastapi import UploadFile
+
+    staged = documents.stage_uploads(files=[UploadFile(BytesIO(body.encode()), filename=name)], collection_id="default")
+    return Path(staged["staged"][0]["path"])
+
+
+def _age(path, seconds):
+    import os
+    import time
+
+    then = time.time() - seconds
+    os.utime(path.parent, (then, then))
+
+
+def test_cancelling_a_queued_job_removes_its_uploads(indexer, monkeypatch):
+    from services.upload_service import upload_service
+
+    mcp.write_document_sync("note.md", NOTES)
+    monkeypatch.setattr(upload_service, "_dispatch", lambda: None)  # it stays in the queue
+    job_id = upload_service.start_local_index([str(_stage(body=CHANGED))], "default", uploaded_by="tester")
+    assert not _nothing_staged()
+
+    assert upload_service.cancel_job(job_id) == "cancelled"
+
+    assert _nothing_staged()
+    _holds(indexer, "note.md", NOTES)
+
+
+def test_uploads_no_job_came_for_are_cleared_after_a_day(indexer):
+    from services.upload_service import STAGED_UPLOAD_MAX_AGE_SECONDS, upload_service
+
+    fresh, stale = _stage("fresh.md"), _stage("stale.md")
+    _age(stale, STAGED_UPLOAD_MAX_AGE_SECONDS + 60)
+
+    upload_service.sweep_staged_uploads()
+
+    assert fresh.exists() and not stale.parent.exists()
+
+
+def test_old_uploads_stay_while_a_job_is_queued_on_the_collection(indexer, monkeypatch):
+    """A long queue can keep a job's files waiting for longer than a day."""
+    from services.upload_service import STAGED_UPLOAD_MAX_AGE_SECONDS, upload_service
+
+    monkeypatch.setattr(upload_service, "_dispatch", lambda: None)
+    waiting = _stage()
+    job_id = upload_service.start_local_index([str(waiting)], "default", uploaded_by="tester")
+    _age(waiting, STAGED_UPLOAD_MAX_AGE_SECONDS + 60)
+
+    upload_service.sweep_staged_uploads()
+    assert waiting.exists()
+
+    upload_service.cancel_job(job_id)
+
+
+def test_the_daily_sweep_clears_old_uploads(indexer):
+    from services import retention
+    from services.upload_service import STAGED_UPLOAD_MAX_AGE_SECONDS
+
+    stale = _stage("stale.md")
+    _age(stale, STAGED_UPLOAD_MAX_AGE_SECONDS + 60)
+
+    retention._sweep()
+
+    assert not stale.parent.exists()
+
+
+# ── Adding the same link again replaces what it brought in ─────────────────
+
+URL = "https://example.com/page"
+PAGE = "<html><body><h1>Status</h1><p>The {} release went out and the on-call engineer checked it.</p></body></html>"
+
+
+def _add_link(fresh_db, monkeypatch, body, name="Status (example.com).html", url=URL):
+    from pathlib import Path
+
+    import services.upload_service as us
+    from services.link_fetcher import FetchedLink
+
+    monkeypatch.setattr(us, "fetch_link", lambda u: FetchedLink(
+        url=u, final_url=u, content_type="text/html", extension=Path(name).suffix,
+        body=body.encode(), filename=name, title="Status"))
+    job_id = fresh_db.create_upload_job("default", 1, job_type="index")
+    us.upload_service._run_link_index(job_id, [url], "default", "tester")
+
+
+def _library():
+    return sorted(p.name for p in indexer_manager.get_documents_path("default").iterdir())
+
+
+def test_a_changed_page_replaces_the_old_version(indexer, fresh_db, monkeypatch):
+    first, second = PAGE.format("spring"), PAGE.format("autumn")
+    _add_link(fresh_db, monkeypatch, first)
+    old_id = _rows(indexer, "Status (example.com).html")[0]["document_id"]
+
+    _add_link(fresh_db, monkeypatch, second)
+
+    _holds(indexer, "Status (example.com).html", second)
+    assert indexer.vector_store.metadata_store.get_chunks_by_document(old_id) == []
+    assert _library() == ["Status (example.com).html"]
+    assert _rows(indexer, "Status (example.com).html")[0]["source_path"] == URL
+    assert _nothing_staged()
+
+
+def test_a_page_keeps_its_name_when_its_title_changes(indexer, fresh_db, monkeypatch):
+    _add_link(fresh_db, monkeypatch, PAGE.format("spring"))
+
+    _add_link(fresh_db, monkeypatch, PAGE.format("autumn"), name="Renamed page (example.com).html")
+
+    _holds(indexer, "Status (example.com).html", PAGE.format("autumn"))
+    assert _library() == ["Status (example.com).html"]
+
+
+def test_an_unchanged_page_stays_one_document_and_one_file(indexer, fresh_db, monkeypatch):
+    _add_link(fresh_db, monkeypatch, PAGE.format("spring"))
+
+    _add_link(fresh_db, monkeypatch, PAGE.format("spring"))
+
+    _holds(indexer, "Status (example.com).html", PAGE.format("spring"))
+    assert _library() == ["Status (example.com).html"]
+
+
+def test_a_page_that_became_another_type_moves_to_the_new_name(indexer, fresh_db, monkeypatch):
+    _add_link(fresh_db, monkeypatch, PAGE.format("spring"))
+
+    _add_link(fresh_db, monkeypatch, "# Status\n\nThe autumn release went out and was checked.\n", name="Status.md")
+
+    _holds(indexer, "Status.md", "# Status\n\nThe autumn release went out and was checked.\n")
+    assert _rows(indexer, "Status (example.com).html") == []
+    assert _library() == ["Status.md"]
+
+
+def test_adding_a_link_clears_copies_left_by_earlier_adds(indexer, fresh_db, monkeypatch):
+    _add_link(fresh_db, monkeypatch, PAGE.format("spring"))
+    extra = indexer_manager.get_documents_path("default") / "Status (example.com)_1.html"
+    extra.write_text(PAGE.format("summer"), encoding="utf-8")
+    meta = indexer.index_document(extra, extra.name, collection_id="default")
+    indexer.vector_store.metadata_store.update_document_source(meta.document_id, source_path=URL, source_type="url")
+
+    _add_link(fresh_db, monkeypatch, PAGE.format("autumn"))
+
+    docs = indexer.list_documents()
+    assert len(docs) == 1 and _library() == [docs[0]["filename"]]
+    _holds(indexer, docs[0]["filename"], PAGE.format("autumn"))
+
+
+def test_a_page_that_cannot_be_read_keeps_the_version_already_there(indexer, fresh_db, monkeypatch):
+    _add_link(fresh_db, monkeypatch, PAGE.format("spring"))
+
+    _add_link(fresh_db, monkeypatch, "<html></html>")  # nothing to extract, so the page fails
+
+    _holds(indexer, "Status (example.com).html", PAGE.format("spring"))
+    assert _library() == ["Status (example.com).html"]
+    assert _nothing_staged()
+
+
+def test_a_cancelled_refetch_keeps_the_version_already_there(indexer, fresh_db, monkeypatch):
+    from services.upload_service import upload_service
+
+    _add_link(fresh_db, monkeypatch, PAGE.format("spring"))
+    monkeypatch.setattr(upload_service, "_is_cancelled", lambda job_id: True)
+
+    _add_link(fresh_db, monkeypatch, PAGE.format("autumn"))
+
+    _holds(indexer, "Status (example.com).html", PAGE.format("spring"))
+    assert _nothing_staged()
+
+
+def test_an_unchanged_page_keeps_a_quarantine_and_label(indexer, fresh_db, monkeypatch):
+    _add_link(fresh_db, monkeypatch, PAGE.format("spring"))
+    doc_id = _rows(indexer, "Status (example.com).html")[0]["document_id"]
+    label = _decide(indexer, doc_id)
+
+    _add_link(fresh_db, monkeypatch, PAGE.format("spring"))
+
+    _assert_decided(indexer, doc_id, label)
+
+
+def test_a_changed_page_of_a_quarantined_link_stays_held(indexer, fresh_db, monkeypatch):
+    from services import governance
+
+    _add_link(fresh_db, monkeypatch, PAGE.format("spring"))
+    _decide(indexer, _rows(indexer, "Status (example.com).html")[0]["document_id"])
+
+    _add_link(fresh_db, monkeypatch, PAGE.format("autumn"))
+
+    rows = _rows(indexer, "Status (example.com).html")
+    assert len(rows) == 1
+    assert governance.is_hidden(indexer.vector_store.metadata_store.get_document_info(rows[0]["document_id"]))
+
+
+def test_two_links_with_the_same_title_both_stay(indexer, fresh_db, monkeypatch):
+    _add_link(fresh_db, monkeypatch, PAGE.format("spring"))
+
+    _add_link(fresh_db, monkeypatch, PAGE.format("autumn"), url="https://example.com/other")
+
+    _holds(indexer, "Status (example.com).html", PAGE.format("spring"))
+    _holds(indexer, "Status (example.com)_1.html", PAGE.format("autumn"))
 
 
 def test_a_changed_reference_replaces_itself(indexer, fresh_db, tmp_path):

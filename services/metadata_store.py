@@ -1753,6 +1753,20 @@ class MetadataStore:
             return self._attach_replacement_names(
                 conn, [self._document_row_to_dict(row) for row in cursor.fetchall()])
 
+    def find_documents_by_source(self, source_path: str, source_type: str) -> List[dict]:
+        """Every document recorded as coming from this source, newest first."""
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(f"""
+                SELECT {self._DOC_LIST_COLUMNS}
+                FROM documents d
+                WHERE d.source_path = ? AND d.source_type = ?
+                ORDER BY COALESCE(d.upload_timestamp, '1970-01-01') DESC, d.document_id
+            """, (source_path, source_type))
+            return self._attach_replacement_names(
+                conn, [self._document_row_to_dict(row) for row in cursor.fetchall()])
+
     def list_documents(self) -> List[dict]:
         """
         List all documents with their statistics.
@@ -2076,8 +2090,10 @@ class MetadataStore:
             # admin's review decisions on every re-index. The document_id is
             # derived from the content hash, so an existing row with the same
             # id holds the same bytes — a past human decision still stands:
-            # carry the injection-review outcome forward, and keep an explicit
-            # "approved" over a fresh scan's flagged/quarantined verdict.
+            # carry the injection-review outcome and the sensitivity label
+            # forward, keep an explicit "approved" over a fresh scan's
+            # flagged/quarantined verdict, and never let adding the same file
+            # again bring a quarantined document back.
             ids = [d["document_id"] for d in documents]
             prior: Dict[str, tuple] = {}
             try:
@@ -2085,7 +2101,7 @@ class MetadataStore:
                     batch = ids[i:i + self._IN_CLAUSE_BATCH]
                     placeholders = ",".join("?" * len(batch))
                     rows = conn.execute(
-                        f"SELECT document_id, policy_status, injection_review, "
+                        f"SELECT document_id, policy_status, policy_flags, sensitivity, injection_review, "
                         f"superseded_by, superseded_at, superseded_note "
                         f"FROM documents WHERE document_id IN ({placeholders})",
                         batch,
@@ -2096,9 +2112,15 @@ class MetadataStore:
                 logger.warning(f"Could not read prior review decisions: {e}")
                 prior = {}
             for doc in documents:
-                old_status, old_review, *old_supersede = prior.get(
-                    doc["document_id"], (None, None, None, None, None)
+                old_status, old_flags, old_sensitivity, old_review, *old_supersede = prior.get(
+                    doc["document_id"], (None,) * 7
                 )
+                if old_sensitivity:
+                    doc["sensitivity"] = old_sensitivity
+                if old_status == "quarantined":
+                    doc["policy_status"] = "quarantined"
+                    if old_flags:
+                        doc["policy_flags"] = json.loads(old_flags)
                 if old_review and not doc.get("injection_review"):
                     doc["injection_review"] = old_review
                 # Same reasoning for "replaced by": an owner's call about a
