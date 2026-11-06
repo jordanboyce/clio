@@ -237,13 +237,13 @@
               </button>
             </template>
             <button
-              v-if="webLinksAvailable || gitAvailable"
+              v-if="linkKindCount > 0"
               @click="toggleLinkPanel"
               class="btn btn-xs flex-1 gap-1"
               :class="linkPanelOpen ? 'btn-secondary' : 'btn-outline'"
               :disabled="indexing || isRecording"
               :aria-expanded="linkPanelOpen"
-              :title="gitAvailable ? 'Index a web link or a git repository' : 'Index the content behind a link'"
+              :title="linkButtonTitle"
             >
               <Link :size="12" />
               Link
@@ -296,9 +296,10 @@
           <!-- Link panel: paste one or more URLs; the server fetches each one
                and indexes the page (or the PDF/file behind it) in the background -->
           <div v-if="linkPanelOpen" class="space-y-1.5">
-            <div v-if="webLinksAvailable && gitAvailable" class="join w-full" role="group" aria-label="What to add">
-              <button type="button" class="btn btn-xs join-item flex-1" :class="activeLinkKind === 'web' ? 'btn-primary' : 'btn-ghost border border-base-300'" :aria-pressed="activeLinkKind === 'web'" @click="linkKind = 'web'">Web page</button>
-              <button type="button" class="btn btn-xs join-item flex-1" :class="activeLinkKind === 'git' ? 'btn-primary' : 'btn-ghost border border-base-300'" :aria-pressed="activeLinkKind === 'git'" @click="linkKind = 'git'">Git repository</button>
+            <div v-if="linkKindCount > 1" class="join w-full" role="group" aria-label="What to add">
+              <button v-if="webLinksAvailable" type="button" class="btn btn-xs join-item flex-1" :class="activeLinkKind === 'web' ? 'btn-primary' : 'btn-ghost border border-base-300'" :aria-pressed="activeLinkKind === 'web'" @click="linkKind = 'web'">Web page</button>
+              <button v-if="gitAvailable" type="button" class="btn btn-xs join-item flex-1" :class="activeLinkKind === 'git' ? 'btn-primary' : 'btn-ghost border border-base-300'" :aria-pressed="activeLinkKind === 'git'" @click="linkKind = 'git'">Git repository</button>
+              <button v-if="serverFolderAvailable" type="button" class="btn btn-xs join-item flex-1" :class="activeLinkKind === 'path' ? 'btn-primary' : 'btn-ghost border border-base-300'" :aria-pressed="activeLinkKind === 'path'" @click="linkKind = 'path'">Server folder</button>
             </div>
             <div v-if="activeLinkKind === 'git'" class="space-y-1.5" data-testid="git-panel">
               <input
@@ -330,6 +331,34 @@
                   <span v-if="gitSubmitting" class="loading loading-spinner loading-xs"></span>
                   <GitBranch v-else :size="11" />
                   {{ gitSubmitting ? 'Cloning…' : 'Add repository' }}
+                </button>
+              </div>
+              <p v-if="capabilities.native_file_picker === false && !serverFolderAvailable" class="text-xs text-base-content/50 leading-tight" data-testid="server-folder-hint">
+                Already have a checkout on this server? Mount it and set LOCAL_SOURCE_ROOTS to add it by path, with no credentials.
+              </p>
+            </div>
+            <div v-else-if="activeLinkKind === 'path'" class="space-y-1.5" data-testid="server-folder-panel">
+              <input
+                v-model="serverPath"
+                type="text"
+                class="input input-bordered input-xs w-full font-mono"
+                :placeholder="`${localRoots[0].replace(/[\\/]+$/, '')}/your-repo`"
+                aria-label="Path of the folder on this server"
+                :disabled="gitSubmitting"
+                @keydown.enter.prevent="indexServerFolder"
+              />
+              <div class="flex items-center gap-2 text-xs">
+                <span class="flex-1 min-w-0 text-base-content/50 leading-tight break-words">Read in place, never changed. In a git checkout, files in .gitignore are skipped. Allowed under {{ localRoots.join(', ') }}.</span>
+                <label class="flex items-center gap-1.5 cursor-pointer select-none flex-shrink-0" title="Check the folder every 15 minutes and tell me when it changes">
+                  <input v-model="gitWatch" type="checkbox" class="toggle toggle-xs toggle-primary" :disabled="gitSubmitting" />
+                  Watch
+                </label>
+              </div>
+              <div class="flex justify-end">
+                <button class="btn btn-primary btn-xs gap-1" @click="indexServerFolder" :disabled="gitSubmitting || !serverPath.trim()">
+                  <span v-if="gitSubmitting" class="loading loading-spinner loading-xs"></span>
+                  <FolderOpen v-else :size="11" />
+                  {{ gitSubmitting ? 'Adding…' : 'Add folder' }}
                 </button>
               </div>
             </div>
@@ -1303,11 +1332,29 @@ const linkSubmitting = ref(false)
 const linkKind = ref('web')
 const webLinksAvailable = computed(() => capabilities.value.link_indexing !== false)
 const gitAvailable = computed(() => !!capabilities.value.git_sources)
+// A folder on the server by its path, offered once LOCAL_SOURCE_ROOTS says which
+// ones may be read. Not tied to the other two: this is what a site with no web
+// access and no reachable git host has left.
+const localRoots = ref([])
+const serverFolderAvailable = computed(() => localRoots.value.length > 0)
+const linkKindCount = computed(() => [webLinksAvailable, gitAvailable, serverFolderAvailable].filter(k => k.value).length)
+const linkButtonTitle = computed(() => {
+  const kinds = [
+    webLinksAvailable.value && 'a web link',
+    gitAvailable.value && 'a git repository',
+    serverFolderAvailable.value && 'a folder on this server',
+  ].filter(Boolean)
+  const last = kinds.pop()
+  return `Index ${kinds.length ? `${kinds.join(', ')} or ${last}` : last}`
+})
 const activeLinkKind = computed(() => {
+  if (linkKind.value === 'path' && serverFolderAvailable.value) return 'path'
   if (linkKind.value === 'git' && gitAvailable.value) return 'git'
   if (linkKind.value === 'web' && webLinksAvailable.value) return 'web'
-  return webLinksAvailable.value ? 'web' : 'git'
+  if (webLinksAvailable.value) return 'web'
+  return gitAvailable.value ? 'git' : 'path'
 })
+const serverPath = ref('')
 const gitUrl = ref('')
 const gitBranch = ref('')
 const gitWatch = ref(true)
@@ -2032,19 +2079,13 @@ const closeNote = () => {
   noteDocument.value = null
 }
 
-const indexGit = async () => {
-  const url = gitUrl.value.trim()
-  if (!url || gitSubmitting.value) return
+// A repository address or a folder on the server: the same submission either way.
+const addSyncedSource = async (url, body, label, fallbackError) => {
   const collectionId = collectionStore.currentCollectionId
   gitSubmitting.value = true
   indexError.value = ''
   try {
-    const { data } = await http.post('/documents/sync-git', {
-      url,
-      branch: gitBranch.value.trim() || null,
-      collection_id: collectionId,
-      watch: gitWatch.value,
-    }, { timeout: 0 })
+    const { data } = await http.post(url, { ...body, collection_id: collectionId, watch: gitWatch.value }, { timeout: 0 })
     if (data.job_id) {
       backgroundJobsStore.addUploadJob({
         job_id: data.job_id, collection_id: collectionId, status: 'pending',
@@ -2052,20 +2093,34 @@ const indexGit = async () => {
       })
       emit('background-job-started')
     }
-    ui.notify(`${folderLabel(url.replace(/\.git$/, ''))}: ${data.queued ? `${data.queued.toLocaleString()} files queued` : 'up to date'}${gitWatch.value ? ' · watching for changes' : ''}`, data.job_id ? 'info' : 'success')
+    ui.notify(`${label}: ${data.queued ? `${data.queued.toLocaleString()} files queued` : 'up to date'}${gitWatch.value ? ' · watching for changes' : ''}`, data.job_id ? 'info' : 'success')
     gitUrl.value = ''
     gitBranch.value = ''
+    serverPath.value = ''
     linkPanelOpen.value = false
     addSectionOpen.value = false
     loadDocuments()
     emit('document-deleted')
   } catch (err) {
     // The server's reason (policy refusal, unreachable host) is the useful part.
-    indexError.value = err?.message || 'Could not add the repository'
+    indexError.value = err?.message || fallbackError
   } finally {
     gitSubmitting.value = false
     loadSyncFolders()
   }
+}
+
+const indexGit = () => {
+  const url = gitUrl.value.trim()
+  if (!url || gitSubmitting.value) return
+  return addSyncedSource('/documents/sync-git', { url, branch: gitBranch.value.trim() || null },
+    folderLabel(url.replace(/\.git$/, '')), 'Could not add the repository')
+}
+
+const indexServerFolder = () => {
+  const path = serverPath.value.trim()
+  if (!path || gitSubmitting.value) return
+  return addSyncedSource('/documents/sync-folder', { path }, folderLabel(path), 'Could not add the folder')
 }
 
 const watchingPath = ref('')
@@ -2540,11 +2595,12 @@ const checkedAfterSync = (folder) => {
   return new Date(folder.last_checked_at).getTime() - new Date(folder.last_synced_at).getTime() > 60_000
 }
 const loadSyncFolders = async () => {
-  if (!collectionStore.canEditCurrent) { syncFolders.value = []; return }
+  if (!collectionStore.canEditCurrent) { syncFolders.value = []; localRoots.value = []; return }
   try {
     const { data } = await http.get('/documents/sync-folders', { params: { collection_id: collectionStore.currentCollectionId } })
     syncFolders.value = data.folders || []
-  } catch { syncFolders.value = [] }
+    localRoots.value = data.local_source_roots || []
+  } catch { syncFolders.value = []; localRoots.value = [] }
 }
 const runFolderSync = async (folder, prune) => {
   const collectionId = collectionStore.currentCollectionId

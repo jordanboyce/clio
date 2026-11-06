@@ -177,9 +177,34 @@ ALERT_WEBHOOK_SECRET=<shared secret>                     # signs each POST (X-Cl
 
 `OFFLINE_MODE=1` normally refuses remote clones; an allowlisted host is the
 exception, so an air-gapped site can still follow a repository on its own
-network. Local checkouts need none of this: add the folder and Clio reads it
-with `git ls-files`, so `.gitignore` is respected. Clones are read-only,
-shallow and live under `DATA_DIR/repos`. Turn on **Watch** for a source in the
+network. Clones are read-only, shallow and live under `DATA_DIR/repos`.
+
+**A checkout already on the server** needs none of that: no token, no allowlisted
+host, and it works in offline mode and whichever git service the repository came
+from. Clio reads it in place with `git ls-files`, so `.gitignore` is respected,
+and picks up whatever you pull or commit there. In a container, mount it
+read-only and say which folders may be read as sources:
+
+```yaml
+# docker-compose.onprem.yml
+volumes:
+  - /srv/checkouts/your-repo:/sources/your-repo:ro
+environment:
+  - LOCAL_SOURCE_ROOTS=/sources
+```
+
+Then add `/sources/your-repo` under **Sources → Link → Server folder**. A checkout
+made with `git worktree` points at a path on the host that the container cannot
+see, so it is read as a plain folder; mount the main checkout instead.
+
+`LOCAL_SOURCE_ROOTS` is also a limit. Once it is set, nothing outside those
+folders can be added or synced by path, through the panel or the API, and a watched
+folder outside them reports an error instead of updating. Uploads and clones are
+not affected. Left empty, anyone who can write to a collection can name any path
+the server can read, so set it wherever people you do not administer can reach
+the app.
+
+Turn on **Watch** for a source in the
 Sources panel and every real change appears in the header's Updates bell, the
 MCP `list_changes` tool and, if configured, the webhook. The image includes
 `git` and the ssh client.

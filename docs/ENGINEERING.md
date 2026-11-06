@@ -91,9 +91,10 @@ was found and deliberately left for later.
 Found in the same review and not applied, because each is a larger change
 than a convention fix. In rough order of value:
 
-1. **Local-path ingestion allowlist.** `index-local-async`, `upload-repo` and
-   `sync-folder` accept any server path from a writer. A `LOCAL_SOURCE_ROOTS`
-   setting, or admin-only for local paths, would close it.
+1. **Local-path ingestion by default.** `index-local-async`, `upload-repo` and
+   `sync-folder` accept any server path from a writer until `LOCAL_SOURCE_ROOTS`
+   is set. Admin-only local paths under `PRIVATE_COLLECTIONS` would close it for
+   deployments that leave the setting empty.
 2. **Bundle import hardening.** An imported `metadata.db` keeps its triggers,
    views and policy verdicts; drop the former and re-scan the latter.
 3. **Link fetcher DNS pinning.** The host is validated, then resolved again by

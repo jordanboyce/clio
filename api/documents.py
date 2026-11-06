@@ -41,7 +41,7 @@ from services.form_field_extractor import (
     estimate_form_likelihood,
     is_form_like_text,
 )
-from services import audit, figures, git_source, governance, page_preview, pasted_text, source_changes, source_watcher, storage_quota
+from services import audit, figures, git_source, governance, local_roots, page_preview, pasted_text, source_changes, source_watcher, storage_quota
 from services.content_policy import BlockedContentError, ContentRejectedError
 from services.storage_quota import StorageLimitExceeded
 from services.link_fetcher import LinkError, LinkRefused, link_indexing_available, validate_link
@@ -77,6 +77,13 @@ def _require_ingest(collection_id: str) -> None:
     """
     _require_write(collection_id)
     governance.require_aup(get_request_user())
+
+
+def _require_allowed_path(path: str) -> None:
+    """LOCAL_SOURCE_ROOTS, checked before anything touches the disk, so a refusal
+    says nothing about whether the path exists."""
+    if not local_roots.allowed(path):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=local_roots.REFUSAL)
 
 
 def _is_policy_refusal(error: Exception) -> bool:
@@ -767,6 +774,7 @@ def upload_repository(  # sync: extraction+embedding run in FastAPI's threadpool
             detail=str(e),
         )
 
+    _require_allowed_path(request.path)
     repo_path = Path(request.path)
 
     if not repo_path.exists():
@@ -901,6 +909,10 @@ def sync_folder(  # sync: hashing and pruning run in FastAPI's threadpool, not o
     if remembered_entry and remembered_entry.get("git_url"):
         _refresh_managed_clone(remembered_entry)
         prune_missing = True
+    else:
+        # A clone lives under DATA_DIR/repos by this server's own doing, so only
+        # a path someone named has to be inside LOCAL_SOURCE_ROOTS.
+        _require_allowed_path(request.path)
 
     folder = Path(request.path)
     if not folder.exists():
@@ -1110,7 +1122,8 @@ def list_sync_folders(collection_id: str = "default") -> SyncFoldersResponse:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
     folders = [_sync_record(entry) for entry in upload_service.list_sync_folders(collection_id)]
-    return SyncFoldersResponse(collection_id=collection_id, folders=folders)
+    return SyncFoldersResponse(collection_id=collection_id, folders=folders,
+                               local_source_roots=local_roots.configured())
 
 
 # A folder drop sends every path in one request, so this is a ceiling on
@@ -1155,8 +1168,15 @@ def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobRespons
     # about the first bad one.
     valid_paths = []
     skipped: List[dict] = []
+    # A browser upload arrives as a path too: staged into this collection's own
+    # documents folder by /documents/upload-staged, which no limit should stop.
+    staging = indexer_manager.get_documents_path(request.collection_id) if local_roots.restricted() else None
     for file_path in request.file_paths:
         path = Path(file_path)
+        # Before anything that touches the disk, so this cannot probe what exists.
+        if staging is not None and not (local_roots.allowed(file_path) or local_roots.inside(file_path, staging)):
+            skipped.append({"filename": path.name or file_path, "error": local_roots.REFUSAL})
+            continue
         if not path.exists():
             skipped.append({"filename": path.name or file_path, "error": "file not found"})
             continue

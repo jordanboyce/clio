@@ -190,7 +190,8 @@ def _git() -> Dict[str, Any]:
     if settings.offline_mode and not settings.git_allowed_hosts.strip():
         return _feature("git", label, LIMITED, "Local checkouts index. Remote repositories need an allowed host "
                                                "in offline mode.",
-                        "Set GIT_ALLOWED_HOSTS to your internal git server.")
+                        "Set GIT_ALLOWED_HOSTS to your internal git server, or mount a checkout and set "
+                        "LOCAL_SOURCE_ROOTS to add it by path.")
     return _feature("git", label, ON, "Repositories can be indexed and kept in sync. Remote hosts are tested "
                                       "when cloned.")
 

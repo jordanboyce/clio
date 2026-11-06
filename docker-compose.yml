@@ -48,6 +48,10 @@ services:
         required: false
     volumes:
       - ./data:/app/data
+      # A git checkout or folder on this machine, to add as a source by its path
+      # (Sources > Link > Server folder). Read-only, and it needs
+      # LOCAL_SOURCE_ROOTS below. No token or clone: this is the copy you have.
+      # - /path/to/your/repo:/sources/your-repo:ro
     environment:
       - DATA_DIR=/app/data
       - HOST=0.0.0.0
@@ -79,6 +83,8 @@ services:
       # Shared-secret gate: require this password (Basic or Bearer) on every
       # request. Recommended whenever others can reach the port.
       # - AUTH_PASSWORD=change-me
+      # The only folders that can be added as sources by path; see the mount above.
+      # - LOCAL_SOURCE_ROOTS=/sources
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

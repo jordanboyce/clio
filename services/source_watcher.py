@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config import settings
-from services import git_source
+from services import git_source, local_roots
 from services.app_database import app_db
 
 logger = logging.getLogger(__name__)
@@ -149,6 +149,9 @@ def check_source(entry: Dict[str, Any]) -> str:
                 )
                 return "unchanged"
             git_source.ensure_clone(git_url, branch)
+        elif not local_roots.allowed(path):
+            # Remembered from before LOCAL_SOURCE_ROOTS was set, or narrowed since.
+            raise PermissionError(local_roots.REFUSAL)
         upload_service.sync_folder(
             path=path, collection_id=cid,
             recursive=entry.get("recursive", True) is not False,

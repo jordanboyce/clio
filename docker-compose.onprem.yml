@@ -65,6 +65,9 @@ services:
       - AI_API_KEY=${AI_API_KEY:-}
       - AI_PROVIDER_LABEL=${AI_PROVIDER_LABEL:-}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # The only folders that can be added as sources by path: see the commented
+      # mount below, and "A checkout already on the server" in docs/ONPREM.md.
+      - LOCAL_SOURCE_ROOTS=${LOCAL_SOURCE_ROOTS:-}
       # Corporate proxies, when outbound traffic has to go through one.
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
@@ -75,6 +78,9 @@ services:
       # Read-only, and empty by default — this mount is a no-op until you put
       # a .crt in it.
       - ./certs/ca:/certs/ca:ro
+      # A git checkout or folder on this host, to add as a source by its path.
+      # Needs LOCAL_SOURCE_ROOTS=/sources in .env.
+      # - /srv/checkouts/your-repo:/sources/your-repo:ro
     extra_hosts:
       # Lets AI_BASE_URL point at a service on the Docker host itself.
       - "host.docker.internal:host-gateway"

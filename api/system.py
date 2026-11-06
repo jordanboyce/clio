@@ -260,6 +260,10 @@ def scan_folder(request: ScanFolderRequest):  # sync: filesystem walk runs in th
     # path-probing oracle under private collections, so operator-only.
     require_admin("browse the server filesystem")
     import os
+    from services import local_roots
+
+    if not local_roots.allowed(request.path):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=local_roots.REFUSAL)
 
     folder_path = Path(request.path)
 

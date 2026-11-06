@@ -671,6 +671,12 @@ class Settings(BaseSettings):
     git_http_user: str = "x-access-token"
     git_http_token: str = ""
     git_timeout_seconds: int = 300
+    # Folders on this server that may be read as sources (comma separated
+    # absolute paths). When set, only paths inside them can be added or synced,
+    # and the Sources panel gets a field for typing one, which is how a
+    # repository mounted into a container becomes a source. When empty, a writer
+    # may name any path the server can read, and the panel offers no such field.
+    local_source_roots: str = ""
 
     # Change alerts. A watched source (Sources panel, "Watch") is re-synced on
     # its own and every real change is recorded in the Updates feed. A remote

@@ -773,3 +773,7 @@ class SyncFolderRecord(BaseModel):
 class SyncFoldersResponse(BaseModel):
     collection_id: str
     folders: List[SyncFolderRecord] = Field(default_factory=list)
+    local_source_roots: List[str] = Field(
+        default_factory=list,
+        description="Folders that may be added by path (LOCAL_SOURCE_ROOTS); empty means no limit is set",
+    )

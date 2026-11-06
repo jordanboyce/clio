@@ -238,6 +238,101 @@ describe('Synced sources', () => {
   })
 })
 
+describe('Adding a folder on the server by its path', () => {
+  function serveWith({ roots = [], capabilities = {} } = {}) {
+    http.get.mockImplementation(async (url) => {
+      if (url === '/documents') return { data: { documents: [], total_documents: 0, kind_counts: {} } }
+      if (url === '/documents/sync-folders') return { data: { folders: [], local_source_roots: roots } }
+      if (url === '/api/capabilities') return { data: { native_file_picker: false, link_indexing: true, git_sources: true, ...capabilities } }
+      if (url === '/api/expertise/packs') return { data: [] }
+      if (url.endsWith('/expertise')) return { data: { packs: [] } }
+      return { data: {} }
+    })
+    http.post.mockResolvedValue({ data: { job_id: 7, queued: 3 } })
+  }
+
+  async function openLinkPanel() {
+    const w = await mountPanel()
+    const add = w.findAll('button').find(b => b.text() === 'Link')
+    if (add) await add.trigger('click')
+    return { w, link: add }
+  }
+
+  const kind = (w, name) => w.findAll('[aria-label="What to add"] button').find(b => b.text() === name)
+
+  it('is not offered until the server names the folders it allows', async () => {
+    serveWith()
+    const { w, link } = await openLinkPanel()
+    expect(kind(w, 'Server folder')).toBeUndefined()
+    expect(w.find('[data-testid="server-folder-panel"]').exists()).toBe(false)
+    expect(link.attributes('title')).toBe('Index a web link or a git repository')
+  })
+
+  it('says how to turn it on where the Folder button can only upload', async () => {
+    serveWith()
+    const { w } = await openLinkPanel()
+    await kind(w, 'Git repository').trigger('click')
+    expect(w.get('[data-testid="server-folder-hint"]').text()).toContain('LOCAL_SOURCE_ROOTS')
+  })
+
+  it('leaves that out where the Folder button already picks a server folder', async () => {
+    serveWith({ capabilities: { native_file_picker: true } })
+    const { w } = await openLinkPanel()
+    await kind(w, 'Git repository').trigger('click')
+    expect(w.find('[data-testid="server-folder-hint"]').exists()).toBe(false)
+  })
+
+  it('syncs the typed path, watched by default, and names the allowed folders', async () => {
+    serveWith({ roots: ['/sources'] })
+    const { w } = await openLinkPanel()
+    await kind(w, 'Server folder').trigger('click')
+    const panel = w.get('[data-testid="server-folder-panel"]')
+    expect(panel.text()).toContain('Allowed under /sources')
+    const input = panel.get('input[type="text"]')
+    expect(input.attributes('placeholder')).toBe('/sources/your-repo')
+    await input.setValue('  /sources/turbines  ')
+    await panel.findAll('button').find(b => b.text() === 'Add folder').trigger('click')
+    await flushPromises()
+    const [url, body] = http.post.mock.calls.find(c => c[0] === '/documents/sync-folder')
+    expect(url).toBe('/documents/sync-folder')
+    expect(body).toEqual({ path: '/sources/turbines', collection_id: 'lab', watch: true })
+    expect(useBackgroundJobsStore().uploadJobs.some(j => j.jobId === 7)).toBe(true)
+  })
+
+  it('shows the server\'s refusal and keeps what was typed', async () => {
+    serveWith({ roots: ['/sources'] })
+    http.post.mockRejectedValue(new Error('That path is outside the folders this server allows as sources (LOCAL_SOURCE_ROOTS).'))
+    const { w } = await openLinkPanel()
+    await kind(w, 'Server folder').trigger('click')
+    const input = w.get('[data-testid="server-folder-panel"] input[type="text"]')
+    await input.setValue('/etc')
+    await input.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(w.text()).toContain('LOCAL_SOURCE_ROOTS')
+    expect(w.get('[data-testid="server-folder-panel"] input[type="text"]').element.value).toBe('/etc')
+  })
+
+  it('is still reachable with web links and git both off', async () => {
+    serveWith({ roots: ['/sources'], capabilities: { link_indexing: false, git_sources: false } })
+    const { w, link } = await openLinkPanel()
+    expect(link.attributes('title')).toBe('Index a folder on this server')
+    expect(w.find('[aria-label="What to add"]').exists()).toBe(false)
+    expect(w.find('[data-testid="server-folder-panel"]').exists()).toBe(true)
+  })
+
+  it('leaves the git panel adding by address', async () => {
+    serveWith({ roots: ['/sources'] })
+    const { w } = await openLinkPanel()
+    await kind(w, 'Git repository').trigger('click')
+    const panel = w.get('[data-testid="git-panel"]')
+    await panel.get('input[aria-label="Git repository address"]').setValue('https://git.example/team/repo.git')
+    await panel.findAll('button').find(b => b.text() === 'Add repository').trigger('click')
+    await flushPromises()
+    const call = http.post.mock.calls.find(c => c[0] === '/documents/sync-git')
+    expect(call[1]).toEqual({ url: 'https://git.example/team/repo.git', branch: null, collection_id: 'lab', watch: true })
+  })
+})
+
 describe('Pasted text', () => {
   // jsdom has no <dialog> API; the reader only needs it to exist.
   beforeEach(() => {
