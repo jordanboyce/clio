@@ -1836,7 +1836,7 @@ const embeddingBanner = computed(() => {
   // Search still works, so this is a warning, not an error: one short line
   // that says what it means, the raw reason one click away for whoever
   // has to fix the network.
-  if (e.status === 'error') return { kind: 'error', text: `Search is using keywords only: the search model${model} could not be prepared.`, detail: e.error || '', canDownload: true }
+  if (e.status === 'error') return { kind: 'error', text: 'Search is using keywords only: the search model could not be prepared.', detail: [e.model && `Model: ${e.model}.`, e.error].filter(Boolean).join(' '), canDownload: true }
   return null
 })
 // A new problem after a dismissal should show again.

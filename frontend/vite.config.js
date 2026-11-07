@@ -99,6 +99,22 @@ export default defineConfig(({ command }) => ({
     // serves it directly and Docker builds it in a dedicated stage.
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Libraries change far less often than the app: in chunks of their
+        // own, an upgrade re-downloads only Clio's code, and a browser keeps
+        // the rest. Each group is needed for the first screen anyway (the
+        // tabs beyond Ask are already lazy), so this splits, not defers.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (/node_modules\/(@vue|vue|pinia)\//.test(id)) return 'vendor-vue'
+          if (id.includes('node_modules/lucide-vue-next/')) return 'vendor-icons'
+          if (/node_modules\/(marked|dompurify)\//.test(id)) return 'vendor-markdown'
+          if (id.includes('node_modules/axios/')) return 'vendor-http'
+          return undefined
+        },
+      },
+    },
   },
   server: {
     port: 5173,
