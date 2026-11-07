@@ -7,6 +7,7 @@
 .EXAMPLE
     .\scripts\package_image.ps1
     .\scripts\package_image.ps1 -OfflineBundle -Tag 1.4.0 -Out D:\transfer
+    .\scripts\package_image.ps1 -Slim -WithProxyImage -Tag 1.4.0 -Out D:\transfer
 #>
 [CmdletBinding()]
 param(
@@ -14,6 +15,10 @@ param(
     [string]$Out = "dist-image",
     [switch]$OfflineBundle,
     [switch]$WithDocling,
+    # 1.5 GB: no PyTorch, OCR or audio.
+    [switch]$Slim,
+    # Also carry nginx, for a host with no registry.
+    [switch]$WithProxyImage,
     [string]$WhisperModel = "base",
     # Build for the target's architecture when it differs from this machine's.
     [string]$Platform = ""
@@ -28,12 +33,17 @@ try { $vcsRef = (git rev-parse --short HEAD).Trim() } catch { }
 
 $offline = "0"; if ($OfflineBundle) { $offline = "1" }
 $docling = "0"; if ($WithDocling) { $docling = "1" }
+$slimArg = "0"; if ($Slim) { $slimArg = "1" }
+$proxyIncluded = "0"; if ($WithProxyImage) { $proxyIncluded = "1" }
+# Keep in step with the default in docker-compose.proxy.yml.
+$proxyImage = "nginx:1.29-alpine"
 
-Write-Host "==> Building $image (offline_bundle=$offline, docling=$docling)"
+Write-Host "==> Building $image (slim=$slimArg, offline_bundle=$offline, docling=$docling)"
 $buildArgs = @(
     "build",
     "--build-arg", "OFFLINE_BUNDLE=$offline",
     "--build-arg", "WITH_DOCLING=$docling",
+    "--build-arg", "SLIM=$slimArg",
     "--build-arg", "WHISPER_MODEL=$WhisperModel",
     "--build-arg", "APP_VERSION=$Tag",
     "--build-arg", "VCS_REF=$vcsRef"
@@ -44,37 +54,61 @@ $buildArgs += @("-t", $image, ".")
 if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
 
 if (-not (Test-Path $Out)) { New-Item -ItemType Directory -Path $Out | Out-Null }
-$tar = Join-Path $Out "clio-$Tag.tar"
-$archive = "$tar.gz"
 
 # `docker save -o` rather than a pipeline: PowerShell pipes text, and would
 # corrupt the tar stream on its way to a file.
-Write-Host "==> Saving $image"
-& docker save -o $tar $image
-if ($LASTEXITCODE -ne 0) { throw "docker save failed" }
+function Save-Image([string]$Name, [string]$Base) {
+    $saved = Join-Path $Out "$Base.tar"
+    $zipped = "$saved.gz"
+    Write-Host "==> Saving $Name"
+    & docker save -o $saved $Name
+    if ($LASTEXITCODE -ne 0) { throw "docker save failed" }
 
-Write-Host "==> Compressing"
-$in = [System.IO.File]::OpenRead($tar)
-$outStream = [System.IO.File]::Create($archive)
-$gzip = New-Object System.IO.Compression.GZipStream($outStream, [System.IO.Compression.CompressionMode]::Compress)
-try { $in.CopyTo($gzip) } finally { $gzip.Dispose(); $outStream.Dispose(); $in.Dispose() }
-Remove-Item $tar
+    Write-Host "==> Compressing"
+    $in = [System.IO.File]::OpenRead($saved)
+    $outStream = [System.IO.File]::Create($zipped)
+    $gzip = New-Object System.IO.Compression.GZipStream($outStream, [System.IO.Compression.CompressionMode]::Compress)
+    try { $in.CopyTo($gzip) } finally { $gzip.Dispose(); $outStream.Dispose(); $in.Dispose() }
+    Remove-Item $saved
 
-Write-Host "==> Checksumming"
-$hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
-# sha256sum format, so the receiving Linux host can verify with `sha256sum -c`.
-"$hash  clio-$Tag.tar.gz" | Out-File -FilePath "$archive.sha256" -Encoding ascii
+    Write-Host "==> Checksumming"
+    $hash = (Get-FileHash $zipped -Algorithm SHA256).Hash.ToLower()
+    # sha256sum format, so the receiving Linux host can verify with `sha256sum -c`.
+    # Not Out-File: its CRLF becomes part of the filename there, and the check fails.
+    [System.IO.File]::WriteAllText((Join-Path (Resolve-Path $Out) "$Base.tar.gz.sha256"), "$hash  $Base.tar.gz`n", [System.Text.Encoding]::ASCII)
+}
+
+Save-Image $image "clio-$Tag"
+
+if ($WithProxyImage) {
+    $pullArgs = @("pull")
+    if ($Platform) { $pullArgs += @("--platform", $Platform) }
+    & docker @pullArgs $proxyImage
+    if ($LASTEXITCODE -ne 0) { throw "docker pull failed" }
+    Save-Image $proxyImage "proxy-image"
+}
 
 Write-Host "==> Copying deployment files"
-Copy-Item docker-compose.onprem.yml, .env.onprem.example, docs\ONPREM.md, docs\AIRGAP.md $Out
+foreach ($entry in Get-Content scripts\bundle_files.txt) {
+    $entry = $entry.Trim()
+    if (-not $entry -or $entry.StartsWith("#")) { continue }
+    $target = Join-Path $Out $entry
+    New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+    Copy-Item $entry $target
+}
+New-Item -ItemType Directory -Force -Path (Join-Path $Out "certs\tls"), (Join-Path $Out "certs\ca") | Out-Null
 
 $built = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 @"
 Clio $Tag - offline install bundle
 built $built from $vcsRef
-offline model bundle: $offline   docling OCR: $docling
+slim: $slimArg   offline model bundle: $offline   docling OCR: $docling
+proxy image included: $proxyIncluded
 
-On the target machine:
+Follow docs/ENTERPRISE.md. In this bundle the image is clio:$Tag.
+An agent doing this for you should read skills/clio-deploy/SKILL.md first.
+
+No firewall or TLS proxy to think about? The short way:
 
   sha256sum -c clio-$Tag.tar.gz.sha256
   docker load < clio-$Tag.tar.gz
@@ -82,7 +116,7 @@ On the target machine:
   # set CLIO_IMAGE=clio:$Tag in .env
   docker compose -f docker-compose.onprem.yml up -d
 
-Then open http://<host>:8473. Full guide: ONPREM.md (air gap: AIRGAP.md).
+Then open http://<host>:8473. See docs/ONPREM.md (air gap: docs/AIRGAP.md).
 "@ | Out-File -FilePath (Join-Path $Out "README.txt") -Encoding utf8
 
 Write-Host ""

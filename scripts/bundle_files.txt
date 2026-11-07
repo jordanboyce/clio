@@ -1,0 +1,28 @@
+# Everything an install needs on a host with no route to this repository, copied
+# into the bundle at these same paths. package_image.sh and package_image.ps1 both
+# read this list, and tests/test_enterprise_hosting.py checks it is complete.
+
+# How to run it
+docker-compose.onprem.yml
+docker-compose.hardened.yml
+docker-compose.proxy.yml
+docker/nginx/clio.conf.template
+.env.onprem.example
+
+# How to check it
+scripts/check_deployment.sh
+
+# The guides, with the ones they link to
+docs/ENTERPRISE.md
+docs/ONPREM.md
+docs/AIRGAP.md
+docs/IDENTITY.md
+docs/SECURE_PROFILE.md
+docs/DEPLOYMENT.md
+docs/APP_API.md
+docs/api/openapi-v1.json
+
+# For agents: one sets it up, the other uses it afterwards
+skills/clio-deploy/SKILL.md
+skills/clio/SKILL.md
+skills/clio/scripts/clio_cli.py

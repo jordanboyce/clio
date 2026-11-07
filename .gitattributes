@@ -7,3 +7,7 @@ docker/entrypoint.sh text eol=lf
 
 # Read by nginx inside a Linux container.
 *.template text eol=lf
+# Read line by line on a Linux host: `docker run --env-file` would keep a \r as
+# part of every value.
+.env*.example text eol=lf
+scripts/bundle_files.txt text eol=lf

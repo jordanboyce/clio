@@ -6,6 +6,7 @@ is actually protecting the deployment.
 
 import json
 import logging
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -366,6 +367,99 @@ def test_clio_publishes_no_port_behind_the_proxy():
     assert "ports: !reset []" in compose
     assert "- BIND_ADDRESS=proxy" in compose
     assert readiness.reachable_beyond_host(type("Cfg", (), {"host": "0.0.0.0", "bind_address": "proxy"})())
+
+
+# ── What reaches a host behind a firewall ──────────────────────────────────
+
+
+def _bundle_entries():
+    lines = (ROOT / "scripts" / "bundle_files.txt").read_text(encoding="utf-8").splitlines()
+    return {line.strip() for line in lines if line.strip() and not line.startswith("#")}
+
+
+def test_every_file_in_the_bundle_exists():
+    assert [entry for entry in _bundle_entries() if not (ROOT / entry).is_file()] == []
+
+
+def test_the_bundle_can_follow_its_own_guide():
+    """It used to carry one compose file and two guides, so a host with no route to
+    the repository was missing most of what the guide told it to run."""
+    bundle = _bundle_entries()
+    guide = (ROOT / "docs" / "ENTERPRISE.md").read_text(encoding="utf-8")
+    for name in re.findall(r"docker-compose\.[a-z]+\.yml", guide):
+        assert name in bundle, name
+    for script in re.findall(r"scripts/[a-z_]+\.sh", guide):
+        if script != "scripts/package_image.sh":  # runs on the connected machine
+            assert script in bundle, script
+    assert "docker/nginx/clio.conf.template" in bundle
+    assert "skills/clio-deploy/SKILL.md" in bundle
+
+
+def test_the_guides_in_the_bundle_do_not_link_out_of_it():
+    bundle = _bundle_entries()
+    for entry in bundle:
+        if not entry.startswith("docs/") or entry not in {"docs/ENTERPRISE.md", "docs/APP_API.md"}:
+            continue
+        text = (ROOT / entry).read_text(encoding="utf-8")
+        for link in re.findall(r"\]\(([^)#\s]+\.md)(?:#[^)]*)?\)", text):
+            target = str((ROOT / entry).parent.joinpath(link).resolve().relative_to(ROOT)).replace("\\", "/")
+            assert target in bundle, f"{entry} links to {target}, which the bundle leaves out"
+
+
+def test_both_packaging_scripts_use_the_same_list_and_options():
+    shell = (ROOT / "scripts" / "package_image.sh").read_text(encoding="utf-8")
+    powershell = (ROOT / "scripts" / "package_image.ps1").read_text(encoding="utf-8")
+    assert "bundle_files.txt" in shell and "bundle_files.txt" in powershell
+    assert "--slim" in shell and "[switch]$Slim" in powershell
+    assert "--with-proxy-image" in shell and "[switch]$WithProxyImage" in powershell
+
+
+def test_a_checksum_made_on_windows_verifies_on_linux():
+    """Out-File ends the line with CRLF, and sha256sum -c then looks for a file
+    whose name ends in a carriage return."""
+    powershell = (ROOT / "scripts" / "package_image.ps1").read_text(encoding="utf-8")
+    line = next(l for l in powershell.splitlines() if ".sha256" in l and "tar.gz" in l and "Write" in l)
+    assert "WriteAllText" in line and "`n" in line
+    assert '.sha256" -Encoding' not in powershell
+
+
+def test_the_carried_proxy_image_is_the_one_compose_runs():
+    compose = (ROOT / "docker-compose.proxy.yml").read_text(encoding="utf-8")
+    image = re.search(r"PROXY_IMAGE:-([^}]+)\}", compose).group(1)
+    assert f'PROXY_IMAGE="{image}"' in (ROOT / "scripts" / "package_image.sh").read_text(encoding="utf-8")
+    assert f'$proxyImage = "{image}"' in (ROOT / "scripts" / "package_image.ps1").read_text(encoding="utf-8")
+
+
+def test_files_read_on_a_linux_host_keep_lf_endings():
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert ".env*.example text eol=lf" in attributes
+    assert "*.template text eol=lf" in attributes
+    assert "*.sh text eol=lf" in attributes
+
+
+def test_every_section_the_guides_link_to_exists():
+    """A wrong anchor strands someone on a network with no search engine."""
+
+    def anchors(text):
+        return {re.sub(r"[^a-z0-9 _-]", "", h.lower()).strip().replace(" ", "-")
+                for h in re.findall(r"^#{1,6} (.+)$", text, re.M)}
+
+    docs = ROOT / "docs"
+    for name in ("ENTERPRISE.md", "APP_API.md"):
+        text = (docs / name).read_text(encoding="utf-8")
+        for page, anchor in re.findall(r"\]\(([A-Za-z_]*\.md)?#([^)]+)\)", text):
+            target = (docs / page).read_text(encoding="utf-8") if page else text
+            assert anchor in anchors(target), f"{name} links to {page}#{anchor}"
+    skill = (ROOT / "skills" / "clio-deploy" / "SKILL.md").read_text(encoding="utf-8")
+    assert "when-something-is-wrong" in skill
+    assert "when-something-is-wrong" in anchors((docs / "ENTERPRISE.md").read_text(encoding="utf-8"))
+
+
+def test_the_deployment_skill_has_what_an_agent_needs_to_load_it():
+    text = (ROOT / "skills" / "clio-deploy" / "SKILL.md").read_text(encoding="utf-8")
+    front = text.split("---")[1]
+    assert "name: clio-deploy" in front
+    assert "description: " in front
 
 
 # ── What is protecting this deployment? ────────────────────────────────────

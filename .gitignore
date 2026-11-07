@@ -118,3 +118,6 @@ AGENTS.md
 .mcp.json
 *.local.md
 docker-compose.ingest.yml
+
+# Install bundles from scripts/package_image.sh
+dist-image/

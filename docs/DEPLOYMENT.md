@@ -1239,6 +1239,9 @@ Only needed if anyone other than you can reach the app.
 
 ### Behind a firewall that blocks huggingface.co
 
+Setting up a whole server behind a corporate firewall? See
+[ENTERPRISE.md](ENTERPRISE.md), which has what to ask your network team for.
+
 Neither the image build nor the first start depends on the download succeeding.
 `docker compose build` prints a warning and continues when the bake cannot reach
 the hub; at runtime the app opens, lists existing sources and serves settings,

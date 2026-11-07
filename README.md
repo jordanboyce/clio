@@ -28,7 +28,7 @@ be forgotten. That is the job here too. The record remembers.
 
 [Deployment](docs/DEPLOYMENT.md) · [Architecture](docs/ARCHITECTURE.md) ·
 [Research workspace](docs/RESEARCH.md) · [Agentic research](docs/AGENTIC_RESEARCH.md) ·
-[On-prem](docs/ONPREM.md) · [Enterprise hosting](docs/ENTERPRISE.md) · [App API](docs/APP_API.md) ·
+[On-prem](docs/ONPREM.md) · [Behind a corporate firewall](docs/ENTERPRISE.md) · [App API](docs/APP_API.md) ·
 [Roadmap](docs/ROADMAP.md) · [The name](docs/BRAND.md) ·
 [Provenance](docs/PROVENANCE.md) · [Engineering conventions](docs/ENGINEERING.md)
 
@@ -877,6 +877,7 @@ clio/
 ├── models/schemas.py    Request and response models
 ├── frontend/            Vue 3 app (src/components, src/stores, src/utils)
 ├── skills/clio/         Agent skill and a dependency-free CLI
+├── skills/clio-deploy/  Agent skill for installing Clio behind a corporate firewall
 ├── scripts/             Setup, backup, preflight, image packaging, load and retrieval benchmarks
 ├── tests/               Backend test suite (pytest)
 ├── docs/                Deployment, architecture, identity, on-prem, air-gap, research guides

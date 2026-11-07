@@ -64,3 +64,6 @@ logs/
 # Frontend dependencies & local builds (installed/built inside the image)
 frontend/node_modules/
 frontend/dist/
+
+# Install bundles from scripts/package_image.sh
+dist-image/

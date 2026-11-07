@@ -1,5 +1,9 @@
 # On-Premises Deployment
 
+**Behind a corporate firewall, with TLS and sign-in?** Start with
+[ENTERPRISE.md](ENTERPRISE.md), which walks through all of it. This page goes deeper on
+private models and endpoints.
+
 Clio ships as one portable container image. Build it once, carry it to
 wherever it has to run, and configure it there: the model endpoint,
 credentials, CA certificates and data all arrive at run time, so the bytes
@@ -29,8 +33,8 @@ docker pull ghcr.io/jordanboyce/clio:latest
 ```
 
 That produces a directory holding the image archive, its checksum, the
-compose file, the example configuration and these guides. On the target
-machine:
+compose files, the example configuration and these guides, under `docs/`. On the
+target machine:
 
 ```bash
 sha256sum -c clio-1.0.0.tar.gz.sha256
