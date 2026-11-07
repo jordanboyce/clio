@@ -40,7 +40,7 @@
           </p>
           <div class="flex flex-col gap-1.5">
             <button class="btn btn-outline btn-xs gap-1" @click="$emit('switch-tab', 'generate')">
-              <Sparkles :size="11" />
+              <FileText :size="11" aria-hidden="true" />
               Create a report
             </button>
             <button class="btn btn-outline btn-xs gap-1" @click="sendToChat('Give me a briefing of this collection: the key themes, what each source covers, and any open questions, with citations.')">
@@ -139,7 +139,7 @@
 import { ref, reactive, computed, watch } from 'vue'
 import {
   ChevronDown, Table2, StickyNote, PanelRightClose,
-  Download, Sparkles, FileText, List, Eye, MessageSquare,
+  Download, FileText, List, Eye, MessageSquare,
 } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 

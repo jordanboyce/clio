@@ -202,8 +202,9 @@
             <template v-else-if="userStore.privateCollections">Sources are recorded against your identity</template>.
             <button v-if="userStore.aup.enabled" type="button" class="link link-hover" @click="userStore.openAup()">Acceptable use</button>
           </p>
-          <!-- File/folder/link/text/record buttons -->
-          <div class="flex flex-wrap gap-1.5">
+          <!-- File/folder/link/text/record buttons: an even grid, so the row
+               that wraps lines up with the one above instead of stretching -->
+          <div class="grid grid-cols-3 gap-1.5">
             <template v-if="capabilities.native_file_picker === false">
               <!-- Headless/Docker: labels directly trigger hidden inputs (no JS click chain needed) -->
               <label
@@ -262,7 +263,7 @@
             <button
               @click="toggleRecording"
               class="btn btn-xs flex-1 gap-1"
-              :class="isRecording ? 'btn-error' : 'btn-outline btn-secondary'"
+              :class="isRecording ? 'btn-error' : 'btn-outline'"
               :disabled="indexing || transcribing"
               :title="isRecording ? 'Stop recording' : 'Record a meeting'"
             >

@@ -468,11 +468,15 @@ class FastEmbedService:
                 raise
             # fastembed's own message ("could not load from any source") hides
             # the one fact an operator can act on: the hub was unreachable.
+            # The cache path goes to the log, not the message: the message
+            # reaches every user of the collection, the path is the operator's.
+            logger.warning(f"Embedding model '{model_name}' download into {self.cache_dir} failed: {e}")
+            reason = str(e).strip().rstrip(".") or type(e).__name__
             raise RuntimeError(
-                f"Could not download embedding model '{model_name}' from huggingface.co "
-                f"into {self.cache_dir}: {e}. Check the network or proxy, pre-seed the "
-                f"cache from a connected machine (docs/AIRGAP.md), or choose Ollama or a "
-                f"hosted provider instead."
+                f"Could not download embedding model '{model_name}' from huggingface.co: "
+                f"{reason}. Check the network or proxy, pre-seed the cache from a "
+                f"connected machine (docs/AIRGAP.md), or choose Ollama or a hosted "
+                f"provider instead."
             ) from e
 
         desc = _fastembed_catalog().get(fe_id) or {}

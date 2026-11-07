@@ -60,7 +60,7 @@
         <li><button @click="$emit('action', { action: 'palette' })"><Command :size="14" />Command palette</button></li>
         <li><button @click="$emit('action', { action: 'shortcuts' })"><Keyboard :size="14" />Keyboard shortcuts</button></li>
         <li><button @click="$emit('customize')"><SlidersHorizontal :size="14" />Customize ribbon…</button></li>
-        <li><button @click="$emit('action', { action: 'onboarding' })"><Sparkles :size="14" />Run setup again</button></li>
+        <li><button @click="$emit('action', { action: 'onboarding' })"><RotateCcw :size="14" />Run setup again</button></li>
         <li><button @click="$emit('action', { action: 'about' })"><Info :size="14" />About Clio</button></li>
       </ul>
     </div>
@@ -98,7 +98,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   BookOpen, Command, EyeOff, FileText, FolderPlus, Gauge, HelpCircle, Info, Keyboard, Layers, LibraryBig,
   MessageSquare, MessageSquarePlus, Network, NotebookPen, PanelLeft, PanelLeftClose, PanelRight, Plug, RotateCcw,
-  Search, Settings, SlidersHorizontal, Sparkles, SquareTerminal, Type,
+  Search, Settings, SlidersHorizontal, SquareTerminal, Type,
 } from 'lucide-vue-next'
 import { defaultLayout, isActive, placeBefore, toggleHidden, withDividers } from '../utils/ribbon.js'
 

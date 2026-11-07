@@ -1,6 +1,27 @@
 <template>
+  <!-- Keyword-only search is a degraded state, not a broken one: one quiet
+       line, the reason a click away. A mismatch blocks adding sources and
+       keeps the loud treatment below. -->
+  <details
+    v-if="health && !health.ok && health.code !== 'embedding_mismatch'"
+    class="group rounded-lg border border-warning/40 bg-warning/5 text-sm"
+    data-testid="embedding-notice"
+  >
+    <summary class="flex items-center gap-2 px-3 py-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+      <AlertTriangle :size="14" class="shrink-0 text-warning" aria-hidden="true" />
+      <span class="flex-1 min-w-0 font-medium">Search is using keywords only</span>
+      <ChevronDown :size="14" class="shrink-0 text-base-content/50 transition-transform group-open:rotate-180" aria-hidden="true" />
+    </summary>
+    <div class="px-3 pb-2.5 space-y-1.5 text-xs text-base-content/70">
+      <p>
+        The search model isn't available. You can still add sources; they get search by
+        meaning on their own once it is.
+      </p>
+      <p class="break-words select-text">{{ health.message }}</p>
+    </div>
+  </details>
   <div
-    v-if="health && !health.ok"
+    v-else-if="health && !health.ok"
     class="alert alert-warning items-start text-sm py-2.5 px-3"
     role="alert"
     data-testid="embedding-notice"
@@ -35,14 +56,6 @@
         <p v-if="error" class="text-xs text-error" role="alert">{{ error }}</p>
       </template>
 
-      <template v-else>
-        <p class="font-medium">Search is using keywords for now</p>
-        <p class="text-xs opacity-80">
-          The embedding model isn't available. You can still add sources, and they get search by
-          meaning by themselves once it is.
-        </p>
-        <p class="text-xs opacity-80 break-words">{{ health.message }}</p>
-      </template>
     </div>
   </div>
 </template>
@@ -54,7 +67,7 @@
 // the background-jobs drawer (a failed job points here) and above the sources
 // list (so the state is visible before anyone tries to add something).
 import { ref, watch, onMounted } from 'vue'
-import { AlertTriangle } from 'lucide-vue-next'
+import { AlertTriangle, ChevronDown } from 'lucide-vue-next'
 import http from '../utils/http'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 

@@ -32,7 +32,7 @@
         <div v-if="hasAnyProvider" class="space-y-1.5">
           <span class="text-xs font-semibold text-base-content/60 uppercase tracking-wider">AI model</span>
           <div class="flex items-center gap-2 px-3 py-2 rounded-lg border border-base-300 bg-base-200/60 text-sm">
-            <Sparkles :size="13" class="text-primary flex-shrink-0" aria-hidden="true" />
+            <Feather :size="13" class="text-primary flex-shrink-0" aria-hidden="true" />
             <span class="flex-1 truncate">
               {{ displayName(providerId) }}<span v-if="modelName" class="text-base-content/55"> · {{ modelName }}</span>
             </span>
@@ -164,7 +164,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useOverlayFocus } from '../composables/useOverlayFocus'
-import { Sparkles, X } from 'lucide-vue-next'
+import { Feather, X } from 'lucide-vue-next'
 import { useProviderStore } from '../stores/providerStore'
 import { getProviderDisplayName, isLocalProvider } from '../utils/aiProviders.js'
 

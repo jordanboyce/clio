@@ -91,6 +91,25 @@ describe('EmbeddingMismatchNotice', () => {
     expect(w.find('button').exists()).toBe(false)
   })
 
+  it('keeps an unavailable model to one quiet line, the reason folded away', async () => {
+    http.get.mockResolvedValueOnce({ data: { ok: false, code: 'embedding_unavailable', fix: 'model', message: 'hub unreachable' } })
+    const w = await mountNotice()
+    const notice = w.get('[data-testid="embedding-notice"]')
+    // Degraded, not broken: a collapsed disclosure, not an alert.
+    expect(notice.element.tagName).toBe('DETAILS')
+    expect(notice.attributes('open')).toBeUndefined()
+    expect(notice.attributes('role')).toBeUndefined()
+    expect(notice.get('summary').text()).toBe('Search is using keywords only')
+  })
+
+  it('keeps a mismatch loud, because it blocks adding sources', async () => {
+    http.get.mockResolvedValueOnce({ data: mismatch() })
+    const w = await mountNotice()
+    const notice = w.get('[data-testid="embedding-notice"]')
+    expect(notice.element.tagName).toBe('DIV')
+    expect(notice.attributes('role')).toBe('alert')
+  })
+
   it('re-checks when a re-index finishes and the warning clears', async () => {
     http.get.mockResolvedValueOnce({ data: mismatch() }).mockResolvedValueOnce({ data: { ok: true } })
     const w = await mountNotice()

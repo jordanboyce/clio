@@ -537,6 +537,13 @@ html, body { overscroll-behavior-y: none; }
 .notice-error { background-color: color-mix(in oklch, var(--color-error) 12%, transparent); }
 .notice-info { background-color: color-mix(in oklch, var(--color-info) 12%, transparent); }
 .notice > svg { flex: none; }
+/* A notice that floats over the page (a fixed banner) keeps its tint but must
+   not let the page show through it: the tint is laid over the base colour
+   instead of replacing it. */
+.notice-floating { background-color: var(--color-base-100); }
+.notice-floating.notice-warning { background-image: linear-gradient(color-mix(in oklch, var(--color-warning) 14%, transparent), color-mix(in oklch, var(--color-warning) 14%, transparent)); }
+.notice-floating.notice-error { background-image: linear-gradient(color-mix(in oklch, var(--color-error) 12%, transparent), color-mix(in oklch, var(--color-error) 12%, transparent)); }
+.notice-floating.notice-info { background-image: linear-gradient(color-mix(in oklch, var(--color-info) 12%, transparent), color-mix(in oklch, var(--color-info) 12%, transparent)); }
 
 /* ─── Reading-room answers ──────────────────────────────────────────────── */
 /* The answer is prose on the page, not a bubble. A hairline on the left of a

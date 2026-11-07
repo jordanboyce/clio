@@ -94,7 +94,7 @@
     <!-- Empty state (no search run yet) -->
     <div
       v-if="showEmptyState"
-      class="flex flex-col items-center justify-center h-full text-center gap-5 py-8 px-4"
+      class="flex flex-col items-center justify-center min-h-full text-center gap-5 py-8 px-4"
     >
       <div class="flex flex-col items-center gap-2">
         <div class="w-11 h-11 rounded-full bg-base-200 flex items-center justify-center">
@@ -103,14 +103,25 @@
         <h3 class="text-lg font-semibold">Find the passage you need</h3>
         <p class="text-sm text-base-content/75 max-w-md leading-relaxed">Search by idea, phrase, or question. Open a matching source to read it in context.</p>
       </div>
-      <div class="flex flex-col gap-1.5 w-full max-w-md">
+      <!-- An empty collection has nothing to find: offer the one step that
+           changes that, not example searches that would come back empty. -->
+      <button
+        v-if="searchDisabled"
+        class="btn btn-primary btn-sm gap-1.5"
+        data-testid="find-add-sources"
+        @click="$emit('add-sources')"
+      >
+        <Plus :size="14" aria-hidden="true" />
+        Add sources
+      </button>
+      <div v-else class="flex flex-col gap-1.5 w-full max-w-md">
         <button
           v-for="suggestion in searchSuggestions"
           :key="suggestion"
           class="btn btn-ghost min-h-11 h-auto py-3 justify-start text-left font-normal text-base-content border border-base-300"
           @click="useSearchSuggestion(suggestion)"
         >
-          <Sparkles :size="13" class="text-base-content/70 flex-shrink-0" aria-hidden="true" />
+          <SearchIcon :size="13" class="text-base-content/50 flex-shrink-0" aria-hidden="true" />
           <span class="whitespace-normal">{{ suggestion }}</span>
         </button>
       </div>
@@ -236,7 +247,7 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import http from '../utils/http'
-import { Plus, History, SlidersHorizontal, Sparkles, Copy, X, Search as SearchIcon } from 'lucide-vue-next'
+import { Plus, History, SlidersHorizontal, Copy, X, Search as SearchIcon } from 'lucide-vue-next'
 import { answerWithReferences } from '../utils/answerEvidence'
 import AnswerEvidence from './AnswerEvidence.vue'
 import SearchResult from './SearchResult.vue'
@@ -259,7 +270,7 @@ import {
   getProviderConfig,
 } from '../utils/aiProviders.js'
 
-const emit = defineEmits(['stats-updated', 'switch-tab'])
+const emit = defineEmits(['stats-updated', 'switch-tab', 'add-sources'])
 
 const providerStore = useProviderStore()
 const statsStore = useStatsStore()

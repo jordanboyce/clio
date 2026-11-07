@@ -10,7 +10,7 @@
       class="btn btn-xs btn-ghost gap-1.5 normal-case font-normal h-7 min-h-0 border border-dashed border-base-content/30 rounded-full px-2.5 text-base-content/70"
       @click="$emit('connect')"
     >
-      <Sparkles :size="11" aria-hidden="true" />
+      <Feather :size="11" aria-hidden="true" />
       Connect a model
     </button>
 
@@ -23,7 +23,7 @@
         aria-haspopup="menu"
         @click="loadModels"
       >
-        <Sparkles :size="11" class="text-primary flex-shrink-0" aria-hidden="true" />
+        <Feather :size="11" class="text-primary flex-shrink-0" aria-hidden="true" />
         <span class="text-xs max-w-52 truncate">
           {{ name }}<span v-if="modelLabel" class="text-base-content/50"> · {{ modelLabel }}</span>
         </span>
@@ -89,7 +89,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { Check, ChevronDown, Settings, Sparkles } from 'lucide-vue-next'
+import { Check, ChevronDown, Settings, Feather } from 'lucide-vue-next'
 import { useProviderStore } from '../stores/providerStore'
 import {
   fetchProviderModels,
