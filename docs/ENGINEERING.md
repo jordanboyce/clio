@@ -19,6 +19,18 @@ was found and deliberately left for later.
   202 while a job was started and 200 when there was nothing to do.
 - **`except Exception` never swallows an `HTTPException`.** Re-raise it
   first, then handle the rest.
+- **A 500's reason is for whoever runs the server.** The handler in `main.py`
+  passes a 500's `detail` to an admin (on a one-person install, everyone) and
+  gives anyone else `{"detail", "code": "internal_error", "request_id"}`, with
+  the reason logged under that id. Other statuses pass through untouched.
+- **A secret never travels in a URL.** Keys go in the body or a header; a
+  query string is written to every proxy's access log. `POST
+  /api/agent/config` still accepts its old query form for scripts, marked
+  deprecated in the spec and answered with a `Deprecation` header.
+- **An unrestricted server path is an admin's call.** While
+  `LOCAL_SOURCE_ROOTS` is unset, naming a server path to index needs
+  `require_admin` (a no-op on a one-person install); the collection's own
+  staging folder, where browser uploads land, is open to every writer.
 - **Authorisation runs before any check that could reveal server state.**
   Path existence checks come after the write and acceptable-use checks.
 - **GET does not write.** The remaining exceptions are audit entries on
@@ -91,24 +103,18 @@ was found and deliberately left for later.
 Found in the same review and not applied, because each is a larger change
 than a convention fix. In rough order of value:
 
-1. **Local-path ingestion by default.** `index-local-async`, `upload-repo` and
-   `sync-folder` accept any server path from a writer until `LOCAL_SOURCE_ROOTS`
-   is set. Admin-only local paths under `PRIVATE_COLLECTIONS` would close it for
-   deployments that leave the setting empty.
-2. **Bundle import hardening.** An imported `metadata.db` keeps its triggers,
+1. **Bundle import hardening.** An imported `metadata.db` keeps its triggers,
    views and policy verdicts; drop the former and re-scan the latter.
-3. **Link fetcher DNS pinning.** The host is validated, then resolved again by
+2. **Link fetcher DNS pinning.** The host is validated, then resolved again by
    the HTTP client; pin the connection to the validated address.
-4. **One error envelope** (`{"detail", "code", ...}`) and no raw exception
-   text in 500 bodies; a global request-body size limit in middleware.
-5. **API key on `POST /api/agent/config` moves from the query string to the
-   body.**
-6. **Refactors**: `execute_tool_calls` to a dispatch table, `create_provider`
+3. **One error envelope** (`{"detail", "code", ...}`) across the main API, as
+   `/api/v1` already has; a global request-body size limit in middleware.
+4. **Refactors**: `execute_tool_calls` to a dispatch table, `create_provider`
    to a registry like `embedding_providers.py`, `_run_turn` and
    `DocumentIndexer.search` split along their stage markers, then
    `UploadService`, `mcp_server.py`, `MetadataStore` and `CodeExtractor`
    split by the sections they already have.
-7. **Judgement calls**: PATCH for the partial updates that use PUT; PUT for
+5. **Judgement calls**: PATCH for the partial updates that use PUT; PUT for
    the settings endpoints that use POST; 503 or 429 instead of 409 for a full
    queue; 401 with a challenge from `require_admin` when there is no identity
    at all; 204 for the delete acknowledgements the frontend does not read.

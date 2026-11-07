@@ -204,9 +204,11 @@ see, so it is read as a plain folder; mount the main checkout instead.
 `LOCAL_SOURCE_ROOTS` is also a limit. Once it is set, nothing outside those
 folders can be added or synced by path, through the panel or the API, and a watched
 folder outside them reports an error instead of updating. Uploads and clones are
-not affected. Left empty, anyone who can write to a collection can name any path
-the server can read, so set it wherever people you do not administer can reach
-the app.
+not affected. Left empty, any path the server can read is allowed: on one
+person's own machine, to whoever runs it; on a deployment with an identity
+provider and `ADMIN_EMAILS`, to admins only, so an ordinary writer cannot index
+the server's own files and then search them. Browser uploads work for everyone
+either way. Set it wherever people other than admins should add folders by path.
 
 Turn on **Watch** for a source in the
 Sources panel and every real change appears in the header's Updates bell, the

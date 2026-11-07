@@ -14,7 +14,7 @@ import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -332,10 +332,51 @@ async def _database_busy(request, exc: DatabaseBusy):
     )
 
 
+from fastapi.exception_handlers import http_exception_handler as _default_http_exception_handler  # noqa: E402
+from starlette.exceptions import HTTPException as _StarletteHTTPException  # noqa: E402
+
+
+async def _http_exception(request, exc: _StarletteHTTPException):
+    """A 500's reason is for whoever runs the server, not whoever hit it.
+
+    Many routes answer an unexpected failure with ``HTTPException(500,
+    detail=str(e))``, and that text can carry a file path, a SQL fragment or
+    an internal hostname. An admin, which on a one-person install is
+    everyone, still reads it; anyone else gets a request id that finds the
+    same text in the server log. Other statuses pass through unchanged: a
+    4xx is about the caller's own request, and a 502/503 names the upstream
+    that failed on purpose.
+    """
+    if exc.status_code != 500:
+        return await _default_http_exception_handler(request, exc)
+    from api.deps import require_admin
+
+    try:
+        require_admin("see the reason for a server error")
+        return await _default_http_exception_handler(request, exc)
+    except HTTPException:
+        pass
+    request_id = getattr(request.state, "request_id", None) or "-"
+    logger.error(f"500 on {request.method} {request.url.path} rid={request_id}: {exc.detail}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": f"Something went wrong on the server. An admin can find the details "
+                      f"in the server log under request {request_id}.",
+            "code": "internal_error",
+            "request_id": request_id,
+        },
+        headers=getattr(exc, "headers", None),
+    )
+
+
 # A mounted app handles its own exceptions, so /api/v1 needs them registered too.
 for _target in (app, v1_app):
     _target.add_exception_handler(EmbeddingUnavailable, _embedding_unavailable)
     _target.add_exception_handler(DatabaseBusy, _database_busy)
+# Not on /api/v1: that surface has its own error envelope (api/v1.py), which is
+# part of the published contract.
+app.add_exception_handler(_StarletteHTTPException, _http_exception)
 
 
 # CORS: origins come from CORS_ALLOW_ORIGINS (comma-separated). Empty — the

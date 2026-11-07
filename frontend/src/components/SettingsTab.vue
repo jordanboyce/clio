@@ -2021,7 +2021,7 @@ const connectProvider = async (id) => {
   // Best-effort: also store the key server-side so background features
   // (OCR, indexing) can use it. Failure is non-fatal — browser key still works.
   try {
-    await http.post(`/api/agent/config?provider=${encodeURIComponent(id)}&api_key=${encodeURIComponent(key)}`)
+    await http.post('/api/agent/config', { provider: id, api_key: key })
   } catch (err) {
     console.warn('Could not store key server-side (browser key still works):', err?.message || err)
   }

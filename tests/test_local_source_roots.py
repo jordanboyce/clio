@@ -266,3 +266,96 @@ def test_the_watcher_does_not_hold_a_managed_clone_to_the_roots(env, roots, tmp_
     clone = tmp_path / "data" / "repos" / "abc"
     assert source_watcher.check_source(_entry(clone, git_url="https://git.example/team/repo.git")) == "synced"
     assert calls
+
+
+# ── a shared deployment with LOCAL_SOURCE_ROOTS unset ─────────────────────
+#
+# "No limit" suits one person's own machine. Once there is an identity provider
+# and an operator list, an ordinary writer naming any server path could index
+# the server's own files and then search them, so that is the operator's call
+# until LOCAL_SOURCE_ROOTS says which folders are fair game. The browser's own
+# uploads, staged inside the collection, are never stopped.
+
+ADMIN = "ops@example.org"
+WRITER = "writer@example.org"
+
+
+@pytest.fixture()
+def shared_client(env, roots, monkeypatch):  # noqa: F811
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    import main
+    from tests import identity_helpers
+
+    for s in {id(s): s for s in (_import_time_settings, config.settings)}.values():
+        monkeypatch.setattr(s, "admin_emails", ADMIN)
+    identity_helpers.install(monkeypatch)
+    yield TestClient(importlib.reload(main).app)
+    importlib.reload(main)
+
+
+@pytest.mark.parametrize("route", ["/documents/sync-folder", "/documents/upload-repo"])
+def test_only_an_admin_may_name_any_server_folder(shared_client, folder, route):  # noqa: F811
+    from tests.identity_helpers import as_user
+
+    refused = shared_client.post(route, json={"path": str(folder), "collection_id": COLLECTION},
+                                 headers=as_user(WRITER))
+    assert refused.status_code == 403
+    assert "LOCAL_SOURCE_ROOTS" in refused.json()["detail"]
+
+    allowed = shared_client.post(route, json={"path": str(folder), "collection_id": COLLECTION},
+                                 headers=as_user(ADMIN))
+    assert allowed.status_code == 202, allowed.text
+
+
+def test_the_writer_refusal_does_not_say_whether_the_path_exists(shared_client, tmp_path, folder):  # noqa: F811
+    from tests.identity_helpers import as_user
+
+    real = shared_client.post("/documents/sync-folder", headers=as_user(WRITER),
+                              json={"path": str(folder), "collection_id": COLLECTION})
+    missing = shared_client.post("/documents/sync-folder", headers=as_user(WRITER),
+                                 json={"path": str(tmp_path / "no-such"), "collection_id": COLLECTION})
+    assert real.status_code == missing.status_code == 403
+    assert real.json()["detail"] == missing.json()["detail"]
+
+
+def test_a_writer_cannot_index_server_files_one_by_one(shared_client, tmp_path):  # noqa: F811
+    from tests.identity_helpers import as_user
+
+    secret = tmp_path / "app-secrets.txt"
+    secret.write_text("OPENAI_API_KEY=sk-not-for-you " * 20, encoding="utf-8")
+
+    refused = shared_client.post("/documents/index-local-async", headers=as_user(WRITER),
+                                 json={"file_paths": [str(secret)], "collection_id": COLLECTION})
+    assert refused.status_code == 400
+    assert "admin" in refused.text.lower()
+
+    allowed = shared_client.post("/documents/index-local-async", headers=as_user(ADMIN),
+                                 json={"file_paths": [str(secret)], "collection_id": COLLECTION})
+    assert allowed.status_code == 202, allowed.text
+
+
+def test_a_writers_browser_upload_still_works(shared_client):  # noqa: F811
+    from tests.identity_helpers import as_user
+
+    staged = shared_client.post("/documents/upload-staged", params={"collection_id": COLLECTION},
+                                headers=as_user(WRITER),
+                                files=[("files", ("uploaded.txt", b"Notes about the coolant pumps. " * 20, "text/plain"))])
+    assert staged.status_code == 202, staged.text
+    paths = [s["path"] for s in staged.json()["staged"]]
+
+    job = shared_client.post("/documents/index-local-async", headers=as_user(WRITER),
+                             json={"file_paths": paths, "collection_id": COLLECTION})
+    assert job.status_code == 202, job.text
+    assert _wait_for_job(shared_client, job.json()["job_id"])["status"] == "completed"
+
+
+def test_with_roots_set_a_writer_may_use_them(shared_client, roots, folder):  # noqa: F811
+    from tests.identity_helpers import as_user
+
+    roots(folder.parent)
+    added = shared_client.post("/documents/sync-folder", headers=as_user(WRITER),
+                               json={"path": str(folder), "collection_id": COLLECTION})
+    assert added.status_code == 202, added.text
