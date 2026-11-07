@@ -23,7 +23,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from models.schemas import ChunkMetadata
+from models.schemas import ChunkMetadata, FigureRef
 from services.figure_extractor import CAPTION_RE, ExtractedFigure, media_type_for
 
 logger = logging.getLogger(__name__)
@@ -234,7 +234,10 @@ def attach_to_results(metadata_store, base_url: str, collection_id: str, results
     refs = refs_for_pages(metadata_store, base_url, collection_id,
                           ((r.document_id, r.page_number) for r in results))
     for r in results:
-        r.figures = refs.get((r.document_id, int(r.page_number or 0))) or None
+        # Models, not dicts: the field is typed, and a dict set after
+        # construction skips validation and makes every response warn.
+        found = refs.get((r.document_id, int(r.page_number or 0)))
+        r.figures = [FigureRef(**ref) for ref in found] if found else None
 
 
 def context_note(refs: Optional[Sequence[Dict[str, Any]]]) -> str:

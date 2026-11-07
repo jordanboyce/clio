@@ -945,7 +945,7 @@ def add_coverage_question(collection_id: str, body: CoverageQuestionRequest,
     try:
         created = add_question(indexer, body.question, body.expected_documents, user_id)
     except QuestionError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e))
     audit.record("coverage.question_add", actor=user_id, collection_id=collection_id,
                  detail={"question_id": created["id"],
                          "documents": [d["document_id"] for d in created["expected_documents"]]})

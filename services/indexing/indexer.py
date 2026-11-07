@@ -7,7 +7,7 @@ import hashlib
 import logging
 import threading
 import time
-from datetime import datetime
+from services.clock import utcnow
 
 from config import DEFAULT_SEMANTIC_WEIGHT, settings
 from models.schemas import (
@@ -451,7 +451,7 @@ class DocumentIndexer:
         self.vector_store.add_chunks(chunks, embeddings)
 
         # Add document record to metadata store
-        indexed_at = datetime.utcnow().isoformat()
+        indexed_at = utcnow().isoformat()
         self.vector_store.metadata_store.add_document(
             document_id=document_id,
             filename=filename,
@@ -649,7 +649,7 @@ class DocumentIndexer:
             raise ValueError("Precomputed embeddings do not match the chunks")
         self.vector_store.add_chunks(all_chunks, embeddings)
 
-        indexed_at = datetime.utcnow().isoformat()
+        indexed_at = utcnow().isoformat()
         self.vector_store.metadata_store.add_documents([
             {
                 "document_id": p.document_id,
@@ -779,7 +779,7 @@ class DocumentIndexer:
             )
 
         report("saving", 0, f"Recording {total_rows} rows")
-        indexed_at = datetime.utcnow().isoformat()
+        indexed_at = utcnow().isoformat()
         self.vector_store.metadata_store.add_document(
             document_id=document_id,
             filename=filename,
@@ -888,7 +888,7 @@ class DocumentIndexer:
         report("saving", 0, f"Saving {num_chunks} chunks to index")
         self.vector_store.add_chunks(chunks, embeddings)
 
-        indexed_at = datetime.utcnow().isoformat()
+        indexed_at = utcnow().isoformat()
         self.vector_store.metadata_store.add_document(
             document_id=document_id,
             filename=filename,

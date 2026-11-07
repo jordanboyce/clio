@@ -21,6 +21,7 @@ import hashlib
 import logging
 import secrets
 from datetime import datetime, timedelta
+from services.clock import utcnow
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,7 @@ def generate_token(
         days = int(expires_in_days)
         if not 1 <= days <= MAX_EXPIRY_DAYS:
             raise ValueError(f"expires_in_days must be between 1 and {MAX_EXPIRY_DAYS}.")
-        expires_at = (datetime.utcnow() + timedelta(days=days)).isoformat()
+        expires_at = (utcnow() + timedelta(days=days)).isoformat()
     record = app_db.create_mcp_token(
         user_id=user_id,
         name=name,
@@ -112,7 +113,7 @@ def is_expired(record: Dict[str, Any], now: Optional[datetime] = None) -> bool:
         return True
     if expires.tzinfo is not None:
         expires = expires.replace(tzinfo=None) - expires.utcoffset()
-    return expires <= (now or datetime.utcnow())
+    return expires <= (now or utcnow())
 
 
 def list_tokens(user_id: Optional[str]) -> List[Dict[str, Any]]:

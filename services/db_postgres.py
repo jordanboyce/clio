@@ -11,6 +11,7 @@ import threading
 import uuid
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
+from services.clock import utcnow
 
 import psycopg2
 import psycopg2.extras
@@ -381,14 +382,14 @@ class PostgresBackend(DatabaseBackend):
                 # Ensure default user
                 cur.execute("SELECT id FROM users WHERE id = 'default'")
                 if not cur.fetchone():
-                    ts = datetime.utcnow().isoformat()
+                    ts = utcnow().isoformat()
                     cur.execute("INSERT INTO users (id, display_name, first_seen_at, last_seen_at) VALUES (%s, %s, %s, %s)",
                                 ("default", "Default User", ts, ts))
 
                 # Ensure default collection
                 cur.execute("SELECT id FROM collections WHERE id = 'default'")
                 if not cur.fetchone():
-                    ts = datetime.utcnow().isoformat()
+                    ts = utcnow().isoformat()
                     cur.execute(
                         """INSERT INTO collections (id, name, description, color, embedding_model, owner_id, created_at, updated_at)
                            VALUES ('default', 'Default', 'Default document collection', '#3b82f6', %s, 'default', %s, %s)""",
@@ -425,7 +426,7 @@ class PostgresBackend(DatabaseBackend):
             self._put(conn)
 
     def _write_config(self, key: str, value: str):
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -459,7 +460,7 @@ class PostgresBackend(DatabaseBackend):
     # ── Users ────────────────────────────────────────────────
 
     def upsert_user(self, user_id: str, display_name: Optional[str] = None) -> Dict[str, Any]:
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -506,7 +507,7 @@ class PostgresBackend(DatabaseBackend):
         if embedding_model is None:
             embedding_model = settings.embedding_model
         cid = str(uuid.uuid4())[:8]
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -575,7 +576,7 @@ class PostgresBackend(DatabaseBackend):
         if not updates:
             return
         updates.append("updated_at = %s")
-        params.append(datetime.utcnow().isoformat())
+        params.append(utcnow().isoformat())
         params.append(collection_id)
         conn = self._conn()
         try:
@@ -601,7 +602,7 @@ class PostgresBackend(DatabaseBackend):
     # ── Collection Documents ─────────────────────────────────
 
     def add_document_to_collection(self, collection_id: str, document_id: str):
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -661,7 +662,7 @@ class PostgresBackend(DatabaseBackend):
 
     def create_share(self, collection_id: str, owner_id: str, permission: str = "read", expires_at: Optional[str] = None, invited_email: Optional[str] = None) -> str:
         sid = str(uuid.uuid4())
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -737,7 +738,7 @@ class PostgresBackend(DatabaseBackend):
                 share = self._fetchone_dict(cur)
                 if share and share.get("expires_at"):
                     try:
-                        if datetime.fromisoformat(share["expires_at"]) < datetime.utcnow():
+                        if datetime.fromisoformat(share["expires_at"]) < utcnow():
                             share["is_active"] = 0
                     except ValueError:
                         pass
@@ -760,7 +761,7 @@ class PostgresBackend(DatabaseBackend):
             self._put(conn)
 
     def accept_share(self, share_id: str, user_id: str):
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -815,7 +816,7 @@ class PostgresBackend(DatabaseBackend):
                 if row:
                     if row[1]:
                         try:
-                            if datetime.fromisoformat(row[1]) < datetime.utcnow():
+                            if datetime.fromisoformat(row[1]) < utcnow():
                                 return None
                         except ValueError:
                             pass
@@ -827,7 +828,7 @@ class PostgresBackend(DatabaseBackend):
     # ── Upload Jobs ──────────────────────────────────────────
 
     def create_upload_job(self, collection_id: str, total_files: int, job_type: str = "upload") -> int:
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -856,7 +857,7 @@ class PostgresBackend(DatabaseBackend):
             params.append(kwargs[field])
         if kwargs.get("status") in ("completed", "failed", "cancelled"):
             updates.append("completed_at = %s")
-            params.append(datetime.utcnow().isoformat())
+            params.append(utcnow().isoformat())
         if not updates:
             return
         params.append(job_id)
@@ -923,7 +924,7 @@ class PostgresBackend(DatabaseBackend):
 
     def fail_interrupted_jobs(self, reason: str) -> Dict[str, int]:
         """Close out jobs left mid-flight by a process exit (see the SQLite backend)."""
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -949,7 +950,7 @@ class PostgresBackend(DatabaseBackend):
     # ── Reindex Jobs ─────────────────────────────────────────
 
     def create_reindex_job(self, config_snapshot: Dict[str, Any]) -> int:
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -971,7 +972,7 @@ class PostgresBackend(DatabaseBackend):
                 params.append(kwargs[field])
         if kwargs.get("status") in ("completed", "failed"):
             updates.append("completed_at = %s")
-            params.append(datetime.utcnow().isoformat())
+            params.append(utcnow().isoformat())
         if not updates:
             return
         params.append(job_id)
@@ -1031,7 +1032,7 @@ class PostgresBackend(DatabaseBackend):
             self._put(conn)
 
     def set_ai_preferences(self, **kwargs):
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -1071,7 +1072,7 @@ class PostgresBackend(DatabaseBackend):
     # ── Search History ───────────────────────────────────────
 
     def add_search_history(self, query: str, top_k: int, results_count: int, **kwargs) -> int:
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -1116,7 +1117,7 @@ class PostgresBackend(DatabaseBackend):
             self._put(conn)
 
     def delete_old_search_history(self, days: int = 30):
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cutoff = (utcnow() - timedelta(days=days)).isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -1141,7 +1142,7 @@ class PostgresBackend(DatabaseBackend):
         cache_hit: bool = False,
         duration_ms: Optional[int] = None,
     ) -> int:
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -1198,7 +1199,7 @@ class PostgresBackend(DatabaseBackend):
             self._put(conn)
 
     def delete_old_chat_usage(self, days: int = 180) -> int:
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cutoff = (utcnow() - timedelta(days=days)).isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -1228,7 +1229,7 @@ class PostgresBackend(DatabaseBackend):
 
     def set_user_preference(self, key: str, value: Any):
         value_str = json.dumps(value) if not isinstance(value, str) else value
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -1266,7 +1267,7 @@ class PostgresBackend(DatabaseBackend):
         allowlist: bool = False,
     ) -> Dict[str, Any]:
         token_id = str(uuid.uuid4())
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         scope_json = json.dumps(list(collection_scope)) if collection_scope else None
         conn = self._conn()
         try:
@@ -1328,7 +1329,7 @@ class PostgresBackend(DatabaseBackend):
                 cur.execute(
                     """UPDATE mcp_tokens SET revoked_at = %s
                        WHERE user_id IS NOT DISTINCT FROM %s AND revoked_at IS NULL""",
-                    (datetime.utcnow().isoformat(), user_id),
+                    (utcnow().isoformat(), user_id),
                 )
                 affected = cur.rowcount
             conn.commit()
@@ -1399,7 +1400,7 @@ class PostgresBackend(DatabaseBackend):
 
     def add_audit_events(self, actor: Optional[str], action: str, collection_id: Optional[str],
                          events: List[Dict[str, Optional[str]]]) -> None:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -1428,7 +1429,7 @@ class PostgresBackend(DatabaseBackend):
                 cur.execute(
                     """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
                        VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                    (datetime.utcnow().isoformat(), actor, action, collection_id, document_id, target, detail),
+                    (utcnow().isoformat(), actor, action, collection_id, document_id, target, detail),
                 )
                 event_id = cur.fetchone()[0]
             conn.commit()
@@ -1468,7 +1469,7 @@ class PostgresBackend(DatabaseBackend):
             self._put(conn)
 
     def delete_old_audit_events(self, days: int) -> int:
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cutoff = (utcnow() - timedelta(days=days)).isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -1482,7 +1483,7 @@ class PostgresBackend(DatabaseBackend):
     # ── Acceptable-use acknowledgements ──────────────────────
 
     def record_aup_acknowledgement(self, user_id: str, version: str) -> Dict[str, Any]:
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -1524,7 +1525,7 @@ class PostgresBackend(DatabaseBackend):
         self, content_hash: str, blocked_by: Optional[str], reason: str = "",
         filename: Optional[str] = None,
     ) -> Dict[str, Any]:
-        ts = datetime.utcnow().isoformat()
+        ts = utcnow().isoformat()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -1577,7 +1578,7 @@ class PostgresBackend(DatabaseBackend):
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE mcp_tokens SET last_used_at = %s, use_count = COALESCE(use_count, 0) + 1 WHERE id = %s",
-                    (datetime.utcnow().isoformat(), token_id),
+                    (utcnow().isoformat(), token_id),
                 )
             conn.commit()
         finally:
@@ -1590,7 +1591,7 @@ class PostgresBackend(DatabaseBackend):
                 cur.execute(
                     """UPDATE mcp_tokens SET revoked_at = %s
                        WHERE id = %s AND user_id IS NOT DISTINCT FROM %s AND revoked_at IS NULL""",
-                    (datetime.utcnow().isoformat(), token_id, user_id),
+                    (utcnow().isoformat(), token_id, user_id),
                 )
                 affected = cur.rowcount
             conn.commit()

@@ -7,7 +7,8 @@ with read or read-write permissions.
 
 import logging
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import timedelta
+from services.clock import utcnow
 
 from middleware.user_context import get_request_app
 from services.app_database import app_db
@@ -83,7 +84,7 @@ class SharingService:
 
         expires_at = None
         if expires_days:
-            expires_at = (datetime.utcnow() + timedelta(days=expires_days)).isoformat()
+            expires_at = (utcnow() + timedelta(days=expires_days)).isoformat()
 
         share_id = app_db.create_share(
             collection_id=collection_id,

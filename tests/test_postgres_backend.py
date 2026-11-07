@@ -19,6 +19,7 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta
+from services.clock import utcnow
 from pathlib import Path
 
 import pytest
@@ -211,7 +212,7 @@ def test_sharing(db):
 
 def test_expired_share_gives_no_access(db):
     cid = db.create_collection("Shared", owner_id="owner@example.org")
-    past = (datetime.utcnow() - timedelta(days=1)).isoformat()
+    past = (utcnow() - timedelta(days=1)).isoformat()
     share = db.create_share(cid, "owner@example.org", "read", expires_at=past)
     db.accept_share(share, "r@example.org")
     assert db.check_share_access(cid, "r@example.org") is None
@@ -277,7 +278,7 @@ def test_audit_trail(db):
     assert len(db.list_audit_events(actor="b@example.org")) == 2
     assert len(db.list_audit_events(collection_id="c2")) == 2
     assert len(db.list_audit_events(document_id="d3")) == 1
-    assert db.list_audit_events(since=(datetime.utcnow() + timedelta(days=1)).isoformat()) == []
+    assert db.list_audit_events(since=(utcnow() + timedelta(days=1)).isoformat()) == []
 
     assert db.delete_old_audit_events(1) == 0
     assert len(db.list_audit_events()) == 3
@@ -368,7 +369,7 @@ def test_chat_usage(db):
     db.add_chat_usage("a@example.org", "c1", "openai", "gpt", 10, 5, tool_calls=2, duration_ms=100)
     db.add_chat_usage("a@example.org", "c1", "openai", "gpt", 1, 1, cache_hit=True)
     db.add_chat_usage(None, "c1", "openai", None, 2, 2)
-    since = (datetime.utcnow() - timedelta(hours=1)).isoformat()
+    since = (utcnow() - timedelta(hours=1)).isoformat()
 
     by_user = {row["grouped_by"]: row for row in db.get_usage_summary(since, group_by="user")}
     assert by_user["a@example.org"]["turns"] == 2

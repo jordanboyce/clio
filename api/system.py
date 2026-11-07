@@ -454,7 +454,7 @@ async def update_config(updates: dict):
     if not result.get("success"):
         # Rejected values are a client error, not a 200 with success=false.
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail="; ".join(result.get("errors") or ["could not save"]),
         )
     return result

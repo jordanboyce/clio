@@ -103,7 +103,7 @@ async def update_mcp_config(updates: dict):
     result = config_manager.update_config(filtered_updates)
     if not result.get("success"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail="; ".join(result.get("errors") or ["could not save"]),
         )
     return result

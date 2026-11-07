@@ -17,6 +17,7 @@ import logging
 import sqlite3
 import uuid
 from datetime import datetime
+from services.clock import utcnow
 from pathlib import Path
 from typing import Optional
 
@@ -182,7 +183,7 @@ class ExpertiseStore:
 
     def create_pack(self, data: ExpertisePackCreate) -> ExpertisePack:
         """Insert a new expertise pack and return it."""
-        now = datetime.utcnow().isoformat()
+        now = utcnow().isoformat()
         pack_id = str(uuid.uuid4())
         flag = authored_text.scan(
             authored_text.pack_scan_text(data.name, data.description, data.body), f"expertise pack {pack_id}",
@@ -211,7 +212,7 @@ class ExpertiseStore:
         if pack is None:
             return None
 
-        now = datetime.utcnow().isoformat()
+        now = utcnow().isoformat()
         new_name = data.name if data.name is not None else pack.name
         new_desc = data.description if data.description is not None else pack.description
         new_body = data.body if data.body is not None else pack.body
@@ -285,7 +286,7 @@ class ExpertiseStore:
 
     def set_packs_for_collection(self, collection_id: str, pack_ids: list[str]) -> None:
         """Replace the full set of packs attached to a collection atomically."""
-        now = datetime.utcnow().isoformat()
+        now = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
                 "DELETE FROM collection_expertise WHERE collection_id = ?",

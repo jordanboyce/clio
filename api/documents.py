@@ -129,7 +129,7 @@ def _content_disposition(disposition: str, filename: str) -> str:
 
 def _storage_error(error: StorageLimitExceeded) -> HTTPException:
     """The per-collection cap answers 413 with the numbers the UI needs."""
-    return HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=error.to_detail())
+    return HTTPException(status_code=413, detail=error.to_detail())
 
 
 def _supported_types_message() -> str:
@@ -285,12 +285,12 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
         error_details = "; ".join([f"{f['filename']}: {f['error']}" for f in failed_docs])
         if storage_refusals == len(failed_docs):
             raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status_code=413,
                 detail=error_details,
             )
         raise HTTPException(
             status_code=(
-                status.HTTP_422_UNPROCESSABLE_ENTITY
+                422
                 if policy_refusals + storage_refusals == len(failed_docs)
                 else status.HTTP_500_INTERNAL_SERVER_ERROR
             ),
@@ -2373,7 +2373,7 @@ def bulk_delete_documents(body: BulkDeleteRequest, response: Response) -> dict: 
     collection_id = body.collection_id
     if body.everything == (body.document_ids is not None):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail="Send either document_ids or everything: true",
         )
     try:

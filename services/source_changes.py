@@ -23,7 +23,7 @@ import json
 import logging
 import threading
 import urllib.request
-from datetime import datetime
+from services.clock import utcnow
 from typing import Any, Dict, List, Optional
 
 from config import settings
@@ -83,7 +83,7 @@ def record(
         data = _load(collection_id)
         event = {
             "id": data["next_id"],
-            "at": datetime.utcnow().isoformat() + "Z",
+            "at": utcnow().isoformat() + "Z",
             "source": source,
             "label": label,
             "trigger": trigger,
