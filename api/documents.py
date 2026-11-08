@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import config
-from services.document_extractor import is_supported_filename, unsupported_reason, SUPPORTED_TYPES_SUMMARY
+from services.document_extractor import is_supported_filename, unsupported_reason
 from services import pii_detector
 from services.prompt_injection_detector import apply_suppressions
 from services.custom_file_types import registry as custom_types
@@ -52,6 +52,7 @@ from services.link_fetcher import LinkError, LinkRefused, link_indexing_availabl
 from fastapi import APIRouter, Request
 from api.deps import (
     get_indexer,
+    require_admin,
     require_collection_access,
 )
 from middleware.user_context import get_request_user
@@ -82,11 +83,34 @@ def _require_ingest(collection_id: str) -> None:
     governance.require_aup(get_request_user())
 
 
+# The action an unrestricted server path needs an operator for (see below).
+_ANY_SERVER_PATH = "add a folder on the server as a source while LOCAL_SOURCE_ROOTS is unset"
+
+
 def _require_allowed_path(path: str) -> None:
     """LOCAL_SOURCE_ROOTS, checked before anything touches the disk, so a refusal
-    says nothing about whether the path exists."""
+    says nothing about whether the path exists.
+
+    Unset, the limit allows any path the server can read. That suits one
+    person's own machine, where ``require_admin`` is a no-op. On a shared
+    deployment it would let any writer index the server's own files (its
+    ``.env``, another tenant's data) and then search them, so there it is an
+    operator's call until LOCAL_SOURCE_ROOTS says which folders are fair game.
+    """
     if not local_roots.allowed(path):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=local_roots.REFUSAL)
+    if not local_roots.restricted():
+        require_admin(_ANY_SERVER_PATH)
+
+
+def _may_read_any_server_path() -> bool:
+    """Whether this caller may name a server path outside the collection's own
+    staging folder while LOCAL_SOURCE_ROOTS is unset (see above)."""
+    try:
+        require_admin(_ANY_SERVER_PATH)
+        return True
+    except HTTPException:
+        return False
 
 
 def _is_policy_refusal(error: Exception) -> bool:
@@ -129,17 +153,7 @@ def _content_disposition(disposition: str, filename: str) -> str:
 
 def _storage_error(error: StorageLimitExceeded) -> HTTPException:
     """The per-collection cap answers 413 with the numbers the UI needs."""
-    return HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=error.to_detail())
-
-
-def _supported_types_message() -> str:
-    """Build a human-readable list of supported file types including custom ones."""
-    builtin = SUPPORTED_TYPES_SUMMARY
-    custom = custom_types.extensions()
-    if custom:
-        custom_str = ", ".join(sorted(custom))
-        return f"{builtin}, and custom types: {custom_str}"
-    return builtin
+    return HTTPException(status_code=413, detail=error.to_detail())
 
 
 def _unsupported_message(filename: str) -> str:
@@ -285,12 +299,12 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
         error_details = "; ".join([f"{f['filename']}: {f['error']}" for f in failed_docs])
         if storage_refusals == len(failed_docs):
             raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status_code=413,
                 detail=error_details,
             )
         raise HTTPException(
             status_code=(
-                status.HTTP_422_UNPROCESSABLE_ENTITY
+                422
                 if policy_refusals + storage_refusals == len(failed_docs)
                 else status.HTTP_500_INTERNAL_SERVER_ERROR
             ),
@@ -1171,12 +1185,23 @@ def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobRespons
     skipped: List[dict] = []
     # A browser upload arrives as a path too: staged into this collection's own
     # staging folder by /documents/upload-staged, which no limit should stop.
-    staging = collection_service.get_staging_path(request.collection_id) if local_roots.restricted() else None
+    # Any other path must be inside LOCAL_SOURCE_ROOTS, or, while that is unset,
+    # come from someone who may read the whole server (_require_allowed_path).
+    staging = collection_service.get_staging_path(request.collection_id)
+    unlimited = (not local_roots.restricted()) and _may_read_any_server_path()
+    refusal = local_roots.REFUSAL if local_roots.restricted() else (
+        "Only an admin may add files from elsewhere on the server while LOCAL_SOURCE_ROOTS is unset."
+    )
     for file_path in request.file_paths:
         path = Path(file_path)
         # Before anything that touches the disk, so this cannot probe what exists.
-        if staging is not None and not (local_roots.allowed(file_path) or local_roots.inside(file_path, staging)):
-            skipped.append({"filename": path.name or file_path, "error": local_roots.REFUSAL})
+        permitted = (
+            unlimited
+            or local_roots.inside(file_path, staging)
+            or (local_roots.restricted() and local_roots.allowed(file_path))
+        )
+        if not permitted:
+            skipped.append({"filename": path.name or file_path, "error": refusal})
             continue
         if not path.exists():
             skipped.append({"filename": path.name or file_path, "error": "file not found"})
@@ -2373,7 +2398,7 @@ def bulk_delete_documents(body: BulkDeleteRequest, response: Response) -> dict: 
     collection_id = body.collection_id
     if body.everything == (body.document_ids is not None):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail="Send either document_ids or everything: true",
         )
     try:

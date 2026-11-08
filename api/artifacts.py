@@ -300,7 +300,7 @@ def delete_collection_outputs(collection_id: str, reviews: bool = False, reports
     running, which would only write its results straight back.
     """
     if not (reviews or reports):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        raise HTTPException(status_code=422,
                             detail="Name what to delete: reviews, reports, or both")
     indexer = _indexer(collection_id)
     user = get_request_user()

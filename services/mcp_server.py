@@ -376,10 +376,6 @@ def get_mcp_settings_payload() -> dict[str, Any]:
     return {field: getattr(settings, field) for field in MCP_CONFIG_FIELDS}
 
 
-def _mcp_profile_preference_key(collection_id: str) -> str:
-    return f"mcp_collection_profile:{collection_id}"
-
-
 def _coerce_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default

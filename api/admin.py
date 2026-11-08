@@ -12,7 +12,8 @@ POST /api/config.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
+from services.clock import utcnow
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -396,7 +397,7 @@ async def get_usage(days: int = 30):
     from services.app_database import app_db
 
     days = max(1, min(days, 365))
-    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    since = (utcnow() - timedelta(days=days)).isoformat()
     try:
         return {
             "days": days,
@@ -431,7 +432,7 @@ async def get_stats():
     from services.app_database import app_db
     from services.upload_service import upload_service
 
-    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    today = utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     try:
         usage_today_rows = app_db.get_usage_summary(today, group_by="day")
         usage_today = usage_today_rows[0] if usage_today_rows else {

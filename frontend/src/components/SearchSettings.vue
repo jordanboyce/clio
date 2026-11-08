@@ -23,7 +23,7 @@
 
           <div v-if="configuredProviders.length" class="rounded-lg border border-base-300 bg-base-200/50 p-3 text-sm">
             <div class="flex items-center gap-2">
-              <Sparkles :size="14" class="text-primary shrink-0" aria-hidden="true" />
+              <Feather :size="14" class="text-primary shrink-0" aria-hidden="true" />
               <span class="flex-1 min-w-0 truncate font-medium">{{ getProviderDisplayName(providerId) }}<span v-if="modelName" class="font-normal text-base-content/60"> · {{ modelName }}</span></span>
               <span class="text-xs text-base-content/75">{{ isLocalProvider(providerId) ? 'Local' : 'Cloud' }}</span>
             </div>
@@ -61,7 +61,7 @@
 
 <script setup>
 import { computed, watch } from 'vue'
-import { Sparkles, X } from 'lucide-vue-next'
+import { Feather, X } from 'lucide-vue-next'
 import { useModal } from '../composables/useModal'
 import { useProviderStore } from '../stores/providerStore'
 import { getProviderDisplayName, isLocalProvider } from '../utils/aiProviders'

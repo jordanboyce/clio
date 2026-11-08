@@ -7,6 +7,7 @@ is involved.
 
 import asyncio
 from datetime import datetime, timedelta
+from services.clock import utcnow
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -68,14 +69,14 @@ def test_is_expired_handles_missing_past_future_and_garbage():
 def test_generate_token_stamps_expiry_and_verify_refuses_after_it(fresh_app_db):
     record = mcp_tokens.generate_token("alice", "Short-lived", expires_in_days=1)
     assert record["expires_at"] is not None
-    remaining = datetime.fromisoformat(record["expires_at"]) - datetime.utcnow()
+    remaining = datetime.fromisoformat(record["expires_at"]) - utcnow()
     assert timedelta(hours=23) < remaining <= timedelta(days=1)
     assert mcp_tokens.verify_token(record["token"]) is not None
 
     # A token whose lifetime has already passed: same shape, past expiry.
     plaintext = f"{mcp_tokens.TOKEN_PREFIX}already-over"
     fresh_app_db.create_mcp_token("alice", "Stale", mcp_tokens._hash(plaintext), plaintext[:14],
-                                  expires_at=(datetime.utcnow() - timedelta(minutes=1)).isoformat())
+                                  expires_at=(utcnow() - timedelta(minutes=1)).isoformat())
     assert mcp_tokens.verify_token(plaintext) is None
     # Refusal leaves no trace of use.
     stale = next(t for t in mcp_tokens.list_tokens("alice") if t["name"] == "Stale")

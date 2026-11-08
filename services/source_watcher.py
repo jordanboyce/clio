@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from services.clock import utcnow
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -105,11 +106,6 @@ def monitored_sources() -> List[Dict[str, Any]]:
     return out
 
 
-def watched_sources() -> List[Dict[str, Any]]:
-    """Every remembered, watched source across all collections."""
-    return [e for e in monitored_sources() if e.get("watch")]
-
-
 def check_source(entry: Dict[str, Any]) -> str:
     """Look after one monitored source. Returns one of :data:`OUTCOMES`:
 
@@ -122,7 +118,7 @@ def check_source(entry: Dict[str, Any]) -> str:
     from services.upload_service import upload_service
 
     cid, path = entry["collection_id"], entry["path"]
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     try:
         job_status = _job_status(entry)
         if job_status in _IN_FLIGHT:
@@ -173,7 +169,7 @@ def check_source(entry: Dict[str, Any]) -> str:
 
 def run_due(now: Optional[datetime] = None) -> Dict[str, int]:
     """One pass over the monitored sources that are due. Returns outcome counts."""
-    now = now or datetime.utcnow()
+    now = now or utcnow()
     counts = {outcome: 0 for outcome in OUTCOMES}
     for entry in monitored_sources():
         if _due(entry, now):

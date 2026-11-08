@@ -206,6 +206,14 @@ answers, then takes the model's size. From then on the vectors on disk fix the
 size: a later model of another size is refused until you re-index, and the
 vectors stay as they were.
 
+**A network that blocks huggingface.co but has a mirror of it** (an Artifactory
+or Nexus remote repository for Hugging Face) needs no copying: set `HF_ENDPOINT`
+to the mirror's address and the search model, reranker and Whisper download from
+there. The setup screen, the failure message and `GET /api/system/readiness` all
+name the mirror instead of huggingface.co, so you can see which one is in use.
+This is not offline mode: with `OFFLINE_MODE` set, nothing downloads from
+anywhere.
+
 **A firewall that drops packets** can take minutes to fail, where a refused
 connection takes a moment. Nothing waits for it: a model that is not on disk is
 fetched in the background, one attempt at a time, while the collection works by

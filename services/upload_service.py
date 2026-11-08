@@ -13,14 +13,13 @@ import tempfile
 import threading
 import shutil
 import json
-import asyncio
 import queue
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional, Dict, Callable, Any, Tuple
-from datetime import datetime
+from services.clock import utcnow
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 
@@ -123,7 +122,7 @@ class ProgressEvent:
     chunks_total: int = 0
     overall_percent: float = 0.0
     error: Optional[str] = None
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: utcnow().isoformat())
 
     def to_sse(self) -> str:
         """Format as SSE event string."""
@@ -1171,7 +1170,7 @@ class UploadService:
         # remote, last error) from the previous entry.
         previous = remembered.get(str(root))
         entry = dict(previous) if isinstance(previous, dict) else {}
-        entry.update({"last_synced_at": datetime.utcnow().isoformat(), **fields})
+        entry.update({"last_synced_at": utcnow().isoformat(), **fields})
         remembered[str(root)] = entry
         app_db.set_config(self._sync_memory_key(collection_id), remembered)
         return dict(entry, path=str(root))
@@ -1405,7 +1404,7 @@ class UploadService:
                 git_head=git_info["head"] if git_info else None,
                 git_branch=git_info["branch"] if git_info else None,
                 git_fingerprint=git_fingerprint,
-                last_checked_at=datetime.utcnow().isoformat(), last_error=None,
+                last_checked_at=utcnow().isoformat(), last_error=None,
                 # A managed clone now holds what the remote had: a probe that
                 # found the remote ahead is answered by this sync.
                 **({"upstream_head": git_info["head"]} if git_info and (

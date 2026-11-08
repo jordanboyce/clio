@@ -44,7 +44,7 @@ const iconClass = { success: 'text-success', error: 'text-error', warning: 'text
       class="fixed top-0 inset-x-0 z-[101] flex justify-center pointer-events-none"
       role="alert"
     >
-      <div class="notice notice-warning shadow-lg rounded-t-none rounded-b-xl bg-base-100 ring-1 ring-base-content/10 max-w-md pointer-events-auto">
+      <div class="notice notice-warning notice-floating shadow-lg rounded-t-none rounded-b-xl ring-1 ring-base-content/10 max-w-md pointer-events-auto">
         <WifiOff :size="15" class="text-warning" aria-hidden="true" />
         <span>Cannot reach the server — retrying as you work. Your last change may not be saved.</span>
       </div>

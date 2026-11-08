@@ -33,6 +33,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta
+from services.clock import utcnow
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -71,7 +72,7 @@ def _new_key() -> str:
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat()
+    return utcnow().isoformat()
 
 
 def _expiry(days: Optional[int]) -> Optional[str]:
@@ -79,7 +80,7 @@ def _expiry(days: Optional[int]) -> Optional[str]:
         return None
     if not 1 <= int(days) <= MAX_EXPIRY_DAYS:
         raise ValueError(f"expires_in_days must be between 1 and {MAX_EXPIRY_DAYS}.")
-    return (datetime.utcnow() + timedelta(days=int(days))).isoformat()
+    return (utcnow() + timedelta(days=int(days))).isoformat()
 
 
 def _has_passed(moment: Optional[str]) -> bool:
@@ -93,7 +94,7 @@ def _has_passed(moment: Optional[str]) -> bool:
         return True
     if parsed.tzinfo is not None:
         parsed = parsed.replace(tzinfo=None) - parsed.utcoffset()
-    return parsed <= datetime.utcnow()
+    return parsed <= utcnow()
 
 
 def _decode(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -269,7 +270,7 @@ def rotate_key(app_id: str, grace_hours: int = DEFAULT_ROTATION_GRACE_HOURS) -> 
         "key_prefix": key[:_PREFIX_DISPLAY_LEN],
         "previous_key_hash": app["key_hash"] if keep_old else None,
         "previous_key_expires_at": (
-            (datetime.utcnow() + timedelta(hours=int(grace_hours))).isoformat() if keep_old else None
+            (utcnow() + timedelta(hours=int(grace_hours))).isoformat() if keep_old else None
         ),
     })
     view = public_view(get_app(app_id))

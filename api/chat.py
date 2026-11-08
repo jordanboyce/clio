@@ -6,7 +6,8 @@ import logging
 import re
 import time
 
-from fastapi import Header, HTTPException, Request, status
+from fastapi import Body, Header, HTTPException, Query, Request, Response, status
+from pydantic import BaseModel, Field
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from middleware.user_context import get_request_user
@@ -1455,14 +1456,26 @@ async def get_agent_config():
     return app_db.get_agent_config()
 
 
+class AgentKeyRequest(BaseModel):
+    """A team API key to store for one hosted provider."""
+
+    provider: str = Field(..., max_length=64, description="AI provider name (anthropic, openai, ...)")
+    api_key: str = Field(..., min_length=1, max_length=4096, description="The API key to store")
+
+
 @router.post(
     "/api/agent/config",
     summary="Configure agent API key",
     tags=["agent"],
 )
 async def set_agent_config(
-    provider: str,
-    api_key: str,
+    response: Response,
+    body: AgentKeyRequest | None = Body(None),
+    provider: str | None = Query(None, max_length=64, deprecated=True,
+                                 description="Deprecated: send it in the JSON body."),
+    api_key: str | None = Query(None, max_length=4096, deprecated=True,
+                                description="Deprecated: a key in the URL lands in proxy and "
+                                            "browser logs. Send it in the JSON body."),
 ):
     """
     Store an API key for agent use.
@@ -1470,9 +1483,10 @@ async def set_agent_config(
     This allows the /api/ask endpoint to work without requiring
     the X-AI-Key header on every request.
 
-    Args:
-        provider: AI provider name (anthropic, openai)
-        api_key: The API key to store
+    Send ``{"provider": "...", "api_key": "..."}`` as the JSON body. The
+    older ``?provider=&api_key=`` query form still works for scripts written
+    against it, answered with a ``Deprecation`` header: a key in a URL is
+    written to every reverse proxy's access log on the way in.
 
     Note: Keys are stored server-side. For security, ensure your
     Clio instance is properly secured. A stored key becomes shared
@@ -1482,6 +1496,18 @@ async def set_agent_config(
     from api.deps import require_admin
     require_admin("store a team API key")
     from services.app_database import app_db
+
+    if body is not None:
+        provider, api_key = body.provider, body.api_key
+    elif provider and api_key:
+        response.headers["Deprecation"] = "true"
+        logger.warning("POST /api/agent/config received the API key in the query string; "
+                       "send it in the JSON body instead")
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail='Send {"provider": "...", "api_key": "..."} as the JSON body.',
+        )
 
     if provider not in CLOUD_AI_PROVIDERS:
         raise HTTPException(

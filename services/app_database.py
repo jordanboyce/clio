@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
+from services.clock import utcnow
 
 from config import settings
 from services.db_backend import DatabaseBackend
@@ -481,7 +482,7 @@ class SQLiteBackend(DatabaseBackend):
             # Ensure default collection exists
             cursor = conn.execute("SELECT id FROM collections WHERE id = 'default'")
             if not cursor.fetchone():
-                timestamp = datetime.utcnow().isoformat()
+                timestamp = utcnow().isoformat()
                 conn.execute(
                     """
                     INSERT INTO collections (id, name, description, color, embedding_model, owner_id, created_at, updated_at)
@@ -501,7 +502,7 @@ class SQLiteBackend(DatabaseBackend):
             # Ensure default user exists
             cursor = conn.execute("SELECT id FROM users WHERE id = 'default'")
             if not cursor.fetchone():
-                timestamp = datetime.utcnow().isoformat()
+                timestamp = utcnow().isoformat()
                 conn.execute(
                     "INSERT INTO users (id, display_name, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?)",
                     ("default", "Default User", timestamp, timestamp)
@@ -518,7 +519,7 @@ class SQLiteBackend(DatabaseBackend):
             return row[0] if row else None
 
     def _write_config(self, key: str, value: str):
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -541,7 +542,7 @@ class SQLiteBackend(DatabaseBackend):
     # ── Users ────────────────────────────────────────────────
 
     def upsert_user(self, user_id: str, display_name: Optional[str] = None) -> Dict[str, Any]:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             existing = conn.execute("SELECT id, display_name, first_seen_at FROM users WHERE id = ?", (user_id,)).fetchone()
             if existing:
@@ -588,7 +589,7 @@ class SQLiteBackend(DatabaseBackend):
         if embedding_model is None:
             embedding_model = settings.embedding_model
         collection_id = str(uuid.uuid4())[:8]
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -665,7 +666,7 @@ class SQLiteBackend(DatabaseBackend):
         if not updates:
             return
         updates.append("updated_at = ?")
-        params.append(datetime.utcnow().isoformat())
+        params.append(utcnow().isoformat())
         params.append(collection_id)
         with sqlite_connect(self.db_path) as conn:
             conn.execute(f"UPDATE collections SET {', '.join(updates)} WHERE id = ?", params)
@@ -682,7 +683,7 @@ class SQLiteBackend(DatabaseBackend):
     # ── Collection Documents ─────────────────────────────────
 
     def add_document_to_collection(self, collection_id: str, document_id: str):
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO collection_documents (collection_id, document_id, added_at) VALUES (?, ?, ?)",
@@ -722,7 +723,7 @@ class SQLiteBackend(DatabaseBackend):
 
     def create_share(self, collection_id: str, owner_id: str, permission: str = "read", expires_at: Optional[str] = None, invited_email: Optional[str] = None) -> str:
         share_id = str(uuid.uuid4())
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
                 """INSERT INTO collection_shares (id, collection_id, owner_id, permission, created_at, expires_at, is_active, invited_email)
@@ -791,7 +792,7 @@ class SQLiteBackend(DatabaseBackend):
                 # Check expiry
                 if share.get("expires_at"):
                     try:
-                        if datetime.fromisoformat(share["expires_at"]) < datetime.utcnow():
+                        if datetime.fromisoformat(share["expires_at"]) < utcnow():
                             share["is_active"] = 0
                     except ValueError:
                         pass
@@ -818,7 +819,7 @@ class SQLiteBackend(DatabaseBackend):
             return shares
 
     def accept_share(self, share_id: str, user_id: str):
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO collection_share_users (share_id, user_id, accepted_at) VALUES (?, ?, ?)",
@@ -878,7 +879,7 @@ class SQLiteBackend(DatabaseBackend):
                 ).fetchone()
                 if share and share[0]:
                     try:
-                        if datetime.fromisoformat(share[0]) < datetime.utcnow():
+                        if datetime.fromisoformat(share[0]) < utcnow():
                             return None
                     except ValueError:
                         pass
@@ -888,7 +889,7 @@ class SQLiteBackend(DatabaseBackend):
     # ── Upload Jobs ──────────────────────────────────────────
 
     def create_upload_job(self, collection_id: str, total_files: int, job_type: str = "upload") -> int:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute(
                 "INSERT INTO upload_jobs (collection_id, status, total_files, started_at, job_type) VALUES (?, ?, ?, ?, ?)",
@@ -924,7 +925,7 @@ class SQLiteBackend(DatabaseBackend):
         status = kwargs.get("status")
         if status in ("completed", "failed", "cancelled"):
             updates.append("completed_at = ?")
-            params.append(datetime.utcnow().isoformat())
+            params.append(utcnow().isoformat())
 
         if not updates:
             return
@@ -1005,7 +1006,7 @@ class SQLiteBackend(DatabaseBackend):
         per-collection guard refuses every new job for that collection
         forever. Called once at startup, before anything can enqueue work.
         """
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             uploads = conn.execute(
                 """UPDATE upload_jobs SET status = 'failed', error = ?, completed_at = ?,
@@ -1025,7 +1026,7 @@ class SQLiteBackend(DatabaseBackend):
     # ── Reindex Jobs ─────────────────────────────────────────
 
     def create_reindex_job(self, config_snapshot: Dict[str, Any]) -> int:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute(
                 "INSERT INTO reindex_jobs (status, started_at, config_snapshot) VALUES (?, ?, ?)",
@@ -1046,7 +1047,7 @@ class SQLiteBackend(DatabaseBackend):
         status = kwargs.get("status")
         if status in ("completed", "failed"):
             updates.append("completed_at = ?")
-            params.append(datetime.utcnow().isoformat())
+            params.append(utcnow().isoformat())
         if not updates:
             return
         params.append(job_id)
@@ -1105,7 +1106,7 @@ class SQLiteBackend(DatabaseBackend):
         rerank_enabled = kwargs.get("rerank_enabled")
         synthesize_enabled = kwargs.get("synthesize_enabled")
         default_provider = kwargs.get("default_provider")
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
 
         with sqlite_connect(self.db_path) as conn:
             row = conn.execute("SELECT * FROM ai_preferences WHERE id = 1").fetchone()
@@ -1141,7 +1142,7 @@ class SQLiteBackend(DatabaseBackend):
     # ── Search History ───────────────────────────────────────
 
     def add_search_history(self, query: str, top_k: int, results_count: int, **kwargs) -> int:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute(
                 """INSERT INTO search_history (query, timestamp, top_k, results_count, ai_provider, ai_used, results_json, execution_time_ms, user_id, collection_id)
@@ -1177,7 +1178,7 @@ class SQLiteBackend(DatabaseBackend):
             return None
 
     def delete_old_search_history(self, days: int = 30):
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cutoff = (utcnow() - timedelta(days=days)).isoformat()
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute("DELETE FROM search_history WHERE timestamp < ?", (cutoff,))
             deleted = cursor.rowcount
@@ -1198,7 +1199,7 @@ class SQLiteBackend(DatabaseBackend):
         cache_hit: bool = False,
         duration_ms: Optional[int] = None,
     ) -> int:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute(
                 """INSERT INTO chat_usage (timestamp, user_id, collection_id, provider, model,
@@ -1243,7 +1244,7 @@ class SQLiteBackend(DatabaseBackend):
             return {"turns": row[0], "input_tokens": row[1], "output_tokens": row[2]}
 
     def delete_old_chat_usage(self, days: int = 180) -> int:
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cutoff = (utcnow() - timedelta(days=days)).isoformat()
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute("DELETE FROM chat_usage WHERE timestamp < ?", (cutoff,))
             deleted = cursor.rowcount
@@ -1260,7 +1261,7 @@ class SQLiteBackend(DatabaseBackend):
         allowlist: bool = False,
     ) -> Dict[str, Any]:
         token_id = str(uuid.uuid4())
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         scope_json = json.dumps(list(collection_scope)) if collection_scope else None
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
@@ -1309,7 +1310,7 @@ class SQLiteBackend(DatabaseBackend):
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute(
                 "UPDATE mcp_tokens SET revoked_at = ? WHERE user_id IS ? AND revoked_at IS NULL",
-                (datetime.utcnow().isoformat(), user_id),
+                (utcnow().isoformat(), user_id),
             )
             conn.commit()
             return cursor.rowcount
@@ -1318,7 +1319,7 @@ class SQLiteBackend(DatabaseBackend):
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
                 "UPDATE mcp_tokens SET last_used_at = ?, use_count = COALESCE(use_count, 0) + 1 WHERE id = ?",
-                (datetime.utcnow().isoformat(), token_id),
+                (utcnow().isoformat(), token_id),
             )
             conn.commit()
 
@@ -1327,7 +1328,7 @@ class SQLiteBackend(DatabaseBackend):
             cursor = conn.execute(
                 """UPDATE mcp_tokens SET revoked_at = ?
                    WHERE id = ? AND user_id IS ? AND revoked_at IS NULL""",
-                (datetime.utcnow().isoformat(), token_id, user_id),
+                (utcnow().isoformat(), token_id, user_id),
             )
             conn.commit()
             return cursor.rowcount > 0
@@ -1379,7 +1380,7 @@ class SQLiteBackend(DatabaseBackend):
 
     def add_audit_events(self, actor: Optional[str], action: str, collection_id: Optional[str],
                          events: List[Dict[str, Optional[str]]]) -> None:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             conn.executemany(
                 """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
@@ -1402,7 +1403,7 @@ class SQLiteBackend(DatabaseBackend):
             cursor = conn.execute(
                 """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (datetime.utcnow().isoformat(), actor, action, collection_id, document_id, target, detail),
+                (utcnow().isoformat(), actor, action, collection_id, document_id, target, detail),
             )
             conn.commit()
             return cursor.lastrowid
@@ -1436,7 +1437,7 @@ class SQLiteBackend(DatabaseBackend):
             return [dict(r) for r in rows]
 
     def delete_old_audit_events(self, days: int) -> int:
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cutoff = (utcnow() - timedelta(days=days)).isoformat()
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute("DELETE FROM audit_events WHERE timestamp < ?", (cutoff,))
             conn.commit()
@@ -1445,7 +1446,7 @@ class SQLiteBackend(DatabaseBackend):
     # ── Acceptable-use acknowledgements ──────────────────────
 
     def record_aup_acknowledgement(self, user_id: str, version: str) -> Dict[str, Any]:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO aup_acknowledgements (user_id, version, accepted_at)
@@ -1478,7 +1479,7 @@ class SQLiteBackend(DatabaseBackend):
         self, content_hash: str, blocked_by: Optional[str], reason: str = "",
         filename: Optional[str] = None,
     ) -> Dict[str, Any]:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO blocked_hashes (content_hash, blocked_by, blocked_at, reason, filename)
@@ -1524,7 +1525,7 @@ class SQLiteBackend(DatabaseBackend):
 
     def set_user_preference(self, key: str, value: Any):
         value_str = json.dumps(value) if not isinstance(value, str) else value
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utcnow().isoformat()
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
                 """INSERT INTO user_preferences (key, value, updated_at) VALUES (?, ?, ?)

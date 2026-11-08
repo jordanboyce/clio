@@ -432,8 +432,15 @@ def egress_paths() -> List[Dict[str, str]]:
             add("Content review", reviewer, "internal" if local else ("blocked" if offline else "open"),
                 "Sampled pages are sent for review.")
 
-    add("Model downloads", "huggingface.co", "blocked" if offline else "open",
-        "Models load from the local cache only." if offline else "Models download on first use if missing.")
+    from services.embedder import DEFAULT_HUB_ENDPOINT, hub_endpoint, hub_host
+
+    mirrored = hub_endpoint() != DEFAULT_HUB_ENDPOINT
+    # "open", mirror or not: HF_ENDPOINT may name a public mirror as well as an
+    # internal one, and this report must not understate an outbound path.
+    add("Model downloads", hub_host(), "blocked" if offline else "open",
+        "Models load from the local cache only." if offline else (
+            "Models download on first use if missing, from this mirror (HF_ENDPOINT)." if mirrored
+            else "Models download on first use if missing."))
     add("Telemetry / analytics", "none", "none", "The server and the frontend make no analytics calls.")
     return paths
 

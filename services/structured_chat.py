@@ -207,40 +207,6 @@ def parse_tool_calls(response_text: str) -> List[Dict[str, Any]]:
     return calls
 
 
-def _resolve_store_for_identifier(
-    identifier: Optional[str],
-    stores: Dict[str, StructuredStore],
-    tables: List[Dict[str, Any]],
-) -> Optional[StructuredStore]:
-    """Look up the store whose tables contain the given identifier."""
-    if not stores:
-        return None
-    if identifier:
-        for t in tables:
-            if identifier in (t.get("table_name"), t.get("filename"), t.get("document_id")):
-                cid = t.get("collection_id")
-                if cid and cid in stores:
-                    return stores[cid]
-    return next(iter(stores.values()))
-
-
-def _resolve_store_for_sql(
-    sql: str,
-    stores: Dict[str, StructuredStore],
-    tables: List[Dict[str, Any]],
-) -> Optional[StructuredStore]:
-    """Scan SQL text for a known table name and route to the owning store."""
-    if not stores:
-        return None
-    for t in tables:
-        name = t.get("table_name") or ""
-        if name and re.search(rf'\b{re.escape(name)}\b', sql):
-            cid = t.get("collection_id")
-            if cid and cid in stores:
-                return stores[cid]
-    return next(iter(stores.values()))
-
-
 _TOOL_ALIASES = {
     "query_structured_table": "query_table",
     "search": "search_documents",

@@ -136,3 +136,22 @@ def test_api_lists_sources_and_answers_503_on_search(unavailable_model, monkeypa
     assert body["code"] == "embedding_unavailable"
     assert "huggingface.co" in body["detail"]
     assert resp.headers.get("retry-after") == "20"
+
+
+def test_a_failed_download_names_the_hub_but_not_the_server_path(monkeypatch, tmp_path):
+    """The reason reaches every reader of the collection (the embedding-health
+    probe, the sidebar notice), so it says what to fix without the server's
+    filesystem layout, and fastembed's own trailing full stop is not doubled."""
+    import services.embedder as embedder
+
+    def blocked(fe_id, cache_dir, retries=1):
+        raise RuntimeError("Could not load model sentence-transformers/all-MiniLM-L6-v2 from any source.")
+
+    monkeypatch.setattr(embedder, "fastembed_model_cached", lambda *a, **k: False)
+    monkeypatch.setattr(embedder, "_fastembed_prefetch", blocked)
+    with pytest.raises(RuntimeError) as err:
+        embedder.FastEmbedService("all-MiniLM-L6-v2", cache_dir=tmp_path / "models")
+    message = str(err.value)
+    assert "huggingface.co" in message
+    assert str(tmp_path) not in message
+    assert ".." not in message

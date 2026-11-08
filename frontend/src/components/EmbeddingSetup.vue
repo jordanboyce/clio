@@ -31,7 +31,7 @@
       <!-- Per-choice detail -->
       <div v-if="choice === 'local'" class="text-xs text-base-content/60 leading-relaxed px-1">
         <template v-if="options.local.cached">The model is already on this server. Nothing to download.</template>
-        <template v-else-if="options.local.huggingface_reachable === false">This server cannot reach huggingface.co, so the model cannot be downloaded here. Pick Ollama or a hosted provider, or pre-seed the model (see docs/AIRGAP.md).</template>
+        <template v-else-if="options.local.huggingface_reachable === false">This server cannot reach {{ options.local.model_source || 'huggingface.co' }}, so the model cannot be downloaded here. Pick Ollama or a hosted provider, pre-seed the model (see docs/AIRGAP.md), or set HF_ENDPOINT to a mirror your network allows.</template>
         <template v-else>One download of about {{ options.local.size_mb }} MB, kept with your data. Text never leaves this machine.</template>
       </div>
 

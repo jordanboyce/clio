@@ -8,11 +8,10 @@ Handles runtime configuration changes including:
 Configuration is stored in SQLite database for persistence across restarts.
 """
 
-import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
-from config import ALL_AI_PROVIDERS, Settings, settings
+from typing import Dict, Any
+from config import ALL_AI_PROVIDERS, settings
 from services.app_database import app_db
 from services.secret_box import SECRET_CONFIG_FIELDS
 

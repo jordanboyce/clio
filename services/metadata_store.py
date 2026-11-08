@@ -973,40 +973,43 @@ class MetadataStore:
             self._add_missing_columns(conn)
 
     def _add_missing_columns(self, conn: sqlite3.Connection):
+        # Info, not warning: every new collection's database comes through
+        # here on first use, so on a fresh install this is routine, not a sign
+        # that anything was wrong.
         doc_columns = self._get_table_columns(conn, "documents")
         migrated = False
         if "source_path" not in doc_columns:
-            logger.warning("Running defensive v3.1 migration - columns were missing")
+            logger.info("Running defensive v3.1 migration - columns were missing")
             self._migrate_to_v3_1(conn)
             migrated = True
         if "injection_warnings" not in doc_columns:
-            logger.warning("Running defensive v3.2 migration - injection_warnings column missing")
+            logger.info("Running defensive v3.2 migration - injection_warnings column missing")
             self._migrate_to_v3_2(conn)
             migrated = True
         if "policy_status" not in doc_columns:
-            logger.warning("Running defensive v3.3 migration - governance columns missing")
+            logger.info("Running defensive v3.3 migration - governance columns missing")
             self._migrate_to_v3_3(conn)
             migrated = True
         if "file_size" not in doc_columns:
-            logger.warning("Running defensive v3.4 migration - file_size column missing")
+            logger.info("Running defensive v3.4 migration - file_size column missing")
             self._migrate_to_v3_4(conn)
             migrated = True
         if not conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_entities'"
         ).fetchone():
-            logger.warning("Running defensive v3.5 migration - chunk_entities table missing")
+            logger.info("Running defensive v3.5 migration - chunk_entities table missing")
             self._migrate_to_v3_5(conn)
             migrated = True
         if "symbol_name" not in self._get_table_columns(conn, "chunks"):
-            logger.warning("Running defensive v3.6 migration - chunk symbol columns missing")
+            logger.info("Running defensive v3.6 migration - chunk symbol columns missing")
             self._migrate_to_v3_6(conn)
             migrated = True
         if "injection_review" not in self._get_table_columns(conn, "documents"):
-            logger.warning("Running defensive v3.7 migration - injection_review column missing")
+            logger.info("Running defensive v3.7 migration - injection_review column missing")
             self._migrate_to_v3_7(conn)
             migrated = True
         if "superseded_by" not in self._get_table_columns(conn, "documents"):
-            logger.warning("Running defensive v3.8 migration - superseded_by column missing")
+            logger.info("Running defensive v3.8 migration - superseded_by column missing")
             self._migrate_to_v3_8(conn)
             migrated = True
         if migrated:

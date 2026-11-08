@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from bs4 import BeautifulSoup, Comment, NavigableString
+from bs4 import BeautifulSoup, Comment
 
 # Write-time caps. A note is written by a person; a million characters is a
 # book, and anything bigger is a file that should be uploaded as one.

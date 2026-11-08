@@ -56,7 +56,7 @@
         >
           <span class="mt-0.5 flex-shrink-0 text-primary" aria-hidden="true">
             <span v-if="loadingSamples" class="loading loading-spinner loading-xs"></span>
-            <Sparkles v-else :size="16" />
+            <ScrollText v-else :size="16" />
           </span>
           <span class="min-w-0">
             <span class="block font-medium text-sm">{{ loadingSamples ? 'Adding the sample documents…' : 'Explore with sample documents' }}</span>
@@ -248,7 +248,7 @@
 
 <script setup>
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
-import { Check, Sparkles } from 'lucide-vue-next'
+import { Check, ScrollText } from 'lucide-vue-next'
 import http from '../utils/http'
 import EmbeddingSetup from './EmbeddingSetup.vue'
 import { useUserStore } from '../stores/userStore'
@@ -418,7 +418,7 @@ const connectKey = async () => {
   upsertProviderConfig(id, { apiKey: key, model: selectedDef.value?.models?.[0]?.id || '' })
   try {
     // Best-effort server-side store so the MCP chat path can use it too.
-    await http.post('/api/agent/config', null, { params: { provider: id, api_key: key } })
+    await http.post('/api/agent/config', { provider: id, api_key: key })
   } catch (e) {
     console.warn('Could not store key server-side:', e?.message || e)
   }

@@ -4,7 +4,7 @@
       <!-- Header row -->
       <div class="flex items-center justify-between flex-shrink-0 py-1.5 mb-1 border-b border-base-300/60">
         <div class="flex items-center gap-1.5 min-w-0">
-          <Bot :size="14" class="text-base-content/40 flex-shrink-0" aria-hidden="true" />
+          <MessageSquare :size="14" class="text-base-content/40 flex-shrink-0" aria-hidden="true" />
           <form v-if="renaming" class="min-w-0" @submit.prevent="commitRename">
             <label for="chat-title-input" class="sr-only">Chat title</label>
             <input
@@ -217,7 +217,7 @@
       <div ref="messagesContainer" class="flex-1 overflow-y-auto space-y-4 min-h-0 pr-1">
 
         <!-- Empty state -->
-        <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full py-8 px-4">
+        <div v-if="messages.length === 0" class="flex flex-col items-center justify-center min-h-full py-8 px-4">
           <!-- out-in: the two states swap rather than drawing over each other. -->
           <Transition name="rise" mode="out-in" appear>
             <div v-if="hasAnyProvider && documentCount > 0" class="w-full max-w-xl">
@@ -310,7 +310,7 @@
                   @click="trySamples"
                 >
                   <span v-if="addingSamples" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
-                  <Sparkles v-else :size="14" aria-hidden="true" />
+                  <ScrollText v-else :size="14" aria-hidden="true" />
                   {{ addingSamples ? 'Adding samples…' : 'Try it with sample documents' }}
                 </button>
               </div>
@@ -369,7 +369,7 @@
                     v-if="sr.tool === '_thinking'"
                     class="flex items-start gap-2 text-xs text-base-content/50 italic px-1 py-0.5"
                   >
-                    <Sparkles :size="11" class="mt-0.5 flex-shrink-0 text-base-content/30" />
+                    <Feather :size="11" class="mt-0.5 flex-shrink-0 text-base-content/30" aria-hidden="true" />
                     <span class="whitespace-pre-wrap">{{ sr.result?.text }}</span>
                   </div>
 
@@ -608,7 +608,7 @@
                   data-testid="related-questions"
                 >
                   <div class="flex items-center gap-1 text-xs font-medium text-base-content/60 mb-0.5">
-                    <Sparkles :size="11" class="text-base-content/40" aria-hidden="true" />
+                    <CornerDownRight :size="11" class="text-base-content/40" aria-hidden="true" />
                     Related
                   </div>
                   <ul class="divide-y divide-base-300/60">
@@ -763,7 +763,7 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import http from '../utils/http'
 import AnswerEvidence from './AnswerEvidence.vue'
 import { answerWithReferences } from '../utils/answerEvidence'
-import { Bot, FileText, ArrowUp, Trash2, Layers, Database, Plus, History, ChevronDown, SlidersHorizontal, Table2, Search, BookOpen, ListTree, Wrench, Sparkles, Copy, Check, RefreshCw, Zap, Download, Square, Info, CircleAlert, X } from 'lucide-vue-next'
+import { CornerDownRight, Feather, MessageSquare, ScrollText, FileText, ArrowUp, Trash2, Layers, Database, Plus, History, ChevronDown, SlidersHorizontal, Table2, Search, BookOpen, ListTree, Wrench, Copy, Check, RefreshCw, Zap, Download, Square, Info, CircleAlert, X } from 'lucide-vue-next'
 import { useChatStore } from '../stores/chatStore'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'

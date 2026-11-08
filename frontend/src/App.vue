@@ -131,7 +131,7 @@
           </li>
           <li>
             <button @click="showOnboarding = true; closeMenus()">
-              <Sparkles :size="14" />
+              <RotateCcw :size="14" />
               Run setup again
             </button>
           </li>
@@ -605,7 +605,7 @@
               </div>
             </div>
 
-            <SearchTab v-if="activeTab === 'search'" @switch-tab="switchTab" />
+            <SearchTab v-if="activeTab === 'search'" @switch-tab="switchTab" @add-sources="openAddSources" />
             <ArtifactsTab v-if="activeTab === 'generate'" />
             <ResearchTab v-if="activeTab === 'research'" />
             <ExpertiseLibrary v-if="activeTab === 'expertise'" />
@@ -769,22 +769,25 @@
     <!-- Search-index readiness. One quiet bar at the top: progress while the
          model downloads, a way forward when it is missing or failed, nothing
          at all once it is ready. -->
+    <!-- On a phone the header holds the collection picker and the composer
+         sits at the bottom, so the notice drops in just below the header,
+         over the chat title row, and covers neither. -->
     <Transition name="rise">
       <div
         v-if="embeddingBanner && !embeddingBannerDismissed"
-        class="fixed top-0 inset-x-0 z-[102] flex justify-center pointer-events-none"
+        class="fixed inset-x-0 z-[102] flex justify-center pointer-events-none px-3 md:px-0 top-12 md:top-0"
         :role="embeddingBanner.kind === 'progress' ? 'status' : 'alert'"
         aria-live="polite"
       >
         <div
-          class="notice shadow-lg rounded-t-none rounded-b-xl bg-base-100 ring-1 ring-base-content/10 w-full max-w-xl pointer-events-auto items-start"
-          :class="{ 'notice-warning': embeddingBanner.kind === 'missing', 'notice-error': embeddingBanner.kind === 'error' }"
+          class="notice notice-floating shadow-lg rounded-xl md:rounded-t-none ring-1 ring-base-content/10 w-full max-w-xl pointer-events-auto items-start"
+          :class="{ 'notice-warning': embeddingBanner.kind !== 'progress' }"
         >
           <span v-if="embeddingBanner.kind === 'progress'" class="loading loading-spinner loading-xs mt-0.5" aria-hidden="true"></span>
-          <AlertTriangle v-else :size="15" class="mt-0.5" :class="embeddingBanner.kind === 'error' ? 'text-error' : 'text-warning'" aria-hidden="true" />
+          <AlertTriangle v-else :size="15" class="mt-0.5 text-warning" aria-hidden="true" />
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
-              <span class="truncate">{{ embeddingBanner.text }}</span>
+              <span :class="embeddingBanner.kind === 'progress' ? 'truncate' : ''">{{ embeddingBanner.text }}</span>
               <span v-if="embeddingBanner.kind === 'progress' && embeddingBanner.percent != null" class="tabular-nums text-base-content/60 flex-shrink-0">{{ embeddingBanner.percent }}%</span>
             </div>
             <progress
@@ -804,7 +807,17 @@
                 {{ embeddingBanner.kind === 'error' ? 'Try again' : 'Download now' }}
               </button>
               <button class="btn btn-xs btn-ghost" @click="switchTab('settings')">Choose another provider</button>
+              <button
+                v-if="embeddingBanner.detail"
+                class="btn btn-xs btn-ghost text-base-content/60"
+                :aria-expanded="embeddingDetailOpen"
+                @click="embeddingDetailOpen = !embeddingDetailOpen"
+              >{{ embeddingDetailOpen ? 'Hide details' : 'Details' }}</button>
             </div>
+            <p
+              v-if="embeddingBanner.detail && embeddingDetailOpen"
+              class="mt-1.5 text-xs text-base-content/70 break-words select-text"
+            >{{ embeddingBanner.detail }}</p>
           </div>
           <button
             class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content -mr-1"
@@ -1328,7 +1341,7 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
 import { useOverlayFocus } from './composables/useOverlayFocus'
-import { ChartColumn, Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, Sparkles, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig, Network, SlidersHorizontal } from 'lucide-vue-next'
+import { ChartColumn, Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, RotateCcw, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig, Network, SlidersHorizontal } from 'lucide-vue-next'
 import CommandPalette from './components/CommandPalette.vue'
 import EmbeddingMismatchNotice from './components/EmbeddingMismatchNotice.vue'
 import ShortcutsDialog from './components/ShortcutsDialog.vue'
@@ -1795,6 +1808,7 @@ useOverlayFocus(showJobsDrawer, jobsDrawerPanel, { onEscape: () => { showJobsDra
 // Embedding-model-missing banner: the flag comes from /health (via
 // statsStore), but dismissal is a per-session UI concern, not persisted.
 const embeddingBannerDismissed = ref(false)
+const embeddingDetailOpen = ref(false)
 const embeddingWarming = ref(false)
 // What the readiness bar says, derived from the stats store's live status.
 const embeddingBanner = computed(() => {
@@ -1819,7 +1833,10 @@ const embeddingBanner = computed(() => {
       canDownload: !!e.can_download,
     }
   }
-  if (e.status === 'error') return { kind: 'error', text: `Sources still index and search works by keyword, but the search model could not be prepared: ${e.error || 'unknown error'}`, canDownload: true }
+  // Search still works, so this is a warning, not an error: one short line
+  // that says what it means, the raw reason one click away for whoever
+  // has to fix the network.
+  if (e.status === 'error') return { kind: 'error', text: 'Search is using keywords only: the search model could not be prepared.', detail: [e.model && `Model: ${e.model}.`, e.error].filter(Boolean).join(' '), canDownload: true }
   return null
 })
 // A new problem after a dismissal should show again.
@@ -2121,7 +2138,7 @@ const paletteCommands = computed(() => {
 
   add('Help', 'Keyboard shortcuts', Keyboard, () => { showShortcuts.value = true }, { keys: ['?'] })
   add('Help', 'Documentation', BookOpen, () => window.open('https://github.com/jordanboyce/clio#readme', '_blank', 'noopener'))
-  add('Help', 'Run setup again', Sparkles, () => { showOnboarding.value = true })
+  add('Help', 'Run setup again', RotateCcw, () => { showOnboarding.value = true })
   add('Help', 'About Clio', Info, () => { showAbout.value = true }, { keywords: 'version whats new' })
   return cmds
 })

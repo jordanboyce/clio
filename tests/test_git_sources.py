@@ -10,6 +10,7 @@ import json
 import subprocess
 import threading
 from datetime import datetime, timedelta
+from services.clock import utcnow
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -180,7 +181,7 @@ def test_watcher_syncs_due_sources_and_records_the_change(env, service, repo, mo
     assert source_watcher.run_due() == _counts()
     assert source_changes.list_events(COLLECTION)["events"] == []
 
-    later = datetime.utcnow() + timedelta(minutes=11)
+    later = utcnow() + timedelta(minutes=11)
     assert source_watcher.run_due(now=later) == _counts(synced=1)
     event = source_changes.list_events(COLLECTION)["events"][0]
     assert event["trigger"] == "watch" and event["changed"] == ["readme.txt"]
@@ -194,7 +195,7 @@ def test_watcher_ignores_unwatched_sources(env, service, folder, monkeypatch):
 
     monkeypatch.setattr(us, "upload_service", service)
     service.sync_folder(str(folder), COLLECTION)
-    assert source_watcher.run_due(now=datetime.utcnow() + timedelta(days=2)) == _counts()
+    assert source_watcher.run_due(now=utcnow() + timedelta(days=2)) == _counts()
 
 
 def test_a_failing_source_is_reported_not_fatal(env, service, folder, monkeypatch):
@@ -205,7 +206,7 @@ def test_a_failing_source_is_reported_not_fatal(env, service, folder, monkeypatc
     monkeypatch.setattr(us, "upload_service", service)
     service.sync_folder(str(folder), COLLECTION, remember={"watch": True})
     shutil.rmtree(folder)
-    counts = source_watcher.run_due(now=datetime.utcnow() + timedelta(days=1))
+    counts = source_watcher.run_due(now=utcnow() + timedelta(days=1))
     assert counts["error"] == 1
     assert "Invalid folder path" in service.list_sync_folders(COLLECTION)[0]["last_error"]
 
@@ -432,7 +433,7 @@ def test_watcher_pulls_a_remote_only_when_it_moved(env, service, remote, monkeyp
     dest = git_source.ensure_clone(remote["url"], "main")
     service.sync_folder(str(dest), COLLECTION, prune_missing=True,
                         remember={"git_url": remote["url"], "git_ref": "main", "watch": True})
-    later = datetime.utcnow() + timedelta(hours=1)
+    later = utcnow() + timedelta(hours=1)
 
     assert source_watcher.run_due(now=later) == _counts(unchanged=1)
     assert source_changes.list_events(COLLECTION)["events"] == []
@@ -537,7 +538,7 @@ def test_watcher_leaves_a_source_alone_while_its_job_is_running(env, service, re
     app_db.update_upload_job(_entry(service)["job_id"], status="running")
     (repo / "readme.txt").write_text(_text("readme", salt=5), encoding="utf-8")
     _commit(repo, "while indexing")
-    assert source_watcher.run_due(now=datetime.utcnow() + timedelta(hours=1)) == _counts(busy=1)
+    assert source_watcher.run_due(now=utcnow() + timedelta(hours=1)) == _counts(busy=1)
     assert source_changes.list_events(COLLECTION)["events"] == []
     assert _entry(service)["last_error"] is None
 
@@ -549,7 +550,7 @@ def test_watcher_repeats_a_sync_whose_job_failed_even_when_the_tip_stood_still(e
     dest = git_source.ensure_clone(remote["url"], "main")
     service.sync_folder(str(dest), COLLECTION, prune_missing=True,
                         remember={"git_url": remote["url"], "git_ref": "main", "watch": True})
-    later = datetime.utcnow() + timedelta(hours=1)
+    later = utcnow() + timedelta(hours=1)
     assert source_watcher.run_due(now=later) == _counts(unchanged=1)
 
     app_db.update_upload_job(_entry(service)["job_id"], status="failed", error="embedder down")
@@ -569,7 +570,7 @@ def test_watcher_makes_a_lost_clone_again(env, service, remote, monkeypatch):
                         remember={"git_url": remote["url"], "git_ref": "main", "watch": True})
     shutil.rmtree(dest)
     assert _fresh(service)["stale_reason"] == "The clone is gone; Sync makes it again"
-    assert source_watcher.run_due(now=datetime.utcnow() + timedelta(hours=1)) == _counts(synced=1)
+    assert source_watcher.run_due(now=utcnow() + timedelta(hours=1)) == _counts(synced=1)
     assert (dest / "a.txt").exists()
     assert _fresh(service)["out_of_date"] is False
 
@@ -582,7 +583,7 @@ def test_an_unwatched_remote_is_probed_so_the_panel_can_say_it_is_behind(env, se
     service.sync_folder(str(dest), COLLECTION, prune_missing=True,
                         remember={"git_url": remote["url"], "git_ref": "main", "watch": False})
     first = git_source.head_info(dest)["head"]
-    later = datetime.utcnow() + timedelta(hours=1)
+    later = utcnow() + timedelta(hours=1)
     assert source_watcher.run_due(now=later) == _counts(probed=1)
     assert _entry(service)["upstream_head"] == first
     assert _fresh(service)["out_of_date"] is False
@@ -599,7 +600,7 @@ def test_an_unwatched_remote_is_probed_so_the_panel_can_say_it_is_behind(env, se
 
     # Not due again before the interval (the probe stamped the real clock),
     # and never synced on its own.
-    assert source_watcher.run_due(now=datetime.utcnow() + timedelta(minutes=5)) == _counts()
+    assert source_watcher.run_due(now=utcnow() + timedelta(minutes=5)) == _counts()
 
 
 def test_sync_folder_endpoint_fetches_a_managed_clone_first(client, env, remote):

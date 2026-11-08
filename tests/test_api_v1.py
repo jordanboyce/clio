@@ -9,6 +9,7 @@ model loads; everything else (indexing, jobs, the database) is the real code.
 import json
 import time
 from datetime import datetime, timedelta
+from services.clock import utcnow
 from pathlib import Path
 
 import pytest
@@ -217,7 +218,7 @@ def test_an_expired_app_is_refused(world):
     created = world.register(collections=[cid], expires_in_days=1)
     headers = _bearer(created["key"])
     assert world.client.get("/api/v1/me", headers=headers).status_code == 200
-    app_db.update_api_app(created["id"], {"expires_at": (datetime.utcnow() - timedelta(minutes=1)).isoformat()})
+    app_db.update_api_app(created["id"], {"expires_at": (utcnow() - timedelta(minutes=1)).isoformat()})
     assert world.client.get("/api/v1/me", headers=headers).status_code == 401
     assert world.client.get("/api/admin/apps").json()["apps"][0]["status"] == "expired"
 
@@ -233,7 +234,7 @@ def test_rotation_keeps_the_old_key_through_its_grace_and_not_after(world):
     assert world.client.get("/api/v1/me", headers=new).status_code == 200
 
     app_db.update_api_app(created["id"], {
-        "previous_key_expires_at": (datetime.utcnow() - timedelta(minutes=1)).isoformat(),
+        "previous_key_expires_at": (utcnow() - timedelta(minutes=1)).isoformat(),
     })
     assert world.client.get("/api/v1/me", headers=old).status_code == 401
     assert world.client.get("/api/v1/me", headers=new).status_code == 200
