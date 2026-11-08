@@ -21,7 +21,6 @@ from services.embedder import create_embedding_service, describe_embedding, ensu
 from services.vector_store import VectorStore
 from services.metadata_store import MetadataStore
 from services.indexing.indexer import DocumentIndexer
-from models.schemas import ChunkMetadata
 from config import settings
 
 logger = logging.getLogger(__name__)

@@ -204,13 +204,6 @@ def _get_engine():
         return _engine
 
 
-def reset_engine_for_tests() -> None:
-    global _engine, _engine_error
-    with _engine_lock:
-        _engine = None
-        _engine_error = None
-
-
 # ── Settings ────────────────────────────────────────────────────────────────
 
 def action() -> str:

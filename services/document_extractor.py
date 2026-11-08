@@ -18,7 +18,7 @@ logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
 # Code extraction
 from services.code_extractor import (
-    CodeExtractor, CodeChunk, CodeLanguage,
+    CodeExtractor, CodeChunk,
     SUPPORTED_CODE_EXTENSIONS, is_code_file
 )
 
@@ -26,7 +26,7 @@ from services.code_extractor import (
 from services.ocr_engine import create_ocr_engine, get_available_engines
 
 # Audio transcription (meeting recordings)
-from services.audio_transcriber import AUDIO_EXTENSIONS, is_audio_file
+from services.audio_transcriber import AUDIO_EXTENSIONS
 
 # Text decoding and the standard-library readers for the lighter formats
 from services.format_readers import (

@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import config
-from services.document_extractor import is_supported_filename, unsupported_reason, SUPPORTED_TYPES_SUMMARY
+from services.document_extractor import is_supported_filename, unsupported_reason
 from services import pii_detector
 from services.prompt_injection_detector import apply_suppressions
 from services.custom_file_types import registry as custom_types
@@ -154,16 +154,6 @@ def _content_disposition(disposition: str, filename: str) -> str:
 def _storage_error(error: StorageLimitExceeded) -> HTTPException:
     """The per-collection cap answers 413 with the numbers the UI needs."""
     return HTTPException(status_code=413, detail=error.to_detail())
-
-
-def _supported_types_message() -> str:
-    """Build a human-readable list of supported file types including custom ones."""
-    builtin = SUPPORTED_TYPES_SUMMARY
-    custom = custom_types.extensions()
-    if custom:
-        custom_str = ", ".join(sorted(custom))
-        return f"{builtin}, and custom types: {custom_str}"
-    return builtin
 
 
 def _unsupported_message(filename: str) -> str:

@@ -135,10 +135,6 @@ def list_artifact_types() -> List[Dict[str, str]]:
     ]
 
 
-def is_valid_type(artifact_type: str) -> bool:
-    return artifact_type in ARTIFACT_TYPES
-
-
 def artifact_title(artifact_type: str, focus: Optional[str] = None) -> str:
     label = ARTIFACT_TYPES[artifact_type]["label"]
     # A focus can run to pages; the title is one line in a list.

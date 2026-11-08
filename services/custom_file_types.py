@@ -128,10 +128,6 @@ def _nesting_depth(text: str) -> int:
     return deepest
 
 
-def _line_of(text: str, pos: int) -> int:
-    return text.count("\n", 0, max(0, pos)) + 1
-
-
 def parse_lenient(text: str, fmt: str = "auto") -> Any:
     """Parse JSON, JSON with comments / trailing commas, or a stream of JSON values.
 

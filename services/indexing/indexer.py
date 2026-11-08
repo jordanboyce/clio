@@ -3,7 +3,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional, Callable
-import hashlib
 import logging
 import threading
 import time
@@ -18,7 +17,7 @@ from models.schemas import (
     AIUsageDetail,
     SearchMode,
 )
-from services.document_extractor import DocumentExtractor, ExtractionResult
+from services.document_extractor import DocumentExtractor
 from services.chunker import TextChunker
 from services.embedder import (
     EmbeddingDimensionMismatch, EmbeddingService, EmbeddingUnavailable, ensure_embedding_ready,

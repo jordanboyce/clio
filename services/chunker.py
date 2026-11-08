@@ -1,6 +1,6 @@
-﻿"""Text chunking service for splitting documents into searchable chunks."""
+"""Text chunking service for splitting documents into searchable chunks."""
 
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 import logging
 import re
 

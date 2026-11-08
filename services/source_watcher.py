@@ -106,11 +106,6 @@ def monitored_sources() -> List[Dict[str, Any]]:
     return out
 
 
-def watched_sources() -> List[Dict[str, Any]]:
-    """Every remembered, watched source across all collections."""
-    return [e for e in monitored_sources() if e.get("watch")]
-
-
 def check_source(entry: Dict[str, Any]) -> str:
     """Look after one monitored source. Returns one of :data:`OUTCOMES`:
 

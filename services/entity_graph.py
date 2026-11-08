@@ -19,8 +19,7 @@ vector/BM25 behavior, which is today's status quo.
 
 import re
 import string
-from collections import Counter
-from typing import Dict, Iterable, List, Set, Tuple
+from typing import Dict, Iterable, List, Set
 
 
 # ── normalization ────────────────────────────────────────────────────────────

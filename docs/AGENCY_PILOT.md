@@ -13,9 +13,13 @@ for decisions and for checking dates, exceptions, and source authority.
 
 ## Five-minute demonstration
 
-1. Create a separate collection named **Fictional agency demo**. Upload the three
-   Markdown files in `docs/demo/agency-records/`. These are invented documents,
-   not actual government policy. Keep them separate from customer collections.
+1. Load the fictional records: choose **Explore with sample documents** on the
+   welcome screen, or **Try it with sample documents** on an empty collection's
+   Ask tab. They land in a collection of their own, **Sample: equipment policy**:
+   the policy, its amendment, a desk note that disagrees with it, and a checkout
+   register. These are invented documents, not actual government policy, and
+   stay separate from customer collections. (The files themselves are in
+   `frontend/public/samples/`.)
 2. Ask: **Under EQ-17, when must equipment be returned?** Show the answer and
    select its `[Source N]` references. Read the actual passage and open the original.
 3. Ask: **Does the rule differ for field teams after July 1, 2026?** Explain the
