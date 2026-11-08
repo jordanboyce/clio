@@ -143,8 +143,13 @@ python main.py
 
 The search model (about 90 MB) and the reranker download in the background
 the first time, with progress shown in the app; search works as soon as they
-are in. Optional extras, each a large ML runtime, so install only what you
-use:
+are in. Until then, and for good if this machine cannot reach
+`huggingface.co` (many company networks block it), search works by keyword
+only. Behind such a network, use one of the Docker images above, which have
+both models inside; or set `HF_ENDPOINT` in `.env` to a mirror your network
+allows; or copy the models in from a connected machine
+([docs/AIRGAP.md](docs/AIRGAP.md)). Optional extras, each a large ML runtime,
+so install only what you use:
 
 ```bash
 pip install -r requirements-ocr.txt       # OCR for scanned PDFs (Tesseract)

@@ -687,12 +687,20 @@ async def test_embedding_settings(req: EmbeddingTestRequest):
 
 
 def _huggingface_reachable(timeout: float = 3.0) -> bool:
-    """HEAD https://huggingface.co — can this host download a model at all?"""
+    """HEAD the model source — can this host download a model at all?
+
+    The source is huggingface.co, or the mirror HF_ENDPOINT names: probing
+    huggingface.co behind a network that blocks it but allows the mirror would
+    turn away a download that works. Any answer below 500 (a mirror's root can
+    say 401 or 404) means the host is there.
+    """
     import httpx
+
+    from services.embedder import hub_endpoint
 
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            resp = client.head("https://huggingface.co")
+            resp = client.head(hub_endpoint())
             return resp.status_code < 500
     except Exception:
         return False
@@ -761,6 +769,7 @@ async def embedding_options():
 
     from services.embedder import (
         fastembed_importable,
+        hub_host,
         local_model_cached,
         resolve_local_backend,
         sentence_transformers_importable,
@@ -844,7 +853,9 @@ async def embedding_options():
             "model_label": entry.get("label") or local_model,
             "size_mb": int(entry.get("size_mb") or 0),
             "cached": cached,
+            # Named for the default; true for whichever source model_source is.
             "huggingface_reachable": hf_reachable,
+            "model_source": hub_host(),
             "install_hint": install_hint,
         },
         "ollama": {

@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     # explicitly configure on your own network. See docs/AIRGAP.md.
     offline_mode: bool = False
 
+    # Where models download from, when a network blocks huggingface.co but
+    # allows a mirror of it: an Artifactory or Nexus remote repository for
+    # Hugging Face, or any other host serving the same API. HF_ENDPOINT is the
+    # name the Hugging Face libraries themselves read, so a value already in
+    # the environment works too. Empty = https://huggingface.co.
+    hf_endpoint: str = ""
+
     # Deployment profile. "standard" is the open, zero-configuration appliance.
     # "secure" is for environments that must be able to prove their posture:
     # it defaults the settings in SECURE_PROFILE_DEFAULTS (offline mode, full
@@ -797,6 +804,11 @@ class Settings(BaseSettings):
         if self.offline_mode:
             os.environ.setdefault("HF_HUB_OFFLINE", "1")
             os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        # Same timing for a mirror: huggingface_hub fixes its endpoint at import.
+        # The setting reaches the environment only when the environment has no
+        # HF_ENDPOINT of its own (from .env under `python main.py`, say).
+        if self.hf_endpoint.strip():
+            os.environ.setdefault("HF_ENDPOINT", self.hf_endpoint.strip().rstrip("/"))
 
 
 # Global settings instance

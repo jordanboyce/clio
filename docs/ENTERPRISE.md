@@ -81,6 +81,10 @@ The running deployment reports its own list: **About → Check this deployment**
 `ghcr.io` and `pkg-containers.githubusercontent.com` on 443 (or your internal registry
 mirroring `ghcr.io/jordanboyce/clio`), and Docker Hub for the nginx image. Nothing at
 run time needs `huggingface.co`: the search model and reranker are inside the image.
+Only choosing a different local model later downloads one. If you will, and your
+network has a Hugging Face mirror (an Artifactory or Nexus remote repository), set
+`HF_ENDPOINT` to it and put its host in `NO_PROXY`; otherwise copy the model in as
+[AIRGAP.md](AIRGAP.md) describes.
 
 ## Get the install across
 

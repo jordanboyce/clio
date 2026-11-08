@@ -365,6 +365,25 @@ def hub_offline() -> bool:
     return os.environ.get("HF_HUB_OFFLINE", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+DEFAULT_HUB_ENDPOINT = "https://huggingface.co"
+
+
+def hub_endpoint() -> str:
+    """Where models download from: HF_ENDPOINT (a mirror) or huggingface.co.
+
+    Read from the environment, which is what the Hugging Face libraries
+    themselves use; config.py puts the HF_ENDPOINT setting there at start-up.
+    """
+    return (os.environ.get("HF_ENDPOINT") or "").strip().rstrip("/") or DEFAULT_HUB_ENDPOINT
+
+
+def hub_host() -> str:
+    """The model source's host name, for messages: "huggingface.co" or a mirror's."""
+    from urllib.parse import urlparse
+
+    return urlparse(hub_endpoint()).netloc or hub_endpoint()
+
+
 def retrieval_prompts(model_name: str) -> Tuple[Optional[str], Optional[str]]:
     """(query_prefix, document_prefix) a model expects, by model family.
 
@@ -472,11 +491,14 @@ class FastEmbedService:
             # reaches every user of the collection, the path is the operator's.
             logger.warning(f"Embedding model '{model_name}' download into {self.cache_dir} failed: {e}")
             reason = str(e).strip().rstrip(".") or type(e).__name__
+            mirror_hint = "" if hub_endpoint() != DEFAULT_HUB_ENDPOINT else (
+                ", point HF_ENDPOINT at a mirror your network allows"
+            )
             raise RuntimeError(
-                f"Could not download embedding model '{model_name}' from huggingface.co: "
-                f"{reason}. Check the network or proxy, pre-seed the cache from a "
-                f"connected machine (docs/AIRGAP.md), or choose Ollama or a hosted "
-                f"provider instead."
+                f"Could not download embedding model '{model_name}' from {hub_host()}: "
+                f"{reason}. Check the network or proxy{mirror_hint}, pre-seed the cache "
+                f"from a connected machine (docs/AIRGAP.md), or choose Ollama or a "
+                f"hosted provider instead."
             ) from e
 
         desc = _fastembed_catalog().get(fe_id) or {}
