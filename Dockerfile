@@ -13,6 +13,9 @@
 # ── Stage 1: build the Vue frontend ──
 # (debian-based node image: the pinned rollup/esbuild natives are glibc builds)
 FROM node:24-bookworm-slim AS frontend
+# Include this stage in the image's SBOM. Its JavaScript ends up bundled into the
+# final image, where a scan of that image alone cannot see which packages it came from.
+ARG BUILDKIT_SBOM_SCAN_STAGE=true
 WORKDIR /build
 
 # Trust an optional enterprise CA before npm reaches the registry. Node uses

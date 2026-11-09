@@ -363,9 +363,9 @@ replaces the container and keeps the data.
 
 ### Verifying the image
 
-From the first release built with these steps, published images carry an SBOM and build
-provenance, and a keyless signature. Run these before carrying the image in, somewhere that
-can reach the registry and Sigstore's public services:
+From 1.3.0 on, published images carry an SBOM and build provenance, and a keyless signature.
+Run these before carrying the image in, somewhere that can reach the registry and Sigstore's
+public services:
 
 ```bash
 cosign verify ghcr.io/jordanboyce/clio:<version> \
@@ -376,8 +376,19 @@ docker buildx imagetools inspect ghcr.io/jordanboyce/clio:<version> --format '{{
 docker buildx imagetools inspect ghcr.io/jordanboyce/clio:<version> --format '{{ json .Provenance }}'
 ```
 
-A bundle you built yourself with `package_image.sh` is not signed: its checksums show that it
-arrived intact, and your own build process is what vouches for it. The dependency audit in
+**Reading the SBOM.** The output holds up to two documents:
+
+- `SPDX` is what is in the image you run: Python and OS packages.
+- `AdditionalSPDXs` holds `sbom-frontend`, from releases after 1.3.0. The image contains only a
+  bundled copy of the frontend's JavaScript, so a scan of the image cannot name those packages,
+  and this comes from the stage that builds it. It lists more than ships: alongside what reaches
+  the browser (Vue, DOMPurify, Swagger UI) are the build's own tools (Vite, eslint, vitest), Node
+  and that stage's OS packages. In `frontend/package.json`, everything in `devDependencies` except
+  Swagger UI stays behind.
+
+A bundle you built yourself with `package_image.sh` is not signed and carries no SBOM: its
+checksums show that it arrived intact, and your own build process is what vouches for it. To
+produce one, build with `docker buildx build --sbom=true`. The dependency audit in
 `.github/workflows/dependency-audit.yml` runs weekly.
 
 ## Going live

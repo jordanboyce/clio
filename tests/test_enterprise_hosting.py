@@ -337,6 +337,17 @@ def test_the_image_healthcheck_is_the_probe_and_ignores_an_outbound_proxy():
     assert "--noproxy" in healthcheck  # HTTP_PROXY must not capture localhost
 
 
+def test_the_sbom_covers_the_stage_that_builds_the_frontend():
+    """The final image holds only a bundled copy of the JavaScript, so a scan of it
+    finds no Vue or Swagger UI. BuildKit scans an earlier stage only if asked there."""
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    frontend = dockerfile[dockerfile.index("AS frontend"):dockerfile.index("AS deps")]
+    assert "ARG BUILDKIT_SBOM_SCAN_STAGE=true" in frontend
+    # Only there: every stage would add the compilers that never reach the image.
+    assert dockerfile.count("BUILDKIT_SBOM_SCAN_STAGE") == 1
+    assert "sbom: true" in (ROOT / ".github" / "workflows" / "docker-publish.yml").read_text(encoding="utf-8")
+
+
 def test_the_proxy_reaches_clio_only_over_the_network_whose_address_is_trusted():
     compose = (ROOT / "docker-compose.proxy.yml").read_text(encoding="utf-8")
     template = (ROOT / "docker" / "nginx" / "clio.conf.template").read_text(encoding="utf-8")
