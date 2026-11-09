@@ -48,8 +48,11 @@ CREATE TABLE IF NOT EXISTS research_papers (
     renamed_at TEXT,
     analyzed_at TEXT,
     analysis_notes TEXT,        -- JSON list of plain-language notes
-    kind TEXT,                  -- 'article' | 'book' (how the document looked)
-    isbn TEXT
+    kind TEXT,                  -- 'article' | 'book' (how the document looked), or what a user set
+    isbn TEXT,
+    details TEXT,               -- JSON: citation fields beyond the columns (publisher, volume, pages,
+                                -- report number, organization, page_offset ...)
+    corrected_at TEXT           -- the last time a person corrected the record
 );
 CREATE TABLE IF NOT EXISTS research_references (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,10 +122,11 @@ CREATE TABLE IF NOT EXISTS research_jobs (
 
 _PAPER_FIELDS = ("title", "authors", "year", "doi", "arxiv_id", "venue", "abstract",
                  "provenance", "original_filename", "renamed_at", "analyzed_at",
-                 "analysis_notes", "kind", "isbn")
+                 "analysis_notes", "kind", "isbn", "details", "corrected_at")
 # Columns added after the table first shipped; created on older databases.
-_ADDED_PAPER_COLUMNS = (("kind", "TEXT"), ("isbn", "TEXT"))
-_JSON_PAPER_FIELDS = {"authors", "provenance", "analysis_notes"}
+_ADDED_PAPER_COLUMNS = (("kind", "TEXT"), ("isbn", "TEXT"), ("details", "TEXT"), ("corrected_at", "TEXT"))
+_JSON_PAPER_FIELDS = {"authors", "provenance", "analysis_notes", "details"}
+_JSON_DICT_FIELDS = {"provenance", "details"}
 
 _REFERENCE_FIELDS = ("kind", "ordinal", "raw_text", "page_number", "doi", "arxiv_id", "url",
                      "title", "year", "resolved_url", "resolved_kind", "resolved_via",
@@ -233,7 +237,7 @@ class ResearchStore:
     def _paper_row(row: sqlite3.Row) -> dict:
         out = dict(row)
         for field in _JSON_PAPER_FIELDS:
-            out[field] = _loads(out.get(field), [] if field != "provenance" else {})
+            out[field] = _loads(out.get(field), {} if field in _JSON_DICT_FIELDS else [])
         return out
 
     def version_token(self) -> str:
@@ -241,8 +245,8 @@ class ResearchStore:
         cannot stand in for it: analyzing, renaming and matching rewrite these
         tables and leave the documents table untouched."""
         with self._connect() as conn:
-            papers = conn.execute("SELECT COUNT(*), COALESCE(MAX(analyzed_at), ''), COALESCE(MAX(renamed_at), '') "
-                                  "FROM research_papers").fetchone()
+            papers = conn.execute("SELECT COUNT(*), COALESCE(MAX(analyzed_at), ''), COALESCE(MAX(renamed_at), ''), "
+                                  "COALESCE(MAX(corrected_at), '') FROM research_papers").fetchone()
             references = conn.execute("SELECT COUNT(*), COUNT(matched_document_id), COALESCE(MAX(updated_at), '') "
                                       "FROM research_references").fetchone()
         return ":".join(str(value) for value in (*papers, *references))

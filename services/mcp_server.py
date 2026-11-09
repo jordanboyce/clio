@@ -2732,6 +2732,162 @@ def get_document_metadata(
     )
 
 
+_CITE_STYLES = ("apa", "chicago", "mla", "ieee", "harvard")
+_CITE_MAX_PASSAGES = 100
+
+
+def cite_sources_sync(
+    passages: list[dict[str, Any]],
+    style: str = "apa",
+    collection_id: str | None = None,
+    include_location: bool = True,
+) -> dict[str, Any]:
+    """Synchronous implementation of cite_sources; docs live on the tool."""
+    from services.research import citations
+    from services.research.library import research_store
+
+    if style not in _CITE_STYLES:
+        raise ValueError(f"style must be one of {', '.join(_CITE_STYLES)}")
+    if not passages:
+        raise ValueError("passages must name at least one document_id")
+    resolved_collection = _resolve_collection_id(collection_id)
+    indexer = indexer_manager.get_indexer(resolved_collection)
+    collection = collection_service.get_collection(resolved_collection) or {}
+    wanted: list[str] = []
+    rows: list[tuple[str, int | None]] = []
+    for p in passages[:_CITE_MAX_PASSAGES]:
+        did = str((p or {}).get("document_id") or "").strip()
+        if not did:
+            continue
+        try:
+            page = int(p.get("page_number") or p.get("page") or 0) or None
+        except (TypeError, ValueError):
+            page = None
+        rows.append((did, page))
+        if did not in wanted:
+            wanted.append(did)
+    docs = {did: _visible_document_info(resolved_collection, did) for did in wanted}
+    papers = research_store(indexer).get_papers(wanted)
+    name = _mcp_safe_name(collection, resolved_collection)
+    items = {did: citations.build_item(docs[did], papers.get(did), name) for did in wanted}
+    numbers = {did: i for i, did in enumerate(wanted, 1)}
+    cited = []
+    for did, page in rows:
+        c = citations.cite(items[did], style, page, numbers[did], include_location)
+        cited.append({"document_id": did, "filename": docs[did].get("filename"), "file_page": page,
+                      "page": c["page"], "page_is_printed": c["page_is_printed"],
+                      "in_text": c["in_text"], "missing": c["missing"]})
+    return _tool_response({
+        "collection_id": resolved_collection,
+        "style": style,
+        "citations": cited,
+        "bibliography": citations.bibliography(list(items.values()), style, "text", include_location),
+        "incomplete": [did for did in wanted if items[did]["missing"]],
+        "note": ("Built from each source's own record. A field the record lacks is listed in "
+                 "'missing', never invented: tell the user what to add rather than guessing it."),
+    }, "cite_sources")
+
+
+@_threaded_tool(title="Cite sources", annotations=_read_only("Cite sources"))
+def cite_sources(
+    passages: Annotated[list[dict[str, Any]], Field(description=(
+        "Passages to cite, in order: [{\"document_id\": ..., \"page_number\": 4}]. Take both from "
+        "search results; page_number may be omitted to cite a whole source."))],
+    style: Annotated[str, Field(description="apa | chicago | mla | ieee | harvard")] = "apa",
+    collection_id: str | None = None,
+    include_location: bool = True,
+) -> dict[str, Any]:
+    """Format citations for passages you are quoting or relying on.
+
+    Use this instead of writing a citation yourself. It returns, for each
+    passage, the in-text citation with the page *printed* on that page (not
+    the page index of the file), and a reference list in the chosen style,
+    built from the source's record: details read from its text, from a
+    catalogue record for an identifier it prints, or typed by a person.
+    Nothing is invented: a missing year is "n.d." and listed under
+    `missing`. Internal sources (no DOI, ISBN or URL) say which collection
+    and file hold them when `include_location` is true.
+
+    Returns `citations` (document_id, in_text, page, missing) in the order
+    given, `bibliography` (strings), and `incomplete` (document ids whose
+    record lacks something a citation needs).
+    """
+    return cite_sources_sync(passages, style=style, collection_id=collection_id,
+                             include_location=include_location)
+
+
+def check_citations_sync(
+    text: str,
+    collection_id: str | None = None,
+    document_ids: list[str] | None = None,
+    style: str = "apa",
+) -> dict[str, Any]:
+    """Synchronous implementation of check_citations; docs live on the tool."""
+    from services.governance import is_hidden
+    from services.research import draft_check
+    from services.research.library import research_store
+
+    if style not in _CITE_STYLES:
+        raise ValueError(f"style must be one of {', '.join(_CITE_STYLES)}")
+    if not text or not text.strip():
+        raise ValueError("text must not be empty")
+    resolved_collection = _resolve_collection_id(collection_id)
+    indexer = indexer_manager.get_indexer(resolved_collection)
+    docs = [d for d in indexer.list_documents() if not is_hidden(d)]
+    if document_ids:
+        wanted = set(document_ids)
+        docs = [d for d in docs if d["document_id"] in wanted]
+    collection = collection_service.get_collection(resolved_collection) or {}
+    papers = research_store(indexer).get_papers([d["document_id"] for d in docs])
+    result = draft_check.check_draft(indexer, docs, papers, text, style=style, provider=None,
+                                     collection_name=_mcp_safe_name(collection, resolved_collection))
+    excerpts = _normalize_profile(get_request_mcp_profile())["include_sources"]
+    names = {d["document_id"]: d.get("filename") for d in docs}
+    findings = []
+    for f in result["findings"]:
+        f = dict(f)
+        f["text"] = text[f["start"]:f["end"]][:400]
+        if f.get("document_id"):
+            f["filename"] = names.get(f["document_id"])
+        if not excerpts:
+            f.pop("source_text", None)
+            f["evidence"] = [{k: v for k, v in e.items() if k != "text"} for e in f.get("evidence") or []]
+        findings.append(f)
+    return _tool_response({
+        "collection_id": resolved_collection,
+        "summary": result["summary"],
+        "findings": findings,
+        "references": result["references"],
+        "bibliography": [b["text"] for b in result["bibliography"]],
+        "notes": result["notes"],
+    }, "check_citations")
+
+
+@_threaded_tool(title="Check citations", annotations=_read_only("Check citations"))
+def check_citations(
+    text: Annotated[str, Field(description="The text to check: a draft, or an answer you wrote")],
+    collection_id: str | None = None,
+    document_ids: list[str] | None = None,
+    style: Annotated[str, Field(description="apa | chicago | mla | ieee | harvard")] = "apa",
+) -> dict[str, Any]:
+    """Check quotes and citations in a text against the collection.
+
+    Call it on an answer before giving it to the user. Every passage in
+    quotation marks is looked for word for word (extraction noise allowed;
+    a changed number or a dropped "not" is not), and must be in the source
+    its citation names, on the page cited. Citations in author-date form
+    "(Okafor et al., 2021, p. 4)" or numbered "[3]" (with a reference list)
+    are resolved to sources here. Findings have a severity: `error` (a quote
+    that is not in the source, or is altered: `source_text` gives the real
+    wording), `warning` (wrong page, year or source; an unused or missing
+    reference), `info` (could not be checked; a passage that may support an
+    uncited sentence) or `ok`. No model is involved, so it is fast and
+    deterministic; it does not judge whether a paraphrase is fair — read the
+    `evidence` passages for that.
+    """
+    return check_citations_sync(text, collection_id=collection_id, document_ids=document_ids, style=style)
+
+
 def _visible_document_info(collection_id: str, document_id: str) -> dict[str, Any]:
     """The metadata row for one document the caller may see, or a clear error."""
     store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store

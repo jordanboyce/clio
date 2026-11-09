@@ -127,6 +127,7 @@
                       {{ authorsShort(p.authors) || 'Authors unknown' }}<span v-if="p.year"> · {{ p.year }}</span><span v-if="p.venue"> · {{ p.venue }}</span>
                     </template>
                     <template v-else>Not analyzed</template>
+                    <span v-if="p.analyzed && p.missing?.length" class="text-warning" :title="`A citation of this source lacks: ${missingLabel(p.missing)}. Open it to add.`"> · cite: no {{ missingLabel(p.missing) }}</span>
                     <span v-if="p.title && p.filename !== p.suggested_filename" class="text-base-content/40"> · {{ p.filename }}</span>
                   </span>
                   <span v-if="verdicts[p.document_id]?.evidence?.[0]" class="block text-xs text-base-content/70 mt-1 line-clamp-2">
@@ -174,6 +175,15 @@
             />
           </template>
         </ResearchMap>
+
+        <ResearchWriting
+          v-else-if="view === 'write'"
+          :collection-id="collectionId"
+          :papers="papers"
+          :selected-ids="selectionCount ? scopeIds : []"
+          :provider-id="providerId"
+          @open="openPaper"
+        />
 
         <ResearchReviews
           v-else
@@ -243,13 +253,15 @@
 
 <script setup>
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
-import { Library, ListChecks, Network, NotebookPen } from 'lucide-vue-next'
+import { Library, ListChecks, Network, NotebookPen, Quote } from 'lucide-vue-next'
 import ResearchPaperPanel from './ResearchPaperPanel.vue'
 import ResearchReviews from './ResearchReviews.vue'
+import ResearchWriting from './ResearchWriting.vue'
 
 // The map brings the canvas force graph; load it only when the map is opened.
 const ResearchMap = defineAsyncComponent(() => import('./ResearchMap.vue'))
 import { researchApi, VERDICTS, authorsShort } from '../utils/researchApi.js'
+import { missingLabel } from '../utils/citations.js'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useProviderStore } from '../stores/providerStore'
 import { useUiStore } from '../stores/uiStore'
@@ -260,6 +272,7 @@ const views = [
   { id: 'library', label: 'Library', icon: Library },
   { id: 'map', label: 'Citation map', icon: Network },
   { id: 'reviews', label: 'Reviews', icon: NotebookPen },
+  { id: 'write', label: 'Cite & check', icon: Quote },
 ]
 
 const collectionStore = useCollectionStore()

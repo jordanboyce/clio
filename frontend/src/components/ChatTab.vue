@@ -599,6 +599,20 @@
                     <Copy v-else :size="11" />
                     <span class="text-xs">{{ copiedMessageIndex === index ? 'Copied' : 'Copy with evidence' }}</span>
                   </button>
+                  <!-- [Source N] becomes a real citation, page included, with a
+                       reference list built from each source's own record. -->
+                  <button
+                    v-if="msg.content && msg.sources?.length && !msg.streaming"
+                    class="btn btn-ghost btn-xs h-5 min-h-0 px-1.5 text-base-content/50 hover:text-base-content gap-1"
+                    :title="`Copy the answer with ${styleLabel(citationStyle)} citations and a reference list (change the style in Research › Cite & check)`"
+                    :aria-label="citedMessageIndex === index ? 'Copied with citations' : `Copy answer with ${styleLabel(citationStyle)} citations`"
+                    data-testid="copy-with-citations"
+                    @click="copyWithCitations(msg, index)"
+                  >
+                    <Check v-if="citedMessageIndex === index" :size="11" class="text-success" />
+                    <Quote v-else :size="11" />
+                    <span class="text-xs">{{ citedMessageIndex === index ? 'Copied' : `Copy with citations (${styleLabel(citationStyle)})` }}</span>
+                  </button>
                 </div>
 
                 <!-- Related: what a reader of this answer asks next. One tap asks it. -->
@@ -763,7 +777,9 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import http from '../utils/http'
 import AnswerEvidence from './AnswerEvidence.vue'
 import { answerWithReferences } from '../utils/answerEvidence'
-import { CornerDownRight, Feather, MessageSquare, ScrollText, FileText, ArrowUp, Trash2, Layers, Database, Plus, History, ChevronDown, SlidersHorizontal, Table2, Search, BookOpen, ListTree, Wrench, Copy, Check, RefreshCw, Zap, Download, Square, Info, CircleAlert, X } from 'lucide-vue-next'
+import { answerWithCitations, citeSources, copyRich, styleLabel, useCitationStyle } from '../utils/citations.js'
+import { researchApi } from '../utils/researchApi.js'
+import { CornerDownRight, Feather, MessageSquare, ScrollText, FileText, ArrowUp, Trash2, Layers, Database, Plus, History, ChevronDown, SlidersHorizontal, Table2, Search, BookOpen, ListTree, Wrench, Copy, Check, RefreshCw, Zap, Download, Square, Info, CircleAlert, X, Bot, Sparkles, Quote } from 'lucide-vue-next'
 import { useChatStore } from '../stores/chatStore'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
@@ -1199,6 +1215,23 @@ const copyMessage = async (msg, index) => {
     copyResetTimer = setTimeout(() => { copiedMessageIndex.value = null }, 1600)
   } catch (err) {
     console.warn('Clipboard write failed:', err)
+  }
+}
+
+const citationStyle = useCitationStyle()
+const citedMessageIndex = ref(null)
+let citedResetTimer = null
+
+const copyWithCitations = async (msg, index) => {
+  try {
+    const cited = await citeSources(msg.sources || [], citationStyle.value, collectionStore.currentCollectionId, researchApi)
+    const { text, html } = answerWithCitations(msg.content, cited)
+    await copyRich(text, html)
+    citedMessageIndex.value = index
+    if (citedResetTimer) clearTimeout(citedResetTimer)
+    citedResetTimer = setTimeout(() => { citedMessageIndex.value = null }, 1600)
+  } catch (err) {
+    ui.toastError(err, 'Could not build the citations')
   }
 }
 

@@ -12,9 +12,9 @@ import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-from services.research import lookup
+from services.research import citations, lookup
 from services.research.extract import (
-    FRONT_PAGES, clean_text, extract_paper, normalize_doi, title_guess,
+    FRONT_PAGES, _isbn_valid, clean_text, extract_paper, normalize_doi, title_guess,
 )
 from services.research.grounding import similarity
 from services.research.store import ResearchStore, now_iso
@@ -181,11 +181,155 @@ def analyze_document(collection_id: str, indexer, document_id: str,
     elif use_registry:
         notes.append("Registry lookups are off on this server; details come from the document's own text.")
 
-    store.upsert_paper(document_id, **fields, provenance=provenance,
+    details: Dict[str, object] = {}
+    printed = citations.page_offset(pages)
+    if printed:
+        offset, agreeing = printed
+        details["page_offset"] = offset
+        if offset:
+            provenance["page_offset"] = {
+                "source": "paper",
+                "detail": f"the page numbers printed on {agreeing} pages run {offset:+d} from the "
+                          "file's pages; citations give the printed page"}
+            if fields["kind"] != "book" and offset > 0:
+                details["printed_pages"] = citations.page_range(pages, offset)
+
+    # What a person corrected stays corrected: a re-analysis (after an
+    # update, or "Read it again") rewrites only what was read.
+    existing = store.get_paper(document_id) or {}
+    corrected = {f for f, p in (existing.get("provenance") or {}).items()
+                 if isinstance(p, dict) and p.get("source") == "user"}
+    for field in corrected:
+        if field in fields:
+            fields[field] = existing.get(field)
+        provenance[field] = existing["provenance"][field]
+    old_details = existing.get("details") or {}
+    details.update({k: v for k, v in old_details.items() if k in corrected})
+    if corrected:
+        notes.append(f"Kept {len(corrected)} detail{'s' if len(corrected) != 1 else ''} a person corrected: "
+                     + ", ".join(sorted(f.replace('_', ' ') for f in corrected)) + ".")
+
+    store.upsert_paper(document_id, **fields, provenance=provenance, details=details,
                        analysis_notes=notes, analyzed_at=now_iso())
     entries = [_deterministic_resolution(e) for e in found["references"] + found["links"]]
     store.replace_references(document_id, entries)
     return store.get_paper(document_id) or {}
+
+
+# ── corrections by a person ─────────────────────────────────────────────
+
+MAX_AUTHORS = 200
+_FIELD_LIMITS = {"title": 1000, "venue": 500, "container_title": 500, "publisher": 300,
+                 "organization": 300, "place": 200, "url": 2000}
+
+
+class CorrectionError(ValueError):
+    """A typed value that cannot go into a citation; the message says why."""
+
+
+def _clean_value(field: str, value):
+    """The stored form of a typed value, or CorrectionError."""
+    if field in ("authors", "editors"):
+        if isinstance(value, str):
+            value = [line for line in re.split(r"[\n;]+", value)]
+        if not isinstance(value, list):
+            raise CorrectionError(f"{field} must be a list of names")
+        names = [" ".join(str(n).split()) for n in value if str(n).strip()]
+        if len(names) > MAX_AUTHORS:
+            raise CorrectionError(f"At most {MAX_AUTHORS} {field}")
+        if any(len(n) > 300 for n in names):
+            raise CorrectionError("A name is longer than 300 characters")
+        return names
+    if value is None:
+        return None
+    value = " ".join(str(value).split())
+    if not value:
+        return None
+    if field == "year":
+        if not re.fullmatch(r"\d{3,4}", value) or not 1000 <= int(value) <= 2100:
+            raise CorrectionError("The year must be a four-digit year")
+        return int(value)
+    if field in ("month", "day"):
+        limit = 12 if field == "month" else 31
+        if not value.isdigit() or not 1 <= int(value) <= limit:
+            raise CorrectionError(f"The {field} must be a number from 1 to {limit}")
+        return int(value)
+    if field == "doi":
+        doi = normalize_doi(value)
+        if not re.fullmatch(r"10\.\d{4,9}/\S+", doi):
+            raise CorrectionError("That is not a DOI (they start with 10. and a slash, e.g. 10.1000/xyz)")
+        return doi
+    if field == "isbn":
+        digits = re.sub(r"[^0-9Xx]", "", value).upper()
+        if not _isbn_valid(digits):
+            raise CorrectionError("That ISBN's check digit is wrong")
+        return digits
+    if field == "kind":
+        if value not in citations.KINDS:
+            raise CorrectionError(f"The type must be one of {', '.join(citations.KINDS)}")
+        return value
+    if field == "url" and not re.match(r"https?://", value, re.IGNORECASE):
+        raise CorrectionError("A URL starts with http:// or https://")
+    limit = _FIELD_LIMITS.get(field, 120)
+    if len(value) > limit:
+        raise CorrectionError(f"The {field.replace('_', ' ')} is longer than {limit} characters")
+    return value
+
+
+def correct_record(store: ResearchStore, document_id: str, changes: Dict[str, object],
+                   revert: Iterable[str] = (), user: Optional[str] = None) -> dict:
+    """Apply a person's corrections to a source's record.
+
+    Each changed field's provenance says who typed it and keeps what was
+    read before, so ``revert`` can put the read value back. A corrected
+    field is kept through every later re-analysis."""
+    unknown = [f for f in [*changes, *revert] if f not in citations.EDITABLE_FIELDS]
+    if unknown:
+        raise CorrectionError(f"These fields cannot be edited: {', '.join(unknown)}")
+    paper = store.get_paper(document_id) or {}
+    provenance = dict(paper.get("provenance") or {})
+    details = dict(paper.get("details") or {})
+    core: Dict[str, object] = {}
+    stamp = now_iso()
+    who = (user or "").strip() or "a user"
+
+    def current(field):
+        return paper.get(field) if field in citations.CORE_FIELDS else details.get(field)
+
+    def put(field, value):
+        if field in citations.CORE_FIELDS:
+            core[field] = value
+        elif value in (None, [], ""):
+            details.pop(field, None)
+        else:
+            details[field] = value
+
+    for field in revert:
+        prov = provenance.get(field) or {}
+        if prov.get("source") != "user":
+            continue
+        previous = prov.get("previous") or {}
+        put(field, previous.get("value"))
+        if previous.get("provenance"):
+            provenance[field] = previous["provenance"]
+        else:
+            provenance.pop(field, None)
+
+    for field, raw in changes.items():
+        value = _clean_value(field, raw)
+        if value == current(field) and (provenance.get(field) or {}).get("source") == "user":
+            continue
+        if value == current(field) and field not in provenance and value in (None, []):
+            continue
+        prov = provenance.get(field) or {}
+        previous = (prov.get("previous") if prov.get("source") == "user"
+                    else {"value": current(field), "provenance": prov or None})
+        provenance[field] = {"source": "user", "detail": f"entered by {who}", "at": stamp,
+                             "previous": previous}
+        put(field, value)
+
+    return store.upsert_paper(document_id, **core, provenance=provenance, details=details,
+                              corrected_at=stamp)
 
 
 # ── reference resolution (registry) ─────────────────────────────────────

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Dict, List, Literal, Optional
 
@@ -23,7 +24,7 @@ from middleware.user_context import get_request_user
 from services import governance
 from services.research import briefs as briefs_service
 from services.research import jobs as jobs_service
-from services.research import library, lookup, naming, network, relevance
+from services.research import citations, draft_check, library, lookup, naming, network, relevance
 from services.research.graph import build_graph
 from services.usage_service import check_daily_budget, record_chat_usage
 
@@ -86,6 +87,41 @@ class JobRequest(BaseModel):
 
 class BriefReadRequest(BaseModel):
     read: bool = True
+
+
+StyleName = Literal["apa", "chicago", "mla", "ieee", "harvard"]
+
+
+class RecordCorrection(BaseModel):
+    changes: Dict[str, object] = Field(default_factory=dict, description=(
+        "Fields to set: title, authors (list), year, venue, doi, isbn, kind, organization, publisher, "
+        "place, edition, volume, issue, pages, report_number, url, editors, container_title, month, day. "
+        "An empty value clears the field."))
+    revert: List[str] = Field(default_factory=list, description="Fields to put back to what was read")
+
+
+class CitePage(BaseModel):
+    document_id: str
+    page: Optional[int] = Field(None, ge=1, description="Page of the file the passage is on")
+
+
+class CitationRequest(BaseModel):
+    document_ids: Optional[List[str]] = Field(None, max_length=2000, description="Sources; omit for all")
+    passages: Optional[List[CitePage]] = Field(None, max_length=500, description=(
+        "Pages to cite, in order (e.g. a chat answer's sources): each gets an in-text citation with "
+        "its printed page; numbering (IEEE) follows this order"))
+    style: StyleName = "apa"
+    export: Optional[Literal["bibtex", "ris", "csl-json"]] = Field(None, description="Also return a file")
+    include_location: bool = Field(True, description="Say where internal sources are kept")
+
+
+class DraftCheckRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=draft_check.MAX_DRAFT_CHARS)
+    document_ids: Optional[List[str]] = Field(None, description="Sources to check against; omit for all")
+    style: StyleName = "apa"
+    provider: Optional[str] = Field(None, description="AI provider for claim verdicts; omit for none")
+    suggest_uncited: bool = True
+    include_location: bool = True
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
@@ -174,6 +210,11 @@ def _paper_summary(doc: dict, paper: Optional[dict], counts: dict) -> dict:
         "source_path": doc.get("source_path") if doc.get("source_type") == "url" else None,
         "uploaded": doc.get("upload_timestamp"),
         "num_pages": doc.get("num_pages"),
+        "kind": paper.get("kind"),
+        "isbn": paper.get("isbn"),
+        "details": paper.get("details") or {},
+        "corrected_at": paper.get("corrected_at"),
+        "missing": citations.build_item(doc, paper)["missing"],
         "analyzed": bool(paper.get("analyzed_at")),
         "analyzed_at": paper.get("analyzed_at"),
         "title": paper.get("title"),
@@ -719,3 +760,134 @@ def delete_brief(brief_id: int, collection_id: str = "default") -> dict:
     if not library.research_store(indexer).delete_brief(brief_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
     return {"deleted": brief_id}
+
+
+# ── citing ──────────────────────────────────────────────────────────────
+
+def _collection_name(collection_id: str) -> Optional[str]:
+    from services.collection_service import collection_service
+    try:
+        return (collection_service.get_collection(collection_id) or {}).get("name")
+    except Exception:  # noqa: BLE001 - the name is a courtesy in a citation
+        return None
+
+
+def _citable(indexer) -> List[dict]:
+    """Every servable source can be cited, papers or not (a chat answer can
+    cite a memo or a spreadsheet)."""
+    return [d for d in indexer.list_documents() if not governance.is_hidden(d)]
+
+
+@router.patch("/api/research/papers/{document_id}/record", tags=["research"],
+              summary="Correct a source's citation details")
+def correct_record(document_id: str, body: RecordCorrection, collection_id: str = "default") -> dict:
+    """What a person types is kept, labelled as theirs, through every later
+    re-analysis; ``revert`` puts back what was read."""
+    indexer = _indexer(collection_id)
+    _require_write(collection_id)
+    _paper_doc(indexer, document_id)
+    store = library.research_store(indexer)
+    try:
+        library.correct_record(store, document_id, body.changes, body.revert, user=get_request_user())
+    except library.CorrectionError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    # A corrected title or DOI can connect references that did not match before.
+    library.match_library(store, _papers(indexer))
+    return get_paper(document_id, collection_id)
+
+
+def _export_filename(name: Optional[str], ext: str) -> str:
+    base = re.sub(r"[^A-Za-z0-9._-]+", "-", name or "").strip("-.") or "references"
+    return f"{base[:80]}.{ext}"
+
+
+@router.post("/api/research/citations", tags=["research"],
+             summary="Citations and bibliography for sources, in a style or as BibTeX/RIS/CSL-JSON")
+def cite_sources(body: CitationRequest, collection_id: str = "default") -> dict:
+    """Built here from each source's record; nothing is sent anywhere.
+    Each entry lists the fields it is ``missing`` rather than inventing them."""
+    indexer = _indexer(collection_id)
+    docs = {d["document_id"]: d for d in _citable(indexer)}
+    wanted: List[str] = []
+    for p in body.passages or []:
+        if p.document_id not in wanted:
+            wanted.append(p.document_id)
+    default = [] if body.passages else [d for d in docs if library.is_paper(docs[d])]
+    for did in body.document_ids or default:
+        if did not in wanted:
+            wanted.append(did)
+    unknown = [d for d in wanted if d not in docs]
+    wanted = [d for d in wanted if d in docs]
+    if not wanted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="None of those sources were found")
+    papers = library.research_store(indexer).get_papers(wanted)
+    name = _collection_name(collection_id)
+    items = {d: citations.build_item(docs[d], papers.get(d), name) for d in wanted}
+    numbers = {d: i for i, d in enumerate(wanted, 1)}
+    passages = [citations.cite(items[p.document_id], body.style, p.page, numbers[p.document_id],
+                               body.include_location)
+                for p in (body.passages or []) if p.document_id in items]
+    ordered = list(items.values())
+    entries = [citations.cite(items[d], body.style, None, numbers[d], body.include_location) for d in wanted]
+    out = {
+        "style": body.style,
+        "styles": citations.STYLES,
+        "entries": entries,
+        "passages": passages,
+        "bibliography": citations.bibliography(ordered, body.style, "text", body.include_location),
+        "bibliography_html": citations.bibliography(ordered, body.style, "html", body.include_location),
+        "incomplete": [e["document_id"] for e in entries if e["missing"]],
+        "unknown": unknown,
+    }
+    if body.export:
+        content, media_type, ext = citations.export(ordered, body.export, body.include_location)
+        out["export"] = {"format": body.export, "content": content, "media_type": media_type,
+                         "filename": _export_filename(name, ext)}
+    return out
+
+
+@router.post("/api/research/check-draft", tags=["research"],
+             summary="Check a draft's quotes and citations against the sources")
+def check_draft_endpoint(
+    body: DraftCheckRequest,
+    collection_id: str = "default",
+    x_ai_key: str = Header(None), x_ollama_model: str = Header(None), x_anthropic_model: str = Header(None),
+    x_openai_model: str = Header(None), x_ai_model: str = Header(None), x_ai_base_url: str = Header(None),
+) -> dict:
+    """Quotes are checked word for word and citations resolved by fixed
+    rules; a model, when chosen, only judges cited claims, and each verdict
+    stands only on a quote found in the passage it names. Nothing is saved."""
+    started = time.time()
+    indexer = _indexer(collection_id)
+    docs = _citable(indexer)
+    if body.document_ids:
+        wanted = set(body.document_ids)
+        docs = [d for d in docs if d["document_id"] in wanted]
+        if not docs:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="None of those sources were found")
+    user = get_request_user()
+    provider = model = None
+    if body.provider:
+        _budget_or_429(user)
+        provider, model = _provider(body.provider, x_ai_key, x_ollama_model, x_anthropic_model,
+                                    x_openai_model, x_ai_model, x_ai_base_url)
+    papers = library.research_store(indexer).get_papers([d["document_id"] for d in docs])
+    try:
+        result = draft_check.check_draft(
+            indexer, docs, papers, body.text, style=body.style, provider=provider, model=model,
+            suggest_uncited=body.suggest_uncited, collection_name=_collection_name(collection_id),
+            include_location=body.include_location)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:  # noqa: BLE001 - a provider failure is the caller's to see
+        logger.warning("Draft check failed: %s", e)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The check failed: {e}")
+    if body.provider:
+        _record_usage(user, collection_id, body.provider, result.get("usage") or {}, started)
+    names = {d["document_id"]: d.get("filename") for d in docs}
+    used = {f.get("document_id") for f in result["findings"] if f.get("document_id")}
+    used |= {b["document_id"] for b in result["bibliography"]}
+    for f in result["findings"]:
+        used |= set(f.get("document_ids") or [])
+    result["sources"] = {did: {"filename": names.get(did)} for did in used if did}
+    return result

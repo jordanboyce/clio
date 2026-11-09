@@ -59,6 +59,19 @@ export const researchApi = {
     http.get(`/api/research/briefs?${q(cid, { unread: unread || null, document_id: documentId })}`).then(r => r.data),
   markBrief: (cid, id, read = true) => http.post(`/api/research/briefs/${id}/read?${q(cid)}`, { read }).then(r => r.data),
   deleteBrief: (cid, id) => http.delete(`/api/research/briefs/${id}?${q(cid)}`).then(r => r.data),
+  // { changes: {field: value}, revert: [field] }: a person's corrections to a source's record.
+  correct: (cid, id, changes = {}, revert = []) =>
+    http.patch(`/api/research/papers/${encodeURIComponent(id)}/record?${q(cid)}`, { changes, revert })
+      .then(r => r.data),
+  // { document_ids?, passages?: [{document_id, page}], style, export?, include_location }
+  citations: (cid, body) => http.post(`/api/research/citations?${q(cid)}`, body).then(r => r.data),
+  // A model is used only when asked: without one the check is the
+  // deterministic part (quotes, citations, references).
+  checkDraft: (cid, { useModel = false, ...body }, providerId) => {
+    const { provider, headers } = modelArgs(useModel ? providerId : null)
+    return http.post(`/api/research/check-draft?${q(cid)}`, { ...body, provider },
+      { headers, timeout: 300000 }).then(r => r.data)
+  },
   outputs: (cid) => http.get(`/api/collections/${encodeURIComponent(cid)}/outputs`).then(r => r.data),
   // { reviews, reports }: delete everything of that kind generated from the collection.
   deleteOutputs: (cid, what) => http.delete(`/api/collections/${encodeURIComponent(cid)}/outputs`, { params: what }).then(r => r.data),
@@ -89,6 +102,7 @@ export function authorsShort(authors = []) {
 export function sourceLabel(provenance) {
   if (!provenance) return ''
   if (provenance.source === 'paper') return provenance.page ? `From the source, page ${provenance.page}` : 'From the source'
+  if (provenance.source === 'user') return 'Corrected by hand'
   const names = { openalex: 'OpenAlex', crossref: 'Crossref', arxiv: 'arXiv', openlibrary: 'Open Library' }
   return `From ${names[provenance.source] || provenance.source}`
 }

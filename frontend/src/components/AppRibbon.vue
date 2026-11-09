@@ -98,12 +98,12 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   BookOpen, Command, EyeOff, FileText, FolderPlus, Gauge, HelpCircle, Info, Keyboard, Layers, LibraryBig,
   MessageSquare, MessageSquarePlus, Network, NotebookPen, PanelLeft, PanelLeftClose, PanelRight, Plug, RotateCcw,
-  Search, Settings, SlidersHorizontal, SquareTerminal, Type,
+  Search, Settings, SlidersHorizontal, SquareTerminal, Type, Quote, Sparkles,
 } from 'lucide-vue-next'
 import { defaultLayout, isActive, placeBefore, toggleHidden, withDividers } from '../utils/ribbon.js'
 
 const ICONS = {
-  chat: MessageSquare, search: Search, research: LibraryBig, graph: Network, reviews: NotebookPen,
+  chat: MessageSquare, search: Search, research: LibraryBig, graph: Network, reviews: NotebookPen, cite: Quote,
   generate: FileText, expertise: BookOpen, mcp: Plug, collections: Layers, 'add-sources': FolderPlus,
   'new-chat': MessageSquarePlus, notes: PanelRight, palette: SquareTerminal, admin: Gauge,
 }

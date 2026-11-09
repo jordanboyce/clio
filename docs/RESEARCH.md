@@ -11,6 +11,7 @@ requests from lab researchers:
 | "Download everything it cites and links to" | A source's **References** lists every entry of its reference lists (a book's per-chapter lists and bibliography included) and every link in its text. **Download…** fetches open copies (arXiv, open-access PDFs) into the collection; references you already have are marked *In your library*. |
 | "A visual map of my library and its abstracts" | **Citation map** lays out who cites whom, plus the works several of your sources cite that you don't have yet. Click a card to read its abstract. |
 | "Prepare a review while I sleep" | **Reviews** schedules brief or thorough reviews for many sources ("start at 01:00"), runs them on the server, and leaves an unread queue to skim in the morning. |
+| "Cite it properly, and catch what the AI got wrong" | **Cite & check** formats citations in APA, Chicago, MLA, IEEE or Harvard from each source's own record, with the printed page number, and exports BibTeX, RIS or CSL-JSON. **Check a draft** finds every quotation in its source, word for word, and flags altered quotes, wrong pages, citations to nothing, and unused references. |
 
 ## Your selection is the scope
 
@@ -83,6 +84,81 @@ and says which.
 What this does not guarantee: a quote can be real and still be taken out of
 context. The quotes and page links are there so you can check in seconds.
 
+## Citing, and checking what a draft cites
+
+Citing correctly is where AI writing most often fails: a quote with one word
+changed, the right author on the wrong page, a reference to a paper nobody
+wrote. **Cite & check** (the fourth Research view; *Cite & check a draft* in
+the command palette) is built so that cannot pass unnoticed, and so that none
+of it needs the text to leave the server.
+
+**Citations from the record, not from a model.** Every citation is assembled
+on the server from the source's record (the same fields *Where these details
+came from* accounts for) in **APA 7, Chicago author-date, MLA 9, IEEE or
+Harvard**, and exports as **BibTeX, RIS or CSL-JSON** for Zotero, EndNote,
+Mendeley, JabRef or LaTeX. Nothing is looked up to format it. A field the
+record lacks is never filled in: the citation says *n.d.* for a missing year,
+cites an authorless source by its title, and lists what is *missing* so it can
+be added. The library marks such sources (*cite: no year*).
+
+- **Printed page numbers.** A PDF's third page may be page 1186 of the journal.
+  Analysis reads the page numbers printed in running heads and footers and,
+  when at least three pages and most numbered pages agree on one offset,
+  citations give the printed page (*p. 1186*) while links still open the
+  file's page. A year in a header or a figure number does not count.
+- **Internal sources.** A report, memo or procedure has no DOI or URL. Its
+  citation can say where it is kept (*Internal document, collection “Plant
+  reports”, file itl-0042.pdf*), so a reviewer inside the organization can
+  find it; switch this off for a citation going outside. An organization can
+  be the author: type it in braces, `{Idaho Test Laboratory}`, or use the
+  *Organization* field.
+
+**Correct details.** *Correct details* (in a source's *Cite* section, for
+editors) edits the type (article, book, chapter, report, thesis, web page,
+dataset, other), title, authors, year, journal or book title, editors, volume,
+issue, pages, edition, publisher, place, report number, organization, DOI,
+ISBN and URL. DOIs, ISBN check digits, years and URLs are validated. What a
+person types is labelled *Corrected by hand* with who entered it, is kept
+through every later *Read again*, and *use what was read* puts back the value
+analysis found. A corrected title or DOI also reconnects references on the
+citation map.
+
+**Where you cite.**
+
+- A source's panel: the reference in the chosen style, the in-text citation,
+  *Copy reference* (with italics when pasted into Word or Google Docs), *Copy
+  in-text*, and *Export*.
+- Every verified quote in a verdict or a review: **Cite** copies the quote with
+  its in-text citation and reference.
+- Ask: **Copy with citations** turns an answer's `[Source N]` markers into
+  real in-text citations, page included, and appends a reference list.
+- *Reference list* in Cite & check: the selection (or the collection),
+  formatted, with *Copy all* and *Export*.
+
+The style is chosen once and remembered in the browser.
+
+**Check a draft.** Paste a draft, a report section or an answer an AI wrote,
+and press *Check*. The draft is checked against the selected sources (or the
+whole collection) and is not saved.
+
+| What | How it is checked |
+|---|---|
+| Quotations (“…” of 15+ characters) | Looked for word for word, with the matcher reviews use: extraction noise passes; a changed number or a dropped *not* does not. A quote close to the source but altered is shown beside what the source says and how it differs. A quote found in another source, on another page than the one cited, or with no citation, is flagged with the citation it should have. A direct quote with no page is flagged. |
+| Citations | Author-date, parenthetical or narrative — *(Okafor et al., 2021, p. 4)*, *Okafor and Hale (2021)*, *(see Okafor 2021; Hale 2018)*, *(p. 4)* after a named author — MLA *(Okafor 4)*, and numbered *[3]*, *[1–3]* through the draft's reference list. Each is matched to a source by author surnames and year (*2021a/b* told apart by title). No match, several matches, or the author with another year is flagged. |
+| Reference list (under a *References*, *Bibliography* or *Works Cited* heading) | Each entry is matched by DOI, full title or first author and year. Entries never cited, citations missing from the list, and a year that differs from the source are flagged. |
+| Cited sentences | The passages of the cited source that best match the sentence, to check in seconds. With *Judge cited claims with the model*, a verdict (supported, partly, not supported, not addressed), shown only when the model's quote is found in the passage it names; otherwise it is *could not be confirmed*. The model sees the cited sentences and the cited source's passages, nothing else. |
+| Uncited sentences | A sentence with no citation that shares most of its key terms with a passage here gets that passage suggested, with the citation to add. |
+
+Results show the draft with each sentence underlined by its worst finding
+(red: fix, amber: check, blue: note, green: verified); click one to see its
+findings. Below, the reference list of the sources the draft cites, in the
+chosen style.
+
+What it does not do: it does not judge whether a paraphrase is fair (read the
+passages it shows, or ask the model), and it checks only against sources in
+this collection. A citation of a work that is not here is reported as not
+checkable, never as wrong.
+
 ## The citation map
 
 Each source is a dot, sized by how many citations connect it, laid out by a
@@ -121,8 +197,8 @@ collection lacks.
 
 ## Without a model, or offline
 
-- Analysis, renaming, references, links and the citation map need **no
-  model**.
+- Analysis, renaming, references, links, the citation map, citations and
+  exports, and the draft check (all but claim verdicts) need **no model**.
 - *Worth my time?* without a model shows where the source discusses your
   question (Clio's own retrieval inside it), with no verdict.
 - `OFFLINE_MODE` or `RESEARCH_LOOKUP_ENABLED=false` turns off catalogue
@@ -150,6 +226,10 @@ an outbound path.
    title case.
 5. In **Reviews**, choose sources, depth and an optional question, and start
    now or at a time. Close the tab; the queue will be waiting.
+6. When writing, open **Cite & check**: pick a style, paste the draft, and
+   *Check* it. Fix what is red, look at what is amber, and copy or export the
+   reference list. Fill in what a source's citation is *missing* with
+   *Correct details*; it stays corrected.
 
 ## Settings
 
@@ -167,6 +247,10 @@ an outbound path.
   renaming, downloading and starting jobs need edit access; downloading also
   needs the acceptable-use acknowledgement every way of adding sources needs.
   A read-only user can still ask *Worth my time?*; the result is not saved.
+  Citing, exporting and checking a draft need read access; correcting a
+  source's details needs edit access. A draft is limited to 60,000 characters
+  per check; the model judges at most 30 cited claims per check, and
+  suggestions stop at 25.
 - Research records live in the collection's own index database, so collection
   export/import and backups carry them.
 - Analysis and reviews run as background jobs in the server process. A
@@ -197,6 +281,14 @@ an outbound path.
 | GET/POST | `/api/research/jobs`, `/jobs/{id}`, `/jobs/{id}/cancel` | Job progress and cancellation |
 | GET/POST/DELETE | `/api/research/briefs`, `/briefs/{id}/read`, `/briefs/{id}` | The review queue |
 | GET / DELETE | `/api/collections/{id}/outputs` (`reviews`, `reports`) | Count, or delete, everything generated from a collection, including reviews of sources since deleted |
+| PATCH | `/api/research/papers/{id}/record` | Correct citation details (`changes`), or put back what was read (`revert`); edit access |
+| POST | `/api/research/citations` | Citations for `document_ids` or `passages` (`[{document_id, page}]`) in a `style`; `export`: `bibtex`, `ris`, `csl-json` |
+| POST | `/api/research/check-draft` | Check a `text` against the sources (`document_ids`, `style`, `suggest_uncited`, optional `provider`); read access, nothing saved |
+
+MCP clients get the same as two read-only tools: `cite_sources` (citations for
+passages, with printed pages, in a style) and `check_citations` (the model-free
+draft check, for an agent to run on its own answer before giving it). Passage
+text in `check_citations` follows the MCP profile's *source excerpts* setting.
 
 All take `collection_id` as a query parameter. Model-backed calls take the
 same provider headers as `/api/chat`.

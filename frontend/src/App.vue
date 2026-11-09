@@ -1341,7 +1341,7 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
 import { useOverlayFocus } from './composables/useOverlayFocus'
-import { ChartColumn, Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, RotateCcw, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig, Network, SlidersHorizontal } from 'lucide-vue-next'
+import { ChartColumn, Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, RotateCcw, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig, Network, SlidersHorizontal, Sparkles, Quote } from 'lucide-vue-next'
 import CommandPalette from './components/CommandPalette.vue'
 import EmbeddingMismatchNotice from './components/EmbeddingMismatchNotice.vue'
 import ShortcutsDialog from './components/ShortcutsDialog.vue'
@@ -2096,6 +2096,7 @@ const paletteCommands = computed(() => {
   add('Go to', 'Connect', Plug, () => switchTab('mcp'), { keys: ['G', 'C'], keywords: 'mcp token claude chatgpt client' })
   add('Go to', 'Research', LibraryBig, () => { ui.researchView = 'library'; switchTab('research') }, { keys: ['G', 'R'], keywords: 'research papers books citations references abstracts reviews' })
   add('Go to', 'Citation graph', Network, () => { ui.researchView = 'map'; switchTab('research') }, { keywords: 'graph map citations network obsidian' })
+  add('Go to', 'Cite & check a draft', Quote, () => { ui.researchView = 'write'; switchTab('research') }, { keywords: 'citation bibliography references bibtex ris zotero endnote apa mla chicago ieee harvard quote verify draft' })
   if (!isCompact.value) add('Layout', 'Customize the ribbon', SlidersHorizontal, () => { showRibbonCustomize.value = true }, { keywords: 'sidebar icons toolbar hide reorder' })
   add('Go to', 'Reports', FileText, () => switchTab('generate'), { keywords: 'generate briefing summary' })
   add('Go to', 'Saved instructions', BookOpen, () => switchTab('expertise'), { keywords: 'expertise packs' })

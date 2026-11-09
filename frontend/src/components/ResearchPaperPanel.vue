@@ -49,6 +49,13 @@
         </div>
       </section>
 
+      <ResearchCitePanel
+        :paper="paper"
+        :collection-id="collectionId"
+        :can-write="paper.can_write"
+        @changed="onRecordChanged"
+      />
+
       <!-- Abstract -->
       <section>
         <div class="flex items-baseline justify-between gap-2 mb-1">
@@ -81,7 +88,7 @@
           </button>
           <ul class="mt-1 space-y-0.5">
             <li v-for="(prov, field) in paper.provenance" :key="field">
-              <span class="font-medium">{{ field.replace('_', ' ') }}</span>: {{ sourceLabel(prov) }}<span v-if="prov.detail"> — {{ prov.detail }}</span>
+              <span class="font-medium">{{ field.replaceAll('_', ' ') }}</span>: {{ sourceLabel(prov) }}<span v-if="prov.detail"> — {{ prov.detail }}</span>
             </li>
           </ul>
         </details>
@@ -260,6 +267,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { FileText, X } from 'lucide-vue-next'
 import ResearchEvidence from './ResearchEvidence.vue'
 import ResearchBrief from './ResearchBrief.vue'
+import ResearchCitePanel from './ResearchCitePanel.vue'
 import { researchApi, VERDICTS, pageUrl, sourceLabel, abstractLabel, isOpening } from '../utils/researchApi.js'
 import { useUiStore } from '../stores/uiStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
@@ -361,6 +369,12 @@ async function analyze() {
     busy.analyze = false
     ui.toastError(err, 'Analysis failed')
   }
+}
+
+// A correction returns the whole updated source: show it at once.
+function onRecordChanged(updated) {
+  if (updated?.document_id === props.documentId) paper.value = updated
+  emit('changed')
 }
 
 function startEdit() {

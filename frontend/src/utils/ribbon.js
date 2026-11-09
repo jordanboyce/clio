@@ -18,6 +18,7 @@ export const RIBBON_ITEMS = [
   { id: 'research', label: 'Research', tab: 'research', view: 'library', group: 'work' },
   { id: 'graph', label: 'Citation graph', tab: 'research', view: 'map', group: 'work', hidden: true },
   { id: 'reviews', label: 'Reviews', tab: 'research', view: 'reviews', group: 'work', hidden: true },
+  { id: 'cite', label: 'Cite & check', tab: 'research', view: 'write', group: 'work', hidden: true },
   { id: 'generate', label: 'Reports', tab: 'generate', group: 'work' },
   { id: 'expertise', label: 'Saved instructions', tab: 'expertise', group: 'work' },
   { id: 'mcp', label: 'Connect', tab: 'mcp', group: 'share' },
