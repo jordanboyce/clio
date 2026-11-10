@@ -8,9 +8,11 @@ Handles runtime configuration changes including:
 Configuration is stored in SQLite database for persistence across restarts.
 """
 
+import json
 import logging
+import re
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 from config import ALL_AI_PROVIDERS, settings
 from services.app_database import app_db
 from services.secret_box import SECRET_CONFIG_FIELDS
@@ -45,7 +47,28 @@ VALID_CONFIG_FIELDS = {
     "content_policy_llm_sample_pages",
     "pii_scan_action", "pii_flag_threshold", "pii_entities", "pii_redact_outputs",
     "aup_required", "aup_version", "aup_text",
+    # The rest of what the footer reports (Settings → Features), so every
+    # feature shown there can be changed without editing the environment.
+    "enable_reranker", "extract_figures", "enable_transcription", "whisper_model",
+    "research_lookup_enabled", "research_contact_email",
+    "link_indexing_enabled", "git_allowed_hosts",
+    # Classification markings (Admin → Policy)
+    "data_classifications", "controlled_data_hosts",
 }
+
+# Kept in the database only. The catalogue is JSON, which .env cannot hold
+# safely, and the database restores it on start.
+DATABASE_ONLY_FIELDS = {"data_classifications"}
+
+# Checked before saving: a value of the wrong type here would be written to
+# .env and stop the next start.
+BOOLEAN_CONFIG_FIELDS = {
+    "extract_figures", "enable_transcription", "research_lookup_enabled", "link_indexing_enabled",
+}
+# Whisper models by name. WHISPER_MODEL may also be a folder, but only from the
+# environment: a path typed in a browser would probe the server's disk.
+WHISPER_MODELS = ("tiny", "base", "small", "medium", "large-v3")
+_GIT_HOST = re.compile(r"^(\*\.)?[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$")
 
 # For the fields in SECRET_CONFIG_FIELDS, GET /api/config returns MASKED_SECRET
 # in place of the stored value, and an update carrying MASKED_SECRET back is
@@ -139,6 +162,17 @@ class ConfigManager:
             "aup_required": settings.aup_required,
             "aup_version": settings.aup_version,
             "aup_text": settings.aup_text,
+            # Features (null enable_reranker = automatic)
+            "enable_reranker": settings.enable_reranker,
+            "extract_figures": settings.extract_figures,
+            "enable_transcription": settings.enable_transcription,
+            # WHISPER_MODEL may be a folder, and this is readable by anyone signed in.
+            "whisper_model": Path(settings.whisper_model).name,
+            "research_lookup_enabled": settings.research_lookup_enabled,
+            "research_contact_email": settings.research_contact_email,
+            "link_indexing_enabled": settings.link_indexing_enabled,
+            "git_allowed_hosts": settings.git_allowed_hosts,
+            "controlled_data_hosts": settings.controlled_data_hosts,
         }
 
         # Override with database values if present
@@ -147,6 +181,11 @@ class ConfigManager:
         for key in config.keys():
             if key in db_config:
                 config[key] = db_config[key]
+
+        # Always the list in force, whether it came from the environment, the
+        # database or the built-in default.
+        from services import data_controls
+        config["data_classifications"] = data_controls.catalog()
 
         # Never hand a stored credential back out. Callers get a mask plus a
         # boolean so the UI can show "a key is configured" without holding it.
@@ -274,6 +313,12 @@ class ConfigManager:
                 return result
             updates["pii_flag_threshold"] = threshold
 
+        feature_error = self._check_feature_fields(updates)
+        if feature_error:
+            result["errors"].append(feature_error)
+            result["success"] = False
+            return result
+
         # Validate updates
         for key in updates.keys():
             if key not in VALID_CONFIG_FIELDS:
@@ -310,7 +355,8 @@ class ConfigManager:
         # start (IndexerManager._apply_db_config), and a plain copy here would
         # undo that.
         try:
-            mirrored = {k: v for k, v in updates.items() if k not in SECRET_CONFIG_FIELDS}
+            mirrored = {k: v for k, v in updates.items()
+                        if k not in SECRET_CONFIG_FIELDS and k not in DATABASE_ONLY_FIELDS}
             if mirrored:
                 self._update_env_file(mirrored)
         except Exception as e:
@@ -357,8 +403,70 @@ class ConfigManager:
 
         return result
 
+    @staticmethod
+    def _check_feature_fields(updates: Dict[str, Any]) -> Optional[str]:
+        """Validate the Features settings in place. Returns what is wrong, or None."""
+        for key in BOOLEAN_CONFIG_FIELDS & updates.keys():
+            if not isinstance(updates[key], bool):
+                return f"{key} must be true or false"
+
+        if "enable_reranker" in updates:
+            value = updates["enable_reranker"]
+            if value in ("auto", ""):
+                value = None
+            if value is not None and not isinstance(value, bool):
+                return "enable_reranker must be true, false, or auto"
+            updates["enable_reranker"] = value
+
+        if "whisper_model" in updates and updates["whisper_model"] not in WHISPER_MODELS:
+            return f"whisper_model must be one of: {', '.join(WHISPER_MODELS)}"
+
+        if "research_contact_email" in updates:
+            email = str(updates["research_contact_email"] or "").strip()
+            if email and not re.fullmatch(r"[^@\s,;<>]+@[^@\s,;<>]+", email):
+                return "research_contact_email must be one email address, or empty"
+            updates["research_contact_email"] = email
+
+        if "git_allowed_hosts" in updates:
+            hosts = [h.strip().lower() for h in str(updates["git_allowed_hosts"] or "").split(",") if h.strip()]
+            bad = [h for h in hosts if not _GIT_HOST.match(h)]
+            if bad:
+                return (f"Git servers are host names separated by commas, such as "
+                        f"git.corp.example or *.corp.example. Not a host name: {bad[0]}")
+            value = ", ".join(hosts)
+            if value != ", ".join(h.strip().lower() for h in settings.git_allowed_hosts.split(",") if h.strip()):
+                from services.admins import admin_gate_active
+
+                # GIT_HTTP_TOKEN is sent to every host on this list. Where nobody
+                # signs in as an administrator, anyone who can open the app could
+                # add a host of their own and be sent the token.
+                if settings.git_http_token and not (settings.private_collections or admin_gate_active()):
+                    return ("This server sends its git token to every allowed host and has no administrator "
+                            "sign-in, so the list can only be changed with GIT_ALLOWED_HOSTS in the environment.")
+            updates["git_allowed_hosts"] = value
+
+        if "data_classifications" in updates:
+            from services import data_controls
+
+            try:
+                cleaned = data_controls.clean_catalog(updates["data_classifications"])
+            except ValueError as e:
+                return str(e)
+            # Stored as text: the setting is a string wherever it comes from.
+            updates["data_classifications"] = json.dumps(cleaned)
+
+        if "controlled_data_hosts" in updates:
+            hosts = [h.strip().lower() for h in str(updates["controlled_data_hosts"] or "").split(",") if h.strip()]
+            bad = [h for h in hosts if not _GIT_HOST.match(h)]
+            if bad:
+                return (f"Servers are host names or addresses separated by commas, such as "
+                        f"llm.corp.example or *.corp.example. Not a host: {bad[0]}")
+            updates["controlled_data_hosts"] = ", ".join(hosts)
+        return None
+
     def _update_env_file(self, updates: Dict[str, Any]):
-        """Update .env file with new values."""
+        """Update .env file with new values. A value of None removes its line,
+        which is how a setting goes back to automatic."""
         env_lines = []
 
         # Read existing .env file if it exists
@@ -367,7 +475,8 @@ class ConfigManager:
                 env_lines = f.readlines()
 
         # Convert updates to uppercase env var names
-        env_updates = {k.upper(): str(v) for k, v in updates.items()}
+        env_updates = {k.upper(): str(v) for k, v in updates.items() if v is not None}
+        removed = {k.upper() for k, v in updates.items() if v is None}
 
         # Update or append values
         updated_keys = set()
@@ -381,6 +490,8 @@ class ConfigManager:
                 if key in env_updates:
                     env_lines[i] = f"{key}={env_updates[key]}\n"
                     updated_keys.add(key)
+                elif key in removed:
+                    env_lines[i] = ""
 
         # Append new values that weren't found
         for key, value in env_updates.items():

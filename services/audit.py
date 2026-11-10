@@ -41,6 +41,9 @@ ACTIONS: List[str] = [
     "report.dismissed",         # admin closed the open user reports on a document
     "document.sensitivity",     # per-document sensitivity override changed
     "collection.sensitivity",   # collection label changed
+    "document.classification",  # per-document classification marking changed
+    "collection.classification",  # collection classification marking changed
+    "classification.blocked",   # a local-only marking stopped data going to an outside service
     "collection.published",
     "collection.exported",      # bundle downloaded (with/without originals)
     "collection.imported",      # collection created from a bundle

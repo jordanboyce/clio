@@ -38,6 +38,15 @@
         <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/55">Feature status</h2>
         <span class="text-xs text-base-content/55 tabular-nums">{{ onCount }} of {{ features.length }} fully working</span>
       </div>
+      <button
+        type="button"
+        class="btn btn-xs btn-outline mb-3"
+        data-testid="feature-configure"
+        @click="open = false; $emit('configure')"
+      >
+        <Settings :size="11" aria-hidden="true" />
+        Change these in Settings
+      </button>
       <ul class="space-y-2.5">
         <li v-for="f in features" :key="f.id" class="flex gap-2">
           <component :is="STATES[f.state].icon" :size="14" class="mt-0.5 flex-shrink-0" :class="STATES[f.state].text" aria-hidden="true" />
@@ -57,7 +66,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { CheckCircle2, CircleAlert, MinusCircle, XCircle } from 'lucide-vue-next'
+import { CheckCircle2, CircleAlert, MinusCircle, Settings, XCircle } from 'lucide-vue-next'
 import http from '../utils/http'
 import { useProviderStore } from '../stores/providerStore'
 import { useStatsStore } from '../stores/statsStore'
@@ -76,6 +85,8 @@ const SHORT = {
   ai: 'AI', research: 'Research', links: 'Links', git: 'Git', mcp: 'MCP', pii: 'PII',
 }
 const REFRESH_MS = 60000
+
+defineEmits(['configure'])
 
 const providerStore = useProviderStore()
 const statsStore = useStatsStore()
@@ -129,12 +140,14 @@ onMounted(() => {
   refresh()
   timer = setInterval(refresh, REFRESH_MS)
   document.addEventListener('visibilitychange', refresh)
+  window.addEventListener('clio:features-changed', refresh)
   document.addEventListener('click', closeOnOutsideClick)
   document.addEventListener('keydown', closeOnEscape)
 })
 onBeforeUnmount(() => {
   clearInterval(timer)
   document.removeEventListener('visibilitychange', refresh)
+  window.removeEventListener('clio:features-changed', refresh)
   document.removeEventListener('click', closeOnOutsideClick)
   document.removeEventListener('keydown', closeOnEscape)
 })

@@ -513,6 +513,23 @@ def update_collection(collection_id: str, updates: dict, user_id: str = Depends(
             audit.record("collection.sensitivity", actor=user_id, collection_id=collection_id,
                          detail={"from": previous, "to": sensitivity})
 
+    # A classification marking decides which machines may be given the
+    # collection (services/data_controls.py). "" clears it.
+    classification = None
+    if "classification" in updates and updates["classification"] is not None:
+        from services import audit, data_controls
+        try:
+            classification = data_controls.normalize(updates["classification"]) or ""
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        previous = prior.get("classification") or ""
+        if previous != classification:
+            audit.record("collection.classification", actor=user_id, collection_id=collection_id,
+                         detail={"from": previous or None, "to": classification or None,
+                                 "local_only": data_controls.is_local_only(classification)})
+        else:
+            classification = None
+
     # Publishing releases the collection to everyone in the deployment as
     # read-only. Two refusals guard it: a restricted label is a boundary
     # (same rule as sharing), and a team collection has no single owner to
@@ -559,7 +576,13 @@ def update_collection(collection_id: str, updates: dict, user_id: str = Depends(
         guide=updates.get("guide"),
         sensitivity=sensitivity,
         published=published,
+        classification=classification,
     )
+    if classification is not None:
+        # Answers written before the marking may have come from a model the
+        # collection can no longer reach.
+        from services.governance import _invalidate_answers
+        _invalidate_answers(collection_id)
 
     if not collection:
         raise HTTPException(

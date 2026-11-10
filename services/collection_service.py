@@ -176,11 +176,14 @@ class CollectionService:
         # The guide is part of how the collection answers, so it travels with
         # the copy; the governance label does too, because a clone holds the
         # same material as its source.
-        if source.get("guide") or source.get("sensitivity"):
+        # The classification is set before anything is indexed, so a copy of
+        # local-only material is never embedded by an outside service.
+        if source.get("guide") or source.get("sensitivity") or source.get("classification"):
             self.update_collection(
                 collection_id=clone["id"],
                 guide=source.get("guide"),
                 sensitivity=source.get("sensitivity"),
+                classification=source.get("classification") or None,
             )
 
         job_id = upload_service.start_local_index(
@@ -269,6 +272,7 @@ class CollectionService:
         guide: Optional[str] = None,
         sensitivity: Optional[str] = None,
         published: Optional[bool] = None,
+        classification: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         # Every route that writes a guide (the PUT endpoint, bundle import,
         # clone) lands here, so the scan lives here too: the verdict is stored
@@ -289,6 +293,7 @@ class CollectionService:
             guide_flag=guide_flag,
             sensitivity=sensitivity,
             published=published,
+            classification=classification,
         )
         row = app_db.get_collection(collection_id)
         return self._decode_guide_flag(row) if row else None

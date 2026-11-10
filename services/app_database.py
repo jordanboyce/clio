@@ -396,6 +396,11 @@ class SQLiteBackend(DatabaseBackend):
                 conn.execute("ALTER TABLE collections ADD COLUMN sensitivity TEXT DEFAULT 'internal'")
             except sqlite3.OperationalError:
                 pass
+            # Classification marking (services/data_controls.py). Empty = none.
+            try:
+                conn.execute("ALTER TABLE collections ADD COLUMN classification TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
             try:
                 conn.execute("ALTER TABLE mcp_tokens ADD COLUMN collection_scope TEXT")
             except sqlite3.OperationalError:
@@ -649,6 +654,7 @@ class SQLiteBackend(DatabaseBackend):
         sensitivity: Optional[str] = None,
         published: Optional[bool] = None,
         guide_flag: Optional[str] = None,
+        classification: Optional[str] = None,
     ):
         updates = []
         params = []
@@ -659,6 +665,7 @@ class SQLiteBackend(DatabaseBackend):
                              ("mcp_display_description", mcp_display_description),
                              ("guide", guide), ("guide_flag", guide_flag),
                              ("sensitivity", sensitivity),
+                             ("classification", classification),
                              ("published", None if published is None else int(published))]:
             if value is not None:
                 updates.append(f"{field} = ?")

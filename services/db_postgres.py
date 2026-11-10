@@ -345,6 +345,7 @@ class PostgresBackend(DatabaseBackend):
 
                 # Content governance — mirrors the SQLite backend.
                 cur.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS sensitivity TEXT DEFAULT 'internal'")
+                cur.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS classification TEXT DEFAULT ''")
                 # Published collections — mirrors the SQLite backend.
                 cur.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS published BOOLEAN NOT NULL DEFAULT FALSE")
                 cur.execute("""
@@ -560,7 +561,8 @@ class PostgresBackend(DatabaseBackend):
     def update_collection(self, collection_id: str, name=None, description=None, color=None,
                           chunk_size=None, chunk_overlap=None, embedding_model=None,
                           mcp_display_name=None, mcp_display_description=None,
-                          guide=None, sensitivity=None, published=None, guide_flag=None):
+                          guide=None, sensitivity=None, published=None, guide_flag=None,
+                          classification=None):
         updates, params = [], []
         for field, val in [("name", name), ("description", description), ("color", color),
                            ("chunk_size", chunk_size), ("chunk_overlap", chunk_overlap),
@@ -569,6 +571,7 @@ class PostgresBackend(DatabaseBackend):
                            ("mcp_display_description", mcp_display_description),
                            ("guide", guide), ("guide_flag", guide_flag),
                            ("sensitivity", sensitivity),
+                           ("classification", classification),
                            ("published", None if published is None else bool(published))]:
             if val is not None:
                 updates.append(f"{field} = %s")

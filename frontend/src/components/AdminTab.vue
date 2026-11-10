@@ -551,6 +551,9 @@
       </div>
     </section>
 
+    <!-- ═══ Classification markings ═══ -->
+    <ClassificationSettings />
+
     <!-- ═══ Audit trail ═══ -->
     <section aria-labelledby="admin-audit">
       <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
@@ -656,6 +659,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RefreshCw, ShieldCheck } from 'lucide-vue-next'
 import ApiAppsPanel from './ApiAppsPanel.vue'
+import ClassificationSettings from './ClassificationSettings.vue'
 import http from '../utils/http'
 import { useUserStore } from '../stores/userStore'
 import { useUiStore } from '../stores/uiStore'

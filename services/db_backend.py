@@ -140,7 +140,9 @@ class DatabaseBackend(ABC):
         sensitivity: Optional[str] = None,
         published: Optional[bool] = None,
         guide_flag: Optional[str] = None,
+        classification: Optional[str] = None,
     ):
+        """None leaves a field as it is. An empty ``classification`` clears it."""
         ...
 
     @abstractmethod

@@ -992,6 +992,19 @@
           </div>
         </section>
 
+        <!-- ═══ Features ═══ -->
+        <section v-show="activeSection === 'features'" aria-labelledby="settings-features">
+          <h2 id="settings-features" class="sr-only">Features</h2>
+          <FeatureSettings
+            :locked="serverConfigLocked"
+            :active="activeSection === 'features'"
+            :offline="systemInfo.offline_mode"
+            @open-section="activeSection = $event"
+            @switch-tab="$emit('switch-tab', $event)"
+            @changed="onFeatureChanged"
+          />
+        </section>
+
         <!-- ═══ Custom file types ═══ -->
         <section v-show="activeSection === 'custom-file-types'" aria-labelledby="settings-custom-file-types">
           <CustomFileTypes />
@@ -1171,6 +1184,7 @@ import { useLayoutStore } from '../stores/layoutStore'
 import { useUserStore } from '../stores/userStore'
 import { useProviderStore } from '../stores/providerStore'
 import CustomFileTypes from './CustomFileTypes.vue'
+import FeatureSettings from './FeatureSettings.vue'
 import CoverageReportPanel from './CoverageReportPanel.vue'
 import {
   PROVIDER_DEFS,
@@ -1194,6 +1208,11 @@ import {
 } from '../utils/aiProviders.js'
 
 const emit = defineEmits(['data-cleared', 'stats-updated', 'switch-tab', 'chat-tab-toggled', 'clone-collection'])
+const props = defineProps({
+  // A section to open, asked for from outside the tab: { id, at }. `at` makes
+  // asking for the same section twice count as two requests.
+  sectionRequest: { type: Object, default: null },
+})
 
 const collectionStore = useCollectionStore()
 const backgroundJobsStore = useBackgroundJobsStore()
@@ -1208,6 +1227,7 @@ const ALL_SECTIONS = [
   { id: 'layout', label: 'Layout' },
   { id: 'providers', label: 'AI Providers' },
   { id: 'indexing', label: 'Indexing' },
+  { id: 'features', label: 'Features' },
   { id: 'custom-file-types', label: 'Custom file types' },
   { id: 'data', label: 'Data' },
   { id: 'system', label: 'System' },
@@ -1242,6 +1262,10 @@ watch(activeSection, v => localStorage.setItem('settings_section', v))
 // blank column.
 watch(SECTIONS, list => {
   if (!list.some(s => s.id === activeSection.value)) activeSection.value = 'general'
+}, { immediate: true })
+
+watch(() => props.sectionRequest, (request) => {
+  if (request && ALL_SECTIONS.some(s => s.id === request.id)) activeSection.value = request.id
 }, { immediate: true })
 
 // UI feature flags
@@ -1682,6 +1706,12 @@ const loadServerConfig = async () => {
   } catch {
     // Use defaults
   }
+}
+
+// The Features section changed something another section also shows.
+const onFeatureChanged = (id) => {
+  if (id === 'ocr') loadServerConfig()
+  if (id === 'ai') fetchDeploymentDefault().then((info) => { deploymentDefault.value = info; bumpConfig() })
 }
 
 // Re-index collection

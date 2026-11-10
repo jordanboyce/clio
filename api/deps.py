@@ -161,4 +161,8 @@ def get_indexer(collection_id: str = "default") -> DocumentIndexer:
     if settings.private_collections:
         from middleware.user_context import get_request_user
         require_collection_access(collection_id, get_request_user())
+    # A collection marked local only is not opened for a request that hands
+    # what it reads to an outside model (services/data_controls.py).
+    from services import data_controls
+    data_controls.check_collection(collection_id)
     return indexer_manager.get_indexer(collection_id)

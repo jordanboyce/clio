@@ -594,6 +594,22 @@ class Settings(BaseSettings):
     aup_version: str = "1"
     aup_text: str = ""
 
+    # Classification markings (services/data_controls.py). A collection or a
+    # document can be marked, and a marking that is "local only" keeps its
+    # data away from everything outside this deployment: hosted models and
+    # embedding services, MCP clients, registered apps, catalogue lookups,
+    # emails and webhooks. DATA_CLASSIFICATIONS is a JSON list of
+    # {"id", "label", "description", "local_only"}; empty uses the built-in
+    # list (export controlled, CUI, proprietary, all local only). Normally
+    # edited in Admin, Policy.
+    data_classifications: str = ""
+    # Hosts that count as inside the deployment for local-only data, comma
+    # separated, "*.corp.example" allowed. Loopback, private addresses written
+    # as addresses, and single-label names (a compose service) already count.
+    # List the name of an internal model or embedding server here; a name is
+    # never looked up to decide, because the answer could change later.
+    controlled_data_hosts: str = ""
+
     # Audit events (uploads, deletions, shares, tokens, policy decisions,
     # admin actions) are the accountability trail and are kept far longer
     # than the search log. 0 = keep forever.
@@ -760,6 +776,9 @@ class Settings(BaseSettings):
     #   base   ~142MB  good default for CPU
     #   small  ~466MB  better accuracy, ~2x slower than base
     #   medium ~1.5GB  much better, GPU recommended
+    # ENABLE_TRANSCRIPTION=false refuses recordings outright, for a site that
+    # does not want audio or video indexed at all.
+    enable_transcription: bool = True
     whisper_model: str = "base"
     whisper_device: str = "cpu"          # "cpu" or "cuda"
     whisper_compute_type: str = "int8"   # "int8" (fast, CPU) | "float16" (GPU) | "float32"

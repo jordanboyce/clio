@@ -852,6 +852,20 @@ def apply_deployment_defaults(provider_name: str, api_key, kwargs: dict):
 
 
 def create_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProvider:
+    """Create an AI provider instance, marked with whether it is outside this
+    network (``external``), which is what keeps local-only data away from it
+    (services/data_controls.py). See ``_build_provider`` for the arguments.
+    """
+    from services import data_controls
+
+    provider = _build_provider(provider_name, api_key, **kwargs)
+    _, resolved = apply_deployment_defaults(provider_name, api_key, kwargs)
+    provider.external = data_controls.model_is_external(provider_name, resolved.get("base_url") or "")
+    provider.egress_name = provider_name
+    return provider
+
+
+def _build_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProvider:
     """Create an AI provider instance.
 
     Args:

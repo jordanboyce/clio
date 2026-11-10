@@ -77,7 +77,7 @@ def _reranker() -> Dict[str, Any]:
         return _feature("reranker", label, ON, "The best results are put in a more accurate order.")
     if state["setting"] == "off":
         return _feature("reranker", label, OFF, "Turned off. Results come back in retrieval order.",
-                        "Remove ENABLE_RERANKER=false.")
+                        "Turn it on in Settings, Features.")
     return _feature("reranker", label, LIMITED,
                     "The model is not on this server. Results come back in retrieval order.",
                     "Use the full or slim image, which include it, or pre-seed it.")
@@ -108,6 +108,9 @@ def _transcription() -> Dict[str, Any]:
     from services import audio_transcriber, embedder
 
     label = "Transcription"
+    if not settings.enable_transcription:
+        return _feature("transcription", label, OFF, "Turned off, so audio and video recordings are refused.",
+                        "Turn it on in Settings, Features.")
     if find_spec("faster_whisper") is None:
         return _feature("transcription", label, OFF,
                         "Not in this install, so audio and video recordings are refused.",
@@ -133,7 +136,7 @@ def _figures() -> Dict[str, Any]:
     label = "Figures"
     if not settings.extract_figures:
         return _feature("figures", label, OFF, "Turned off. Only the text of a source is indexed.",
-                        "Remove EXTRACT_FIGURES=false.")
+                        "Turn it on in Settings, Features.")
     if not _vision_usable():
         return _feature("figures", label, LIMITED,
                         "Pictures are kept and shown beside results, but cannot be found by what they show.",
@@ -148,7 +151,8 @@ def _ai() -> Dict[str, Any]:
     provider = (settings.ai_provider or "").strip()
     if not provider:
         return _feature("ai", label, OFF, "No model is set for this server. Search does not need one.",
-                        "Connect a model on your network, or set AI_PROVIDER, AI_BASE_URL and AI_MODEL.")
+                        "Set this server's model in Settings, Features, or connect one in this browser "
+                        "under AI Providers.")
     if _uses_blocked_provider(provider):
         return _feature("ai", label, UNAVAILABLE, f"Set to {provider}, which offline mode does not allow.",
                         "Use local Ollama or an OpenAI-compatible server on your network.")
@@ -164,8 +168,9 @@ def _research() -> Dict[str, Any]:
         return _feature("research", label, ON, "Papers are organised and checked, with citations looked up in "
                                                "public catalogues. Those are tested when used.")
     return _feature("research", label, LIMITED,
-                    "Papers are organised and checked from their own text. Catalogue lookups are off "
-                    + ("in offline mode." if settings.offline_mode else "(RESEARCH_LOOKUP_ENABLED=false)."))
+                    "Papers are organised and checked from their own text. Catalogue lookups are off"
+                    + (" in offline mode." if settings.offline_mode else "."),
+                    "" if settings.offline_mode else "Turn lookups on in Settings, Features.")
 
 
 def _links() -> Dict[str, Any]:
@@ -174,9 +179,10 @@ def _links() -> Dict[str, Any]:
     label = "Web links"
     if link_indexing_available():
         return _feature("links", label, ON, "Pages can be added by link. Each site is tested when it is fetched.")
-    return _feature("links", label, OFF,
-                    "Offline mode does not fetch web pages." if settings.offline_mode
-                    else "Turned off by LINK_INDEXING_ENABLED=false.")
+    if settings.offline_mode:
+        return _feature("links", label, OFF, "Offline mode does not fetch web pages.")
+    return _feature("links", label, OFF, "Turned off, so pages cannot be added by link.",
+                    "Turn it on in Settings, Features.")
 
 
 def _git() -> Dict[str, Any]:
@@ -190,7 +196,7 @@ def _git() -> Dict[str, Any]:
     if settings.offline_mode and not settings.git_allowed_hosts.strip():
         return _feature("git", label, LIMITED, "Local checkouts index. Remote repositories need an allowed host "
                                                "in offline mode.",
-                        "Set GIT_ALLOWED_HOSTS to your internal git server, or mount a checkout and set "
+                        "Add your internal git server under Settings, Features, or mount a checkout and set "
                         "LOCAL_SOURCE_ROOTS to add it by path.")
     return _feature("git", label, ON, "Repositories can be indexed and kept in sync. Remote hosts are tested "
                                       "when cloned.")
@@ -200,7 +206,8 @@ def _mcp() -> Dict[str, Any]:
     label = "MCP"
     if settings.enable_mcp:
         return _feature("mcp", label, ON, "Agents can search this server through its MCP endpoint.")
-    return _feature("mcp", label, OFF, "Turned off, so agents cannot connect.", "Remove ENABLE_MCP=false.")
+    return _feature("mcp", label, OFF, "Turned off, so agents cannot connect.",
+                    "Turn it on in Settings, Features.")
 
 
 def _pii() -> Dict[str, Any]:
@@ -209,7 +216,7 @@ def _pii() -> Dict[str, Any]:
     label = "PII scan"
     if settings.pii_scan_action == "off":
         return _feature("pii", label, OFF, "Turned off. Sources are not scanned for personal data.",
-                        "Set PII_SCAN_ACTION.")
+                        "Choose what the scan does in Settings, Features.")
     if presidio_installed():
         return _feature("pii", label, ON, "Sources are scanned for personal data with Presidio.")
     return _feature("pii", label, LIMITED,

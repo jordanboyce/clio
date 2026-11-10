@@ -93,9 +93,14 @@ def mcp_can_expose(collection: Optional[Dict[str, Any]], token_scope: Optional[L
 # ── Document servability ──────────────────────────────────────────────────
 
 def is_hidden(doc_info: Optional[Dict[str, Any]]) -> bool:
+    """Quarantined, or marked local only while the request is on behalf of
+    something outside this deployment (services/data_controls.py)."""
+    from services import data_controls
     from services.content_policy import HIDDEN_STATUSES
 
-    return bool(doc_info) and (doc_info.get("policy_status") or "clear") in HIDDEN_STATUSES
+    if not doc_info:
+        return False
+    return (doc_info.get("policy_status") or "clear") in HIDDEN_STATUSES or data_controls.document_withheld(doc_info)
 
 
 def assert_document_servable(doc_info: Optional[Dict[str, Any]], allow_admin: bool = True) -> None:
@@ -109,7 +114,10 @@ def assert_document_servable(doc_info: Optional[Dict[str, Any]], allow_admin: bo
     """
     if not is_hidden(doc_info):
         return
-    if allow_admin:
+    from services import data_controls
+
+    # Being an administrator does not make an outside service an inside one.
+    if allow_admin and not data_controls.document_withheld(doc_info):
         from api.deps import require_admin
 
         try:
@@ -269,6 +277,14 @@ def retire_older_versions(collection_id: str, indexer: Any, document_id: str, *,
     labels = [row["sensitivity"] for row in versions.values() if row.get("sensitivity") in SENSITIVITY_LEVELS]
     if labels:
         store.set_document_governance(current, sensitivity=max(labels, key=SENSITIVITY_LEVELS.index))
+    # A classification stays with the document through its versions too, and a
+    # local-only one wins over a label.
+    from services import data_controls
+
+    markings = [row["classification"] for row in versions.values() if row.get("classification")]
+    if markings:
+        store.set_document_governance(
+            current, classification=next((m for m in markings if data_controls.is_local_only(m)), markings[0]))
     retired = [row for doc_id, row in versions.items() if doc_id != current]
     held = next((row for row in retired if row.get("policy_status") == "quarantined"), None)
     if held:
@@ -415,6 +431,37 @@ def set_document_sensitivity(
                  detail={"filename": doc_info.get("filename"),
                          "from": doc_info.get("sensitivity"), "to": label})
     return {"document_id": document_id, "sensitivity": label}
+
+
+def set_document_classification(
+    collection_id: str, document_id: str, classification: Optional[str], *, actor: Any = _UNSET
+) -> Dict[str, Any]:
+    """Mark one document, or clear its marking with None or "".
+
+    Raises KeyError for an unknown document and ValueError for a marking this
+    deployment does not have. Cached answers go: one of them may have been
+    written by a model this document may no longer reach.
+    """
+    from services import data_controls
+    from services.indexer_manager import indexer_manager
+
+    marking_id = data_controls.normalize(classification)
+    store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store
+    doc_info = store.get_document_info(document_id)
+    if not doc_info:
+        raise KeyError(document_id)
+    if actor is _UNSET:
+        from middleware.user_context import get_request_user
+
+        actor = get_request_user()
+    store.set_document_governance(document_id, classification=marking_id)
+    _invalidate_answers(collection_id)
+    audit.record("document.classification", actor=actor, collection_id=collection_id,
+                 document_id=document_id,
+                 detail={"filename": doc_info.get("filename"),
+                         "from": doc_info.get("classification"), "to": marking_id})
+    return {"document_id": document_id, "classification": marking_id,
+            "local_only": data_controls.is_local_only(marking_id)}
 
 
 def set_document_superseded(
@@ -815,7 +862,11 @@ def report_document(
     if recipients:
         from services.share_email import send_plain_email, share_email_enabled
 
-        if share_email_enabled():
+        from services import data_controls
+
+        # The notice names the file, and goes through an outside mail service.
+        # The report itself is in the review queue either way.
+        if share_email_enabled() and data_controls.external_allowed(collection_id, doc_info):
             subject = f"[Clio] Document reported: {doc_info.get('filename')}"
             body = (
                 f"{actor or 'An anonymous user'} reported a document for review.\n\n"

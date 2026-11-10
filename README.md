@@ -490,8 +490,15 @@ of them. The ones that matter most:
 | `COLLECTION_STORAGE_LIMIT_BYTES` | Most a single collection may hold (5 GiB default); extracted figures count toward it |
 | `EXTRACT_FIGURES`, `VISION_OCR_PROVIDER` | Whether pictures embedded in documents are pulled out and shown with results (on by default), and whether a vision model describes them so charts are findable by content (off unless a provider is set) |
 | `OFFLINE_MODE`, `CLIO_PROFILE` | No cloud providers, no downloads, no web fetching; refuse to start when unsafely exposed |
+| `DATA_CLASSIFICATIONS`, `CONTROLLED_DATA_HOSTS` | The classification markings a collection or source can carry (export controlled, CUI, proprietary, or your own), and which servers count as inside for data marked local only ([Classification](docs/CLASSIFICATION.md)) |
 | `IDENTITY_PROVIDER`, `PRIVATE_COLLECTIONS` | Your own sign-in, and per-person collections enforced against it |
 | `DATA_DIR` | Where documents, indexes and the app database live (`./data`) |
+
+Everything the status bar at the bottom reports (search model, reranker, OCR,
+transcription, figures, this server's AI model, catalogue lookups, web links,
+git servers, MCP, the personal-data scan) can also be changed in Settings →
+Features, without editing the environment. What is saved there is kept in the
+app database and wins over the environment on the next start.
 
 Provider API keys entered in the browser stay in that browser; a team key
 saved under Settings → AI Providers is stored server-side for everyone on the

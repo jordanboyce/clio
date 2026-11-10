@@ -112,6 +112,17 @@ async def search_documents(
             except Exception as e:
                 logger.warning(f"Failed to create AI service: {e}")
 
+        # The AI steps send result passages to the model. Where the collection
+        # holds local-only data and the model is outside, search still answers,
+        # without them.
+        if ai_service is not None:
+            from services import data_controls
+
+            if data_controls.provider_is_external(ai_service.provider) and data_controls.holds_local_only(collection_id):
+                logger.info(f"Search of {collection_id}: AI steps skipped, the collection holds local-only data")
+                ai_service = None
+                ai_provider_used = None
+
         # Build collection overview so AI synthesis can answer meta-questions
         # like "how many sources are in this collection?"
         collection_overview = None

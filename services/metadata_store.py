@@ -174,7 +174,9 @@ class MetadataStore:
                     -- current version, when an owner marked this one older)
                     superseded_by TEXT DEFAULT NULL,
                     superseded_at TEXT DEFAULT NULL,
-                    superseded_note TEXT DEFAULT NULL
+                    superseded_note TEXT DEFAULT NULL,
+                    -- classification marking (services/data_controls.py)
+                    classification TEXT DEFAULT NULL
                 )
             """)
 
@@ -1012,6 +1014,12 @@ class MetadataStore:
             logger.info("Running defensive v3.8 migration - superseded_by column missing")
             self._migrate_to_v3_8(conn)
             migrated = True
+        # Additive and nullable, so it needs no schema version of its own.
+        if "classification" not in self._get_table_columns(conn, "documents"):
+            conn.execute("ALTER TABLE documents ADD COLUMN classification TEXT DEFAULT NULL")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_classification "
+                         "ON documents(classification) WHERE classification IS NOT NULL")
+            conn.commit()
         if migrated:
             conn.execute("""
                 INSERT OR REPLACE INTO schema_info (key, value)
@@ -1263,7 +1271,7 @@ class MetadataStore:
                     SELECT document_id, filename, num_pages, num_chunks, upload_timestamp,
                            source_format, extraction_method, embedding_model, chunk_size,
                            chunk_overlap, schema_version, source_path, source_type,
-                           uploaded_by, sensitivity, policy_status
+                           uploaded_by, sensitivity, policy_status, classification
                     FROM documents
                     WHERE document_id IN ({placeholders})
                 """, batch)
@@ -1710,7 +1718,8 @@ class MetadataStore:
                     d.injection_review,
                     d.superseded_by,
                     d.superseded_at,
-                    d.superseded_note"""
+                    d.superseded_note,
+                    d.classification"""
 
     def list_documents_page(self, limit: int, offset: int = 0, q: str = "",
                             keys: Optional[List[str]] = None) -> List[dict]:
@@ -1827,16 +1836,35 @@ class MetadataStore:
             return [self._document_row_to_dict(row) for row in cursor.fetchall()]
 
     def get_hidden_document_ids(self) -> set:
-        """Ids of documents retrieval must not return (quarantined)."""
+        """Ids of documents retrieval must not return: quarantined ones, and
+        for a consumer outside this deployment, ones marked local only."""
+        from services import data_controls
+
         with sqlite_connect(self.db_path) as conn:
             self._ensure_v3_1_columns(conn)
             rows = conn.execute(
                 "SELECT document_id FROM documents WHERE policy_status = 'quarantined'"
             ).fetchall()
-            return {r[0] for r in rows}
+            hidden = {r[0] for r in rows}
+            if data_controls.current_outside_consumer():
+                marked = conn.execute(
+                    "SELECT document_id, classification FROM documents "
+                    "WHERE classification IS NOT NULL AND classification != ''"
+                ).fetchall()
+                hidden.update(doc_id for doc_id, marking in marked if data_controls.is_local_only(marking))
+            return hidden
+
+    def classified_document_ids(self) -> Dict[str, str]:
+        """document_id -> classification, for every document that carries one."""
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            return dict(conn.execute(
+                "SELECT document_id, classification FROM documents "
+                "WHERE classification IS NOT NULL AND classification != ''"
+            ).fetchall())
 
     def set_document_governance(self, document_id: str, *, sensitivity=..., policy_status=None,
-                                policy_flags=..., injection_review=...):
+                                policy_flags=..., injection_review=..., classification=...):
         """Update the governance columns of one document.
 
         ``sensitivity`` and ``policy_flags`` use Ellipsis as "leave alone" so
@@ -1855,6 +1883,9 @@ class MetadataStore:
         if injection_review is not ...:
             updates.append("injection_review = ?")
             params.append(injection_review)
+        if classification is not ...:
+            updates.append("classification = ?")
+            params.append(classification or None)
         if not updates:
             return
         params.append(document_id)
@@ -2105,7 +2136,7 @@ class MetadataStore:
                     placeholders = ",".join("?" * len(batch))
                     rows = conn.execute(
                         f"SELECT document_id, policy_status, policy_flags, sensitivity, injection_review, "
-                        f"superseded_by, superseded_at, superseded_note "
+                        f"classification, superseded_by, superseded_at, superseded_note "
                         f"FROM documents WHERE document_id IN ({placeholders})",
                         batch,
                     ).fetchall()
@@ -2115,11 +2146,14 @@ class MetadataStore:
                 logger.warning(f"Could not read prior review decisions: {e}")
                 prior = {}
             for doc in documents:
-                old_status, old_flags, old_sensitivity, old_review, *old_supersede = prior.get(
-                    doc["document_id"], (None,) * 7
+                old_status, old_flags, old_sensitivity, old_review, old_classification, *old_supersede = prior.get(
+                    doc["document_id"], (None,) * 8
                 )
                 if old_sensitivity:
                     doc["sensitivity"] = old_sensitivity
+                # A marking is about the bytes, and these are the same bytes.
+                if old_classification:
+                    doc["classification"] = old_classification
                 if old_status == "quarantined":
                     doc["policy_status"] = "quarantined"
                     if old_flags:
@@ -2142,8 +2176,8 @@ class MetadataStore:
                  source_format, extraction_method, embedding_model, chunk_size,
                  chunk_overlap, schema_version, source_path, source_type, injection_warnings,
                  uploaded_by, content_hash, sensitivity, policy_status, policy_flags, file_size,
-                 injection_review, superseded_by, superseded_at, superseded_note)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 injection_review, superseded_by, superseded_at, superseded_note, classification)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
                 (
                     doc["document_id"],
@@ -2170,6 +2204,7 @@ class MetadataStore:
                     doc.get("superseded_by"),
                     doc.get("superseded_at"),
                     doc.get("superseded_note"),
+                    doc.get("classification"),
                 )
                 for doc in documents
             ])
@@ -2271,7 +2306,7 @@ class MetadataStore:
                        chunk_overlap, schema_version, source_path, source_type,
                        uploaded_by, content_hash, sensitivity, policy_status, policy_flags,
                        injection_warnings, injection_review,
-                       superseded_by, superseded_at, superseded_note
+                       superseded_by, superseded_at, superseded_note, classification
                 FROM documents
                 WHERE document_id = ?
             """, (document_id,))

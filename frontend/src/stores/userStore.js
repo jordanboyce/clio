@@ -19,6 +19,10 @@ export const useUserStore = defineStore('user', () => {
   const aup = ref({ enabled: false, required: false, version: '1', accepted: false, accepted_at: null })
   const contentPolicyAction = ref('flag')
   const sensitivityLevels = ref(['public', 'internal', 'confidential', 'restricted'])
+  // Classification markings on offer ({id, label, description, local_only}),
+  // and whether this server embeds with a provider outside the network.
+  const classifications = ref([])
+  const embeddingExternal = ref(false)
   // Set by anything that wants the policy shown on demand (sidebar link).
   const aupOpen = ref(false)
   // Per-collection storage cap in bytes (0 = unlimited).
@@ -42,6 +46,8 @@ export const useUserStore = defineStore('user', () => {
       if (Array.isArray(response.data.sensitivity_levels)) {
         sensitivityLevels.value = response.data.sensitivity_levels
       }
+      classifications.value = Array.isArray(response.data.classifications) ? response.data.classifications : []
+      embeddingExternal.value = !!response.data.embedding_external
       collectionStorageLimitBytes.value = response.data.collection_storage_limit_bytes || 0
       loaded.value = true
     } catch (err) {
@@ -80,6 +86,8 @@ export const useUserStore = defineStore('user', () => {
     aupOpen,
     contentPolicyAction,
     sensitivityLevels,
+    classifications,
+    embeddingExternal,
     collectionStorageLimitBytes,
     isPrivateMode,
     mustAcceptAup,

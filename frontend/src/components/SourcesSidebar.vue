@@ -676,6 +676,19 @@
           <option value="__inherit__">Use collection default</option>
           <option v-for="level in userStore.sensitivityLevels" :key="level" :value="level">{{ level }}</option>
         </select>
+        <!-- Bulk classification marking for the selection -->
+        <select
+          v-if="selectedDocuments.length > 0 && collectionStore.canEditCurrent && userStore.classifications.length"
+          class="select select-bordered select-xs w-28"
+          :disabled="labelling"
+          aria-label="Set classification marking for selected sources"
+          data-testid="bulk-classification"
+          @change="applyBulkClassification($event)"
+        >
+          <option value="">Classify…</option>
+          <option value="__none__">No marking</option>
+          <option v-for="m in userStore.classifications" :key="m.id" :value="m.id">{{ m.label }}{{ m.local_only ? ' (local only)' : '' }}</option>
+        </select>
         <!-- What a selection means, on its own line so the row above stays one line -->
         <p
           v-if="selectedDocuments.length > 0"
@@ -844,6 +857,7 @@
                 :class="labelBadgeClass(doc.sensitivity_effective)"
                 :title="`Sensitivity: ${doc.sensitivity_effective}${doc.sensitivity ? ' (set on this document)' : ' (collection default)'}`"
               >{{ doc.sensitivity_effective }}</span>
+              <ClassificationBadge v-if="doc.classification_effective" :marking="doc.classification_effective" :inherited="!doc.classification" />
               <!-- Replaced by a newer document: quiet, informational -->
               <span
                 v-if="replacedBadge(doc)"
@@ -1275,6 +1289,7 @@ import { useCollectionStore } from '../stores/collectionStore'
 import { useUiStore } from '../stores/uiStore'
 import { useUserStore } from '../stores/userStore'
 import { labelBadgeClass, showLabel, policyBadge, policyFlagPages, categoryLabel, injectionBadge } from '../utils/governance'
+import ClassificationBadge from './ClassificationBadge.vue'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useExpertiseStore } from '../stores/expertiseStore'
 import { useSelectionStore } from '../stores/selectionStore'
@@ -1653,6 +1668,41 @@ async function applyBulkLabel(event) {
     await loadDocuments()
   } catch (err) {
     ui.toastError(err, 'Could not update the label')
+  } finally {
+    labelling.value = false
+  }
+}
+
+// Bulk classification marking of the current selection
+async function applyBulkClassification(event) {
+  const value = event.target.value
+  event.target.value = ''
+  if (!value || selectedDocuments.value.length === 0) return
+  const classification = value === '__none__' ? '' : value
+  const count = selectedDocuments.value.length
+  labelling.value = true
+  try {
+    for (const docId of selectedDocuments.value) {
+      await http.patch(
+        `/documents/${docId}/governance`,
+        { classification },
+        { params: { collection_id: collectionStore.currentCollectionId } },
+      )
+    }
+    const marking = userStore.classifications.find((m) => m.id === classification)
+    const sources = `${count} source${count === 1 ? '' : 's'}`
+    if (marking?.local_only) {
+      ui.notify(
+        `Marked ${sources} ${marking.label}. This collection is now closed to outside AI models, agents and apps.` +
+        (userStore.embeddingExternal ? ' Text already indexed was sent to the embedding provider before the marking.' : ''),
+        'success', { duration: 10000 },
+      )
+    } else {
+      ui.notify(classification ? `Marked ${sources} ${marking?.label || classification}.` : `Cleared the marking on ${sources}.`, 'success')
+    }
+    await loadDocuments()
+  } catch (err) {
+    ui.toastError(err, 'Could not update the marking')
   } finally {
     labelling.value = false
   }

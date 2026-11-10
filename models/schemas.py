@@ -85,6 +85,8 @@ class DocumentMetadata(BaseModel):
     content_hash: Optional[str] = Field(None, description="Full sha256 of the file (blocklist key)")
     sensitivity: Optional[str] = Field(None, description="Per-document sensitivity override; None inherits the collection label")
     sensitivity_effective: Optional[str] = Field(None, description="Label in force: the override, else the collection's")
+    classification: Optional[str] = Field(None, description="Classification marking set on this document; None inherits the collection's")
+    classification_effective: Optional[str] = Field(None, description="Marking in force: this document's, else the collection's")
     policy_status: str = Field(default="clear", description="clear | flagged | quarantined | approved")
     policy_flags: Optional[Dict[str, Any]] = Field(None, description="Content-policy scan summary when anything was found")
 

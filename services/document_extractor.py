@@ -518,6 +518,17 @@ class DocumentExtractor:
         return ""
 
     def _get_vision_ocr_engine(self) -> Optional["OCREngine"]:
+        """The vision engine, unless the source being indexed belongs to a
+        collection that holds local-only data and the vision model is outside
+        this network. Then there is none, and the local engine reads the page."""
+        from services import data_controls
+
+        engine = self._configured_vision_ocr_engine()
+        if engine is not None and not data_controls.allow_outside_processing(getattr(engine, "_provider", None)):
+            return None
+        return engine
+
+    def _configured_vision_ocr_engine(self) -> Optional["OCREngine"]:
         """Get or create a VisionOCREngine if vision OCR is configured."""
         if self._vision_ocr_engine_instance is not None:
             return self._vision_ocr_engine_instance
@@ -1707,6 +1718,12 @@ class DocumentExtractor:
         """
         from config import settings
         from services.audio_transcriber import get_transcriber, format_transcript_with_timestamps
+
+        if not settings.enable_transcription:
+            raise RuntimeError(
+                "Recordings are not transcribed on this server: transcription is turned off "
+                "(Settings, Features). Other kinds of source are not affected."
+            )
 
         transcriber = get_transcriber(
             model_size=settings.whisper_model,

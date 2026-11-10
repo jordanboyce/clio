@@ -103,6 +103,12 @@ def _token_permits(collection: dict[str, Any] | None) -> bool:
     funnels through here so the two rules cannot drift apart."""
     from services.governance import mcp_can_expose
 
+    from services import data_controls
+
+    # A collection marked local only is never an agent's to read, whatever the
+    # token: an MCP client or a registered app is outside this deployment.
+    if data_controls.collection_withheld(collection):
+        return False
     scope = get_request_mcp_token_scope()
     if get_request_mcp_token_allowlist():
         cid = (collection or {}).get("id")
@@ -4688,9 +4694,14 @@ def app_request_scope(app: dict[str, Any]):
     )
     app_token = set_request_app(app)
     identity_token = set_request_identity(app["actor"])
+    from services import data_controls
+
+    # A registered app is another program: data marked local only is not its to read.
+    outside_token = data_controls.mark_outside_consumer("a registered app")
     try:
         yield
     finally:
+        data_controls.reset_outside_consumer(outside_token)
         reset_request_identity(identity_token)
         reset_request_app(app_token)
         for variable, token in reversed(tokens):
@@ -4760,12 +4771,18 @@ class ToggleableMCPApp:
             from middleware.user_context import set_request_user
 
             user_token = set_request_user(state.get("auth_identity"))
+        from services import data_controls
+
+        # Whatever an agent reads goes wherever the agent runs, so every MCP
+        # request is on behalf of something outside (services/data_controls.py).
+        outside_token = data_controls.mark_outside_consumer("an MCP client")
         try:
             if scope["type"] == "http" and scope.get("method") == "POST":
                 await self._call_recording_activity(scope, receive, send, state)
             else:
                 await self.app(scope, receive, send)
         finally:
+            data_controls.reset_outside_consumer(outside_token)
             if user_token is not None:
                 from middleware.user_context import reset_request_user
 

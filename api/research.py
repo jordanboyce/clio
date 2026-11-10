@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from api.deps import get_indexer, require_collection_access
 from middleware.user_context import get_request_user
-from services import governance
+from services import data_controls, governance
 from services.research import briefs as briefs_service
 from services.research import jobs as jobs_service
 from services.research import citations, draft_check, library, lookup, naming, network, relevance
@@ -443,6 +443,10 @@ async def resolve_references(body: ResolveRequest, collection_id: str = "default
     if not lookup.lookup_available():
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Registry lookups are off on this server (offline mode or RESEARCH_LOOKUP_ENABLED=false)")
+    if data_controls.holds_local_only(collection_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="This collection holds data marked local only, so its references are not "
+                                   "sent to outside catalogues.")
     resolved = await asyncio.to_thread(library.resolve_references, store, refs)
     return {"references": resolved}
 
@@ -462,7 +466,7 @@ async def download_references(body: DownloadRequest, response: Response, collect
     store = library.research_store(indexer)
     refs = _chosen_references(store, body.document_id, body.reference_ids, include_links=body.include_links
                               or bool(body.reference_ids))
-    if lookup.lookup_available():
+    if lookup.lookup_available() and not data_controls.holds_local_only(collection_id):
         refs = await asyncio.to_thread(library.resolve_references, store, refs)
     wanted = library.download_urls(refs, include_pages=body.include_pages)
 
@@ -608,6 +612,7 @@ def assess_paper(
         _budget_or_429(user)
         provider, model = _provider(body.provider, x_ai_key, x_ollama_model, x_anthropic_model,
                                     x_openai_model, x_ai_model, x_ai_base_url)
+        data_controls.guard_model_call(collection_id, provider)
     try:
         result = relevance.assess(indexer, document_id, body.question, provider=provider, model=model)
     except ValueError as e:
@@ -672,8 +677,12 @@ def start_research_job(
             return {"job": None, "message": "Every selected source already has a review like this."}
     question = (body.question or "").strip() or None
 
+    data_controls.guard_model_call(collection_id, provider)
+
     def work(doc: dict, job_id: str) -> None:
         started = time.time()
+        # Asked again for each paper: one may have been marked since the job began.
+        data_controls.guard_model_call(collection_id, provider)
         if body.kind == "assess":
             result = relevance.assess(indexer, doc["document_id"], question, provider=provider, model=model)
             _record_usage(user, collection_id, body.provider, result.get("usage") or {}, started)
@@ -871,6 +880,7 @@ def check_draft_endpoint(
         _budget_or_429(user)
         provider, model = _provider(body.provider, x_ai_key, x_ollama_model, x_anthropic_model,
                                     x_openai_model, x_ai_model, x_ai_base_url)
+        data_controls.guard_model_call(collection_id, provider)
     papers = library.research_store(indexer).get_papers([d["document_id"] for d in docs])
     try:
         result = draft_check.check_draft(

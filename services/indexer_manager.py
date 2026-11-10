@@ -320,13 +320,18 @@ class IndexerManager:
             chunk_overlap=chunk_overlap,
         )
 
-        # Create indexer
-        return DocumentIndexer(
+        # Create indexer. The embedding service is wrapped so that a collection
+        # holding local-only data is never sent to an outside embedding provider.
+        from services import data_controls
+
+        indexer = DocumentIndexer(
             vector_store=vector_store,
-            embedding_service=embedding_service,
+            embedding_service=data_controls.guard_embedding(embedding_service, collection_id),
             document_extractor=self._document_extractor,
             text_chunker=text_chunker,
         )
+        indexer.collection_id = collection_id
+        return indexer
 
     def reload_indexer(self, collection_id: str = "default"):
         """Reload an indexer's vector store from disk.

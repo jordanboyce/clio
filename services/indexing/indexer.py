@@ -102,6 +102,28 @@ class ChunkBatcher:
         return batch
 
 
+def _without_outside_help(method):
+    """Run an indexing step so that, for a collection holding local-only data,
+    nothing it does calls a service outside this network: no vision model for
+    scanned pages or figures, no model review of the content
+    (services/data_controls.py). Embedding is kept in by the embedding service
+    the collection's indexer is given."""
+    import functools
+    import inspect
+
+    signature = inspect.signature(method)
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        from services import data_controls
+
+        given = signature.bind_partial(self, *args, **kwargs).arguments
+        with data_controls.local_processing(given.get("collection_id") or self.collection_id):
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class DocumentIndexer:
     """Orchestrates the document indexing pipeline."""
 
@@ -129,6 +151,9 @@ class DocumentIndexer:
         self.document_extractor = document_extractor
         self.text_chunker = text_chunker
         self.figures_dir = figures_dir or figures.figures_root(vector_store.metadata_store)
+        # Set by whoever builds an indexer for a collection. Callers that pass
+        # no collection_id to an indexing method fall back to it.
+        self.collection_id: Optional[str] = None
         self._fill_lock = threading.Lock()
         self._fill_running = False
         self._fill_not_before = 0.0
@@ -315,6 +340,7 @@ class DocumentIndexer:
             )
         return status, flags, suggested
 
+    @_without_outside_help
     def index_document_with_progress(
         self,
         document_path: Path,
@@ -500,6 +526,7 @@ class DocumentIndexer:
         )
         return metadata
 
+    @_without_outside_help
     def prepare_document(
         self,
         document_path: Path,

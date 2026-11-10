@@ -380,6 +380,9 @@ def export_collection(collection_id: str, include_sources: bool = False,
                 "color": collection.get("color"),
                 "guide": collection.get("guide"),
                 "sensitivity": governance.collection_sensitivity(collection),
+                # Travels with the bundle. A server that does not have this
+                # marking treats it as local only (services/data_controls.py).
+                "classification": collection.get("classification") or None,
                 "chunk_size": collection.get("chunk_size"),
                 "chunk_overlap": collection.get("chunk_overlap"),
             },
@@ -595,6 +598,10 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
             updates["sensitivity"] = normalize_sensitivity(meta.get("sensitivity"))
         except Exception:
             pass
+        marking = str(meta.get("classification") or "").strip().lower()[:40]
+        if marking:
+            # Kept as it came, known here or not, and set before anything is embedded.
+            updates["classification"] = marking
         collection_service.update_collection(cid, **{k: v for k, v in updates.items() if v})
 
         indexes_dir = collection_service.get_indexes_path(cid)

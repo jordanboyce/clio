@@ -506,6 +506,11 @@ def llm_review(page_texts: Dict[int, str], filename: str = "") -> Optional[Dict[
         import json
 
         provider, model = _resolve_review_provider()
+        from services import data_controls
+
+        # No second opinion from outside on a collection that holds local-only data.
+        if provider is not None and not data_controls.allow_outside_processing(provider):
+            return None
         if provider is None:
             return None
         sample = _sample_pages(page_texts, max(1, settings.content_policy_llm_sample_pages))

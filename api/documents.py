@@ -44,7 +44,7 @@ from services.form_field_extractor import (
     estimate_form_likelihood,
     is_form_like_text,
 )
-from services import audit, figures, git_source, governance, local_roots, page_preview, pasted_text, source_changes, source_watcher, storage_quota
+from services import audit, data_controls, figures, git_source, governance, local_roots, page_preview, pasted_text, source_changes, source_watcher, storage_quota
 from services.content_policy import BlockedContentError, ContentRejectedError
 from services.storage_quota import StorageLimitExceeded
 from services.link_fetcher import LinkError, LinkRefused, link_indexing_available, validate_link
@@ -1701,6 +1701,9 @@ def list_documents(
                 content_hash=doc.get("content_hash"),
                 sensitivity=doc.get("sensitivity"),
                 sensitivity_effective=governance.effective_sensitivity(collection, doc.get("sensitivity")),
+                classification=doc.get("classification"),
+                classification_effective=data_controls.effective_classification(
+                    collection, doc.get("classification")),
                 policy_status=doc.get("policy_status") or "clear",
                 policy_flags=doc.get("policy_flags"),
                 superseded_by=doc.get("superseded_by"),
@@ -2457,8 +2460,10 @@ def report_document(document_id: str, body: ReportRequest, request: Request, col
 
 
 class DocumentGovernanceUpdate(BaseModel):
-    """Body for per-document governance changes."""
+    """Body for per-document governance changes. A field that is left out is
+    left alone."""
     sensitivity: str | None = None   # "" or null clears the override
+    classification: str | None = None  # a marking id; "" or null clears it
 
 
 @router.patch(
@@ -2476,7 +2481,23 @@ def update_document_governance(document_id: str, body: DocumentGovernanceUpdate,
     get_indexer(collection_id)
     _require_write(collection_id)
     try:
-        return governance.set_document_sensitivity(collection_id, document_id, body.sensitivity)
+        result: dict = {"document_id": document_id}
+        if "sensitivity" in body.model_fields_set or "classification" not in body.model_fields_set:
+            result.update(governance.set_document_sensitivity(collection_id, document_id, body.sensitivity))
+        if "classification" in body.model_fields_set:
+            from services import data_controls
+
+            # Anyone who can add sources can mark one. Taking a local-only
+            # marking off releases the document to outside services, so that
+            # is the owner's call.
+            current = (get_indexer(collection_id).vector_store.metadata_store.get_document_info(document_id)
+                       or {}).get("classification")
+            wanted = data_controls.normalize(body.classification)
+            if data_controls.is_local_only(current) and not data_controls.is_local_only(wanted):
+                from middleware.user_context import get_request_user
+                require_collection_access(collection_id, get_request_user(), owner=True)
+            result.update(governance.set_document_classification(collection_id, document_id, wanted))
+        return result
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except KeyError:

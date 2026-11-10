@@ -18,6 +18,7 @@ docs/ONPREM.md
 docs/AIRGAP.md
 docs/IDENTITY.md
 docs/SECURE_PROFILE.md
+docs/CLASSIFICATION.md
 docs/DEPLOYMENT.md
 docs/APP_API.md
 docs/api/openapi-v1.json

@@ -24,6 +24,28 @@ export function labelBadgeClass(label) {
   }
 }
 
+// ── Classification markings ────────────────────────────────────────────────
+// A marking says which machines may be given the data. The list comes from the
+// server (userStore.classifications). An id that is not on it any more is
+// still shown, and is local only: removing a marking never releases data.
+
+export function classificationInfo(catalog, id) {
+  if (!id) return null
+  const known = (catalog || []).find((m) => m.id === id)
+  return known || { id, label: String(id).replace(/_/g, ' '), description: '', local_only: true, retired: true }
+}
+
+export const LOCAL_ONLY_HELP =
+  'Stays on this server: no hosted AI model or embedding service, MCP client, registered app, ' +
+  'catalogue lookup, email or webhook is given it.'
+
+export function classificationTitle(info, inherited = false) {
+  if (!info) return ''
+  const where = inherited ? ' (from the collection)' : ''
+  const rule = info.local_only ? LOCAL_ONLY_HELP : 'A label only. It does not change where the data may go.'
+  return `${info.label}${where}. ${info.description ? info.description + ' ' : ''}${rule}`
+}
+
 // Whether a label is worth a badge at all — "internal" is the default and
 // would just be noise on every row.
 export function showLabel(label) {

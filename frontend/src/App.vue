@@ -412,6 +412,7 @@
                         :class="labelBadgeClass(collection.sensitivity)"
                         :title="`Sensitivity: ${collection.sensitivity}`"
                       >{{ collection.sensitivity }}</span>
+                      <ClassificationBadge v-if="collection.classification" :marking="collection.classification" />
                     </div>
                     <p v-if="collection.description" class="mt-1.5 text-[13px] leading-relaxed text-base-content/55 truncate">{{ collection.description }}</p>
                   </div>
@@ -535,6 +536,7 @@
                           :class="labelBadgeClass(collection.sensitivity)"
                           :title="`Sensitivity: ${collection.sensitivity}`"
                         >{{ collection.sensitivity }}</span>
+                        <ClassificationBadge v-if="collection.classification" :marking="collection.classification" />
                       </div>
                     </div>
                   </div>
@@ -611,7 +613,7 @@
             <ExpertiseLibrary v-if="activeTab === 'expertise'" />
             <MCPTab v-if="activeTab === 'mcp'" />
             <AdminTab v-if="activeTab === 'admin'" />
-            <SettingsTab v-if="activeTab === 'settings'" @data-cleared="handleDataCleared" @stats-updated="statsStore.fetchStats" @switch-tab="switchTab" @chat-tab-toggled="onChatTabToggled" @clone-collection="collectionStore.currentCollection && startClone(collectionStore.currentCollection)" />
+            <SettingsTab v-if="activeTab === 'settings'" :section-request="settingsSectionRequest" @data-cleared="handleDataCleared" @stats-updated="statsStore.fetchStats" @switch-tab="switchTab" @chat-tab-toggled="onChatTabToggled" @clone-collection="collectionStore.currentCollection && startClone(collectionStore.currentCollection)" />
           </div>
         </div>
 
@@ -709,7 +711,7 @@
 
       <!-- What works right now -->
       <span class="w-px h-3 bg-base-300" aria-hidden="true"></span>
-      <FeatureStatus />
+      <FeatureStatus @configure="openSettingsSection('features')" />
 
       <div class="flex-1"></div>
 
@@ -1000,6 +1002,31 @@
           </select>
           <p class="text-xs opacity-70 mt-1">
             {{ SENSITIVITY_HELP[editCollectionSensitivity] }} Shown on every result and citation; individual documents can override it.
+          </p>
+        </div>
+
+        <div class="form-control w-full mb-4">
+          <label class="label pb-1" for="edit-collection-classification">
+            <span class="label-text">Classification</span>
+          </label>
+          <select
+            id="edit-collection-classification"
+            v-model="editCollectionClassification"
+            class="select select-bordered w-full"
+            data-testid="edit-collection-classification"
+          >
+            <option value="">None</option>
+            <option v-for="m in editClassificationOptions" :key="m.id" :value="m.id">
+              {{ m.label }}{{ m.local_only ? ' (local only)' : '' }}
+            </option>
+          </select>
+          <p class="text-xs opacity-70 mt-1">
+            <template v-if="editClassificationInfo">{{ classificationTitle(editClassificationInfo) }}</template>
+            <template v-else>For data with handling rules, such as export-controlled or proprietary material. A single source can be marked from the Sources panel.</template>
+          </p>
+          <p v-if="editClassificationInfo?.local_only && userStore.embeddingExternal" class="text-xs text-warning mt-1">
+            This server embeds with a provider outside the network. Text already indexed here has been sent
+            to it. From now on this collection is indexed and searched by keyword only.
           </p>
         </div>
 
@@ -1386,7 +1413,8 @@ const ExpertiseLibrary = lazyView(() => import('./components/ExpertiseLibrary.vu
 const WelcomeOnboarding = lazyView(() => import('./components/WelcomeOnboarding.vue'))
 const AdminTab = lazyView(() => import('./components/AdminTab.vue'))
 const AcceptableUseModal = lazyView(() => import('./components/AcceptableUseModal.vue'))
-import { SENSITIVITY_HELP, labelBadgeClass, showLabel } from './utils/governance'
+import { SENSITIVITY_HELP, classificationInfo, classificationTitle, labelBadgeClass, showLabel } from './utils/governance'
+import ClassificationBadge from './components/ClassificationBadge.vue'
 import { formatBytes, describeStorage } from './utils/format'
 import Toaster from './components/Toaster.vue'
 import {
@@ -1999,6 +2027,13 @@ const switchTab = (tabName) => {
   activeTab.value = tabName
 }
 
+// The footer's feature panel: land on the settings that change what it shows.
+const settingsSectionRequest = ref(null)
+const openSettingsSection = (id) => {
+  settingsSectionRequest.value = { id, at: Date.now() }
+  switchTab('settings')
+}
+
 // Notification bell / footer indicator: land on the part of Admin that holds
 // the thing being counted, not just the top of the page.
 const openReview = (target = 'review') => {
@@ -2214,6 +2249,16 @@ const createCollection = async () => {
   }
 }
 
+// Classification marking in the edit dialog. A marking the collection already
+// carries stays selectable after it has left the server's list.
+const editCollectionClassification = ref('')
+const editClassificationInfo = computed(() =>
+  classificationInfo(userStore.classifications, editCollectionClassification.value))
+const editClassificationOptions = computed(() => {
+  const info = editClassificationInfo.value
+  return info?.retired ? [...userStore.classifications, info] : userStore.classifications
+})
+
 const openEditCollectionModal = (collection) => {
   editingCollectionId.value = collection.id
   editCollectionName.value = collection.name
@@ -2221,6 +2266,7 @@ const openEditCollectionModal = (collection) => {
   editCollectionColor.value = collection.color || '#3b82f6'
   editCollectionGuide.value = collection.guide || ''
   editCollectionSensitivity.value = collection.sensitivity || 'internal'
+  editCollectionClassification.value = collection.classification || ''
   editCollectionPublished.value = !!collection.published
   editModal.open()
 }
@@ -2236,6 +2282,7 @@ const updateCollection = async () => {
       color: editCollectionColor.value,
       guide: editCollectionGuide.value,
       sensitivity: editCollectionSensitivity.value,
+      classification: editCollectionClassification.value,
       published: canPublishEditing.value ? editCollectionPublished.value : undefined,
     })
     editModal.close()

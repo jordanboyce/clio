@@ -197,12 +197,21 @@ def get_transcriber(
     device: str = "cpu",
     compute_type: str = "int8",
 ) -> AudioTranscriber:
-    """Return a process-wide AudioTranscriber, creating it on first call."""
+    """Return the process-wide AudioTranscriber for this model.
+
+    A different model, device or compute type replaces it, so a model chosen
+    in Settings is the one the next recording uses.
+    """
     global _transcriber_instance
-    if _transcriber_instance is not None:
+
+    def _matches(instance: Optional[AudioTranscriber]) -> bool:
+        return instance is not None and (instance.model_size, instance.device, instance.compute_type) == (
+            model_size, device, compute_type)
+
+    if _matches(_transcriber_instance):
         return _transcriber_instance
     with _instance_lock:
-        if _transcriber_instance is None:
+        if not _matches(_transcriber_instance):
             _transcriber_instance = AudioTranscriber(
                 model_size=model_size,
                 device=device,

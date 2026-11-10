@@ -47,7 +47,7 @@ async def get_current_user(
     """
     from services.admins import admin_gate_active, is_admin
     from services.app_database import app_db
-    from services import governance
+    from services import data_controls, governance
     user = app_db.get_user(user_id) if user_id else None
     identity = getattr(request.state, "auth_identity", None)
     admin_identity = identity or user_id
@@ -68,6 +68,9 @@ async def get_current_user(
         "aup": governance.aup_payload(user_id),
         "content_policy_action": settings.content_policy_action,
         "sensitivity_levels": list(governance.SENSITIVITY_LEVELS),
+        # Classification markings on offer, and whether this server embeds
+        # with an outside provider (local-only data is then keyword-only).
+        **data_controls.public_payload(),
         # The per-collection storage cap, so the UI can show it without a
         # second round-trip (0 = unlimited).
         "collection_storage_limit_bytes": settings.collection_storage_limit_bytes,
@@ -126,6 +129,7 @@ async def create_share(collection_id: str, body: ShareCreateRequest, request: Re
                 shared_by=user_id or "A teammate",
                 app_url=str(request.base_url),
                 expires_at=share.get("expires_at"),
+                collection_id=collection_id,
             )
             share["email_sent"] = True
         except Exception as e:
@@ -204,6 +208,7 @@ async def create_shares_bulk(collection_id: str, body: ShareBulkRequest, request
                 shared_by=user_id or "A teammate",
                 app_url=str(request.base_url),
                 expires_at=share.get("expires_at"),
+                collection_id=collection_id,
             )
             entry["email_sent"] = True
         except Exception as e:

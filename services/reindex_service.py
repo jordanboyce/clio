@@ -403,12 +403,15 @@ class ReindexService:
             # chunking. Previously this loop reinvented the chunk-embed-add
             # pipeline and silently skipped the tabular branch, leaving
             # csv_schemas empty after a re-index.
+            from services import data_controls
+
             indexer = DocumentIndexer(
                 vector_store=vector_store,
-                embedding_service=embedding_service,
+                embedding_service=data_controls.guard_embedding(embedding_service, collection_id),
                 document_extractor=document_extractor,
                 text_chunker=text_chunker,
             )
+            indexer.collection_id = collection_id
 
             # Get list of documents from metadata store (includes local references)
             # This ensures we reindex ALL documents, not just those in the documents_dir
@@ -600,7 +603,12 @@ class ReindexService:
             if old_id and old_id != new.document_id:
                 indexer.delete_document(old_id)
         else:
-            embeddings = indexer.embedding_service.embed_texts([c.text for c in prepared.chunks])
+            from services import data_controls
+
+            # Kept from an outside embedding provider: indexed for keyword search,
+            # which index_prepared_documents does when it is given no vectors.
+            embeddings = None if data_controls.embedding_withheld(collection_id) else (
+                indexer.embedding_service.embed_texts([c.text for c in prepared.chunks]))
 
             # The old entry goes only now that the new one is ready, and the swap
             # holds the index lock so a search never sees the document half-way.
@@ -646,6 +654,7 @@ class ReindexService:
             policy_status=status,
             policy_flags=flags,
             injection_review=prior["injection_review"] if prior.get("injection_review") else ...,
+            classification=prior["classification"] if prior.get("classification") else ...,
         )
 
     def _get_documents_to_reindex(
@@ -880,12 +889,15 @@ class ReindexService:
             )
             vector_store.embedding_info = describe_embedding(embedding_service)
 
+            from services import data_controls
+
             indexer = DocumentIndexer(
                 vector_store=vector_store,
-                embedding_service=embedding_service,
+                embedding_service=data_controls.guard_embedding(embedding_service, collection_id),
                 document_extractor=document_extractor,
                 text_chunker=text_chunker,
             )
+            indexer.collection_id = collection_id
 
             # Get list of documents from metadata store (includes local references)
             document_list = self._get_documents_to_reindex(

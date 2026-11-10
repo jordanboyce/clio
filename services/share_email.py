@@ -36,9 +36,19 @@ def send_share_email(
     shared_by: str,
     app_url: str,
     expires_at: Optional[str] = None,
+    collection_id: Optional[str] = None,
 ) -> None:
     """Send one share invitation. Raises RuntimeError with a readable message
     on any failure — the caller surfaces it to the person clicking Send."""
+    from services import data_controls
+
+    # The invitation carries the collection's name and the token that opens it,
+    # through an outside mail service.
+    if collection_id and not data_controls.external_allowed(collection_id):
+        raise RuntimeError(
+            "The share was created, but not emailed: this collection holds data marked local only, and "
+            "invitations go through an outside mail service. Give them the share token yourself."
+        )
     if not share_email_enabled():
         raise RuntimeError(
             "Email sending is not configured: set RESEND_API_KEY in .env "

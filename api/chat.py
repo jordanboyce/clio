@@ -14,7 +14,7 @@ from middleware.user_context import get_request_user
 from services.usage_service import check_daily_budget, record_chat_usage
 
 from services.ai_service import AIService, AnthropicProvider, DEFAULT_OLLAMA_MODEL, create_provider
-from services import authored_text, figures, page_preview
+from services import authored_text, data_controls, figures, page_preview
 from services.agent_tools import anthropic_tools, openai_tools
 from services.collection_overview import build_collection_overview as _build_collection_overview
 from services.collection_service import collection_service
@@ -679,7 +679,9 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
         selected_ids = _selected_document_ids(chat_request)
         hits: list[tuple] = []
         if chat_request.scope == "all":
-            overview_ids = [c["id"] for c in collection_service.get_all_collections()]
+            # Asking across everything leaves out what the model may not be given.
+            overview_ids = [c["id"] for c in collection_service.get_all_collections()
+                            if not data_controls.collection_withheld(c)]
             for cid in overview_ids:
                 try:
                     found = get_indexer(cid).search(
@@ -958,6 +960,37 @@ def _provider_args(x_ai_key, x_ollama_model, x_anthropic_model, x_openai_model, 
             "x_openai_model": x_openai_model, "x_ai_model": x_ai_model, "x_ai_base_url": x_ai_base_url}
 
 
+def _model_scope(request_arg: str):
+    """Run an endpoint as a read on behalf of the model it will call.
+
+    When that model is outside this network, everything the endpoint reads is
+    on its way there, so collections holding local-only data are closed to it
+    (services/data_controls.py). Decided from the request, before anything is
+    read. Applies to direct callers of the function too, such as report jobs.
+    """
+    import functools
+    import inspect
+
+    def decorate(fn):
+        signature = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            given = signature.bind_partial(*args, **kwargs).arguments
+            body = given.get(request_arg)
+            base_url = given.get("x_ai_base_url")
+            destination = data_controls.model_destination(
+                getattr(body, "provider", ""), base_url if isinstance(base_url, str) else "")
+            with data_controls.outside_consumer(destination):
+                if getattr(body, "scope", "current") != "all":
+                    data_controls.check_collection(given.get("collection_id") or "default")
+                return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorate
+
+
 def _budget_response(turn_user):
     """A 429 when the user is over their daily token budget, else None.
     Checked only after the cache: a cache hit spends nothing, so it stays
@@ -970,6 +1003,7 @@ def _budget_response(turn_user):
 
 
 @router.post("/api/chat", response_model=ChatResponse)
+@_model_scope("chat_request")
 def chat_with_documents(  # sync: provider round-trips + tool loop run in FastAPI's threadpool
     chat_request: ChatRequest,
     request: Request,
@@ -1040,11 +1074,17 @@ async def chat_stream_endpoint(
     text_delta, sources, related, done, error — see `_run_turn`.
     """
     provider_args = _provider_args(x_ai_key, x_ollama_model, x_anthropic_model, x_openai_model, x_ai_model, x_ai_base_url)
-    # Cache and budget are settled before the stream starts: the budget can
-    # still answer with a real HTTP 429, impossible once SSE has begun.
-    cache_ctx, cache_entry = await asyncio.to_thread(
-        _prepare_turn, chat_request, collection_id, _requested_model(chat_request, **provider_args),
-    )
+    # As _model_scope does for the endpoints that are not streams. A refusal
+    # here is still a real HTTP 403.
+    destination = data_controls.model_destination(chat_request.provider, x_ai_base_url or "")
+    with data_controls.outside_consumer(destination):
+        if chat_request.scope != "all":
+            data_controls.check_collection(collection_id)
+        # Cache and budget are settled before the stream starts: the budget can
+        # still answer with a real HTTP 429, impossible once SSE has begun.
+        cache_ctx, cache_entry = await asyncio.to_thread(
+            _prepare_turn, chat_request, collection_id, _requested_model(chat_request, **provider_args),
+        )
     if cache_entry is None:
         over_budget = _budget_response(get_request_user())
         if over_budget:
@@ -1058,6 +1098,10 @@ async def chat_stream_endpoint(
 
     async def generate():
         exhausted = object()
+        # Set here because the stream outlives the endpoint call; each step
+        # below runs in a thread that takes a copy of this context.
+        if destination:
+            data_controls.mark_outside_consumer(destination)
         try:
             while True:
                 # Every step of the turn is blocking provider/index work — run
@@ -1167,6 +1211,7 @@ def _sample_passages(indexer, selected_ids: list[str] | None) -> list[dict]:
     tags=["chat"],
     summary="Suggested opening questions for a collection",
 )
+@_model_scope("body")
 def starter_questions_endpoint(  # sync: provider round-trip runs in the threadpool
     body: StarterQuestionsRequest,
     collection_id: str = "default",

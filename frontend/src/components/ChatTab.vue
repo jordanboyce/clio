@@ -1427,6 +1427,10 @@ const sendMessage = async () => {
 
     if (!response.ok) {
       const errBody = await response.json().catch(() => ({}))
+      // A refusal can carry a structured detail whose own `detail` is the sentence.
+      if (errBody.detail && typeof errBody.detail === 'object') {
+        errBody.detail = errBody.detail.detail || errBody.detail.message || ''
+      }
       // 429 = rate limit or daily token budget (shared backend contract:
       // {"detail", "retry_after_seconds"}). This is a raw fetch, so the
       // axios interceptor never sees it — handle it here, in the thread.

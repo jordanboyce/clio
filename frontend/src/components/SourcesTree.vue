@@ -79,6 +79,13 @@
           :class="LABEL_TONE[row.doc.sensitivity_effective] || 'text-base-content/55'"
           :title="`Sensitivity: ${row.doc.sensitivity_effective}${row.doc.sensitivity ? ' (set on this document)' : ' (collection default)'}`"
         ><Lock :size="9" aria-hidden="true" />{{ row.doc.sensitivity_effective }}</span>
+        <ClassificationBadge
+          v-if="row.doc.classification_effective"
+          class="tree-flag"
+          compact
+          :marking="row.doc.classification_effective || ''"
+          :inherited="!row.doc.classification"
+        />
         <span v-if="row.doc.superseded_by" class="tree-flag text-base-content/45" title="Replaced by a newer version">replaced</span>
         <span class="tree-ext">{{ fileInfo(row.doc).label }}</span>
         <button
@@ -124,6 +131,7 @@ import {
 } from 'lucide-vue-next'
 import { describeFile } from '../utils/fileTypes'
 import { injectionBadge, policyBadge, showLabel } from '../utils/governance'
+import ClassificationBadge from './ClassificationBadge.vue'
 import { folderDocIds, folderSelection, visibleRows } from '../utils/sourceTree.js'
 
 const props = defineProps({

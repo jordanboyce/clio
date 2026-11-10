@@ -119,8 +119,18 @@ def list_events(collection_id: str, since_id: int = 0, limit: int = 50) -> Dict[
 
 # ── Webhook ──────────────────────────────────────────────────────────────
 
+def _may_leave(collection_id: str) -> bool:
+    """A change notice names files, so it is not posted to a webhook outside
+    this network for a collection that holds local-only data."""
+    from services import data_controls
+
+    if data_controls.url_is_internal(settings.alert_webhook_url):
+        return True
+    return not data_controls.holds_local_only(collection_id)
+
+
 def _deliver_async(collection_id: str, event: Dict[str, Any]) -> None:
-    if not settings.alert_webhook_url:
+    if not settings.alert_webhook_url or not _may_leave(collection_id):
         return
     threading.Thread(target=_post_webhook, args=(collection_id, event), daemon=True,
                      name="alert-webhook").start()

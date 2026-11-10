@@ -150,6 +150,12 @@ def analyze_document(collection_id: str, indexer, document_id: str,
         printed_in = pages[ordered[0]] if ordered else ""
         where = "on page 1"
 
+    from services import data_controls
+
+    if use_registry and lookup.lookup_available() and not data_controls.external_allowed(collection_id, doc):
+        # A title or identifier sent to a catalogue says what this server holds.
+        use_registry = False
+        notes.append("Catalogue lookups were skipped: this source is marked local only.")
     if use_registry and lookup.lookup_available():
         record, how = None, ""
         for how, ident, fetch in (("ISBN", fields["isbn"], lookup.by_isbn),

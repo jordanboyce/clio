@@ -740,7 +740,17 @@ class CoverageRunner:
 
         def work() -> None:
             try:
-                report = run_coverage(indexer, probes=probes, seed=seed, use_llm=use_llm,
+                from services import data_controls
+
+                # Writing questions with a model sends it the sampled passages.
+                with_model = use_llm
+                if with_model is not False and data_controls.holds_local_only(collection_id):
+                    from services.ai_service import resolve_default_provider
+
+                    model, _ = (resolver or resolve_default_provider)(purpose="Retrieval coverage questions")
+                    if model is not None and data_controls.provider_is_external(model):
+                        with_model = False
+                report = run_coverage(indexer, probes=probes, seed=seed, use_llm=with_model,
                                       resolver=resolver, time_budget_s=time_budget_s,
                                       progress=progress)
                 indexer.vector_store.metadata_store.save_coverage_report(report)
