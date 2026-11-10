@@ -722,6 +722,27 @@ def test_jobs_from_an_earlier_process_are_reported_failed(tmp_path):
     assert listed[0]["status"] == "failed" and "restarted" in listed[0]["current"]
 
 
+def test_finished_jobs_can_be_removed_but_not_ones_still_going(tmp_path):
+    from services.metadata_store import MetadataStore
+    MetadataStore(tmp_path / "m.db")
+    store = ResearchStore(tmp_path / "m.db")
+    for job_id, state in (("done-1", "done"), ("failed-1", "failed"), ("cancelled-1", "cancelled")):
+        store.create_job(job_id, "brief", {}, total=1)
+        store.update_job(job_id, status=state)
+    waiting = jobs.start_job(collection_id="c", store=store, kind="brief", documents=[{"document_id": "a"}],
+                             work=lambda d, j: None, params={},
+                             not_before=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
+    try:
+        assert jobs.remove_job(store, waiting["job_id"]) is False
+        assert jobs.remove_job(store, "done-1") is True
+        assert jobs.remove_job(store, "done-1") is False          # already gone
+        assert jobs.clear_finished(store) == 2
+        assert [j["job_id"] for j in store.list_jobs()] == [waiting["job_id"]]
+    finally:
+        jobs.cancel_job(store, waiting["job_id"])
+        jobs.wait_for(waiting["job_id"])
+
+
 def test_job_size_is_capped(tmp_path, monkeypatch):
     from services.metadata_store import MetadataStore
     MetadataStore(tmp_path / "m.db")
@@ -871,6 +892,18 @@ def test_api_overnight_review_job_and_queue(client, monkeypatch):
     again = client.post("/api/research/jobs?collection_id=c1", json={
         "kind": "brief", "document_ids": ["doc-1"], "provider": "anthropic"}).json()
     assert again["job"] is None
+
+    # Clearing the finished job tidies the list and leaves its reviews alone.
+    job_id = started["job"]["job_id"]
+    client.state["write"] = False
+    assert client.delete(f"/api/research/jobs/{job_id}?collection_id=c1").status_code == 403
+    assert client.delete("/api/research/jobs?collection_id=c1").status_code == 403
+    client.state["write"] = True
+    assert client.delete(f"/api/research/jobs/{job_id}?collection_id=c1").json() == {"removed": job_id}
+    assert client.delete(f"/api/research/jobs/{job_id}?collection_id=c1").status_code == 404
+    assert client.get("/api/research/jobs?collection_id=c1").json()["jobs"] == []
+    assert client.delete("/api/research/jobs?collection_id=c1").json() == {"removed": 0}
+    assert len(client.get("/api/research/briefs?collection_id=c1").json()["briefs"]) == 2
 
 
 def test_api_assess_with_model_saves_the_verdict(client, monkeypatch):

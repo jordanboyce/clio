@@ -13,10 +13,11 @@ const review = (id, over = {}) => ({
 })
 
 let wrapper
+let serverJobs = []
 async function mountReviews(briefs, props = {}) {
   http.get.mockImplementation(async (url) => {
     if (url.startsWith('/api/research/briefs')) return { data: { briefs, unread: briefs.filter(b => !b.read_at).length } }
-    return { data: { jobs: [] } }
+    return { data: { jobs: serverJobs } }
   })
   wrapper = mount(ResearchReviews, {
     props: { collectionId: 'lab', papers: [], selectedIds: [], providerId: null, canWrite: true, ...props },
@@ -31,6 +32,7 @@ beforeEach(() => {
   http.get.mockReset()
   http.post.mockReset()
   http.delete.mockReset()
+  serverJobs = []
 })
 afterEach(() => {
   wrapper?.unmount()
@@ -117,5 +119,71 @@ describe('deleting reviews', () => {
 
     expect(w.find('[aria-label="Delete the review of Paper 1"]').exists()).toBe(false)
     expect(w.find('[data-testid="delete-all-reviews"]').exists()).toBe(false)
+  })
+})
+
+describe('tidying the background work list', () => {
+  const job = (id, status, over = {}) => ({
+    job_id: id, kind: 'brief', status, params: { depth: 'brief' }, done: 1, failed: 0, total: 1, errors: [], ...over,
+  })
+  const rows = (w) => w.findAll('[data-testid="job-row"]')
+
+  it('removes one finished job from the list without touching the reviews', async () => {
+    serverJobs = [job('a', 'done'), job('b', 'failed', { params: { depth: 'thorough' } })]
+    http.delete.mockResolvedValue({ data: { removed: 'a' } })
+    const w = await mountReviews([review(1)])
+
+    await w.get('[aria-label="Remove Brief reviews from this list"]').trigger('click')
+    await flushPromises()
+
+    expect(http.delete).toHaveBeenCalledWith(expect.stringContaining('/api/research/jobs/a?'))
+    expect(rows(w)).toHaveLength(1)
+    expect(w.findAll('[data-testid="review-row"]')).toHaveLength(1)
+  })
+
+  it('clears every finished job at once and keeps the one still running', async () => {
+    serverJobs = [job('run', 'running', { done: 0 }), job('a', 'done'), job('b', 'cancelled')]
+    http.delete.mockImplementation(async () => {
+      serverJobs = serverJobs.filter(j => j.status === 'running')
+      return { data: { removed: 2 } }
+    })
+    const w = await mountReviews([])
+
+    await w.get('[data-testid="clear-finished-jobs"]').trigger('click')
+    await flushPromises()
+
+    expect(http.delete).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/research\/jobs\?/))
+    expect(rows(w)).toHaveLength(1)
+    expect(w.find('[data-testid="clear-finished-jobs"]').exists()).toBe(false)
+  })
+
+  it('offers Stop, not Remove, on a job that is still going', async () => {
+    serverJobs = [job('run', 'running', { done: 0 })]
+    const w = await mountReviews([])
+
+    expect(rows(w)[0].text()).toContain('Stop')
+    expect(w.find('[aria-label="Remove Brief reviews from this list"]').exists()).toBe(false)
+    expect(w.find('[data-testid="clear-finished-jobs"]').exists()).toBe(false)
+  })
+
+  it('says so when a job could not be removed, and shows what the server still has', async () => {
+    serverJobs = [job('a', 'done')]
+    http.delete.mockRejectedValue({ message: 'This job is still waiting or running. Stop it first.' })
+    const w = await mountReviews([])
+
+    await w.get('[aria-label="Remove Brief reviews from this list"]').trigger('click')
+    await flushPromises()
+
+    expect(useUiStore().toasts[0].message).toContain('Stop it first')
+    expect(rows(w)).toHaveLength(1)
+  })
+
+  it('offers read-only people nothing to clear', async () => {
+    serverJobs = [job('a', 'done')]
+    const w = await mountReviews([], { canWrite: false })
+
+    expect(rows(w)).toHaveLength(1)
+    expect(w.find('[data-testid="clear-finished-jobs"]').exists()).toBe(false)
+    expect(w.find('[aria-label="Remove Brief reviews from this list"]').exists()).toBe(false)
   })
 })

@@ -735,6 +735,28 @@ def cancel_research_job(job_id: str, collection_id: str = "default") -> dict:
     return {"cancelling": jobs_service.cancel_job(store, job_id)}
 
 
+@router.delete("/api/research/jobs", tags=["research"],
+               summary="Clear finished research jobs from the list (their reviews and verdicts stay)")
+def clear_research_jobs(collection_id: str = "default") -> dict:
+    indexer = _indexer(collection_id)
+    _require_write(collection_id)
+    return {"removed": jobs_service.clear_finished(library.research_store(indexer))}
+
+
+@router.delete("/api/research/jobs/{job_id}", tags=["research"],
+               summary="Remove one finished research job from the list (its reviews and verdicts stay)")
+def remove_research_job(job_id: str, collection_id: str = "default") -> dict:
+    indexer = _indexer(collection_id)
+    _require_write(collection_id)
+    store = library.research_store(indexer)
+    if not store.get_job(job_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    if not jobs_service.remove_job(store, job_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="This job is still waiting or running. Stop it first.")
+    return {"removed": job_id}
+
+
 # ── review queue ────────────────────────────────────────────────────────
 
 @router.get("/api/research/briefs", tags=["research"], summary="Prepared reviews, newest first")

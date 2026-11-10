@@ -544,6 +544,25 @@ class ResearchStore:
                                 (int(limit),)).fetchall()
         return [self._job_row(r) for r in rows]
 
+    def delete_job(self, job_id: str) -> bool:
+        """Remove one job's record, unless it is still waiting or running.
+
+        Only the record of the work goes: the reviews and verdicts it wrote
+        are rows of their own and stay."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM research_jobs WHERE job_id = ? AND status NOT IN ('queued', 'running')",
+                (job_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
+    def delete_finished_jobs(self) -> int:
+        """Remove every job record that is not waiting or running."""
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM research_jobs WHERE status NOT IN ('queued', 'running')")
+            conn.commit()
+            return cur.rowcount
+
     # ── housekeeping ────────────────────────────────────────────────────
 
     def output_counts(self) -> Dict[str, int]:

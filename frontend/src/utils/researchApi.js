@@ -55,6 +55,9 @@ export const researchApi = {
   },
   jobs: (cid) => http.get(`/api/research/jobs?${q(cid)}`).then(r => r.data),
   cancelJob: (cid, jobId) => http.post(`/api/research/jobs/${jobId}/cancel?${q(cid)}`).then(r => r.data),
+  // Finished jobs only, and only their place in the list: what they wrote stays.
+  removeJob: (cid, jobId) => http.delete(`/api/research/jobs/${jobId}?${q(cid)}`).then(r => r.data),
+  clearJobs: (cid) => http.delete(`/api/research/jobs?${q(cid)}`).then(r => r.data),
   briefs: (cid, { unread = false, documentId = null } = {}) =>
     http.get(`/api/research/briefs?${q(cid, { unread: unread || null, document_id: documentId })}`).then(r => r.data),
   markBrief: (cid, id, read = true) => http.post(`/api/research/briefs/${id}/read?${q(cid)}`, { read }).then(r => r.data),

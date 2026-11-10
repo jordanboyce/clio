@@ -205,6 +205,19 @@ def cancel_job(store: ResearchStore, job_id: str) -> bool:
     return True
 
 
+def remove_job(store: ResearchStore, job_id: str) -> bool:
+    """Drop a finished job from the list. False when it is still waiting or
+    running (stop it first) or is not there. What the job wrote stays."""
+    reconcile(store)
+    return store.delete_job(job_id)
+
+
+def clear_finished(store: ResearchStore) -> int:
+    """Drop every finished job from the list; waiting and running ones stay."""
+    reconcile(store)
+    return store.delete_finished_jobs()
+
+
 def wait_for(job_id: str, timeout: float = 30.0) -> None:
     """Block until a job's thread ends (tests, and the shutdown hook)."""
     with _live_lock:

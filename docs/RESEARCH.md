@@ -279,6 +279,7 @@ an outbound path.
 | GET | `/api/research/assessments` | Saved verdicts for a question, ranked |
 | POST | `/api/research/jobs` | Background screening (`assess`) or reviews (`brief`), optional `not_before` |
 | GET/POST | `/api/research/jobs`, `/jobs/{id}`, `/jobs/{id}/cancel` | Job progress and cancellation |
+| DELETE | `/api/research/jobs`, `/jobs/{id}` | Clear finished jobs from the list (all, or one); their reviews and verdicts stay, and a waiting or running job is refused (409) |
 | GET/POST/DELETE | `/api/research/briefs`, `/briefs/{id}/read`, `/briefs/{id}` | The review queue |
 | GET / DELETE | `/api/collections/{id}/outputs` (`reviews`, `reports`) | Count, or delete, everything generated from a collection, including reviews of sources since deleted |
 | PATCH | `/api/research/papers/{id}/record` | Correct citation details (`changes`), or put back what was read (`revert`); edit access |

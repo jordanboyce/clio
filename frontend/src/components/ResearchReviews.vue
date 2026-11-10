@@ -51,9 +51,19 @@
 
     <!-- Jobs -->
     <section v-if="jobs.length" class="space-y-2">
-      <h3 class="text-xs font-semibold uppercase tracking-wide text-base-content/55">Background work</h3>
+      <div class="flex items-center justify-between gap-2">
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-base-content/55">Background work</h3>
+        <button
+          v-if="canWrite && finishedCount"
+          class="btn btn-xs btn-ghost"
+          :disabled="clearing"
+          title="Removes finished jobs from this list. Their reviews are kept."
+          data-testid="clear-finished-jobs"
+          @click="clearFinished"
+        >Clear finished</button>
+      </div>
       <ul class="divide-y divide-base-300/60">
-        <li v-for="job in jobs.slice(0, 8)" :key="job.job_id" class="py-2 text-sm flex items-center gap-3">
+        <li v-for="job in jobs.slice(0, 8)" :key="job.job_id" class="py-2 text-sm flex items-center gap-3" data-testid="job-row">
           <span class="badge badge-sm" :class="jobTone(job)">{{ jobStatus(job) }}</span>
           <div class="min-w-0 flex-1">
             <div class="truncate">
@@ -68,8 +78,16 @@
           </div>
           <progress v-if="isActive(job)" class="progress w-24" :value="job.done + job.failed" :max="job.total || 1" />
           <button v-if="isActive(job) && canWrite" class="btn btn-xs btn-ghost" @click="cancel(job)">Stop</button>
+          <button
+            v-else-if="canWrite"
+            class="btn btn-xs btn-ghost btn-square text-base-content/50"
+            :aria-label="`Remove ${jobTitle(job)} from this list`"
+            title="Remove from this list. Its reviews are kept."
+            @click="removeJob(job)"
+          >✕</button>
         </li>
       </ul>
+      <p v-if="jobs.length > 8" class="text-xs text-base-content/50">and {{ jobs.length - 8 }} older</p>
     </section>
 
     <!-- Queue -->
@@ -196,6 +214,8 @@ const startLabel = computed(() => {
 })
 
 const isActive = (job) => ['queued', 'running'].includes(job.status)
+const finishedCount = computed(() => jobs.value.filter(j => !isActive(j)).length)
+const clearing = ref(false)
 
 async function load() {
   try {
@@ -249,6 +269,30 @@ async function cancel(job) {
     await load()
   } catch (err) {
     ui.toastError(err, 'Could not stop the job')
+  }
+}
+
+// Removing a job only tidies this list: the reviews it wrote are rows of
+// their own, so neither of these asks first.
+async function removeJob(job) {
+  try {
+    await researchApi.removeJob(props.collectionId, job.job_id)
+    jobs.value = jobs.value.filter(j => j.job_id !== job.job_id)
+  } catch (err) {
+    ui.toastError(err, 'Could not remove the job')
+    await load()
+  }
+}
+
+async function clearFinished() {
+  clearing.value = true
+  try {
+    await researchApi.clearJobs(props.collectionId)
+    await load()
+  } catch (err) {
+    ui.toastError(err, 'Could not clear the finished jobs')
+  } finally {
+    clearing.value = false
   }
 }
 
