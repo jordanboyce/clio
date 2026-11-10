@@ -8,11 +8,12 @@ import axios from 'axios'
 //    legitimately long calls);
 //  - offline detection: a network-layer failure flips uiStore.offline (the
 //    banner in App.vue), and the first response that gets through clears it;
+//    a client-side timeout does not (it comes back as isTimeout instead);
 //  - 429 handling: the backend's shared contract (rate limiter and daily
 //    token budget both send {"detail", "retry_after_seconds"}) becomes one
 //    friendly toast here instead of per-surface handling;
 //  - error normalization: catch blocks receive {status, message, isRateLimit,
-//    isNetwork} without digging through err.response themselves.
+//    isNetwork, isTimeout} without digging through err.response themselves.
 //
 // The chat SSE stream uses fetch() and cannot ride this interceptor — it
 // handles 429/network in ChatTab.vue directly.
@@ -45,6 +46,21 @@ http.interceptors.response.use(
     }
 
     const ui = uiStore()
+
+    // A request that ran past its client-side timeout has no response either,
+    // but the server answered nothing about itself: it is usually busy on this
+    // one request (a slow model writing starter questions). Calling that an
+    // outage put up the offline banner over a healthy backend, so it leaves
+    // the flag as it was and says what actually happened.
+    if (error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT') {
+      return Promise.reject({
+        status: 0,
+        message: 'The server took too long to answer this request.',
+        isNetwork: false,
+        isTimeout: true,
+        isRateLimit: false,
+      })
+    }
 
     // "Backend unreachable" arrives in different costumes depending on the
     // deployment: a direct connection fails at the network layer (no

@@ -1102,7 +1102,9 @@ const loadStarters = async () => {
         provider: getAPIProviderName(selectedProvider.value),
         document_ids: selectionStore.active ? selectionStore.currentIds : null,
       },
-      { headers: buildProviderHeaders(selectedProvider.value), quiet: true },
+      // A slow local model can take well over the 30s default to write these;
+      // give it longer, and past that the generic suggestions stand in.
+      { headers: buildProviderHeaders(selectedProvider.value), quiet: true, timeout: 90000 },
     )
     if (startersKeyNow() === key) starters.value = Array.isArray(data?.questions) ? data.questions : []
   } catch {

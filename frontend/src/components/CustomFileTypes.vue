@@ -739,6 +739,8 @@ async function runSuggest() {
 
     const resp = await http.post('/api/custom-file-types/suggest', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      // The AI pass waits on a model, which can take minutes.
+      timeout: 180000,
     })
     const result = resp.data
     const fellBack = !!(result.ai?.requested && !result.ai?.used)

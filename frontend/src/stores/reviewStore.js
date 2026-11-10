@@ -26,7 +26,7 @@ export const useReviewStore = defineStore('review', () => {
   async function refresh() {
     if (!userStore.adminConsole) return
     try {
-      const resp = await http.get('/api/admin/review/summary')
+      const resp = await http.get('/api/admin/review/summary', { quiet: true })
       summary.value = { ...summary.value, ...resp.data }
       failed.value = false
     } catch {
