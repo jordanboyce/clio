@@ -751,12 +751,19 @@ def export_collection_static(  # sync: reads the index and builds a zip in the t
     confirm_public: bool = False,
     quantization: str = "int8",
     passages_per_file: int = 2000,
+    site: bool = False,
     user_id: str = Depends(get_current_user_id),
 ):
     """
     A zip of `manifest.json`, `passages.json` (split into `passages-0001.json`,
     ... past `passages_per_file`) and `vectors.bin`: everything a page needs to
     search the collection by meaning with no server (docs/STATIC_SEARCH.md).
+
+    `site=true` returns a whole site instead, ready to serve: those files
+    under `search/`, the reference page, and the embedding model and
+    transformers.js runtime it needs, so the site loads nothing from Hugging
+    Face or a CDN. The preview's `site.available` says whether this server can
+    make one, and how much it adds.
 
     Owner only, and everything in it is published. Refused unless the
     collection is labelled Public, holds nothing marked local only, was
@@ -774,7 +781,7 @@ def export_collection_static(  # sync: reads the index and builds a zip in the t
     try:
         path, filename, detail = export_zip(
             collection_id, confirm_public=confirm_public, quantization=quantization,
-            passages_per_file=passages_per_file)
+            passages_per_file=passages_per_file, site=site)
     except StaticExportError as e:
         raise _static_export_refusal(collection_id, e)
 

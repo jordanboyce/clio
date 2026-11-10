@@ -3,7 +3,7 @@
 // tested here with the rest of the frontend.
 import { describe, expect, it } from 'vitest'
 import {
-  ModelMismatch, buildIndex, checkModel, createSearch, keywordRank, rank,
+  ModelMismatch, buildIndex, checkModel, createSearch, keywordRank, localTransformers, rank,
 } from '../../../../docs/static-search/clio-static-search.js'
 
 const passages = [
@@ -135,5 +135,31 @@ describe('keyword fallback', () => {
   it('weighs rarer words more', () => {
     const index = buildIndex(manifest(), passages, int8())
     expect(keywordRank(index, 'holiday accrue')[0].passage.id).toBe('a_p1_c0')
+  })
+})
+
+describe('a site that carries its own model', () => {
+  it('loads transformers.js from vendor/ and models only from models/', async () => {
+    const base = 'https://example.org/handbook/'
+    const loaded = []
+    const library = await localTransformers({
+      base,
+      load: async (url) => {
+        loaded.push(url)
+        const env = { allowRemoteModels: true, allowLocalModels: false, backends: { onnx: { wasm: {} } } }
+        return { env, pipeline: () => 'pipeline' }
+      },
+    })
+    expect(loaded).toEqual([base + 'vendor/transformers.min.js'])
+    expect(library.pipeline()).toBe('pipeline')
+    expect(library.env.allowRemoteModels).toBe(false)
+    expect(library.env.allowLocalModels).toBe(true)
+    // A path, not a URL: transformers.js finds no tokenizer behind an http(s) URL.
+    expect(library.env.localModelPath).toBe('/handbook/models/')
+    // Named outright, as .js: a server that sends .mjs as text/plain cannot break it.
+    expect(library.env.backends.onnx.wasm.wasmPaths).toEqual({
+      mjs: base + 'vendor/ort-wasm-simd-threaded.asyncify.js',
+      wasm: base + 'vendor/ort-wasm-simd-threaded.asyncify.wasm',
+    })
   })
 })

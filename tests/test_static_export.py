@@ -5,6 +5,7 @@ collection of two text files. The fake model is registered as having a
 browser build so the model gate can be passed.
 """
 
+import hashlib
 import io
 import json
 import sqlite3
@@ -303,3 +304,145 @@ def test_cli_checks_then_replaces_last_years_files(site, tmp_path, capsys):
     assert export_static.main([cid, "--out", str(out), "--confirm-public"]) == 0
     assert sorted(p.name for p in out.iterdir()) == ["index.html", "manifest.json", "passages.json", "vectors.bin"]
     assert _audit(action="collection.static_export")[0]["actor"] == "cli"
+
+
+# ── A whole site, with the model and its runtime ─────────────────────────────
+
+
+def _fake_runtime(root):
+    vendor = root / "vendor"
+    vendor.mkdir(parents=True)
+    for name in se.SITE_RUNTIME_FILES:
+        (vendor / name).write_bytes(b"runtime:" + name.encode())
+    (vendor / "LICENSE.onnxruntime-web.txt").write_text("MIT", encoding="utf-8")
+    (vendor / "runtime.json").write_text(json.dumps({"packages": {
+        "@huggingface/transformers": {"version": "4.3.2", "license": "Apache-2.0"}}}), encoding="utf-8")
+    return vendor
+
+
+def _fake_model(root):
+    folder = root / "snapshot"
+    folder.mkdir(parents=True)
+    for name in ("config.json", "tokenizer.json", "tokenizer_config.json"):
+        (folder / name).write_text("{}", encoding="utf-8")
+    (folder / "model_optimized.onnx").write_bytes(b"onnx" * 10)
+    files = {n: folder / n for n in ("config.json", "tokenizer.json", "tokenizer_config.json")}
+    files["onnx/model.onnx"] = folder / "model_optimized.onnx"
+    return {"files": files, "source": "Qdrant/fake-embed-onnx", "license": "mit",
+            "bytes": sum(p.stat().st_size for p in files.values())}
+
+
+@pytest.fixture()
+def kit(site, tmp_path, monkeypatch):
+    vendor = _fake_runtime(tmp_path / "runtime")
+    model = _fake_model(tmp_path / "model")
+    monkeypatch.setattr(se, "site_runtime_dirs", lambda: [tmp_path / "nowhere", vendor])
+    monkeypatch.setattr(se, "site_model", lambda name: model if name == "fake-embed" else None)
+    return model
+
+
+def test_the_preview_says_whether_a_whole_site_can_be_made(site, tmp_path, monkeypatch):
+    cid, _ = _public(site)
+    monkeypatch.setattr(se, "site_runtime_dirs", lambda: [tmp_path / "nowhere"])
+    offer = se.preview(cid)["site"]
+    assert offer["available"] is False and "no copy of the browser runtime" in offer["reason"]
+    with pytest.raises(se.StaticExportError) as e:
+        se.write_export(cid, tmp_path / "out", confirm_public=True, site=True)
+    assert e.value.code == "site"
+    assert not (tmp_path / "out").exists()
+
+    monkeypatch.setattr(se, "site_runtime_dirs", lambda: [_fake_runtime(tmp_path / "rt")])
+    monkeypatch.setattr(se, "site_model", lambda name: None)
+    offer = se.preview(cid)["site"]
+    assert offer["available"] is False and "not on this server's disk" in offer["reason"]
+
+
+def test_a_whole_site_carries_the_page_the_runtime_and_clios_own_model(kit, site, tmp_path):
+    cid, _ = _public(site)
+    offer = se.preview(cid)["site"]
+    assert offer["available"] is True and offer["model"] == "fake-embed"
+    assert offer["bytes"] == offer["model_bytes"] + offer["runtime_bytes"] and offer["model_bytes"] == kit["bytes"]
+
+    out = tmp_path / "out"
+    manifest, detail = se.write_export(cid, out, confirm_public=True, site=True)
+    assert detail["site"] is True
+    files = sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
+    assert files == sorted([
+        "index.html", "clio-static-search.js",
+        "search/manifest.json", "search/passages.json", "search/vectors.bin",
+        "vendor/LICENSE.onnxruntime-web.txt", "vendor/runtime.json", *[f"vendor/{n}" for n in se.SITE_RUNTIME_FILES],
+        "models/fake-embed/config.json", "models/fake-embed/tokenizer.json",
+        "models/fake-embed/tokenizer_config.json", "models/fake-embed/onnx/model.onnx",
+        "models/fake-embed/SOURCE.txt",
+    ])
+    # The ONNX file is the one Clio embeds with, whatever fastembed named it.
+    assert (out / "models/fake-embed/onnx/model.onnx").read_bytes() == b"onnx" * 10
+    assert "Qdrant/fake-embed-onnx" in (out / "models/fake-embed/SOURCE.txt").read_text(encoding="utf-8")
+
+    bundled = manifest["embedding"]["browser"]["bundled"]
+    assert bundled["model"] == "fake-embed" and bundled["source"] == "Qdrant/fake-embed-onnx"
+    assert bundled["sha256"] == hashlib.sha256(b"onnx" * 10).hexdigest()
+    assert bundled["runtime"]["@huggingface/transformers"]["version"] == "4.3.2"
+    assert json.loads((out / "search/manifest.json").read_text(encoding="utf-8")) == manifest
+    # The data files are the same as a plain export's.
+    plain, _ = se.write_export(cid, tmp_path / "plain", confirm_public=True)
+    assert "bundled" not in plain["embedding"]["browser"]
+    assert (tmp_path / "plain/vectors.bin").read_bytes() == (out / "search/vectors.bin").read_bytes()
+    # The page it ships knows how to load what it ships.
+    assert "localTransformers" in (out / "index.html").read_text(encoding="utf-8")
+
+
+def test_the_site_downloads_as_one_zip_over_http(kit, site, monkeypatch):
+    from fastapi.testclient import TestClient
+    from api import deps
+    import main
+
+    monkeypatch.setattr(deps, "_initialized", True)
+    client = TestClient(main.app)
+    cid, _ = _public(site)
+    r = client.get(f"/api/collections/{cid}/export/static?confirm_public=true&site=true")
+    assert r.status_code == 200, r.text
+    assert "Handbooks.static-site.zip" in r.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        names = zf.namelist()
+        manifest = json.loads(zf.read("search/manifest.json"))
+    assert "index.html" in names and "models/fake-embed/onnx/model.onnx" in names
+    assert "vendor/transformers.min.js" in names and manifest["embedding"]["browser"]["bundled"]
+    assert _audit(action="collection.static_export")[0]["detail"]["site"] is True
+
+
+def test_cli_writes_a_site_and_leaves_the_folders_other_files(kit, site, tmp_path, capsys):
+    from scripts import export_static
+
+    cid, _ = _public(site)
+    out = tmp_path / "public"
+    (out / "search").mkdir(parents=True)
+    (out / "search" / "passages-0009.json").write_text("[]", encoding="utf-8")
+    (out / "about.html").write_text("<html>", encoding="utf-8")
+    assert export_static.main([cid, "--out", str(out), "--site", "--confirm-public"]) == 0
+    assert "serve" in capsys.readouterr().out
+    assert (out / "about.html").exists() and not (out / "search" / "passages-0009.json").exists()
+    assert (out / "index.html").exists() and (out / "models/fake-embed/onnx/model.onnx").exists()
+    assert not (out / ".clio-static-export").exists()
+
+
+def test_site_model_finds_fastembeds_copy_and_its_onnx_file(env, tmp_path, monkeypatch):  # noqa: F811
+    pytest.importorskip("fastembed")
+    from services import embedder
+
+    cache = tmp_path / "fastembed"
+    snapshot = cache / "models--Qdrant--bge-small-en-v1.5-onnx-Q" / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True)
+    for name in ("config.json", "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json"):
+        (snapshot / name).write_text("{}", encoding="utf-8")
+    (snapshot / "model_optimized.onnx").write_bytes(b"q" * 100)
+    monkeypatch.setattr(embedder, "fastembed_cached_in", lambda name: cache)
+
+    found = se.site_model("BAAI/bge-small-en-v1.5")
+    assert found["source"] == "Qdrant/bge-small-en-v1.5-onnx-Q" and found["license"] == "mit"
+    assert found["files"]["onnx/model.onnx"] == snapshot / "model_optimized.onnx"
+    assert set(found["files"]) == {"config.json", "tokenizer.json", "tokenizer_config.json",
+                                   "special_tokens_map.json", "onnx/model.onnx"}
+
+    monkeypatch.setattr(embedder, "fastembed_cached_in", lambda name: None)
+    assert se.site_model("BAAI/bge-small-en-v1.5") is None

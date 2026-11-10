@@ -14,6 +14,7 @@
 //
 // No dependencies. The embedder is passed in, so a site decides where the
 // model and the library come from (a CDN, or its own files on a closed network).
+// An export made as a whole site carries both: see localTransformers below.
 
 export const FORMAT = 'clio-static-search'
 export const VERSION = 1
@@ -151,6 +152,33 @@ export function keywordRank(index, query, { k = 10 } = {}) {
     terms.forEach((t, i) => { if (set.has(t)) scores[row] += weights[i] })
   })
   return top(index, scores, k).filter((hit) => hit.score > 0)
+}
+
+/**
+ * transformers.js from the site's own files, set up to load models only from
+ * the site: the layout an export made as a whole site has (vendor/ holds the
+ * library and its WebAssembly runtime, models/<model>/ the model). Returns
+ * the library's module; pass its `pipeline` to transformersEmbedder with
+ * `model: manifest.embedding.browser.bundled.model`.
+ */
+export async function localTransformers({ vendor = './vendor/', models = './models/', base, load } = {}) {
+  const root = base || globalThis.document?.baseURI || globalThis.location?.href
+  const at = (path, file = '') => new URL(file, new URL(path, root)).href
+  const library = await (load || ((url) => import(url)))(at(vendor, 'transformers.min.js'))
+  const { env } = library
+  env.allowRemoteModels = false
+  env.allowLocalModels = true
+  // A path on this site, never a full http(s) URL: given a URL, transformers.js
+  // 4.3.2 skips its check that a local file exists, decides the model has no
+  // tokenizer, and every query fails (the model itself still loads).
+  env.localModelPath = new URL(models, root).pathname
+  // Both files named outright: the loader ships as .js, not the .mjs the
+  // library would look for, because many servers send .mjs as text/plain.
+  env.backends.onnx.wasm.wasmPaths = {
+    mjs: at(vendor, 'ort-wasm-simd-threaded.asyncify.js'),
+    wasm: at(vendor, 'ort-wasm-simd-threaded.asyncify.wasm'),
+  }
+  return library
 }
 
 /**

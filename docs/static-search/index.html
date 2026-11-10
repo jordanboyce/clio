@@ -20,8 +20,10 @@
     holding the export (manifest.json, passages.json, vectors.bin), and serve
     the folder with any static web server.
 
-    The model and transformers.js load from public CDNs here. On a network
-    that blocks them, host both yourself: see "Hosting the model yourself" in
+    An export made as a whole site ("Include the model" in Clio's Export
+    dialog) carries the model and transformers.js in models/ and vendor/, and
+    this page loads them from there. Otherwise both come from public CDNs; on
+    a network that blocks them, see "Hosting the model yourself" in
     docs/STATIC_SEARCH.md.
   -->
   <label for="q">Ask a question or type a few words</label>
@@ -30,7 +32,7 @@
   <ol id="results"></ol>
 
   <script type="module">
-    import { createSearch, transformersEmbedder } from './clio-static-search.js'
+    import { createSearch, localTransformers, transformersEmbedder } from './clio-static-search.js'
 
     const status = document.getElementById('status')
     const input = document.getElementById('q')
@@ -38,7 +40,12 @@
 
     const search = await createSearch('./search/', {
       embedder: async (manifest) => {
-        status.textContent = `Loading ${manifest.embedding.browser.model}…`
+        const bundled = manifest.embedding.browser.bundled
+        status.textContent = `Loading ${bundled ? bundled.model : manifest.embedding.browser.model}…`
+        if (bundled) {
+          const { pipeline } = await localTransformers()
+          return transformersEmbedder(manifest, { pipeline, model: bundled.model })
+        }
         const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2')
         return transformersEmbedder(manifest, { pipeline })
       },

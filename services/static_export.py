@@ -11,6 +11,14 @@ A page loads the three, embeds the visitor's query in the browser with the
 same model, and ranks by the dot product. docs/static-search/ holds a
 reference client; docs/STATIC_SEARCH.md is the guide.
 
+With ``site=True`` the export is a whole site instead, ready to serve: the
+reference page, the files above under search/, and everything the page needs
+to embed a query with no outside service: transformers.js and its
+WebAssembly runtime under vendor/ (baked into the image at build time, see
+scripts/vendor_static_search.mjs), and under models/ the very ONNX file Clio
+embeds with. That is what a network that blocks Hugging Face and the CDNs
+needs, and since it is the same file, the probe matches exactly.
+
 Three things make this different from a collection bundle
 (services/collection_bundle.py):
 
@@ -73,6 +81,18 @@ DESTINATION = "a public website"
 # nothing for old exports: each manifest carries its own.
 PROBE_TEXT = "Which passages answer this question?"
 
+# The ready-to-serve site (``site=True``). The runtime comes from the image,
+# or from DATA_DIR/static-search/vendor on a source install
+# (scripts/vendor_static_search.mjs writes either).
+SITE_DATA_DIR = "search"
+SITE_RUNTIME_IMAGE_DIR = Path("/opt/clio/static-search/vendor")
+SITE_RUNTIME_FILES = ("transformers.min.js", "ort-wasm-simd-threaded.asyncify.js",
+                      "ort-wasm-simd-threaded.asyncify.wasm")
+SITE_PAGE_DIR = Path(__file__).resolve().parent.parent / "docs" / "static-search"
+SITE_PAGE_FILES = ("index.html", "clio-static-search.js")
+# Besides the ONNX file, what transformers.js reads from a model folder.
+SITE_MODEL_FILES = ("config.json", "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json")
+
 # Clio model -> the browser build that reproduces its query vectors, and how
 # that model pools. Add a model here only after comparing vectors: for both
 # of these, transformers.js at fp32 or fp16 gives a query vector within
@@ -88,7 +108,7 @@ class StaticExportError(ValueError):
     """The export cannot be made; the message says why in plain words.
 
     ``code`` is stable: ``not_found``, ``empty``, ``local_only``,
-    ``not_public``, ``model``, ``vectors``, ``confirm``, ``option``.
+    ``not_public``, ``model``, ``vectors``, ``confirm``, ``option``, ``site``.
     """
 
     def __init__(self, message: str, code: str = "invalid"):
@@ -109,6 +129,80 @@ def browser_model(model_name: Optional[str]) -> Optional[Dict[str, str]]:
 
 def _supported() -> str:
     return " or ".join(BROWSER_MODELS)
+
+
+# ── What a ready-to-serve site needs ─────────────────────────────────────────
+
+
+def site_runtime_dirs() -> List[Path]:
+    from config import settings
+
+    return [SITE_RUNTIME_IMAGE_DIR, Path(settings.data_dir) / "static-search" / "vendor"]
+
+
+def site_runtime() -> Optional[Dict[str, Any]]:
+    """The browser runtime a site export can carry, or None when this server
+    has no copy: {"dir", "files": [names], "info": runtime.json, "bytes"}."""
+    for d in site_runtime_dirs():
+        try:
+            if not all((d / f).is_file() for f in SITE_RUNTIME_FILES + ("runtime.json",)):
+                continue
+            info = json.loads((d / "runtime.json").read_text(encoding="utf-8"))
+            files = sorted(f.name for f in d.iterdir() if f.is_file())
+            return {"dir": d, "files": files, "info": info, "bytes": sum((d / f).stat().st_size for f in files)}
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def site_model(clio_model: str) -> Optional[Dict[str, Any]]:
+    """The model files a site export can carry: the copy fastembed loads on
+    this server, laid out the way transformers.js reads a model folder.
+
+    Returns {"files": {path in the folder: source path}, "source", "license",
+    "bytes"}, or None when the model is not on disk here.
+    """
+    from services import embedder
+
+    try:
+        fe_id = embedder.fastembed_model_id(clio_model)
+        cache = embedder.fastembed_cached_in(clio_model)
+        if fe_id is None or cache is None:
+            return None
+        desc = embedder._fastembed_catalog().get(fe_id) or {}
+        model_file = desc.get("model_file") or "model.onnx"
+        model_dir = embedder.fastembed_model_dir(clio_model, cache)
+        candidates = sorted((model_dir / "snapshots").glob("*")) if model_dir is not None else []
+        candidates.append(Path(cache) / f"fast-{fe_id.split('/')[-1]}")
+        for folder in candidates:
+            onnx = folder / model_file
+            if not (onnx.is_file() and (folder / "tokenizer.json").is_file() and (folder / "config.json").is_file()):
+                continue
+            files = {name: folder / name for name in SITE_MODEL_FILES if (folder / name).is_file()}
+            files["onnx/model.onnx"] = onnx
+            return {"files": files, "source": (desc.get("sources") or {}).get("hf") or fe_id,
+                    "license": desc.get("license"), "bytes": sum(p.stat().st_size for p in files.values())}
+    except Exception as e:  # noqa: BLE001 - only decides whether the option is offered
+        logger.warning(f"Static export: could not find {clio_model}'s files for a site export: {e}")
+    return None
+
+
+def _site_offer(browser: Optional[Dict[str, str]]) -> Dict[str, Any]:
+    """Whether a ready-to-serve site can be exported here, and its extra size."""
+    if browser is None:
+        return {"available": False, "reason": None}
+    runtime, model = site_runtime(), site_model(browser["clio_model"])
+    if runtime is None:
+        return {"available": False, "reason": (
+            "This server has no copy of the browser runtime (transformers.js), so the site has to load it and "
+            "the model from the internet. The published Clio images carry it; on a source install run "
+            "scripts/vendor_static_search.mjs once.")}
+    if model is None:
+        return {"available": False, "reason": (
+            f"{browser['clio_model']} is not on this server's disk, so it cannot be included.")}
+    return {"available": True, "reason": None, "model": browser["clio_model"],
+            "model_bytes": model["bytes"], "runtime_bytes": runtime["bytes"],
+            "bytes": model["bytes"] + runtime["bytes"]}
 
 
 # ── Reading the collection ───────────────────────────────────────────────────
@@ -241,6 +335,8 @@ def preview(collection_id: str, passages_per_file: int = DEFAULT_PASSAGES_PER_FI
         "vectors_bytes": passages * dimension,
         "passages_bytes": survey["text_bytes"] + passages * 90,
         "passage_files": max(1, -(-passages // max(1, passages_per_file))),
+        # A ready-to-serve site with the model and its runtime (site=True).
+        "site": _site_offer(survey["browser"]),
     }
 
 
@@ -327,8 +423,14 @@ def clear_previous(out_dir: Path) -> None:
 
 def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = False,
                  quantization: str = "int8",
-                 passages_per_file: int = DEFAULT_PASSAGES_PER_FILE) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+                 passages_per_file: int = DEFAULT_PASSAGES_PER_FILE,
+                 site: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Write manifest.json, the passage file(s) and vectors.bin into ``out_dir``.
+
+    With ``site`` they go into ``out_dir/search`` instead, beside the
+    reference page, the browser runtime under vendor/ and the model under
+    models/: a folder any static web server can serve as it is, which loads
+    nothing from anywhere else.
 
     Returns (the manifest, what the audit trail should keep). Raises
     StaticExportError when anything stands in the way; nothing is written in
@@ -363,6 +465,12 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
 
         collection, model, browser = survey["collection"], survey["model"], survey["browser"]
         documents = survey["documents"]
+        runtime = model_files = None
+        if site:
+            runtime, model_files = site_runtime(), site_model(browser["clio_model"])
+            if runtime is None or model_files is None:
+                raise StaticExportError(_site_offer(browser)["reason"], "site")
+        data_dir = out_dir / SITE_DATA_DIR if site else out_dir
         rows_by_id, matrix = _read_vectors(survey["indexes_dir"] / "faiss.index")
         dimension = int(matrix.shape[1])
         if survey["info"].get("dimension") and int(survey["info"]["dimension"]) != dimension:
@@ -378,7 +486,7 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
 
         total = survey["passages"]
         file_count = max(1, -(-total // passages_per_file))
-        out_dir.mkdir(parents=True, exist_ok=True)
+        data_dir.mkdir(parents=True, exist_ok=True)
         order: List[int] = []
         missing = 0
         per_document: Dict[str, int] = {}
@@ -389,8 +497,8 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                 name = _passage_file_name(number, file_count)
                 digest = hashlib.sha256()
                 count = 0
-                with open(out_dir / name, "wb") as f:
-                    written.append(out_dir / name)
+                with open(data_dir / name, "wb") as f:
+                    written.append(data_dir / name)
 
                     def put(data: bytes) -> None:
                         digest.update(data)
@@ -417,12 +525,23 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
 
             data, scale = quantize(matrix[np.asarray(order, dtype=np.int64)] if order
                                    else np.zeros((0, dimension), dtype=np.float32), quantization)
-            (out_dir / VECTORS_FILE).write_bytes(data)
-            written.append(out_dir / VECTORS_FILE)
+            (data_dir / VECTORS_FILE).write_bytes(data)
+            written.append(data_dir / VECTORS_FILE)
 
             from services.embedder import retrieval_prompts
 
             query_prefix, _ = retrieval_prompts(browser["clio_model"])
+            browser_entry: Dict[str, Any] = {"library": "@huggingface/transformers", "model": browser["model"],
+                                             "dtype": "fp32", "also_matches": ["fp16"]}
+            if site:
+                # The page loads this folder (models/<model>/) and the runtime
+                # beside it, not the hub build named above.
+                browser_entry["bundled"] = {
+                    "model": browser["clio_model"], "source": model_files["source"],
+                    "license": model_files["license"],
+                    "sha256": _sha256_file(model_files["files"]["onnx/model.onnx"]),
+                    "runtime": runtime["info"].get("packages", {}),
+                }
             manifest = {
                 "format": FORMAT,
                 "version": VERSION,
@@ -438,8 +557,7 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                     "metric": "inner_product",
                     "query_prefix": query_prefix or "",
                     # What a page loads to embed a query the same way.
-                    "browser": {"library": "@huggingface/transformers", "model": browser["model"],
-                                "dtype": "fp32", "also_matches": ["fp16"]},
+                    "browser": browser_entry,
                     "probe": _probe(browser["clio_model"], dimension),
                 },
                 "vectors": {
@@ -452,7 +570,10 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                 "documents": [{"id": d["document_id"], "name": d["filename"], "pages": d.get("num_pages"),
                                "passages": per_document.get(d["document_id"], 0)} for d in documents],
             }
-            (out_dir / MANIFEST_FILE).write_text(_manifest_text(manifest), encoding="utf-8", newline="\n")
+            (data_dir / MANIFEST_FILE).write_text(_manifest_text(manifest), encoding="utf-8", newline="\n")
+            written.append(data_dir / MANIFEST_FILE)
+            if site:
+                written += _write_site(out_dir, runtime, browser["clio_model"], model_files)
         except Exception:
             for path in written:
                 path.unlink(missing_ok=True)
@@ -461,10 +582,44 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
             "documents": len(documents), "passages": len(order), "model": browser["clio_model"],
             "quantization": quantization, "vectors_sha256": manifest["vectors"]["sha256"],
             "held_excluded": survey["held"], "not_public_excluded": survey["not_public"],
-            "confirmed_public": True,
+            "confirmed_public": True, "site": site,
         }
     finally:
         conn.close()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _write_site(out_dir: Path, runtime: Dict[str, Any], clio_model: str,
+                model_files: Dict[str, Any]) -> List[Path]:
+    """Put the page, the runtime and the model beside search/. Returns what it wrote."""
+    written: List[Path] = []
+
+    def put(source: Path, target: Path) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        written.append(target)
+        shutil.copyfile(source, target)
+
+    for name in SITE_PAGE_FILES:
+        put(SITE_PAGE_DIR / name, out_dir / name)
+    for name in runtime["files"]:
+        put(runtime["dir"] / name, out_dir / "vendor" / name)
+    model_dir = out_dir / "models" / Path(*clio_model.split("/"))
+    for name, source in model_files["files"].items():
+        put(source, model_dir / name)
+    note = model_dir / "SOURCE.txt"
+    written.append(note)
+    note.write_text(
+        f"{clio_model}: the ONNX export Clio embeds with, copied from {model_files['source']} on the Hugging "
+        f"Face hub. Licence: {model_files['license'] or 'see the model card'}. The site embeds queries with "
+        f"this file, so its vectors match the export's.\n", encoding="utf-8", newline="\n")
+    return written
 
 
 def export_zip(collection_id: str, **options: Any) -> Tuple[Path, str, Dict[str, Any]]:
@@ -478,11 +633,16 @@ def export_zip(collection_id: str, **options: Any) -> Tuple[Path, str, Dict[str,
         manifest, detail = write_export(collection_id, work, **options)
         zip_path = _work_dir() / f"static-{uuid.uuid4().hex}.zip"
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for name in [MANIFEST_FILE, *[f["file"] for f in manifest["passages"]["files"]], VECTORS_FILE]:
-                zf.write(work / name, name)
+            if options.get("site"):
+                for path in sorted(p for p in work.rglob("*") if p.is_file()):
+                    zf.write(path, path.relative_to(work).as_posix())
+            else:
+                for name in [MANIFEST_FILE, *[f["file"] for f in manifest["passages"]["files"]], VECTORS_FILE]:
+                    zf.write(work / name, name)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     name = manifest["collection"]["name"] or collection_id
     slug = "".join(c if c.isalnum() or c in "-_" else "-" for c in name).strip("-")
-    return zip_path, f"{slug or collection_id}.static-search.zip", detail
+    suffix = "static-site" if options.get("site") else "static-search"
+    return zip_path, f"{slug or collection_id}.{suffix}.zip", detail
 

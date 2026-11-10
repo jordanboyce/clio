@@ -96,9 +96,33 @@ describe('Export dialog, for a website', () => {
     const link = wrapper.get('a.btn-primary')
     expect(link.classes()).toContain('btn-disabled')
     expect(link.attributes('href')).toBe('#')
-    await wrapper.get('input[type="checkbox"]').setValue(true)
+    expect(wrapper.find('input[name="include-model"]').exists()).toBe(false)
+    await wrapper.get('input[name="confirm-public"]').setValue(true)
     expect(link.classes()).not.toContain('btn-disabled')
     expect(link.attributes('href')).toBe('/api/collections/c1/export/static?confirm_public=true')
+  })
+
+  it('offers the model and its runtime when the server has them, on by default', async () => {
+    const wrapper = await openSite({
+      ...ready, site: { available: true, model: 'BAAI/bge-small-en-v1.5', bytes: 95 * 1024 * 1024 },
+    })
+    expect(wrapper.text()).toContain('Include the model')
+    expect(wrapper.text()).toContain('95 MB more')
+    await wrapper.get('input[name="confirm-public"]').setValue(true)
+    const link = wrapper.get('a.btn-primary')
+    expect(link.attributes('href')).toBe('/api/collections/c1/export/static?confirm_public=true&site=true')
+    await wrapper.get('input[name="include-model"]').setValue(false)
+    expect(link.attributes('href')).toBe('/api/collections/c1/export/static?confirm_public=true')
+  })
+
+  it('says why the model cannot be included', async () => {
+    const wrapper = await openSite({
+      ...ready, site: { available: false, reason: 'This server has no copy of the browser runtime (transformers.js).' },
+    })
+    expect(wrapper.find('input[name="include-model"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('no copy of the browser runtime')
+    await wrapper.get('input[name="confirm-public"]').setValue(true)
+    expect(wrapper.get('a.btn-primary').attributes('href')).toBe('/api/collections/c1/export/static?confirm_public=true')
   })
 
   it('says why a collection cannot be published, and offers no confirmation', async () => {

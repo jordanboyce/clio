@@ -39,8 +39,19 @@
               About {{ formatBytes(site.passages_bytes) }} of text<span v-if="site.passage_files > 1"> in {{ site.passage_files }} files</span>
               and {{ formatBytes(site.vectors_bytes) }} of vectors.
             </p>
+            <label v-if="site.site?.available" class="flex items-start gap-3 cursor-pointer">
+              <input v-model="includeModel" name="include-model" type="checkbox" class="checkbox checkbox-sm mt-0.5" />
+              <span class="text-sm">
+                Include the model, as a site ready to serve<span class="text-base-content/60"> (about {{ formatBytes(site.site.bytes) }} more)</span>
+                <span class="block text-xs text-base-content/60">
+                  The page, {{ site.site.model }} and the library that runs it, so the site loads nothing from
+                  Hugging Face or a CDN. Works on a network that blocks both.
+                </span>
+              </span>
+            </label>
+            <p v-else-if="site.site?.reason" class="text-xs text-base-content/60">{{ site.site.reason }}</p>
             <label class="flex items-start gap-3 cursor-pointer">
-              <input v-model="confirmPublic" type="checkbox" class="checkbox checkbox-sm mt-0.5" />
+              <input v-model="confirmPublic" name="confirm-public" type="checkbox" class="checkbox checkbox-sm mt-0.5" />
               <span class="text-sm">
                 Everything in this collection is cleared for public release
                 <span class="block text-xs text-base-content/60">
@@ -133,9 +144,13 @@ const site = ref(null)
 const siteLoading = ref(false)
 const siteError = ref('')
 const confirmPublic = ref(false)
+// On whenever the server can include the model: a site that carries it works
+// anywhere, and its visitors' browsers contact no one else.
+const includeModel = ref(true)
 
 const siteHref = computed(() => site.value?.ready && confirmPublic.value && target.value
-  ? `/api/collections/${encodeURIComponent(target.value.id)}/export/static?confirm_public=true`
+  ? `/api/collections/${encodeURIComponent(target.value.id)}/export/static?confirm_public=true` +
+    (includeModel.value && site.value.site?.available ? '&site=true' : '')
   : '')
 
 async function setMode(next) {
@@ -163,6 +178,7 @@ async function open(collection) {
   site.value = null
   siteError.value = ''
   confirmPublic.value = false
+  includeModel.value = true
   preview.value = null
   error.value = ''
   loading.value = true

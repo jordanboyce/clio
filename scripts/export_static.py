@@ -3,6 +3,7 @@
 
     python scripts/export_static.py "Course handbook" --check
     python scripts/export_static.py "Course handbook" --out ../site/public/search --confirm-public
+    python scripts/export_static.py "Course handbook" --out ../site/public --site --confirm-public
 
 Writes manifest.json, passages.json (passages-0001.json, ... when there are
 many) and vectors.bin into --out, replacing a previous export there, so the
@@ -19,6 +20,11 @@ The same rules as the Export dialog apply (docs/STATIC_SEARCH.md): the
 collection must be labelled Public and hold nothing marked local only, and
 --confirm-public says it is cleared for release. --check prints what would
 be exported, and what stands in the way, without writing anything.
+
+--site writes a whole site into --out instead: the export under search/, the
+reference page, and the embedding model and its browser runtime, so the site
+needs neither Hugging Face nor a CDN (the image carries the runtime; a source
+install fetches it once with scripts/vendor_static_search.mjs).
 """
 
 from __future__ import annotations
@@ -56,6 +62,8 @@ def main(argv=None) -> int:
     parser.add_argument("--check", action="store_true", help="say what would be exported and stop")
     parser.add_argument("--float32", action="store_true", help="write full-precision vectors (four times the size)")
     parser.add_argument("--passages-per-file", type=int, default=None)
+    parser.add_argument("--site", action="store_true",
+                        help="write a ready-to-serve site, with the model and its runtime, instead of the data alone")
     args = parser.parse_args(argv)
 
     from services import audit, static_export
@@ -81,23 +89,36 @@ def main(argv=None) -> int:
     try:
         manifest, detail = static_export.write_export(
             collection_id, staging, confirm_public=args.confirm_public,
-            quantization="float32" if args.float32 else "int8", passages_per_file=per_file)
+            quantization="float32" if args.float32 else "int8", passages_per_file=per_file, site=args.site)
     except static_export.StaticExportError as e:
         shutil.rmtree(staging, ignore_errors=True)
         print(f"Cannot export: {e}", file=sys.stderr)
         return 1
-    static_export.clear_previous(args.out)
-    for path in staging.iterdir():
-        path.replace(args.out / path.name)
-    staging.rmdir()
+    if args.site:
+        # A site replaces the files it writes and leaves the folder's others alone.
+        static_export.clear_previous(args.out / static_export.SITE_DATA_DIR)
+        for path in sorted((p for p in staging.rglob("*") if p.is_file()), reverse=True):
+            target = args.out / path.relative_to(staging)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            path.replace(target)
+        shutil.rmtree(staging, ignore_errors=True)
+    else:
+        static_export.clear_previous(args.out)
+        for path in staging.iterdir():
+            path.replace(args.out / path.name)
+        staging.rmdir()
 
     audit.record("collection.static_export", actor="cli", collection_id=collection_id,
                  detail={**detail, "out": str(args.out)})
     files = [f["file"] for f in manifest["passages"]["files"]]
     print(f"Wrote {manifest['passages']['count']} passages from {len(manifest['documents'])} sources to {args.out}: "
           f"manifest.json, {', '.join(files)}, vectors.bin ({manifest['vectors']['bytes']:,} bytes).")
-    print(f"A page must embed queries with {manifest['embedding']['browser']['model']} "
-          f"({manifest['embedding']['pooling']} pooling).")
+    bundled = manifest["embedding"]["browser"].get("bundled")
+    if bundled:
+        print(f"The site carries {bundled['model']} and transformers.js: serve {args.out} as it is.")
+    else:
+        print(f"A page must embed queries with {manifest['embedding']['browser']['model']} "
+              f"({manifest['embedding']['pooling']} pooling).")
     if not manifest["embedding"]["probe"]:
         print("No probe vector was written: the embedding model could not be loaded here.", file=sys.stderr)
     return 0

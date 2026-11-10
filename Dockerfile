@@ -33,6 +33,15 @@ ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
 
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
+
+# The browser runtime a website export carries (docs/STATIC_SEARCH.md):
+# transformers.js and its WebAssembly build, pinned and checksummed in the
+# script, about 26 MB. With it the export can be a whole site that embeds
+# queries with Clio's own model file and loads nothing from Hugging Face or a
+# CDN, which a locked-down network needs. Each package's package.json is kept
+# under node_modules/ so this stage's SBOM scan names them.
+COPY scripts/vendor_static_search.mjs /tmp/vendor_static_search.mjs
+RUN node /tmp/vendor_static_search.mjs /opt/static-search && rm /tmp/vendor_static_search.mjs
 COPY frontend/ ./
 # The bundle banner records the build it came from (frontend/vite.config.js).
 ARG APP_VERSION=dev
@@ -243,6 +252,7 @@ RUN for d in /opt/clio /opt/hf-cache /opt/whisper-cache; do [ -d "$d" ] && chmod
 # Application code and the built frontend
 COPY . .
 COPY --from=frontend /build/dist ./frontend/dist
+COPY --from=frontend /opt/static-search/vendor /opt/clio/static-search/vendor
 
 # The server runs as an unprivileged user (entrypoint.sh drops to it after the
 # root-only steps). Code and models stay root-owned and read-only to it; only

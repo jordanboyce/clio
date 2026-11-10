@@ -179,6 +179,7 @@ first three boxes are not true.
 | Transcribing audio and video recordings | ✅ | Local Whisper; the full image includes the `base` model. Speech only: what appears on screen is not read |
 | Grounded chat | ✅ | Via local Ollama or self-hosted OpenAI-compatible server |
 | MCP endpoint for internal agents | ✅ | Embedded, in-process |
+| Search on a static website | ✅ | Export it as a whole site (**Include the model**): it carries the model Clio embeds with and transformers.js, so neither the site nor its visitors need Hugging Face or a CDN ([STATIC_SEARCH.md](STATIC_SEARCH.md#a-site-that-carries-its-own-model)) |
 | Cloud AI providers | 🚫 | Deliberately disabled in offline mode |
 
 ## When a model or provider is out of reach
