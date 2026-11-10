@@ -348,9 +348,9 @@
 
                 <!-- Initial "Thinking…" placeholder before any content arrives -->
                 <div v-else-if="msg.streaming && !msg.content && (!msg.structuredResults || msg.structuredResults.length === 0)"
-                  class="flex items-center gap-2 text-sm text-base-content/50 py-0.5">
+                  class="flex items-center gap-2 text-sm text-base-content/50 py-0.5" data-testid="stream-status">
                   <span class="loading loading-dots loading-xs text-primary"></span>
-                  <span>Thinking…</span>
+                  <span :class="{ 'text-warning': msg.status?.stage === 'retry' }">{{ streamStatusText(msg, 'Thinking…') }}</span>
                 </div>
 
                 <!-- Structured query / metric results (rendered BEFORE the prose answer
@@ -533,10 +533,10 @@
                   <!-- Post-tool "Synthesizing…" hint: tools finished, prose not started -->
                   <div
                     v-if="msg.streaming && !msg.content && msg.structuredResults?.length > 0 && !msg.structuredResults.some(sr => sr.pending)"
-                    class="flex items-center gap-2 text-xs text-base-content/50 py-0.5"
+                    class="flex items-center gap-2 text-xs text-base-content/50 py-0.5" data-testid="stream-status"
                   >
                     <span class="loading loading-dots loading-xs text-primary"></span>
-                    <span>Synthesizing answer…</span>
+                    <span :class="{ 'text-warning': msg.status?.stage === 'retry' }">{{ streamStatusText(msg, 'Synthesizing answer…') }}</span>
                   </div>
                 </div>
 
@@ -835,6 +835,27 @@ const indexingActive = computed(() =>
 
 // UI state
 const loading = ref(false)
+
+// A one-second clock while an answer is in flight, so the status line can
+// say how long the current step has taken ("Waiting for Anthropic… · 42 s").
+// Silence with a timer reads as work; silence without one reads as a hang.
+const clock = ref(Date.now())
+let clockTimer = null
+watch(loading, (busy) => {
+  clearInterval(clockTimer)
+  clockTimer = null
+  if (busy) {
+    clock.value = Date.now()
+    clockTimer = setInterval(() => { clock.value = Date.now() }, 1000)
+  }
+})
+const STATUS_TIMER_AFTER_S = 5
+const streamStatusText = (msg, fallback) => {
+  const status = msg.status
+  if (!status?.text) return fallback
+  const seconds = Math.floor((clock.value - status.since) / 1000)
+  return seconds >= STATUS_TIMER_AFTER_S ? `${status.text} · ${seconds} s` : status.text
+}
 const error = ref('')
 const errorDetail = ref('')
 const inputMessage = ref('')
@@ -1472,6 +1493,8 @@ const sendMessage = async () => {
           chatStore.addStreamingToolCall(stream, event.tool, event.args || {})
         } else if (event.type === 'tool_end') {
           chatStore.resolveStreamingToolCall(stream, event.tool, event.result || {})
+        } else if (event.type === 'status') {
+          chatStore.setStreamingStatus(stream, event)
         } else if (event.type === 'thinking') {
           chatStore.addStreamingThinking(stream, event.text || '')
         } else if (event.type === 'text_delta') {
@@ -1498,6 +1521,20 @@ const sendMessage = async () => {
           chatStore.removeStreamingMessage(stream)
           setChatError(event.message)
         }
+      }
+    }
+
+    // The stream ended with neither an answer nor an error: the connection
+    // was cut (a proxy or tunnel dropping it, a server restart). Left as it
+    // was, the placeholder would say "Thinking…" forever.
+    const unfinished = chatStore.getStreamingMessage(stream)
+    if (unfinished?.streaming) {
+      if (unfinished.content) {
+        chatStore.finalizeStreamingMessage(stream, { depth: depthOverride.value || depth.value, provider: selectedProvider.value, scope: scope.value })
+        setChatError('The connection closed before the answer finished, so it may be cut short. Ask again for the full answer.')
+      } else {
+        chatStore.removeStreamingMessage(stream)
+        setChatError('The connection to the server closed before an answer arrived. A proxy or tunnel may have cut it off, or the server restarted. Try again.')
       }
     }
   } catch (err) {
@@ -1591,6 +1628,7 @@ onBeforeUnmount(() => {
   // tells the server to stop the provider call.
   abortController?.abort()
   window.removeEventListener('clio:prefill-chat', handlePrefill)
+  clearInterval(clockTimer)
   if (autoScrollTimer) {
     clearTimeout(autoScrollTimer)
     autoScrollTimer = null

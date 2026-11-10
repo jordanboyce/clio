@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from middleware.user_context import get_request_user
 from services.usage_service import check_daily_budget, record_chat_usage
 
-from services.ai_service import AIService, AnthropicProvider, DEFAULT_OLLAMA_MODEL, create_provider
+from services.ai_service import AIService, AnthropicProvider, DEFAULT_OLLAMA_MODEL, OllamaProvider, create_provider
 from services import authored_text, data_controls, figures, page_preview
 from services.agent_tools import anthropic_tools, openai_tools
 from services.collection_overview import build_collection_overview as _build_collection_overview
@@ -619,6 +619,133 @@ def _tool_result_messages(tool_calls: list, results: list, is_anthropic: bool) -
             for tc, payload in zip(tool_calls, payloads)]
 
 
+# ── Provider calls a person can see ─────────────────────────────────────────
+# The answer is not streamed from the provider, so a call that stalls is
+# silence. Every call in a turn first says what it is waiting for, gives up
+# after CHAT_MODEL_TIMEOUT_SECONDS, and retries a transient failure once with
+# a status event saying so, instead of the SDK's silent retries.
+
+# HTTP statuses worth one more try: timeouts, conflicts, rate limits and the
+# provider's own trouble (529 is Anthropic's "overloaded").
+_RETRY_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
+_RETRY_WAIT_SECONDS = 2.0
+# A provider that asks for a longer pause than this gets the person told,
+# not a turn held open in silence.
+_MAX_RETRY_WAIT_SECONDS = 30.0
+
+
+class ProviderStalled(RuntimeError):
+    """A provider call failed in a way the person should read as it is."""
+
+
+def _provider_label(provider) -> str:
+    from config import settings
+    from services.ai_service import OpenAICompatibleProvider
+
+    if isinstance(provider, OpenAICompatibleProvider):
+        # It inherits "OpenAI", which would blame the wrong company for a
+        # private vLLM or gateway.
+        return settings.ai_provider_label or "The AI endpoint"
+    label = getattr(provider, "PROVIDER_LABEL", None)
+    if isinstance(label, str) and label:
+        return label
+    if isinstance(provider, OllamaProvider):
+        return "Ollama"
+    return "The AI provider"
+
+
+def _retry_after(exc) -> float | None:
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    try:
+        value = headers.get("retry-after") if headers is not None else None
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _call_trouble(exc, provider) -> tuple[str, float | None] | None:
+    """What went wrong with a provider call, in words, and the wait before one retry.
+
+    The wait is None when retrying cannot help. Returns None for errors that
+    are not the provider's passing trouble (a bad key, a bad request): those
+    keep their original message.
+    """
+    label = _provider_label(provider)
+    name = type(exc).__name__
+    status_code = getattr(exc, "status_code", None)
+    if not isinstance(status_code, int):
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    if "Timeout" in name:
+        limit = getattr(provider, "call_timeout", None)
+        reason = (f"{label} didn't reply within {limit:.0f} s."
+                  if isinstance(limit, (int, float)) else f"{label} didn't reply in time.")
+        # A local model too slow for one reply is just as slow the second time.
+        return reason, (None if isinstance(provider, OllamaProvider) else 0.0)
+    if status_code == 429:
+        wait = _retry_after(exc)
+        if wait is not None and wait > _MAX_RETRY_WAIT_SECONDS:
+            return f"{label} is rate-limiting this key (HTTP 429) and asks to wait {wait:.0f} s.", None
+        return f"{label} is rate-limiting this key (HTTP 429).", (wait if wait is not None else _RETRY_WAIT_SECONDS)
+    if status_code in _RETRY_STATUSES:
+        return f"{label} is overloaded or having trouble (HTTP {status_code}).", _RETRY_WAIT_SECONDS
+    if isinstance(exc, ConnectionError) or "Connect" in name or "RemoteProtocol" in name:
+        return f"Couldn't reach {label}.", _RETRY_WAIT_SECONDS
+    return None
+
+
+def _limit_calls(provider) -> None:
+    from config import settings
+
+    limit = getattr(provider, "limit_calls", None)
+    if callable(limit):
+        limit(max(10, int(settings.chat_model_timeout_seconds)))
+
+
+def _model_call(provider, model_name: str, fn, *args, **kwargs):
+    """Make one provider call inside a turn: ``result = yield from _model_call(...)``.
+
+    Yields status events: what it is waiting for, and a retry when a
+    transient failure gets its one more try. Raises ProviderStalled with a
+    reason a person can act on when that try fails too.
+    """
+    label = _provider_label(provider)
+    waiting = f"Waiting for {label} ({model_name})…" if model_name else f"Waiting for {label}…"
+    yield {"type": "status", "stage": "model", "text": waiting}
+    for attempt in (1, 2):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            trouble = _call_trouble(exc, provider)
+            if trouble is None:
+                raise
+            reason, wait = trouble
+            if attempt == 2 or wait is None:
+                logger.warning(f"Chat model call gave up ({type(exc).__name__}): {exc}")
+                again = " It failed again after one retry." if attempt == 2 else ""
+                raise ProviderStalled(
+                    f"{reason}{again} Try again in a moment, or choose another model."
+                ) from exc
+            logger.info(f"Chat model call will retry once ({type(exc).__name__}): {exc}")
+            # The reason stays on screen through the second try, with its own
+            # timer: replaced at once, it could not be read.
+            if wait >= 3:
+                yield {"type": "status", "stage": "retry", "text": f"{reason} Trying again in {wait:.0f} s…"}
+            if wait > 0:
+                time.sleep(wait)
+            yield {"type": "status", "stage": "retry", "text": f"{reason} Trying once more…"}
+
+
+def _search_status(chat_request: ChatRequest, collection_id: str) -> dict:
+    if chat_request.scope == "all":
+        where = "all collections"
+    else:
+        try:
+            where = (collection_service.get_collection(collection_id) or {}).get("name") or "this collection"
+        except Exception:  # noqa: BLE001 - a label must never fail the turn
+            where = "this collection"
+    return {"type": "status", "stage": "search", "text": f"Searching {where}…"}
+
+
 def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
               provider_args: dict, cache_ctx, cache_entry):  # noqa: C901
     turn_started = time.time()
@@ -663,6 +790,7 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
     except HTTPException as e:
         yield {"type": "error", "message": e.detail, "_status": e.status_code}
         return
+    _limit_calls(provider)
     ai_service = AIService(provider=provider)
 
     try:
@@ -672,7 +800,13 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
         # is what makes multi-turn retrieval work. Single-turn queries skip the
         # extra provider call.
         prior = [{"role": m.role, "content": m.content} for m in chat_request.messages[:-1]]
-        search_query = ai_service.reformulate_query(prior, latest_query) if prior else latest_query
+        if prior:
+            search_query = yield from _model_call(
+                provider, ai_service.fast_model, ai_service.reformulate_query, prior, latest_query,
+            )
+        else:
+            search_query = latest_query
+        yield _search_status(chat_request, collection_id)
 
         # The user's source selection constrains everything downstream:
         # retrieval, the inlined tables, the overview and every tool call.
@@ -709,7 +843,8 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
         result_collection_ids = [cid for _, cid in hits]
         rerank_usage = None
         if chat_request.rerank and context_results:
-            context_results, result_collection_ids, rerank_usage = _rerank_context(
+            context_results, result_collection_ids, rerank_usage = yield from _model_call(
+                provider, ai_service.fast_model, _rerank_context,
                 ai_service, latest_query, context_results, result_collection_ids, chat_request.top_k,
             )
         rerank_usage = rerank_usage or {}
@@ -823,7 +958,8 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
             messages = [{"role": m.role, "content": m.content} for m in chat_request.messages]
 
             for iteration in range(max_iterations):
-                turn = provider.complete_with_tools(
+                turn = yield from _model_call(
+                    provider, ai_service.quality_model, provider.complete_with_tools,
                     messages=messages, tools=tools_spec, max_tokens=chat_request.max_output_tokens or 4096,
                     model=ai_service.quality_model, system=system_text,
                 )
@@ -848,7 +984,8 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
                 # Iteration cap hit mid-research: one more pass with no tools
                 # so the turn always ends in an answer.
                 try:
-                    turn = provider.complete_with_tools(
+                    turn = yield from _model_call(
+                        provider, ai_service.quality_model, provider.complete_with_tools,
                         messages=messages, tools=[], max_tokens=chat_request.max_output_tokens or 2048,
                         model=ai_service.quality_model,
                         system=system_text + "\n\nDo not call any more tools. Summarize the final answer.",
@@ -878,15 +1015,19 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
                 parts.append("Assistant:")
                 return "\n\n".join(parts)
 
-            def ask(extra: str) -> str:
-                result = provider.complete(prompt=compose(extra), max_tokens=chat_request.max_output_tokens or 2048,
-                                           model=ai_service.quality_model)
+            def ask(extra: str):
+                """The model's reply as text: ``raw = yield from ask(...)``."""
+                result = yield from _model_call(
+                    provider, ai_service.quality_model, provider.complete,
+                    prompt=compose(extra), max_tokens=chat_request.max_output_tokens or 2048,
+                    model=ai_service.quality_model,
+                )
                 account(result.get("usage"))
                 return result["text"]
 
             suffix = ""
             for iteration in range(5 if tools_block else 1):
-                raw = ask(suffix)
+                raw = yield from ask(suffix)
                 calls = parse_tool_calls(raw)
                 narration = strip_tool_calls(raw)
                 if not calls:
@@ -910,7 +1051,8 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
                 )
             if not answer and suffix:
                 try:
-                    answer = strip_tool_calls(ask(suffix + "\n\nDo not call any more tools. Write the final answer now."))
+                    answer = strip_tool_calls((yield from ask(
+                        suffix + "\n\nDo not call any more tools. Write the final answer now.")))
                 except Exception as e:
                     logger.warning(f"Agent final-answer pass failed: {e}")
                 answer = answer or _FINAL_ANSWER_FALLBACK
@@ -950,6 +1092,8 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
 
     except HTTPException as e:
         yield {"type": "error", "message": e.detail, "_status": e.status_code}
+    except ProviderStalled as e:
+        yield {"type": "error", "message": str(e), "_status": 504}
     except Exception as e:
         logger.exception("Chat turn failed")
         yield {"type": "error", "message": f"Chat failed: {e}", "_status": 500}
@@ -1055,6 +1199,10 @@ def chat_with_documents(  # sync: provider round-trips + tool loop run in FastAP
     )
 
 
+# Seconds of quiet on the answer stream before it sends a keepalive comment.
+_KEEPALIVE_SECONDS = 15.0
+
+
 @router.post("/api/chat/stream", tags=["chat"])
 async def chat_stream_endpoint(
     chat_request: ChatRequest,
@@ -1103,10 +1251,21 @@ async def chat_stream_endpoint(
         if destination:
             data_controls.mark_outside_consumer(destination)
         try:
+            pending = None
             while True:
                 # Every step of the turn is blocking provider/index work — run
                 # it off the event loop, one event at a time.
-                event = await asyncio.to_thread(next, turn, exhausted)
+                if pending is None:
+                    pending = asyncio.ensure_future(asyncio.to_thread(next, turn, exhausted))
+                finished, _ = await asyncio.wait({pending}, timeout=_KEEPALIVE_SECONDS)
+                if not finished:
+                    # An SSE comment while the model thinks: proxies and
+                    # tunnels that close a quiet connection (Cloudflare after
+                    # 100 s) see traffic, and browsers ignore it.
+                    yield ": keepalive\n\n"
+                    continue
+                event = pending.result()
+                pending = None
                 if event is exhausted:
                     break
                 if event["type"] != "text" or event.get("_whole"):

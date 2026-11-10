@@ -221,6 +221,14 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // What the server is doing right now ("Searching …", "Waiting for …", a
+  // retry), shown with a running timer until text arrives. `since` is when
+  // this step began, so the timer restarts with each step.
+  const setStreamingStatus = (stream, { stage, text } = {}) => {
+    const msg = getStreamingMessage(stream)
+    if (msg && text) msg.status = { stage: stage || '', text, since: Date.now() }
+  }
+
   // Suggested follow-ups arrive as their own event after the answer text.
   const setStreamingRelated = (stream, questions) => {
     const msg = getStreamingMessage(stream)
@@ -231,6 +239,7 @@ export const useChatStore = defineStore('chat', () => {
     const msg = getStreamingMessage(stream)
     if (!msg) return
     msg.streaming = false
+    delete msg.status
     if (sources) msg.sources = sources
     if (Array.isArray(relatedQuestions)) msg.relatedQuestions = relatedQuestions
     if (depth) msg.depth = depth
@@ -354,6 +363,7 @@ export const useChatStore = defineStore('chat', () => {
     resolveStreamingToolCall,
     addStreamingThinking,
     setStreamingRelated,
+    setStreamingStatus,
     finalizeStreamingMessage,
     removeStreamingMessage,
   }

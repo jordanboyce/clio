@@ -68,6 +68,24 @@ def detect_ollama(base_url: str = "http://localhost:11434") -> Dict:
 class AIProvider(ABC):
     """Base class for LLM providers."""
 
+    # Seconds one call may take before it is abandoned. The SDKs' own default
+    # until limit_calls() says otherwise.
+    call_timeout: float = 600.0
+
+    def limit_calls(self, timeout: float) -> None:
+        """Abandon a call after ``timeout`` seconds and leave retrying to the caller.
+
+        For interactive use: the SDKs otherwise wait ten minutes and retry
+        twice without telling anyone, which a person watching a chat sees as
+        an answer that never comes. Providers without an SDK client keep
+        their own limits.
+        """
+        client = getattr(self, "client", None)
+        if client is None or not hasattr(client, "with_options"):
+            return
+        self.client = client.with_options(timeout=float(timeout), max_retries=0)
+        self.call_timeout = float(timeout)
+
     @abstractmethod
     def complete(self, prompt: str, max_tokens: int, model: str) -> dict:
         """Send a prompt and return {'text': str, 'usage': {'input_tokens': int, 'output_tokens': int, 'model': str}}."""
@@ -468,6 +486,13 @@ class OpenAIProvider(AIProvider):
 class OllamaProvider(AIProvider):
     """Ollama provider for local LLM inference."""
 
+    # A local model on modest hardware can need minutes for one reply, and
+    # that is slowness, not an outage: limit_calls() leaves this alone.
+    call_timeout = 300.0
+
+    def limit_calls(self, timeout: float) -> None:
+        return
+
     def __init__(self, base_url: str = "http://localhost:11434", model: str = DEFAULT_OLLAMA_MODEL,
                  num_ctx: Optional[int] = None):
         """Initialize Ollama provider.
@@ -507,13 +532,13 @@ class OllamaProvider(AIProvider):
         return OpenAI(
             base_url=f"{self.base_url}/v1",
             api_key="ollama",  # Ollama ignores the key but the client requires a non-empty value
-            timeout=300.0,
+            timeout=self.call_timeout,
         )
 
     def complete(self, prompt: str, max_tokens: int, model: str) -> dict:
         """Generate completion using Ollama's native /api/chat endpoint."""
         import httpx
-        with httpx.Client(timeout=300.0) as client:
+        with httpx.Client(timeout=self.call_timeout) as client:
             response = client.post(
                 f"{self.base_url}/api/chat",
                 json={

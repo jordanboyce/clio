@@ -153,6 +153,12 @@ class Settings(BaseSettings):
     # badly for a private endpoint ("openai_compatible" is not a product
     # anyone recognises); name it after the thing people know.
     ai_provider_label: str = ""
+    # How long one call to a hosted AI model may take during a chat answer
+    # before it is given up and tried once more where the person can see it.
+    # Answers are not streamed from the provider, so this has to cover writing
+    # a whole long reply; the SDK default it replaces is 600 s with two silent
+    # retries. Local Ollama keeps its own 300 s: slow hardware is not an outage.
+    chat_model_timeout_seconds: int = 180
 
     # Semantic answer cache: single-turn chat questions that closely match a
     # previously answered one are candidate cache hits. The chat layer also
