@@ -46,6 +46,7 @@ ACTIONS: List[str] = [
     "classification.blocked",   # a local-only marking stopped data going to an outside service
     "collection.published",
     "collection.exported",      # bundle downloaded (with/without originals)
+    "collection.static_export",  # exported for a public website (counts, model, who confirmed)
     "collection.imported",      # collection created from a bundle
     "collection.guide",         # guide text changed (length/digest/scan verdict, never the text)
     "collection.metadata",      # name/description changed (length/digest only)

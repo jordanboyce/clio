@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clio static search: example page</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 44rem; margin: 2rem auto; padding: 0 1rem; color: #1f2933; }
+    input { font: inherit; width: 100%; padding: .6rem .75rem; box-sizing: border-box; border: 1px solid #9aa5b1; border-radius: .4rem; }
+    #status { color: #52606d; font-size: .875rem; margin: .5rem 0 1.25rem; }
+    li { margin-bottom: 1rem; }
+    .meta { color: #52606d; font-size: .8125rem; }
+    ol { padding-left: 1.25rem; }
+  </style>
+</head>
+<body>
+  <h1>Search</h1>
+  <!--
+    Put this page and clio-static-search.js beside a folder named "search"
+    holding the export (manifest.json, passages.json, vectors.bin), and serve
+    the folder with any static web server.
+
+    The model and transformers.js load from public CDNs here. On a network
+    that blocks them, host both yourself: see "Hosting the model yourself" in
+    docs/STATIC_SEARCH.md.
+  -->
+  <label for="q">Ask a question or type a few words</label>
+  <input id="q" type="search" autocomplete="off" disabled>
+  <p id="status" role="status">Loading the index…</p>
+  <ol id="results"></ol>
+
+  <script type="module">
+    import { createSearch, transformersEmbedder } from './clio-static-search.js'
+
+    const status = document.getElementById('status')
+    const input = document.getElementById('q')
+    const results = document.getElementById('results')
+
+    const search = await createSearch('./search/', {
+      embedder: async (manifest) => {
+        status.textContent = `Loading ${manifest.embedding.browser.model}…`
+        const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2')
+        return transformersEmbedder(manifest, { pipeline })
+      },
+    }).catch((error) => { status.textContent = error.message })
+
+    if (search) {
+      const { manifest } = search.index
+      status.textContent = search.semantic
+        ? `${manifest.passages.count.toLocaleString()} passages from ${manifest.collection.name}, searched by meaning.`
+        : `Searching by keyword only. ${search.reason}`
+      input.disabled = false
+      input.focus()
+
+      let latest = 0
+      input.addEventListener('input', async () => {
+        const turn = ++latest
+        const query = input.value.trim()
+        const hits = query ? await search(query, { k: 8 }) : []
+        if (turn !== latest) return
+        results.replaceChildren(...hits.map((hit) => {
+          const item = document.createElement('li')
+          const meta = document.createElement('div')
+          meta.className = 'meta'
+          meta.textContent = `${hit.document?.name ?? hit.passage.document_id}, page ${hit.passage.page} · ${hit.score.toFixed(3)}`
+          const text = document.createElement('div')
+          text.textContent = hit.passage.text
+          item.append(meta, text)
+          return item
+        }))
+      })
+    }
+  </script>
+</body>
+</html>

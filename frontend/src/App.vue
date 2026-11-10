@@ -460,7 +460,7 @@
                         v-if="collectionStore.canConfigure(collection)"
                         @click.stop="openExportModal(collection)"
                         class="btn btn-ghost btn-xs btn-square"
-                        title="Export to share with another Clio"
+                        title="Export for another Clio or a website"
                         :aria-label="`Export collection ${collection.name}`"
                       >
                         <Download :size="13" />
@@ -587,7 +587,7 @@
                         v-if="collectionStore.canConfigure(collection)"
                         @click.stop="openExportModal(collection)"
                         class="btn btn-ghost btn-xs btn-square"
-                        title="Export to share with another Clio"
+                        title="Export for another Clio or a website"
                         :aria-label="`Export collection ${collection.name}`"
                       >
                         <Download :size="13" />

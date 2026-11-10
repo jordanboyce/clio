@@ -29,6 +29,7 @@ be forgotten. That is the job here too. The record remembers.
 [Deployment](docs/DEPLOYMENT.md) · [Architecture](docs/ARCHITECTURE.md) ·
 [Research workspace](docs/RESEARCH.md) · [Agentic research](docs/AGENTIC_RESEARCH.md) ·
 [On-prem](docs/ONPREM.md) · [Behind a corporate firewall](docs/ENTERPRISE.md) · [App API](docs/APP_API.md) ·
+[Search on a static website](docs/STATIC_SEARCH.md) ·
 [Roadmap](docs/ROADMAP.md) · [The name](docs/BRAND.md) ·
 [Provenance](docs/PROVENANCE.md) · [Engineering conventions](docs/ENGINEERING.md)
 

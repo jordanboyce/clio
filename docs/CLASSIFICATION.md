@@ -57,3 +57,5 @@ Everything in the app itself keeps working: search, reading, tables, and chat wi
 ## Bundles and copies
 
 An exported bundle carries its collection's marking and its sources' markings. An imported one keeps them, known on the importing server or not, and the marking is in place before anything is embedded. A clone copies the marking the same way.
+
+The export for a static website ([STATIC_SEARCH.md](STATIC_SEARCH.md)) publishes what it holds, so it counts as an outside service: a collection that is marked local only, or holds one source that is, cannot be exported that way at all.

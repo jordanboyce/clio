@@ -65,6 +65,66 @@ describe('Export dialog', () => {
   })
 })
 
+describe('Export dialog, for a website', () => {
+  const ready = {
+    name: 'Handbooks', ready: true, blockers: [], documents: 2, passages: 1200, held_excluded: 1, not_public_excluded: 0,
+    embedding: model, browser_model: 'Xenova/bge-small-en-v1.5',
+    vectors_bytes: 1200 * 384, passages_bytes: 3 * 1024 * 1024, passage_files: 1,
+  }
+  const bundle = { documents: 2, chunks: 1200, quarantined_excluded: 0, embedding: model, vectors_included: true, sources_bytes: 0 }
+  const tab = (wrapper, name) => wrapper.findAll('[role="tab"]').find(t => t.text() === name)
+
+  async function openSite(sitePreview) {
+    http.get.mockImplementation((url) => Promise.resolve({ data: url.endsWith('/export/static/preview') ? sitePreview : bundle }))
+    const wrapper = mount(ExportCollectionModal)
+    wrapper.vm.open({ id: 'c1', name: 'Handbooks' })
+    await flushPromises()
+    await tab(wrapper, 'For a website').trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('names the model the site must use and downloads only once release is confirmed', async () => {
+    const wrapper = await openSite(ready)
+    expect(http.get).toHaveBeenCalledWith('/api/collections/c1/export/static/preview')
+    const text = wrapper.text()
+    expect(text).toContain('Xenova/bge-small-en-v1.5')
+    expect(text).toContain('1,200 passages')
+    expect(text).toContain('1 held source left out')
+    expect(text).toContain('3 MB of text')
+
+    const link = wrapper.get('a.btn-primary')
+    expect(link.classes()).toContain('btn-disabled')
+    expect(link.attributes('href')).toBe('#')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    expect(link.classes()).not.toContain('btn-disabled')
+    expect(link.attributes('href')).toBe('/api/collections/c1/export/static?confirm_public=true')
+  })
+
+  it('says why a collection cannot be published, and offers no confirmation', async () => {
+    const wrapper = await openSite({
+      ...ready, ready: false, browser_model: null,
+      blockers: [{ code: 'not_public', message: 'This collection is labelled Internal. Only a collection labelled Public can be exported for a website.' }],
+    })
+    expect(wrapper.get('[role="alert"]').text()).toContain('labelled Internal')
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
+    expect(wrapper.get('a.btn-primary').classes()).toContain('btn-disabled')
+  })
+
+  it('returns to the bundle export, and forgets a confirmation when reopened', async () => {
+    const wrapper = await openSite(ready)
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await tab(wrapper, 'For another Clio').trigger('click')
+    expect(wrapper.get('a.btn-primary').attributes('href')).toBe('/api/collections/c1/export?include_sources=false')
+
+    wrapper.vm.open({ id: 'c1', name: 'Handbooks' })
+    await flushPromises()
+    await tab(wrapper, 'For a website').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('input[type="checkbox"]').element.checked).toBe(false)
+  })
+})
+
 describe('Import dialog', () => {
   const summary = {
     upload_id: 'a'.repeat(32), name: 'Handbooks', description: '', documents: 2, chunks: 1200,

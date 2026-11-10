@@ -725,6 +725,87 @@ def export_preview(collection_id: str, user_id: str = Depends(get_current_user_i
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+def _static_export_refusal(collection_id: str, error) -> HTTPException:
+    """The HTTP answer for a static export that cannot be made."""
+    from services import data_controls
+    from services.static_export import DESTINATION
+
+    if error.code == "not_found":
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
+    if error.code == "local_only":
+        # The same 403 and audit entry as any other outside service.
+        row = collection_service.get_collection(collection_id)
+        data_controls._record_block(row, DESTINATION)
+        return data_controls.ExternalServiceBlocked(
+            str(error), classification=data_controls.collection_classification(row), service=DESTINATION)
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
+
+
+@router.get(
+    "/api/collections/{collection_id}/export/static",
+    summary="Download a collection as files a static website can search",
+    tags=["collections"],
+)
+def export_collection_static(  # sync: reads the index and builds a zip in the threadpool
+    collection_id: str,
+    confirm_public: bool = False,
+    quantization: str = "int8",
+    passages_per_file: int = 2000,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    A zip of `manifest.json`, `passages.json` (split into `passages-0001.json`,
+    ... past `passages_per_file`) and `vectors.bin`: everything a page needs to
+    search the collection by meaning with no server (docs/STATIC_SEARCH.md).
+
+    Owner only, and everything in it is published. Refused unless the
+    collection is labelled Public, holds nothing marked local only, was
+    embedded on this machine with a model that has a checked browser build,
+    and `confirm_public=true` says it is cleared for release. Held sources,
+    and sources with a stricter label of their own, are left out.
+    """
+    from starlette.background import BackgroundTask
+    from fastapi.responses import FileResponse
+
+    from api.deps import require_collection_access
+    from services.static_export import StaticExportError, export_zip
+
+    require_collection_access(collection_id, user_id, owner=True)
+    try:
+        path, filename, detail = export_zip(
+            collection_id, confirm_public=confirm_public, quantization=quantization,
+            passages_per_file=passages_per_file)
+    except StaticExportError as e:
+        raise _static_export_refusal(collection_id, e)
+
+    audit.record("collection.static_export", actor=user_id, collection_id=collection_id,
+                 detail={**detail, "bytes": path.stat().st_size})
+    return FileResponse(
+        path, media_type="application/zip", filename=filename,
+        background=BackgroundTask(path.unlink, missing_ok=True),
+    )
+
+
+@router.get(
+    "/api/collections/{collection_id}/export/static/preview",
+    summary="What a static-site export would contain, and what stands in its way",
+    tags=["collections"],
+)
+def export_static_preview(collection_id: str, user_id: str = Depends(get_current_user_id)):
+    """Counts, sizes, the model a page must use, and `blockers` (each with a
+    stable `code` and a message) when the collection cannot be exported."""
+    from api.deps import require_collection_access
+    from services.static_export import StaticExportError, preview
+
+    require_collection_access(collection_id, user_id, owner=True)
+    try:
+        return preview(collection_id)
+    except StaticExportError as e:
+        if e.code == "not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 @router.post(
     "/api/collections/import/preview",
     summary="Look inside a bundle before importing it",
