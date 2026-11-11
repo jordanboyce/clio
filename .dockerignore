@@ -1,3 +1,15 @@
+# Patterns here match from the build context's root only, so a bare
+# `__pycache__/` or `.env` misses copies further down. The `**/` forms below
+# catch those, which matters for a local build (scripts/package_image.sh): the
+# working tree holds other checkouts under .claude/ (agent worktrees, each
+# with its own .env, venv and node_modules) that `COPY . .` baked into the image.
+.claude/
+**/__pycache__/
+**/*.py[cod]
+**/.env
+**/.env.*
+.ruff_cache/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -32,6 +44,7 @@ data.docker-backup-*/
 .env
 .env.*
 !.env.example
+!frontend/.env.example
 
 # Documentation
 *.md
