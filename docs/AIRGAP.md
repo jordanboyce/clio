@@ -56,7 +56,11 @@ a firewall cannot quietly produce an image without them:
 | `faster-whisper base` | Transcribing audio and video recordings | ~145 MB | Yes |
 | Docling layout + TableFormer | Local OCR of scanned PDFs, beside the Tesseract already included | ~500 MB | No |
 
-To bake a different Whisper size: `--build-arg WHISPER_MODEL=small`.
+To bake a different Whisper size: `--build-arg WHISPER_MODEL=small`. To bake a
+different embedding model, for example `BAAI/bge-small-en-v1.5` for a
+[website export](STATIC_SEARCH.md):
+`--build-arg EMBEDDING_MODEL=BAAI/bge-small-en-v1.5`, which also makes it the
+image's default (see [Changing the embedding model](#changing-the-embedding-model)).
 
 ### 2. Export, transfer, load
 
@@ -88,7 +92,10 @@ Then `docker compose -f docker-compose.onprem.yml up -d` and open
 
 `scripts/package_image.sh --offline-bundle` does steps 1–2 and assembles the
 compose file, the example `.env` and these guides into one directory to
-carry across.
+carry across. Add `--embedding-model <id>` (`-EmbeddingModel` in
+`package_image.ps1`) for an image built around another embedding model; the
+bundle's `README.txt` and the image's `dev.clio.embedding-model` label record
+which one it holds.
 
 ## Option B — Bare metal
 
@@ -124,6 +131,93 @@ carry across.
 
    and start with `python main.py` (do not re-run the bootstrap scripts — they
    try to reinstall dependencies).
+
+## Changing the embedding model
+
+### An image built around another model
+
+The stock image bakes `all-MiniLM-L6-v2`. To build one around another local
+model, `BAAI/bge-small-en-v1.5` here (the other model a
+[website export](STATIC_SEARCH.md) has a browser build for):
+
+```bash
+./scripts/package_image.sh --embedding-model BAAI/bge-small-en-v1.5 --offline-bundle --tag 1.4.0-bge
+./scripts/package_image.sh --embedding-model BAAI/bge-small-en-v1.5 --offline-bundle --slim --tag 1.4.0-bge-slim
+#   Windows:  .\scripts\package_image.ps1 -EmbeddingModel BAAI/bge-small-en-v1.5 -OfflineBundle -Tag 1.4.0-bge
+```
+
+What that image does differently:
+
+- It bakes the fastembed copy of the model into `/opt/clio/models/fastembed`
+  (the full image also bakes the sentence-transformers copy), and the build
+  checks that the app finds it there. A build that names its model fails if the
+  model cannot be fetched, instead of producing an image without it.
+- It sets `EMBEDDING_MODEL` to that model, so a container uses it with nothing
+  in `.env`. Leave `EMBEDDING_MODEL` out of `.env` (`.env.onprem.example`
+  leaves it commented out); `docker-compose.onprem.yml` passes it through only
+  when you set it. A value you set still wins, but in an air gap only the
+  baked model can load.
+- It does **not** hold `all-MiniLM-L6-v2`. See which model an image holds with
+  `docker inspect -f '{{ index .Config.Labels "dev.clio.embedding-model" }}' clio:1.4.0-bge`.
+
+Images built without `--embedding-model` behave exactly as before.
+
+### What happens to existing collections
+
+Each collection records the model it was created with, and indexing and search
+for it always use that model, never the server's default. Starting a bge image
+on a data volume made with MiniLM therefore re-embeds nothing and never
+searches MiniLM vectors with bge queries (both are 384-dimensional, so nothing
+would catch the mix-up). The default collection follows a new default only
+while it holds no documents.
+
+New collections take the server's model, bge-small on a bge image.
+
+On a bge image in an air gap, a collection still recorded as MiniLM cannot load
+its model, so search by meaning for it answers 503 with a message naming the
+missing model. Keyword search, and the default `auto` mode, which falls back to
+keywords, keep working. Move it to bge as below, or keep it on an image that
+holds MiniLM.
+
+### Moving a collection to bge-small
+
+Both ways re-embed from the collection's source files, so they need those files
+(uploads are kept by default; a folder or git source must still be reachable).
+
+**Clone (recommended).** The copy is built with the new model while the
+original keeps answering with its own:
+
+```bash
+curl -X POST http://<host>:8473/api/collections/<id>/clone \
+  -H "Authorization: Bearer <password>" -H "Content-Type: application/json" \
+  -d '{"name": "Handbook (bge)", "embedding_model": "BAAI/bge-small-en-v1.5"}'
+```
+
+The answer carries the new collection and a `job_id`; follow it in Background
+work. The guide, the sensitivity label and any classification marking travel
+with the copy; publishing and shares do not. When the copy is ready, delete the
+original if it is no longer needed.
+
+**Re-index in place.** Change the collection's model, then rebuild it:
+
+```bash
+curl -X PUT http://<host>:8473/api/collections/<id> \
+  -H "Authorization: Bearer <password>" -H "Content-Type: application/json" \
+  -d '{"embedding_model": "BAAI/bge-small-en-v1.5"}'
+curl -X POST http://<host>:8473/api/collections/<id>/reindex -H "Authorization: Bearer <password>"
+```
+
+Run the two together and do not rely on the collection's search until the job
+finishes. In between it holds MiniLM vectors under a bge label: a server that
+already had the collection open keeps searching with MiniLM, but one that opens
+it afresh (after a restart, say) embeds queries with bge against those vectors
+and returns poor results without any error. While the job runs the collection is
+only partly searchable. If a re-index was interrupted, start it again. Clone
+has none of these gaps.
+
+Either way, check the result before exporting it for a website:
+`GET /api/collections/<id>/export/static/preview` should list no blockers and
+name `Xenova/bge-small-en-v1.5` as `browser_model`.
 
 ## Local LLM for chat
 
