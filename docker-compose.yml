@@ -64,7 +64,11 @@ services:
       # (Google Gemini, Mistral, Voyage, Jina, OpenAI, …) at runtime; that
       # choice is stored in the app database under ./data and wins over these.
       - EMBEDDING_PROVIDER=local
-      - EMBEDDING_MODEL=all-MiniLM-L6-v2
+      # EMBEDDING_MODEL is deliberately not listed: the image's own model
+      # applies (all-MiniLM-L6-v2 for a local build or :latest, bge-small for
+      # a -bge image). Pinning it here made CLIO_IMAGE=ghcr.io/…/clio:bge run
+      # MiniLM, downloaded it where the hub is reachable, and gave every new
+      # collection MiniLM without a word. Set it in .env only to override.
       # Reach an Ollama instance on the docker host, if you run one
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       # The LLM this deployment uses for everyone, so nobody configures a
