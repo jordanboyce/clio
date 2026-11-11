@@ -120,7 +120,11 @@ docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 \
 `:latest` is the full image (4.0 GB). `:slim` (1.6 GB) leaves out PyTorch,
 OCR for scanned PDFs and audio transcription, and keeps everything else:
 search, reranking, chat, research and every MCP tool. Both carry the version
-tags too (`:1.2.3`, `:1.2.3-slim`).
+tags too (`:1.2.3`, `:1.2.3-slim`). `:bge` and `:bge-slim` (`:1.2.3-bge`,
+`:1.2.3-bge-slim`) are the same two images built around the
+`BAAI/bge-small-en-v1.5` embedding model instead of `all-MiniLM-L6-v2`; see
+[docs/AIRGAP.md](docs/AIRGAP.md#changing-the-embedding-model) before
+switching an existing install.
 
 **Docker, built from source**
 

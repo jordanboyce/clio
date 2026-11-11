@@ -7,12 +7,17 @@
 # Runs on a version tag (v1.2.3) and on demand. Not on every push: the build
 # compiles a torch/faiss dependency set and takes tens of minutes.
 #
-# Two variants build side by side from the same Dockerfile:
-#   full  :latest, :1.2.3, :1.2        everything (PyTorch, OCR, audio)
-#   slim  :slim, :1.2.3-slim, :1.2-slim  SLIM=1 — about 1.6 GB instead of
-#         4.0 GB, no PyTorch/OCR/audio, the fastembed search model and
-#         reranker still baked in. The quick start leads with it because the
-#         pull is what stands between a new user and a running app.
+# Four variants build side by side from the same Dockerfile:
+#   full      :latest, :1.2.3, :1.2        everything (PyTorch, OCR, audio)
+#   slim      :slim, :1.2.3-slim, :1.2-slim  SLIM=1 — about 1.6 GB instead of
+#             4.0 GB, no PyTorch/OCR/audio, the fastembed search model and
+#             reranker still baked in. The quick start leads with it because
+#             the pull is what stands between a new user and a running app.
+#   full-bge  :bge, :1.2.3-bge, :1.2-bge             the same two, built
+#   slim-bge  :bge-slim, :1.2.3-bge-slim, :1.2-bge-slim  around
+#             BAAI/bge-small-en-v1.5 instead of all-MiniLM-L6-v2: the image
+#             bakes it and a container uses it unless EMBEDDING_MODEL is set
+#             (docs/AIRGAP.md, "Changing the embedding model").
 name: Publish image
 
 on:
@@ -45,13 +50,35 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # moving: the tag a release moves to this build. cache_base: the
+        # MiniLM variant whose cache a bge build also reads; the model is
+        # chosen after the dependency install, so everything up to it is the
+        # same layers.
         include:
           - variant: full
             suffix: ""
             slim: "0"
+            embedding_model: all-MiniLM-L6-v2
+            moving: latest
+            cache_base: full
           - variant: slim
             suffix: "-slim"
             slim: "1"
+            embedding_model: all-MiniLM-L6-v2
+            moving: slim
+            cache_base: slim
+          - variant: full-bge
+            suffix: "-bge"
+            slim: "0"
+            embedding_model: BAAI/bge-small-en-v1.5
+            moving: bge
+            cache_base: full
+          - variant: slim-bge
+            suffix: "-bge-slim"
+            slim: "1"
+            embedding_model: BAAI/bge-small-en-v1.5
+            moving: bge-slim
+            cache_base: slim
     steps:
       - uses: actions/checkout@v4
 
@@ -72,8 +99,9 @@ jobs:
           # Lowercased by the action — a registry path cannot carry the
           # capitals a GitHub owner name may have.
           images: ghcr.io/${{ github.repository }}
-          # The variant suffix lands on every tag (1.2.3-slim, sha-abc-slim);
-          # the slim image's moving tag is plain :slim, not :latest-slim.
+          # The variant suffix lands on every tag (1.2.3-slim, sha-abc-bge);
+          # the moving tag is the variant's own name, without the suffix:
+          # plain :slim and :bge, not :latest-slim or :bge-bge.
           flavor: |
             latest=false
             suffix=${{ matrix.suffix }}
@@ -82,8 +110,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
             type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=raw,value=latest,enable=${{ matrix.variant == 'full' && startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=slim,suffix=,enable=${{ matrix.variant == 'slim' && startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=${{ matrix.moving }},suffix=,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - id: build
         uses: docker/build-push-action@v6
@@ -103,9 +130,14 @@ jobs:
             VCS_REF=${{ github.sha }}
             OFFLINE_BUNDLE=${{ inputs.offline_bundle && '1' || '0' }}
             SLIM=${{ matrix.slim }}
-          # One cache per variant: they share base layers but diverge at the
-          # dependency install, and a shared scope would evict each other.
-          cache-from: type=gha,scope=${{ matrix.variant }}
+            EMBEDDING_MODEL=${{ matrix.embedding_model }}
+          # One cache per variant: full and slim share base layers but diverge
+          # at the dependency install, and a shared scope would evict each
+          # other. A bge variant also reads its MiniLM twin's cache, since they
+          # are the same image up to the model bake.
+          cache-from: |
+            type=gha,scope=${{ matrix.variant }}
+            type=gha,scope=${{ matrix.cache_base }}
           cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
 
       - uses: sigstore/cosign-installer@v3
@@ -118,7 +150,7 @@ jobs:
       - name: Summarise
         run: |
           {
-            echo "### Published (${{ matrix.variant }})"
+            echo "### Published (${{ matrix.variant }}, ${{ matrix.embedding_model }})"
             echo '```'
             echo "${{ steps.meta.outputs.tags }}"
             echo '```'

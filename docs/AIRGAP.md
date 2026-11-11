@@ -136,9 +136,19 @@ which one it holds.
 
 ### An image built around another model
 
-The stock image bakes `all-MiniLM-L6-v2`. To build one around another local
-model, `BAAI/bge-small-en-v1.5` here (the other model a
-[website export](STATIC_SEARCH.md) has a browser build for):
+The stock image bakes `all-MiniLM-L6-v2`. Every release since 1.4.1 also
+publishes the same two images built around `BAAI/bge-small-en-v1.5` (the other
+model a [website export](STATIC_SEARCH.md) has a browser build for):
+
+```bash
+docker pull ghcr.io/jordanboyce/clio:bge          # or :<version>-bge
+docker pull ghcr.io/jordanboyce/clio:bge-slim     # or :<version>-bge-slim
+```
+
+A machine that can reach the registry can pull one and carry it across with
+`docker save`. The published images bake the search model and reranker but not
+the rest of the offline bundle (Whisper, OCR models). For those, or for another
+model, build the bundle yourself:
 
 ```bash
 ./scripts/package_image.sh --embedding-model BAAI/bge-small-en-v1.5 --offline-bundle --tag 1.4.0-bge

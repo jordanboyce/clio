@@ -91,7 +91,9 @@ network has a Hugging Face mirror (an Artifactory or Nexus remote repository), s
 **If the VM can reach a registry**, get these files from the repository, keeping their
 paths: everything listed in [scripts/bundle_files.txt](../scripts/bundle_files.txt). Then set
 `CLIO_IMAGE=ghcr.io/jordanboyce/clio:<version>-slim` and `CLIO_PULL_POLICY=missing` in the
-next step, and `PROXY_PULL_POLICY=missing` is already the default.
+next step, and `PROXY_PULL_POLICY=missing` is already the default. For the
+`BAAI/bge-small-en-v1.5` embedding model instead of `all-MiniLM-L6-v2`, use
+`:<version>-bge-slim` ([AIRGAP.md](AIRGAP.md#changing-the-embedding-model)).
 
 **If it cannot**, build a bundle on a connected machine with Docker:
 
