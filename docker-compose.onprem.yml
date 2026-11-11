@@ -48,7 +48,10 @@ services:
       # Search embeddings stay on this machine. The picker in Settings can
       # switch to a hosted API, which OFFLINE_MODE then refuses.
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-local}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      # No default here on purpose: unset, the image's own model applies (the
+      # one it baked: all-MiniLM-L6-v2, or bge-small in a -bge image). A value
+      # in .env or the shell still passes through and wins.
+      - EMBEDDING_MODEL
       # No cloud AI, no model downloads. Only the endpoints configured below
       # are ever contacted. Set OFFLINE_MODE=false in .env if this deployment
       # is allowed to reach hosted providers.

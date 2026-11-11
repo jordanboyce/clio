@@ -8,6 +8,8 @@
     .\scripts\package_image.ps1
     .\scripts\package_image.ps1 -OfflineBundle -Tag 1.4.0 -Out D:\transfer
     .\scripts\package_image.ps1 -Slim -WithProxyImage -Tag 1.4.0 -Out D:\transfer
+    .\scripts\package_image.ps1 -EmbeddingModel BAAI/bge-small-en-v1.5 -OfflineBundle -Tag 1.4.0-bge
+    (--embedding-model works too, spelled as in package_image.sh)
 #>
 [CmdletBinding()]
 param(
@@ -20,6 +22,11 @@ param(
     # Also carry nginx, for a host with no registry.
     [switch]$WithProxyImage,
     [string]$WhisperModel = "base",
+    # The model the image bakes and a container uses unless EMBEDDING_MODEL is
+    # set at run time. With -OfflineBundle the prefetch fetches it too. Keep the
+    # default in step with the Dockerfile's ARG EMBEDDING_MODEL and config.py.
+    [Alias("embedding-model")]
+    [string]$EmbeddingModel = "all-MiniLM-L6-v2",
     # Build for the target's architecture when it differs from this machine's.
     [string]$Platform = ""
 )
@@ -38,11 +45,14 @@ $proxyIncluded = "0"; if ($WithProxyImage) { $proxyIncluded = "1" }
 # Keep in step with the default in docker-compose.proxy.yml.
 $proxyImage = "nginx:1.29-alpine"
 
-Write-Host "==> Building $image (slim=$slimArg, offline_bundle=$offline, docling=$docling)"
+if (-not $EmbeddingModel.Trim()) { throw "-EmbeddingModel needs a model id" }
+
+Write-Host "==> Building $image (slim=$slimArg, offline_bundle=$offline, docling=$docling, embedding_model=$EmbeddingModel)"
 $buildArgs = @(
     "build",
     "--build-arg", "OFFLINE_BUNDLE=$offline",
     "--build-arg", "WITH_DOCLING=$docling",
+    "--build-arg", "EMBEDDING_MODEL=$EmbeddingModel",
     "--build-arg", "SLIM=$slimArg",
     "--build-arg", "WHISPER_MODEL=$WhisperModel",
     "--build-arg", "APP_VERSION=$Tag",
@@ -103,7 +113,14 @@ $built = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 Clio $Tag - offline install bundle
 built $built from $vcsRef
 slim: $slimArg   offline model bundle: $offline   docling OCR: $docling
+embedding model: $EmbeddingModel
 proxy image included: $proxyIncluded
+
+The embedding model above is the one this image uses when EMBEDDING_MODEL is
+not set; leave it unset in .env to use it. Collections indexed earlier keep the
+model they were built with (docs/AIRGAP.md: "Changing the embedding model").
+Check a loaded image with:
+  docker inspect -f '{{ index .Config.Labels "dev.clio.embedding-model" }}' clio:$Tag
 
 Follow docs/ENTERPRISE.md. In this bundle the image is clio:$Tag.
 An agent doing this for you should read skills/clio-deploy/SKILL.md first.

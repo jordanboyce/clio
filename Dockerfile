@@ -206,7 +206,14 @@ RUN if [ "$SLIM" = "1" ]; then \
 # EMBEDDING_PROVIDER at a non-local backend (ollama / openai_compatible / a
 # hosted API) — otherwise the model is fetched at first start instead.
 ARG BAKE_EMBEDDING=1
+# The model baked here is also the container's default (ENV EMBEDDING_MODEL
+# below), so an image built with --build-arg EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+# uses bge-small with no .env edit. Keep this default in step with config.py and
+# scripts/package_image.{sh,ps1}; the bake steps below compare against it.
 ARG EMBEDDING_MODEL=all-MiniLM-L6-v2
+# Declared here rather than at its own step below because it also decides
+# whether a failed embedding bake fails the build.
+ARG OFFLINE_BUNDLE=0
 # The reranker rides along with the embedding bake, so a stock image reranks
 # every search from the first query (ENABLE_RERANKER unset = on whenever the
 # model is on disk). RERANKER_MODEL is the name the app is configured with;
@@ -219,14 +226,26 @@ ARG RERANKER_FASTEMBED_MODEL=Xenova/ms-marco-MiniLM-L-6-v2
 # on a network that can never reach huggingface.co. About 145 MB.
 ARG WHISPER_MODEL=base
 ENV HF_HOME=/opt/hf-cache
-# Best effort: a build behind a firewall that blocks huggingface.co must
-# still produce a working image. If the bake cannot download, the build
-# prints a warning and continues; the app then offers the download (with
-# progress) at first start, or Ollama / a hosted provider instead.
-RUN if [ "$BAKE_EMBEDDING" = "1" ]; then \
+# Best effort for the stock image: a build behind a firewall that blocks
+# huggingface.co must still produce a working image. If the bake cannot
+# download, the build prints a warning and continues; the app then offers the
+# download (with progress) at first start, or Ollama / a hosted provider instead.
+#
+# Not for an embedding model the build asked for by name (anything but the
+# default) or an offline bundle: such an image is made to run where nothing
+# can be downloaded, so one without its model would only fail at the site.
+# Those builds stop here instead.
+RUN strict_embedding=0; \
+    if [ "$EMBEDDING_MODEL" != "all-MiniLM-L6-v2" ] || [ "$OFFLINE_BUNDLE" = "1" ]; then strict_embedding=1; fi; \
+    if [ "$BAKE_EMBEDDING" = "1" ]; then \
       ( python -c "from fastembed import TextEmbedding; m='${EMBEDDING_MODEL}'; TextEmbedding(m if '/' in m else 'sentence-transformers/' + m, cache_dir='/opt/clio/models/fastembed')" \
         && ( [ "$SLIM" = "1" ] || python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL}')" ) ) \
-      || echo "WARNING: could not bake the embedding model '${EMBEDDING_MODEL}' (huggingface.co unreachable from this build?). The image still works: the app downloads it at first start, or pick Ollama / a hosted provider. See docs/AIRGAP.md to pre-seed."; \
+      || if [ "$strict_embedding" = "1" ]; then \
+           echo "ERROR: could not bake the embedding model '${EMBEDDING_MODEL}' this build asked for (huggingface.co unreachable, or a model id fastembed does not know?). Stopping rather than producing an image without its model." >&2; \
+           exit 1; \
+         else \
+           echo "WARNING: could not bake the embedding model '${EMBEDDING_MODEL}' (huggingface.co unreachable from this build?). The image still works: the app downloads it at first start, or pick Ollama / a hosted provider. See docs/AIRGAP.md to pre-seed."; \
+         fi; \
       ( python -c "from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder('${RERANKER_FASTEMBED_MODEL}', cache_dir='/opt/clio/models/fastembed')" \
         && ( [ "$SLIM" = "1" ] || python -c "from sentence_transformers import CrossEncoder; CrossEncoder('${RERANKER_MODEL}')" ) ) \
       || echo "WARNING: could not bake the reranker '${RERANKER_MODEL}'. Search still works, in retrieval order; the app fetches the reranker at first start when it can. See docs/AIRGAP.md to pre-seed."; \
@@ -239,11 +258,19 @@ RUN if [ "$BAKE_EMBEDDING" = "1" ]; then \
 # fetched, so nothing is ever needed at runtime. Adds roughly 500 MB.
 #   docker compose build --build-arg OFFLINE_BUNDLE=1
 # Pair with OFFLINE_MODE=1 at runtime; full walkthrough in docs/AIRGAP.md.
-ARG OFFLINE_BUNDLE=0
-COPY scripts/prefetch_offline_models.py /tmp/prefetch_offline_models.py
+# (ARG OFFLINE_BUNDLE is declared with the embedding bake above.)
+#
+# The prefetch resolves model ids through services/embedder.py and
+# services/reranker.py, and the application is not copied in until later, so
+# those modules (and config.py, which they read) come along on their own.
+# Without them every core fetch failed with "No module named 'services'".
+COPY scripts/prefetch_offline_models.py config.py /tmp/clio-prefetch/
+COPY services/__init__.py services/embedder.py services/embedding_providers.py services/reranker.py /tmp/clio-prefetch/services/
 RUN if [ "$OFFLINE_BUNDLE" = "1" ]; then \
-      python /tmp/prefetch_offline_models.py --whisper-model "$WHISPER_MODEL"; \
-    fi && rm /tmp/prefetch_offline_models.py
+      cd /tmp/clio-prefetch \
+      && CLIO_ROOT=/tmp/clio-prefetch DATA_DIR=/tmp/clio-prefetch/data \
+         python prefetch_offline_models.py --embedding-model "$EMBEDDING_MODEL" --whisper-model "$WHISPER_MODEL"; \
+    fi && rm -rf /tmp/clio-prefetch
 
 # The unprivileged service user reads the baked models; the download step
 # leaves some cache metadata owner-only.
@@ -259,6 +286,16 @@ COPY --from=frontend /opt/static-search/vendor /opt/clio/static-search/vendor
 # the data directory is writable.
 RUN groupadd --gid 10001 clio     && useradd --uid 10001 --gid clio --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin clio     && mkdir -p /app/data/documents /app/data/indexes     && chown -R clio:clio /app/data
 
+# For a build that named its embedding model (or an offline bundle), check with
+# the app's own lookup that the copy baked above is the one a container will
+# load: fastembed_cached_in must answer with the image cache, not "nothing", so
+# the model can never be fetched (or fail to be) at the site instead.
+RUN if [ "$BAKE_EMBEDDING" = "1" ] && { [ "$EMBEDDING_MODEL" != "all-MiniLM-L6-v2" ] || [ "$OFFLINE_BUNDLE" = "1" ]; }; then \
+      DATA_DIR=/tmp/clio-bake-check HF_HUB_OFFLINE=1 python -c "import sys; from services.embedder import FASTEMBED_IMAGE_CACHE, fastembed_cached_in, fastembed_model_id; m = sys.argv[1]; fe = fastembed_model_id(m); found = fastembed_cached_in(m) if fe else None; print(f'embedding model {m!r}: fastembed id {fe!r}, found in {found}'); sys.exit(0 if fe and found == FASTEMBED_IMAGE_CACHE else 1)" "$EMBEDDING_MODEL" \
+      || { echo "ERROR: the app does not find '${EMBEDDING_MODEL}' in /opt/clio/models/fastembed, where this build baked it." >&2; exit 1; }; \
+      rm -rf /tmp/clio-bake-check; \
+    fi
+
 # Runtime setup that cannot be baked: site CA certificates and the data dirs.
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
@@ -268,9 +305,13 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # version and commit go in as labels rather than living in a build log.
 ARG APP_VERSION=dev
 ARG VCS_REF=unknown
-LABEL org.opencontainers.image.title="Clio"       org.opencontainers.image.description="Private document indexing, grounded chat and MCP access"       org.opencontainers.image.source="https://github.com/jordanboyce/clio"       org.opencontainers.image.licenses="MIT"       org.opencontainers.image.authors="Jordan Boyce"       dev.clio.lineage="clio.helicon.58a48ab52f51"       org.opencontainers.image.version="${APP_VERSION}"       org.opencontainers.image.revision="${VCS_REF}"
+LABEL org.opencontainers.image.title="Clio"       org.opencontainers.image.description="Private document indexing, grounded chat and MCP access"       org.opencontainers.image.source="https://github.com/jordanboyce/clio"       org.opencontainers.image.licenses="MIT"       org.opencontainers.image.authors="Jordan Boyce"       dev.clio.lineage="clio.helicon.58a48ab52f51"       org.opencontainers.image.version="${APP_VERSION}"       org.opencontainers.image.revision="${VCS_REF}"       dev.clio.embedding-model="${EMBEDDING_MODEL}"
+# The image's own default embedding model: the one baked above. A run-time
+# EMBEDDING_MODEL (docker run -e, an env file, compose) still wins, and each
+# collection keeps the model it was indexed with whatever this says.
 ENV CLIO_VERSION=${APP_VERSION} \
-    CLIO_VCS_REF=${VCS_REF}
+    CLIO_VCS_REF=${VCS_REF} \
+    EMBEDDING_MODEL=${EMBEDDING_MODEL}
 
 EXPOSE 8473
 

@@ -319,7 +319,8 @@ def create_collection(collection_data: dict, user_id: str = Depends(get_current_
         color: Hex color for UI (default: #3b82f6)
         chunk_size: Text chunk size (default: 500)
         chunk_overlap: Chunk overlap (default: 50)
-        embedding_model: Embedding model to use
+        embedding_model: Embedding model to use (default: this server's
+            EMBEDDING_MODEL, i.e. the model its image baked)
         visibility: "private" (default) or "team" — private-collections mode
             only. Team collections belong to everyone; private ones belong to
             the caller until shared.
@@ -343,7 +344,10 @@ def create_collection(collection_data: dict, user_id: str = Depends(get_current_
         color=collection_data.get("color", "#3b82f6"),
         chunk_size=collection_data.get("chunk_size", 500),
         chunk_overlap=collection_data.get("chunk_overlap", 50),
-        embedding_model=collection_data.get("embedding_model", "all-MiniLM-L6-v2"),
+        # None = the server's configured model. A literal MiniLM here gave every
+        # collection made in the app MiniLM, even on an image that bakes only
+        # bge-small, where it then could not be embedded offline.
+        embedding_model=collection_data.get("embedding_model") or None,
         # The creator chooses team (owner "default" — everyone's) or private
         # (theirs until shared). Anonymous password-auth callers have no
         # identity to own anything, so their collections are always team.
@@ -636,6 +640,10 @@ def clone_collection(collection_id: str, body: dict = None, user_id: str = Depen
 
     Body:
         name: Name for the copy (default: "Copy of <source name>")
+        embedding_model: Local model to build the copy with (default: the
+            source's). This is how a collection moves to another model: the
+            copy is embedded afresh with it, and the source keeps answering
+            with its own model until the copy is ready.
 
     Returns the new collection plus `job_id` for the background indexing job.
     """
@@ -655,6 +663,7 @@ def clone_collection(collection_id: str, body: dict = None, user_id: str = Depen
             source_id=collection_id,
             owner_id=user_id or settings.default_user_id,
             name=(body or {}).get("name"),
+            embedding_model=(body or {}).get("embedding_model") or None,
         )
     except storage_quota.StorageLimitExceeded as e:
         raise HTTPException(status_code=413, detail=e.to_detail())

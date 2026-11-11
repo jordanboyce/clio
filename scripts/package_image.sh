@@ -8,6 +8,9 @@
 #   ./scripts/package_image.sh --slim                # 1.5 GB: no PyTorch, OCR or audio
 #   ./scripts/package_image.sh --with-proxy-image    # + nginx, for a host with no registry
 #   ./scripts/package_image.sh --tag 1.4.0 --out /media/transfer
+#   ./scripts/package_image.sh --embedding-model BAAI/bge-small-en-v1.5 --tag 1.4.0-bge
+#                                # bake (and default to) another embedding model;
+#                                # all-MiniLM-L6-v2 when not given
 #
 # Produces, in the output directory:
 #   clio-<tag>.tar.gz        the image (docker load < this)
@@ -28,6 +31,8 @@ OUT="dist-image"
 OFFLINE_BUNDLE=0
 WITH_DOCLING=0
 BAKE_EMBEDDING=1
+# Keep in step with the Dockerfile's ARG EMBEDDING_MODEL and config.py.
+EMBEDDING_MODEL="all-MiniLM-L6-v2"
 WHISPER_MODEL="base"
 PLATFORM=""
 SLIM=0
@@ -36,7 +41,8 @@ WITH_PROXY_IMAGE=0
 PROXY_IMAGE="nginx:1.29-alpine"
 
 usage() {
-    sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+    # The comment block at the top of this file, without its leading "# ".
+    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
     exit "${1:-0}"
 }
 
@@ -47,6 +53,9 @@ while [ $# -gt 0 ]; do
         --offline-bundle) OFFLINE_BUNDLE=1; shift ;;
         --with-docling) WITH_DOCLING=1; shift ;;
         --no-bake-embedding) BAKE_EMBEDDING=0; shift ;;
+        # The model the image bakes and a container uses unless EMBEDDING_MODEL
+        # is set at run time. With --offline-bundle the prefetch fetches it too.
+        --embedding-model) EMBEDDING_MODEL="$2"; shift 2 ;;
         --slim) SLIM=1; shift ;;
         --with-proxy-image) WITH_PROXY_IMAGE=1; shift ;;
         --whisper-model) WHISPER_MODEL="$2"; shift 2 ;;
@@ -61,11 +70,17 @@ done
 IMAGE="clio:${TAG}"
 VCS_REF="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
-echo "==> Building ${IMAGE} (slim=${SLIM}, offline_bundle=${OFFLINE_BUNDLE}, docling=${WITH_DOCLING}, bake_embedding=${BAKE_EMBEDDING})"
+if [ -z "$EMBEDDING_MODEL" ]; then
+    echo "--embedding-model needs a model id" >&2
+    exit 1
+fi
+
+echo "==> Building ${IMAGE} (slim=${SLIM}, offline_bundle=${OFFLINE_BUNDLE}, docling=${WITH_DOCLING}, bake_embedding=${BAKE_EMBEDDING}, embedding_model=${EMBEDDING_MODEL})"
 build_args=(
     --build-arg "OFFLINE_BUNDLE=${OFFLINE_BUNDLE}"
     --build-arg "WITH_DOCLING=${WITH_DOCLING}"
     --build-arg "BAKE_EMBEDDING=${BAKE_EMBEDDING}"
+    --build-arg "EMBEDDING_MODEL=${EMBEDDING_MODEL}"
     --build-arg "SLIM=${SLIM}"
     --build-arg "WHISPER_MODEL=${WHISPER_MODEL}"
     --build-arg "APP_VERSION=${TAG}"
@@ -106,7 +121,14 @@ cat > "${OUT}/README.txt" <<EOF
 Clio ${TAG} — offline install bundle
 built $(date -u +%Y-%m-%dT%H:%M:%SZ) from ${VCS_REF}
 slim: ${SLIM}   offline model bundle: ${OFFLINE_BUNDLE}   docling OCR: ${WITH_DOCLING}   bake embedding: ${BAKE_EMBEDDING}
+embedding model: ${EMBEDDING_MODEL}
 proxy image included: ${WITH_PROXY_IMAGE}
+
+The embedding model above is the one this image uses when EMBEDDING_MODEL is
+not set; leave it unset in .env to use it. Collections indexed earlier keep the
+model they were built with (docs/AIRGAP.md: "Changing the embedding model").
+Check a loaded image with:
+  docker inspect -f '{{ index .Config.Labels "dev.clio.embedding-model" }}' clio:${TAG}
 
 Follow docs/ENTERPRISE.md. In this bundle the image is clio:${TAG}.
 An agent doing this for you should read skills/clio-deploy/SKILL.md first.

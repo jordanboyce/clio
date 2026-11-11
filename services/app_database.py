@@ -26,6 +26,28 @@ from services.db_helpers import _get_document_count_from_metadata, _get_storage_
 logger = logging.getLogger(__name__)
 
 
+def _collection_holds_nothing(collection_id: str) -> bool:
+    """True only when the collection's index provably has no documents.
+
+    No metadata.db means nothing was ever indexed. A file that cannot be read
+    counts as holding something: the caller relabels the collection's model,
+    and doing that to vectors it cannot see is the mistake to avoid.
+    """
+    path = Path(settings.data_dir) / "collections" / collection_id / "indexes" / "metadata.db"
+    if not path.exists():
+        return True
+    try:
+        with sqlite_connect(path) as conn:
+            try:
+                row = conn.execute("SELECT 1 FROM documents LIMIT 1").fetchone()
+            except sqlite3.OperationalError:
+                row = conn.execute("SELECT 1 FROM chunks LIMIT 1").fetchone()
+        return row is None
+    except Exception as e:
+        logger.warning(f"Could not read {path} ({e}); leaving collection '{collection_id}' on its recorded model")
+        return False
+
+
 class SQLiteBackend(DatabaseBackend):
     """Manages application-level persistent data in SQLite."""
 
@@ -495,7 +517,15 @@ class SQLiteBackend(DatabaseBackend):
                     """,
                     (settings.embedding_model, timestamp, timestamp)
                 )
-            else:
+            elif settings.embedding_model != "all-MiniLM-L6-v2" and _collection_holds_nothing("default"):
+                # A default collection that still carries the schema's old
+                # default follows the configured model, but only while it is
+                # empty. Once it holds documents their vectors came from
+                # MiniLM, and relabelling it would embed every later query
+                # with another model against them: same 384 dimensions, so
+                # nothing would notice, and search would quietly go wrong.
+                # Starting an image with another default (a -bge image on an
+                # old volume) must leave such a collection as it was.
                 conn.execute(
                     """
                     UPDATE collections SET embedding_model = ?

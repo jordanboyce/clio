@@ -129,6 +129,7 @@ class CollectionService:
         source_id: str,
         owner_id: str,
         name: Optional[str] = None,
+        embedding_model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Copy a collection's sources into a new collection owned by ``owner_id``.
 
@@ -136,6 +137,11 @@ class CollectionService:
         terms: they get their own copy, with the build settings inherited, and
         can reindex or rechunk it without touching the original. The copy is
         never published — releasing it is the new owner's decision.
+
+        ``embedding_model`` builds the copy with another local model instead of
+        the source's: the safe way to move a collection to a new model, since
+        the copy is embedded from its source files and the original is never
+        searched with a model that did not write its vectors.
 
         Returns the new collection with a ``job_id`` for the indexing job.
         Raises StorageLimitExceeded if the sources do not fit the caller's cap,
@@ -148,6 +154,9 @@ class CollectionService:
         if not source:
             raise ValueError(f"Collection '{source_id}' not found")
 
+        if embedding_model is not None and (not isinstance(embedding_model, str) or not embedding_model.strip()):
+            raise ValueError("embedding_model must be a model name")
+
         paths = self.source_file_paths(source_id)
         if not paths:
             raise ValueError("This collection has no sources to copy.")
@@ -158,7 +167,7 @@ class CollectionService:
             color=source.get("color") or "#3b82f6",
             chunk_size=source.get("chunk_size") or 500,
             chunk_overlap=source.get("chunk_overlap") or 50,
-            embedding_model=source.get("embedding_model"),
+            embedding_model=(embedding_model.strip() if embedding_model else source.get("embedding_model")),
             owner_id=owner_id,
         )
 
