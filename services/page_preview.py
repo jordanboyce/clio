@@ -63,6 +63,18 @@ def clamp_width(width: Optional[int]) -> int:
 
 
 def _render_pdf_page(path: Path, page_number: int, width: int) -> bytes:
+    from services.pdfium_lock import PDFIUM_LOCK
+
+    with PDFIUM_LOCK:
+        image = _render_pdf_page_locked(path, page_number, width)
+    buf = io.BytesIO()
+    image.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def _render_pdf_page_locked(path: Path, page_number: int, width: int):
+    """The page as a PIL image (a copy, not a view of PDFium's bitmap).
+    Call with PDFIUM_LOCK held."""
     import pypdfium2 as pdfium
 
     try:
@@ -78,14 +90,15 @@ def _render_pdf_page(path: Path, page_number: int, width: int) -> bytes:
         try:
             page_width = page.get_width() or 1
             bitmap = page.render(scale=width / page_width)
-            image = bitmap.to_pil()
+            try:
+                image = bitmap.to_pil().copy()
+            finally:
+                bitmap.close()
         finally:
             page.close()
     finally:
         doc.close()
-    buf = io.BytesIO()
-    image.save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
+    return image
 
 
 def _scale_image(path: Path, width: int) -> Tuple[bytes, str]:

@@ -857,24 +857,26 @@ class DocumentExtractor:
     def _extract_pdf_with_pdfium(self, pdf_path: Path) -> Dict[int, str]:
         """Extract text with pypdfium2 (PDFium, Chrome's PDF engine)."""
         import pypdfium2 as pdfium
+        from services.pdfium_lock import PDFIUM_LOCK
         page_texts: Dict[int, str] = {}
-        doc = pdfium.PdfDocument(str(pdf_path))
-        try:
-            for page_num in range(1, len(doc) + 1):
-                try:
-                    page = doc[page_num - 1]
-                    textpage = page.get_textpage()
-                    text = textpage.get_text_range() or ""
-                    textpage.close()
-                    page.close()
-                except Exception as e:  # noqa: BLE001 - one bad page must not lose the rest
-                    logger.warning(f"pdfium: page {page_num} of {pdf_path.name} failed to extract ({e})")
-                    text = ""
-                # PDFium ends lines with CRLF and marks soft hyphens with \x02.
-                text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\x02", "-")
-                page_texts[page_num] = text.replace("\x00", "").strip()
-        finally:
-            doc.close()
+        with PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(str(pdf_path))
+            try:
+                for page_num in range(1, len(doc) + 1):
+                    try:
+                        page = doc[page_num - 1]
+                        textpage = page.get_textpage()
+                        text = textpage.get_text_range() or ""
+                        textpage.close()
+                        page.close()
+                    except Exception as e:  # noqa: BLE001 - one bad page must not lose the rest
+                        logger.warning(f"pdfium: page {page_num} of {pdf_path.name} failed to extract ({e})")
+                        text = ""
+                    # PDFium ends lines with CRLF and marks soft hyphens with \x02.
+                    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\x02", "-")
+                    page_texts[page_num] = text.replace("\x00", "").strip()
+            finally:
+                doc.close()
         return page_texts
 
     def _extract_pdf_with_pdfplumber(self, pdf_path: Path) -> Dict[int, str]:

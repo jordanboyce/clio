@@ -201,6 +201,15 @@ def _encode(image, prefer_jpeg: bool) -> Tuple[bytes, str]:
 
 
 def _pdf_figures(path: Path, page_texts: Optional[Dict[int, str]], collector: _Collector) -> None:
+    from services.pdfium_lock import PDFIUM_LOCK
+
+    with PDFIUM_LOCK:
+        _pdf_figures_locked(path, page_texts, collector)
+
+
+def _pdf_figures_locked(path: Path, page_texts: Optional[Dict[int, str]], collector: _Collector) -> None:
+    """Call with PDFIUM_LOCK held. Every image handed to the collector is a
+    copy, so nothing it keeps still points into memory PDFium owns."""
     import pypdfium2 as pdfium
 
     doc = pdfium.PdfDocument(str(path))
@@ -232,7 +241,12 @@ def _pdf_figures(path: Path, page_texts: Optional[Dict[int, str]], collector: _C
                             collector.skipped_small += 1
                             continue
                         is_jpeg = "DCTDecode" in (obj.get_filters() or [])
-                        image = obj.get_bitmap(render=False).to_pil()
+                        # The bitmap belongs to the page (pypdfium2 warns on
+                        # closing it); copy the pixels and let it go here,
+                        # under the lock, rather than in some later GC.
+                        bitmap = obj.get_bitmap(render=False)
+                        image = bitmap.to_pil().copy()
+                        del bitmap
                     except Exception as e:
                         logger.debug(f"pdf figure on page {page_number} of {path.name} skipped: {e}")
                         continue
