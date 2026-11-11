@@ -59,9 +59,18 @@ $buildArgs = @(
     "--build-arg", "VCS_REF=$vcsRef"
 )
 if ($Platform) { $buildArgs += @("--platform", $Platform) }
-$buildArgs += @("-t", $image, ".")
+$iidFile = [System.IO.Path]::GetTempFileName()
+$buildArgs += @("--iidfile", $iidFile, "-t", $image, ".")
 & docker @buildArgs
-if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
+if ($LASTEXITCODE -ne 0) { Remove-Item $iidFile -ErrorAction SilentlyContinue; throw "docker build failed" }
+
+# Save only the image this run built. Another build of the same tag (one whose
+# client was stopped keeps running in BuildKit) can finish later and take the
+# tag over, and the bundle would then carry that image under this README.
+$builtId = (Get-Content $iidFile -Raw).Trim()
+Remove-Item $iidFile -ErrorAction SilentlyContinue
+$taggedId = (& docker image inspect -f "{{.Id}}" $image).Trim()
+if ($taggedId -ne $builtId) { throw "$image no longer points at the image this run built (another build re-tagged it?). Not saving." }
 
 if (-not (Test-Path $Out)) { New-Item -ItemType Directory -Path $Out | Out-Null }
 

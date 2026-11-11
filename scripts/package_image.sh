@@ -88,9 +88,19 @@ build_args=(
 )
 [ -n "$PLATFORM" ] && build_args+=(--platform "$PLATFORM")
 
-docker build "${build_args[@]}" -t "$IMAGE" .
-
 mkdir -p "$OUT"
+IIDFILE="$(mktemp)"
+trap 'rm -f "$IIDFILE"' EXIT
+docker build "${build_args[@]}" --iidfile "$IIDFILE" -t "$IMAGE" .
+
+# Save only the image this run built. Another build of the same tag (one whose
+# client was stopped keeps running in BuildKit) can finish later and take the
+# tag over, and the bundle would then carry that image under this README.
+if [ "$(docker image inspect -f '{{.Id}}' "$IMAGE")" != "$(cat "$IIDFILE")" ]; then
+    echo "${IMAGE} no longer points at the image this run built (another build re-tagged it?). Not saving." >&2
+    exit 1
+fi
+
 ARCHIVE="${OUT}/clio-${TAG}.tar.gz"
 
 echo "==> Saving ${IMAGE} to ${ARCHIVE}"
