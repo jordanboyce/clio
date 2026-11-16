@@ -318,6 +318,8 @@ class PostgresBackend(DatabaseBackend):
                 cur.execute("ALTER TABLE mcp_tokens ADD COLUMN IF NOT EXISTS expires_at TEXT")
                 cur.execute("ALTER TABLE mcp_tokens ADD COLUMN IF NOT EXISTS allowlist BOOLEAN NOT NULL DEFAULT FALSE")
                 cur.execute("ALTER TABLE mcp_tokens ADD COLUMN IF NOT EXISTS use_count INTEGER NOT NULL DEFAULT 0")
+                # The grant to replace a source a person uploaded — mirrors SQLite.
+                cur.execute("ALTER TABLE mcp_tokens ADD COLUMN IF NOT EXISTS can_overwrite_uploads BOOLEAN NOT NULL DEFAULT FALSE")
 
                 # Registered apps — mirrors the SQLite backend.
                 cur.execute("""
@@ -1268,6 +1270,7 @@ class PostgresBackend(DatabaseBackend):
         can_write: bool = False,
         expires_at: Optional[str] = None,
         allowlist: bool = False,
+        can_overwrite_uploads: bool = False,
     ) -> Dict[str, Any]:
         token_id = str(uuid.uuid4())
         ts = utcnow().isoformat()
@@ -1277,10 +1280,11 @@ class PostgresBackend(DatabaseBackend):
             with conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO mcp_tokens (id, user_id, name, token_hash, token_prefix, created_at,
-                                               collection_scope, can_write, expires_at, allowlist, use_count)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0)""",
+                                               collection_scope, can_write, expires_at, allowlist, use_count,
+                                               can_overwrite_uploads)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s)""",
                     (token_id, user_id, name, token_hash, token_prefix, ts, scope_json,
-                     bool(can_write), expires_at, bool(allowlist)),
+                     bool(can_write), expires_at, bool(allowlist), bool(can_overwrite_uploads)),
                 )
             conn.commit()
             return {
@@ -1296,6 +1300,7 @@ class PostgresBackend(DatabaseBackend):
                 "expires_at": expires_at,
                 "allowlist": bool(allowlist),
                 "use_count": 0,
+                "can_overwrite_uploads": bool(can_overwrite_uploads),
             }
         finally:
             self._put(conn)
@@ -1306,7 +1311,8 @@ class PostgresBackend(DatabaseBackend):
             with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
                 cur.execute(
                     """SELECT id, user_id, name, token_prefix, created_at, last_used_at, revoked_at,
-                              collection_scope, can_write, expires_at, allowlist, use_count
+                              collection_scope, can_write, expires_at, allowlist, use_count,
+                              can_overwrite_uploads
                        FROM mcp_tokens WHERE user_id IS NOT DISTINCT FROM %s
                        ORDER BY created_at DESC""",
                     (user_id,),

@@ -52,11 +52,31 @@ describe('MCP client setup', () => {
     await flushPromises()
     expect(http.post).toHaveBeenCalledWith('/api/mcp/tokens', {
       name: 'AnythingLLM', collection_scope: [], can_write: false, expires_in_days: 90, allowlist: false,
+      can_overwrite_uploads: false,
     })
     expect(exportedServer(wrapper).headers.Authorization).toBe('Bearer test-only-secret')
     await wrapper.get('#mcp-export-token').setValue('existing')
     expect(wrapper.get('pre').text()).not.toContain('test-only-secret')
     expect(exportedServer(wrapper).headers.Authorization).toContain('Bearer <PASTE_YOUR_TOKEN')
+    wrapper.unmount()
+  })
+
+  it('offers the grant to replace uploads only with writes, and sends it only when ticked', async () => {
+    const wrapper = await openAnythingLLM()
+    http.post.mockResolvedValue({ data: { id: 'new', token: 'test-only-secret' } })
+    http.get.mockResolvedValue({ data: { tokens: [existingToken] } })
+    expect(wrapper.find('#mcp-token-overwrite-uploads').exists()).toBe(false)
+    const write = wrapper.findAll('input[type="checkbox"]').find(i => i.element.closest('label')?.textContent.includes('Allow adding and updating sources'))
+    await write.setValue(true)
+    await wrapper.get('#mcp-token-overwrite-uploads').setValue(true)
+    await wrapper.get('#mcp-token-name').setValue('Curator')
+    await wrapper.findAll('button').find(button => button.text() === 'Generate token').trigger('click')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledWith('/api/mcp/tokens', expect.objectContaining({
+      name: 'Curator', can_write: true, can_overwrite_uploads: true,
+    }))
+    // The form resets: the grant is off again for the next token.
+    expect(wrapper.find('#mcp-token-overwrite-uploads').exists()).toBe(false)
     wrapper.unmount()
   })
 

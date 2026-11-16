@@ -48,6 +48,7 @@ def generate_token(
     can_write: bool = False,
     expires_in_days: Optional[int] = None,
     allowlist: bool = False,
+    can_overwrite_uploads: bool = False,
 ) -> Dict[str, Any]:
     """Create and persist a new token. Returns it WITH the plaintext — once.
 
@@ -69,6 +70,11 @@ def generate_token(
     ``allowlist`` turns ``collection_scope`` into the *only* collections
     the token may see over MCP, restricted or not. It requires a non-empty
     scope: an allowlist of nothing would be a token that sees nothing.
+
+    ``can_overwrite_uploads`` lets the token's agents replace a source a
+    person uploaded. Without it they may create notes, edit their own, and
+    append to anything, but a replace of an upload is refused, because it
+    keeps no copy of the person's version. It requires ``can_write``.
     """
     from services.app_database import app_db
 
@@ -77,6 +83,8 @@ def generate_token(
     scope = [str(c).strip() for c in (collection_scope or []) if str(c).strip()] or None
     if allowlist and not scope:
         raise ValueError("An allowlisted token needs at least one collection in its scope.")
+    if can_overwrite_uploads and not can_write:
+        raise ValueError("A token may only replace uploads if it may write: set can_write too.")
     expires_at = None
     if expires_in_days is not None:
         days = int(expires_in_days)
@@ -92,6 +100,7 @@ def generate_token(
         can_write=bool(can_write),
         expires_at=expires_at,
         allowlist=bool(allowlist),
+        can_overwrite_uploads=bool(can_overwrite_uploads),
     )
     record["token"] = plaintext
     return record

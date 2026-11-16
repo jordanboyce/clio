@@ -438,9 +438,12 @@ class SQLiteBackend(DatabaseBackend):
             # restricted-collection grant) and a use counter so the Settings
             # table can show which agents are actually active. Existing
             # tokens keep their behaviour: no expiry, grant semantics.
+            # can_overwrite_uploads: the grant that lets an agent replace a
+            # source a person uploaded. Existing tokens never had it.
             for col in ("expires_at TEXT",
                         "allowlist INTEGER NOT NULL DEFAULT 0",
-                        "use_count INTEGER NOT NULL DEFAULT 0"):
+                        "use_count INTEGER NOT NULL DEFAULT 0",
+                        "can_overwrite_uploads INTEGER NOT NULL DEFAULT 0"):
                 try:
                     conn.execute(f"ALTER TABLE mcp_tokens ADD COLUMN {col}")
                 except sqlite3.OperationalError:
@@ -1296,6 +1299,7 @@ class SQLiteBackend(DatabaseBackend):
         can_write: bool = False,
         expires_at: Optional[str] = None,
         allowlist: bool = False,
+        can_overwrite_uploads: bool = False,
     ) -> Dict[str, Any]:
         token_id = str(uuid.uuid4())
         timestamp = utcnow().isoformat()
@@ -1303,10 +1307,12 @@ class SQLiteBackend(DatabaseBackend):
         with sqlite_connect(self.db_path) as conn:
             conn.execute(
                 """INSERT INTO mcp_tokens (id, user_id, name, token_hash, token_prefix, created_at,
-                                           collection_scope, can_write, expires_at, allowlist, use_count)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                                           collection_scope, can_write, expires_at, allowlist, use_count,
+                                           can_overwrite_uploads)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
                 (token_id, user_id, name, token_hash, token_prefix, timestamp, scope_json,
-                 1 if can_write else 0, expires_at, 1 if allowlist else 0),
+                 1 if can_write else 0, expires_at, 1 if allowlist else 0,
+                 1 if can_overwrite_uploads else 0),
             )
             conn.commit()
         return {
@@ -1322,6 +1328,7 @@ class SQLiteBackend(DatabaseBackend):
             "expires_at": expires_at,
             "allowlist": bool(allowlist),
             "use_count": 0,
+            "can_overwrite_uploads": bool(can_overwrite_uploads),
         }
 
     def list_mcp_tokens(self, user_id: Optional[str]) -> List[Dict[str, Any]]:
@@ -1329,7 +1336,8 @@ class SQLiteBackend(DatabaseBackend):
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """SELECT id, user_id, name, token_prefix, created_at, last_used_at, revoked_at,
-                          collection_scope, can_write, expires_at, allowlist, use_count
+                          collection_scope, can_write, expires_at, allowlist, use_count,
+                          can_overwrite_uploads
                    FROM mcp_tokens WHERE user_id IS ? ORDER BY created_at DESC""",
                 (user_id,),
             ).fetchall()

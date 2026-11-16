@@ -451,6 +451,9 @@ def test_replace_clears_rows_a_race_left_behind(indexer):
         path = documents / "race.md"
         path.write_text(body, encoding="utf-8")
         meta = indexer.index_document(path, "race.md", collection_id="default")
+        # Two agents' creates racing: their notes, so a replace may retire them.
+        indexer.vector_store.metadata_store.update_document_source(
+            meta.document_id, source_path=None, source_type=mcp.AGENT_NOTE_SOURCE_TYPE)
         collection_service.add_document("default", meta.document_id)
     assert len(_rows(indexer, "race.md")) == 2
 
@@ -1097,7 +1100,15 @@ def test_an_upload_over_a_synced_files_name_takes_it(indexer, upload):
     _holds(indexer, "README.md", CHANGED)
 
 
-def test_a_staged_upload_is_a_stored_file_not_a_reference(indexer, fresh_db):
+@pytest.fixture()
+def may_overwrite_uploads():
+    """A token minted with can_overwrite_uploads: agents may replace a person's upload."""
+    token = mcp._request_mcp_can_overwrite_uploads.set(True)
+    yield
+    mcp._request_mcp_can_overwrite_uploads.reset(token)
+
+
+def test_a_staged_upload_is_a_stored_file_not_a_reference(indexer, fresh_db, may_overwrite_uploads):
     """Marked as a reference, it was shown as a folder, kept its file when deleted and refused agent edits."""
     from services import governance
 
@@ -1143,7 +1154,7 @@ def test_an_upload_finishing_after_an_agent_write_is_the_last_write(indexer, fre
     _holds(indexer, "note.md", CHANGED)
 
 
-def test_an_upload_gives_way_to_a_write_that_already_replaced_it(indexer, fresh_db, monkeypatch):
+def test_an_upload_gives_way_to_a_write_that_already_replaced_it(indexer, fresh_db, monkeypatch, may_overwrite_uploads):
     """The row was in the index for a moment, so an agent's replace retired it before the file moved."""
     mcp.write_document_sync("note.md", NOTES)
     index_prepared = indexer.index_prepared_documents

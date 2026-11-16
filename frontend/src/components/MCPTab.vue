@@ -127,6 +127,18 @@
               </span>
             </span>
           </label>
+          <!-- A narrower grant on top of writes: replacing a file a person
+               uploaded keeps no copy of their version, so it is off unless ticked. -->
+          <label v-if="newTokenCanWrite" class="flex items-start gap-2.5 max-w-xl cursor-pointer ml-7">
+            <input id="mcp-token-overwrite-uploads" v-model="newTokenCanOverwriteUploads" type="checkbox" class="checkbox checkbox-sm checkbox-error mt-0.5" />
+            <span>
+              <span class="block text-sm font-medium">Also allow replacing files people uploaded</span>
+              <span class="block text-xs text-base-content/55">
+                Without this, the agent can add notes, rewrite its own, and append to anything, but cannot
+                replace a file a person uploaded. A replace keeps no copy of the old version.
+              </span>
+            </span>
+          </label>
 
           <!-- Lifetime: "never" stays a deliberate choice, not the silent default
                of a form that has no other option. -->
@@ -201,6 +213,7 @@
                   <td class="font-mono text-xs text-base-content/60">{{ t.token_prefix }}…</td>
                   <td class="text-xs whitespace-nowrap">
                     <span v-if="t.can_write" class="badge badge-xs badge-warning badge-outline">read + write</span>
+                    <span v-if="t.can_overwrite_uploads" class="badge badge-xs badge-error badge-outline ml-1">replaces uploads</span>
                     <span v-else class="text-base-content/40">read-only</span>
                   </td>
                   <td class="text-xs">
@@ -709,6 +722,7 @@ const tokens = ref([])
 const newTokenName = ref('')
 const newTokenScope = ref([])
 const newTokenCanWrite = ref(false)
+const newTokenCanOverwriteUploads = ref(false)
 const newTokenAllowlist = ref(false)
 // null = never expires; otherwise days until the token stops working.
 const newTokenExpiryDays = ref(90)
@@ -997,12 +1011,15 @@ const createToken = async () => {
       can_write: newTokenCanWrite.value,
       expires_in_days: newTokenExpiryDays.value,
       allowlist: newTokenAllowlist.value,
+      // Only meaningful with writes; the server refuses it without them.
+      can_overwrite_uploads: newTokenCanWrite.value && newTokenCanOverwriteUploads.value,
     })
     newTokenPlaintext.value = response.data.token
     lastCreatedTokenId.value = response.data.id
     newTokenName.value = ''
     newTokenScope.value = []
     newTokenCanWrite.value = false
+    newTokenCanOverwriteUploads.value = false
     newTokenAllowlist.value = false
     await loadTokens()
     exportTokenId.value = response.data.id

@@ -42,7 +42,8 @@ def test_cached_fingerprint_tracks_content_and_effective_label(monkeypatch):
 def test_mcp_tools_advertise_read_and_write_semantics():
     tools = asyncio.run(mcp_server._clio_mcp.list_tools())
     assert tools
-    writers = {"write_document", "reindex_document", "update_document_metadata"}
+    writers = {"write_document", "create_document", "append_to_document", "reindex_document",
+               "update_document_metadata"}
     for tool in tools:
         assert tool.annotations is not None
         assert tool.annotations.readOnlyHint is (tool.name not in writers)
