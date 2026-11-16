@@ -14,10 +14,17 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional, Dict
 
+from services import model_catalog
+
 logger = logging.getLogger(__name__)
 
 # The Ollama model used when neither the request nor the deployment names one.
-DEFAULT_OLLAMA_MODEL = "llama3.2"
+DEFAULT_OLLAMA_MODEL = model_catalog.default_model("ollama")
+
+# Seconds a model listing may take. A person is waiting on the picker, and a
+# provider that a firewall silently drops must not hold it for the SDKs'
+# ten-minute default (with two retries).
+LIST_TIMEOUT = 6.0
 
 
 def detect_ollama(base_url: str = "http://localhost:11434") -> Dict:
@@ -65,6 +72,212 @@ def detect_ollama(base_url: str = "http://localhost:11434") -> Dict:
         }
 
 
+# ── What providers report about their models ───────────────────────────────
+#
+# Each parser below turns one provider's model listing into partial records
+# for services/model_catalog.py: only the fields the provider actually stated.
+# The catalog fills the rest from its table, or leaves them "not known".
+
+
+def _as_dict(obj) -> dict:
+    """A plain dict from an SDK model object (extra fields included)."""
+    if isinstance(obj, dict):
+        return obj
+    for attr in ("model_dump", "to_dict"):
+        fn = getattr(obj, attr, None)
+        if callable(fn):
+            try:
+                return fn()
+            except Exception:
+                pass
+    return dict(getattr(obj, "__dict__", {}) or {})
+
+
+_MODALITY_KINDS = {
+    "text": "chat", "embeddings": "embedding", "embedding": "embedding",
+    "image": "image", "video": "video", "audio": "speech", "speech": "speech",
+    "transcription": "transcription", "rerank": "rerank",
+}
+
+_TYPE_KINDS = {
+    # Together AI's "type", LM Studio's "type"
+    "chat": ["chat"], "language": ["chat"], "code": ["chat"], "llm": ["chat"],
+    "vlm": ["chat"], "embedding": ["embedding"], "embeddings": ["embedding"],
+    "image": ["image"], "moderation": ["moderation"], "rerank": ["rerank"],
+    "audio": ["speech"], "transcribe": ["transcription"],
+}
+
+
+def ollama_capability_facts(capabilities: list) -> dict:
+    """Ollama's ``capabilities`` list (completion, vision, tools, embedding,
+    thinking, insert) as record fields."""
+    caps = {str(c).lower() for c in capabilities or []}
+    kinds = []
+    if "completion" in caps:
+        kinds.append("chat")
+    if "embedding" in caps:
+        kinds.append("embedding")
+    facts: dict = {"kinds": kinds, "vision": "vision" in caps, "tools": "tools" in caps}
+    if not kinds:
+        facts["kinds"] = ["other"]
+    return facts
+
+
+def openai_style_record(data: dict) -> dict:
+    """What one entry of an OpenAI-style ``/models`` listing says.
+
+    OpenAI itself returns only id/created/owned_by. Other servers add fields
+    of their own, read here when present: OpenRouter's ``architecture`` and
+    ``supported_parameters``, xAI's ``context_length`` and modalities,
+    Mistral's ``capabilities`` object, Together's and LM Studio's ``type``,
+    Groq's ``context_window``, vLLM's ``max_model_len``.
+    """
+    rec: dict = {"id": data.get("id")}
+    name = data.get("name") or data.get("display_name")
+    if isinstance(name, str) and name.strip():
+        rec["label"] = name.strip()
+
+    arch = data.get("architecture") if isinstance(data.get("architecture"), dict) else {}
+    inputs = arch.get("input_modalities") or data.get("input_modalities")
+    outputs = arch.get("output_modalities") or data.get("output_modalities")
+    if isinstance(inputs, list) and inputs:
+        rec["vision"] = "image" in inputs
+    if isinstance(outputs, list) and outputs:
+        kinds = [_MODALITY_KINDS[o] for o in outputs if o in _MODALITY_KINDS]
+        if kinds:
+            rec["kinds"] = kinds
+
+    params = data.get("supported_parameters")
+    if isinstance(params, list):
+        rec["tools"] = "tools" in params
+
+    caps = data.get("capabilities")
+    if isinstance(caps, dict) and "completion_chat" in caps:  # Mistral
+        if caps.get("completion_chat"):
+            rec["kinds"] = ["chat"]
+        if "function_calling" in caps:
+            rec["tools"] = bool(caps.get("function_calling"))
+        if "vision" in caps:
+            rec["vision"] = bool(caps.get("vision"))
+    elif isinstance(caps, list) and caps:  # Ollama-style servers
+        rec.update(ollama_capability_facts(caps))
+
+    typ = data.get("type")
+    if isinstance(typ, str) and typ.lower() in _TYPE_KINDS and "kinds" not in rec:
+        rec["kinds"] = list(_TYPE_KINDS[typ.lower()])
+        if typ.lower() == "vlm":
+            rec["vision"] = True
+
+    top = data.get("top_provider") if isinstance(data.get("top_provider"), dict) else {}
+    for key in ("context_length", "context_window", "max_context_length", "max_model_len"):
+        value = data.get(key) or (top.get(key) if key == "context_length" else None)
+        if value:
+            rec["context_tokens"] = value
+            break
+    return rec
+
+
+def _merge_reported(base: List[dict], extra: List[dict]) -> List[dict]:
+    """Fold a second listing's facts into the first, by id. Facts already
+    present win; ids only the second listing has are not added (the first
+    listing is the one the chat endpoint accepts)."""
+    by_id = {r.get("id"): r for r in extra if r.get("id")}
+    for rec in base:
+        more = by_id.get(rec.get("id"))
+        if not more:
+            continue
+        for key, value in more.items():
+            if key not in rec and value is not None:
+                rec[key] = value
+    return base
+
+
+def ollama_entry_record(entry: dict, show: Optional[dict] = None) -> dict:
+    """A partial record for one Ollama model.
+
+    Ollama 0.6+ reports a ``capabilities`` list from /api/show (newer
+    releases put it in /api/tags too); that is what this reads. For older
+    Ollama, the vision encoder in ``details.families`` (clip, mllama) is
+    the only signal, and it is marked as a guess in ``pattern_fields``; the
+    catalog's name patterns are the last resort. ``detected_by`` says which
+    of these decided (capabilities, families, or unset for "by name").
+    """
+    name = entry.get("name") or entry.get("model") or ""
+    details = entry.get("details") or {}
+    caps = entry.get("capabilities")
+    ctx = details.get("context_length")
+    emb_len = details.get("embedding_length")
+    if show:
+        if caps is None:
+            caps = show.get("capabilities")
+        info = show.get("model_info") or {}
+        arch = info.get("general.architecture")
+        if arch:
+            ctx = ctx or info.get(f"{arch}.context_length")
+            emb_len = emb_len or info.get(f"{arch}.embedding_length")
+        details = details or show.get("details") or {}
+
+    rec: dict = {
+        "id": name,
+        "size": entry.get("size", 0),
+        "modified_at": entry.get("modified_at", ""),
+    }
+    if ctx:
+        rec["context_tokens"] = ctx
+    if isinstance(caps, list):
+        rec.update(ollama_capability_facts(caps))
+        rec["detected_by"] = "capabilities"
+        if "embedding" in rec["kinds"]:
+            rec["embedding_dimensions"] = emb_len
+            rec["max_input_tokens"] = ctx
+        return rec
+
+    families = details.get("families") or []
+    if "clip" in families or "mllama" in families:
+        rec["kinds"] = ["chat"]
+        rec["vision"] = True
+        rec["pattern_fields"] = ["kinds", "vision"]
+        rec["detected_by"] = "families"
+    return rec
+
+
+def ollama_model_records(base_url: str, timeout: float = 3.0, headers: Optional[dict] = None,
+                         show: bool = True) -> List[dict]:
+    """Partial records for every model an Ollama server has, in its order.
+
+    One /api/tags call; /api/show only for models whose listing carries no
+    capabilities (older Ollama), in parallel and each with its own short
+    timeout. Raises when the server does not answer /api/tags.
+    """
+    import httpx
+    from concurrent.futures import ThreadPoolExecutor
+
+    root = base_url.rstrip("/")
+    with httpx.Client(timeout=timeout, headers=headers or {}) as client:
+        response = client.get(f"{root}/api/tags")
+        response.raise_for_status()
+        entries = [m for m in response.json().get("models", []) if m.get("name") or m.get("model")]
+
+    need_show = [m for m in entries if m.get("capabilities") is None] if show else []
+    shown: dict = {}
+    if need_show:
+        def fetch(entry):
+            name = entry.get("name") or entry.get("model")
+            try:
+                with httpx.Client(timeout=timeout + 1.0, headers=headers or {}) as c:
+                    r = c.post(f"{root}/api/show", json={"model": name, "name": name})
+                    if r.status_code == 200:
+                        return name, r.json()
+            except Exception:
+                pass
+            return name, None
+
+        with ThreadPoolExecutor(max_workers=min(8, len(need_show))) as pool:
+            shown = dict(pool.map(fetch, need_show))
+
+    return [ollama_entry_record(m, shown.get(m.get("name") or m.get("model"))) for m in entries]
+
+
 class AIProvider(ABC):
     """Base class for LLM providers."""
 
@@ -105,13 +318,27 @@ class AIProvider(ABC):
         """Whether this provider implements `complete_with_tools`."""
         return False
 
+    def list_model_records(self) -> Optional[List[dict]]:
+        """What the provider itself reports about each model it offers.
+
+        Partial records (see services/model_catalog.py): an ``id`` plus only
+        the fields the provider's API stated. None when this provider has no
+        way to list models; raises when listing was tried and failed. Each
+        implementation keeps to LIST_TIMEOUT.
+        """
+        return None
+
     def list_models(self) -> List[str]:
         """Return available model ids for this provider, best effort.
 
-        Providers that can't enumerate models return []; the frontend falls
-        back to its curated recommendations.
+        Providers that can't enumerate models return []; /api/ai/models then
+        answers from the catalog's recommendations.
         """
-        return []
+        try:
+            return [r["id"] for r in (self.list_model_records() or [])]
+        except Exception as e:
+            logger.warning(f"{self.__class__.__name__} model listing failed: {e}")
+            return []
 
     def complete_with_tools(
         self,
@@ -142,8 +369,8 @@ class AnthropicProvider(AIProvider):
 
     PROVIDER_LABEL = "Anthropic"
     KEY_HINT = "https://console.anthropic.com/settings/keys"
-    FAST_MODEL = "claude-haiku-4-5-20251001"
-    QUALITY_MODEL = "claude-sonnet-5"
+    FAST_MODEL = model_catalog.fast_model("anthropic")
+    QUALITY_MODEL = model_catalog.default_model("anthropic")
 
     def __init__(self, api_key: str, model: Optional[str] = None):
         import anthropic
@@ -300,14 +527,25 @@ class AnthropicProvider(AIProvider):
             logger.error(f"Anthropic validation error: {e}")
             raise
 
-    def list_models(self) -> List[str]:
-        try:
-            page = self.client.models.list(limit=100)
-            # API returns newest first — keep that order
-            return [m.id for m in page.data]
-        except Exception as e:
-            logger.warning(f"Anthropic model listing failed: {e}")
-            return []
+    def list_model_records(self) -> Optional[List[dict]]:
+        """The Models API: newest first, with ``display_name``,
+        ``max_input_tokens`` and a ``capabilities`` object (image_input among
+        them). It lists only Messages-API models, so each one is a chat
+        model; tool use is not reported and comes from the catalog."""
+        client = self.client.with_options(timeout=LIST_TIMEOUT, max_retries=0)
+        page = client.models.list(limit=1000)
+        out = []
+        for m in page.data:
+            d = _as_dict(m)
+            rec: dict = {"id": d.get("id"), "label": d.get("display_name"), "kinds": ["chat"]}
+            image = (d.get("capabilities") or {}).get("image_input")
+            if isinstance(image, dict) and "supported" in image:
+                rec["vision"] = bool(image["supported"])
+            if d.get("max_input_tokens"):
+                rec["context_tokens"] = d["max_input_tokens"]
+                rec["max_input_tokens"] = d["max_input_tokens"]
+            out.append(rec)
+        return out
 
 
 class OpenAIProvider(AIProvider):
@@ -316,8 +554,8 @@ class OpenAIProvider(AIProvider):
     KEY_HINT = "https://platform.openai.com/api-keys"
     """OpenAI provider."""
 
-    FAST_MODEL = "gpt-4o-mini"
-    QUALITY_MODEL = "gpt-4o"
+    FAST_MODEL = model_catalog.fast_model("openai")
+    QUALITY_MODEL = model_catalog.default_model("openai")
 
     def __init__(self, api_key: str, model: Optional[str] = None, base_url: Optional[str] = None):
         from openai import OpenAI
@@ -360,18 +598,24 @@ class OpenAIProvider(AIProvider):
             },
         }
 
-    def list_models(self) -> List[str]:
-        """List models via the OpenAI-style /models endpoint.
+    def _listing_client(self):
+        return self.client.with_options(timeout=LIST_TIMEOUT, max_retries=0)
+
+    def list_model_records(self) -> Optional[List[dict]]:
+        """List models via the OpenAI-style /models endpoint, sorted by id.
 
         Inherited by every OpenAI-compatible subclass (Grok, Google, GitHub,
         Ollama Cloud, OpenRouter, custom endpoints) — vLLM, LM Studio, and
-        LiteLLM all implement /models too.
+        LiteLLM all implement /models too. Whatever extra fields a server
+        adds are read by openai_style_record.
         """
-        try:
-            return sorted(m.id for m in self.client.models.list())
-        except Exception as e:
-            logger.warning(f"{self.__class__.__name__} model listing failed: {e}")
-            return []
+        records = [openai_style_record(_as_dict(m)) for m in self._listing_client().models.list()]
+        return sorted((r for r in records if r.get("id")), key=lambda r: r["id"])
+
+    def _get_json(self, path: str):
+        """GET another path of this provider's API with the same client
+        (same host, same key) and the listing timeout."""
+        return self._listing_client().get(path, cast_to=object)
 
     def complete_with_image(self, prompt: str, image_base64: str, media_type: str, max_tokens: int, model: str) -> dict:
         from openai import OpenAI
@@ -522,9 +766,8 @@ class OllamaProvider(AIProvider):
         except Exception:
             return 8192
 
-    def list_models(self) -> List[str]:
-        result = detect_ollama(self.base_url)
-        return [m["name"] for m in result.get("models", [])]
+    def list_model_records(self) -> Optional[List[dict]]:
+        return ollama_model_records(self.base_url)
 
     def _openai_client(self):
         """Return an OpenAI client pointed at Ollama's OpenAI-compatible /v1/ endpoint."""
@@ -656,11 +899,27 @@ class GrokProvider(OpenAIProvider):
 
     PROVIDER_LABEL = "Grok (xAI)"
     KEY_HINT = "https://console.x.ai"
-    FAST_MODEL = "grok-3-mini"
-    QUALITY_MODEL = "grok-3"
+    FAST_MODEL = model_catalog.fast_model("grok")
+    QUALITY_MODEL = model_catalog.default_model("grok")
 
     def __init__(self, api_key: str, model: Optional[str] = None):
         super().__init__(api_key, model=model, base_url="https://api.x.ai/v1")
+
+    def list_model_records(self) -> Optional[List[dict]]:
+        """/v1/models (ids and ``context_length``), enriched from
+        /v1/language-models and /v1/image-generation-models, which carry
+        ``input_modalities`` and ``output_modalities``. Either extra listing
+        may fail on its own without losing the first."""
+        records = super().list_model_records()
+        for path in ("/language-models", "/image-generation-models"):
+            try:
+                data = self._get_json(path)
+            except Exception as e:
+                logger.info(f"xAI {path} unavailable: {e}")
+                continue
+            extra = [openai_style_record(m) for m in (data or {}).get("models", []) if isinstance(m, dict)]
+            _merge_reported(records, extra)
+        return records
 
 
 class GoogleProvider(OpenAIProvider):
@@ -668,8 +927,9 @@ class GoogleProvider(OpenAIProvider):
 
     PROVIDER_LABEL = "Google Gemini"
     KEY_HINT = "https://aistudio.google.com/apikey"
-    FAST_MODEL = "gemini-2.0-flash"
-    QUALITY_MODEL = "gemini-2.5-pro-preview-03-25"
+    FAST_MODEL = model_catalog.fast_model("google")
+    QUALITY_MODEL = model_catalog.default_model("google")
+    NATIVE_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
     def __init__(self, api_key: str, model: Optional[str] = None):
         super().__init__(
@@ -677,6 +937,56 @@ class GoogleProvider(OpenAIProvider):
             model=model,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         )
+
+    def list_model_records(self) -> Optional[List[dict]]:
+        """Gemini's native models.list, which says more than the
+        OpenAI-compatible /models: ``supportedGenerationMethods``
+        (generateContent for chat, embedContent for embeddings),
+        ``inputTokenLimit`` and ``displayName``. The key goes to the same
+        Google host the chat calls already use. Falls back to the
+        OpenAI-compatible list."""
+        import httpx
+
+        try:
+            out: List[dict] = []
+            token = ""
+            with httpx.Client(timeout=LIST_TIMEOUT) as client:
+                for _ in range(10):
+                    params = {"pageSize": 1000, **({"pageToken": token} if token else {})}
+                    resp = client.get(self.NATIVE_MODELS_URL, params=params,
+                                      headers={"x-goog-api-key": self.client.api_key})
+                    resp.raise_for_status()
+                    body = resp.json()
+                    out.extend(self._native_record(m) for m in body.get("models", []))
+                    token = body.get("nextPageToken") or ""
+                    if not token:
+                        break
+            return [r for r in out if r.get("id")]
+        except Exception as e:
+            logger.info(f"Gemini native model list unavailable, using the OpenAI-compatible one: {e}")
+        records = super().list_model_records()
+        for r in records:
+            r["id"] = r["id"].removeprefix("models/")
+        return records
+
+    @staticmethod
+    def _native_record(m: dict) -> dict:
+        methods = set(m.get("supportedGenerationMethods") or [])
+        kinds = []
+        if "generateContent" in methods:
+            kinds.append("chat")
+        if methods & {"embedContent", "embedText", "batchEmbedContents"}:
+            kinds.append("embedding")
+        if not kinds and "bidiGenerateContent" in methods:
+            kinds.append("realtime")
+        rec: dict = {"id": (m.get("name") or "").removeprefix("models/"), "label": m.get("displayName")}
+        if kinds:
+            rec["kinds"] = kinds
+        if m.get("inputTokenLimit"):
+            rec["max_input_tokens"] = m["inputTokenLimit"]
+            if "chat" in kinds:
+                rec["context_tokens"] = m["inputTokenLimit"]
+        return rec
 
 
 class GitHubProvider(OpenAIProvider):
@@ -694,8 +1004,8 @@ class GitHubProvider(OpenAIProvider):
 
     PROVIDER_LABEL = "GitHub Models"
     KEY_HINT = "https://github.com/settings/tokens"
-    FAST_MODEL = "openai/gpt-4o-mini"
-    QUALITY_MODEL = "openai/gpt-4o"
+    FAST_MODEL = model_catalog.fast_model("github")
+    QUALITY_MODEL = model_catalog.default_model("github")
 
     def __init__(self, api_key: str, model: Optional[str] = None):
         super().__init__(
@@ -717,11 +1027,28 @@ class OllamaCloudProvider(OpenAIProvider):
 
     PROVIDER_LABEL = "Ollama Cloud"
     KEY_HINT = "https://ollama.com/settings/keys"
-    FAST_MODEL = "gpt-oss:20b"
-    QUALITY_MODEL = "gpt-oss:120b"
+    FAST_MODEL = model_catalog.fast_model("ollama_cloud")
+    QUALITY_MODEL = model_catalog.default_model("ollama_cloud")
 
     def __init__(self, api_key: str, model: Optional[str] = None):
         super().__init__(api_key, model=model, base_url="https://ollama.com/v1")
+
+    def list_model_records(self) -> Optional[List[dict]]:
+        """The /v1 list (the ids chat accepts), enriched from ollama.com's
+        native /api/tags where that reports capabilities. Same host and key
+        as the chat calls."""
+        records = super().list_model_records()
+        try:
+            native = ollama_model_records(
+                "https://ollama.com", timeout=LIST_TIMEOUT, show=False,
+                headers={"Authorization": f"Bearer {self.client.api_key}"},
+            )
+        except Exception as e:
+            logger.info(f"Ollama Cloud /api/tags unavailable: {e}")
+            return records
+        reported = [{k: v for k, v in r.items() if k not in ("size", "modified_at", "detected_by")}
+                    for r in native if r.get("detected_by") == "capabilities"]
+        return _merge_reported(records, reported)
 
 
 class OpenRouterProvider(OpenAIProvider):
@@ -734,14 +1061,14 @@ class OpenRouterProvider(OpenAIProvider):
 
     Auth: API key from openrouter.ai (Bearer token; OpenAI SDK handles it).
     Endpoint: https://openrouter.ai/api/v1.
-    Model IDs are namespaced like `anthropic/claude-3.5-sonnet`,
+    Model IDs are namespaced like `anthropic/claude-sonnet-5.5`,
     `openai/gpt-4o`, `meta-llama/llama-3.3-70b-instruct`.
     """
 
     PROVIDER_LABEL = "OpenRouter"
     KEY_HINT = "https://openrouter.ai/keys"
-    FAST_MODEL = "anthropic/claude-3.5-haiku"
-    QUALITY_MODEL = "anthropic/claude-3.5-sonnet"
+    FAST_MODEL = model_catalog.fast_model("openrouter")
+    QUALITY_MODEL = model_catalog.default_model("openrouter")
 
     def __init__(self, api_key: str, model: Optional[str] = None):
         super().__init__(api_key, model=model, base_url="https://openrouter.ai/api/v1")
@@ -768,11 +1095,11 @@ class BedrockProvider(AnthropicProvider):
     import is deferred so the rest of the app runs without it.
 
     Bedrock model IDs differ from the public ones, e.g.
-    `anthropic.claude-3-5-sonnet-20241022-v2:0`.
+    `anthropic.claude-sonnet-5-5`.
     """
 
-    FAST_MODEL = "anthropic.claude-3-5-haiku-20241022-v1:0"
-    QUALITY_MODEL = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    FAST_MODEL = model_catalog.fast_model("bedrock")
+    QUALITY_MODEL = model_catalog.default_model("bedrock")
 
     def __init__(
         self,
@@ -799,9 +1126,46 @@ class BedrockProvider(AnthropicProvider):
         # a direct Anthropic client. We only need to swap in the Bedrock client;
         # every inherited method drives `self.client.messages` agnostically.
         self.client = AnthropicBedrock(**client_kwargs)
+        # For list_model_records only; held in memory like the client's own copy.
+        self._region = region
+        self._aws_keys = (aws_access_key, aws_secret_key) if aws_access_key and aws_secret_key else None
         if model:
             self.FAST_MODEL = model
             self.QUALITY_MODEL = model
+
+    def list_model_records(self) -> Optional[List[dict]]:
+        """ListFoundationModels for Anthropic's models: ``inputModalities``,
+        ``outputModalities`` and lifecycle status (no context length or tool
+        use). Needs boto3, which this provider already requires, and the
+        bedrock:ListFoundationModels permission."""
+        import os
+
+        import boto3
+        from botocore.config import Config
+
+        kwargs: dict = {
+            "config": Config(connect_timeout=3, read_timeout=LIST_TIMEOUT, retries={"max_attempts": 1}),
+        }
+        region = self._region or getattr(self.client, "aws_region", None) or os.environ.get("AWS_REGION")
+        if region:
+            kwargs["region_name"] = region
+        if self._aws_keys:
+            kwargs["aws_access_key_id"], kwargs["aws_secret_access_key"] = self._aws_keys
+        resp = boto3.client("bedrock", **kwargs).list_foundation_models(byProvider="Anthropic")
+        out = []
+        for summary in resp.get("modelSummaries", []):
+            status = (summary.get("modelLifecycle") or {}).get("status")
+            if status and status != "ACTIVE":
+                continue
+            outputs = {o.upper() for o in summary.get("outputModalities") or []}
+            kinds = [k for o, k in (("TEXT", "chat"), ("EMBEDDING", "embedding"), ("IMAGE", "image")) if o in outputs]
+            rec: dict = {"id": summary.get("modelId"), "label": summary.get("modelName")}
+            if kinds:
+                rec["kinds"] = kinds
+            if summary.get("inputModalities"):
+                rec["vision"] = "IMAGE" in {i.upper() for i in summary["inputModalities"]}
+            out.append(rec)
+        return out
 
     def validate(self) -> bool:
         try:

@@ -72,3 +72,14 @@ def _settings_saves_stay_out_of_the_real_env_file(tmp_path, monkeypatch):
     from services.config_manager import config_manager
 
     monkeypatch.setattr(config_manager, "env_file", tmp_path / ".env.test")
+
+
+@pytest.fixture(autouse=True)
+def _model_listings_are_not_shared_between_tests():
+    """/api/ai/models caches listings per provider and key; one test's fake
+    provider must not answer the next test's request."""
+    from services import model_catalog
+
+    model_catalog.clear_cache()
+    yield
+    model_catalog.clear_cache()

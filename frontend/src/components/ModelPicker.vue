@@ -64,13 +64,16 @@
             <option value="">{{ deployment ? 'Chosen by your administrator' : 'Provider default' }}</option>
             <option v-if="missingModel" :value="missingModel">{{ missingModel }}</option>
             <optgroup v-if="recommended.length" label="Recommended">
-              <option v-for="m in recommended" :key="m.id" :value="m.id">{{ m.label }}</option>
+              <option v-for="m in recommended" :key="m.id" :value="m.id">{{ m.display }}</option>
             </optgroup>
             <optgroup v-if="others.length" label="All models">
-              <option v-for="m in others" :key="m.id" :value="m.id">{{ m.label }}</option>
+              <option v-for="m in others" :key="m.id" :value="m.id">{{ m.display }}</option>
             </optgroup>
           </select>
           <p v-if="loadingModels" class="text-[11px] text-base-content/45 mt-1">Loading models…</p>
+          <div v-else-if="currentRecord?.badges.length" class="flex gap-1 mt-1.5" data-testid="model-badges">
+            <span v-for="b in currentRecord.badges" :key="b" class="badge badge-ghost badge-xs">{{ BADGE_TEXT[b] }}</span>
+          </div>
         </div>
 
         <p class="text-[11px] leading-snug text-base-content/55">
@@ -121,6 +124,8 @@ const loadingModels = ref(false)
 let seq = 0
 const recommended = computed(() => models.value.filter(m => m.recommended))
 const others = computed(() => models.value.filter(m => !m.recommended))
+const BADGE_TEXT = { vision: 'Reads images', tools: 'Uses tools' }
+const currentRecord = computed(() => models.value.find(m => m.id === currentModel.value) || null)
 const missingModel = computed(() => {
   const cur = currentModel.value
   return cur && !models.value.some(m => m.id === cur) ? cur : ''

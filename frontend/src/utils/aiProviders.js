@@ -6,9 +6,10 @@
  * request headers in a consistent way.
  */
 
-// `models` here are curated RECOMMENDATIONS only (2-3 per provider) — the
-// full list is fetched live from the provider via fetchProviderModels(),
-// so we never ship a stale 60-model catalog again.
+// No model names live here. What a provider offers, what each model can do,
+// and which ones are recommended all come from the server
+// (fetchProviderModels -> POST /api/ai/models, built from
+// services/model_catalog.py), so a new model generation is a server change.
 export const PROVIDER_DEFS = [
   {
     id: 'anthropic',
@@ -17,11 +18,6 @@ export const PROVIDER_DEFS = [
     badge: 'cloud',
     keyPlaceholder: 'sk-ant-...',
     keyLink: 'https://console.anthropic.com/settings/keys',
-    models: [
-      { id: 'claude-sonnet-5', label: 'Claude Sonnet 5 (quality)' },
-      { id: 'claude-opus-5', label: 'Claude Opus 5 (best)' },
-      { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (fast)' },
-    ],
   },
   {
     id: 'openai',
@@ -30,10 +26,6 @@ export const PROVIDER_DEFS = [
     badge: 'cloud',
     keyPlaceholder: 'sk-...',
     keyLink: 'https://platform.openai.com/api-keys',
-    models: [
-      { id: 'gpt-4o', label: 'GPT-4o (quality)' },
-      { id: 'gpt-4o-mini', label: 'GPT-4o Mini (fast)' },
-    ],
   },
   {
     id: 'grok',
@@ -42,10 +34,6 @@ export const PROVIDER_DEFS = [
     badge: 'cloud',
     keyPlaceholder: 'xai-...',
     keyLink: 'https://console.x.ai/',
-    models: [
-      { id: 'grok-3', label: 'Grok-3 (quality)' },
-      { id: 'grok-3-mini', label: 'Grok-3 Mini (fast)' },
-    ],
   },
   {
     id: 'google',
@@ -54,10 +42,6 @@ export const PROVIDER_DEFS = [
     badge: 'cloud',
     keyPlaceholder: 'AIza...',
     keyLink: 'https://aistudio.google.com/app/apikey',
-    models: [
-      { id: 'gemini-2.5-pro-preview-03-25', label: 'Gemini 2.5 Pro (quality)' },
-      { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash (fast)' },
-    ],
   },
   {
     id: 'github',
@@ -66,11 +50,6 @@ export const PROVIDER_DEFS = [
     badge: 'cloud',
     keyPlaceholder: 'github_pat_... or ghp_...',
     keyLink: 'https://github.com/settings/tokens?type=beta',
-    models: [
-      { id: 'openai/gpt-4o', label: 'GPT-4o (quality)' },
-      { id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini (fast)' },
-      { id: 'meta/Llama-3.3-70B-Instruct', label: 'Llama 3.3 70B' },
-    ],
   },
   {
     id: 'openrouter',
@@ -79,11 +58,6 @@ export const PROVIDER_DEFS = [
     badge: 'cloud',
     keyPlaceholder: 'sk-or-...',
     keyLink: 'https://openrouter.ai/keys',
-    models: [
-      { id: 'anthropic/claude-3.5-sonnet', label: 'Claude 3.5 Sonnet (quality)' },
-      { id: 'anthropic/claude-3.5-haiku', label: 'Claude 3.5 Haiku (fast)' },
-      { id: 'deepseek/deepseek-chat', label: 'DeepSeek V3' },
-    ],
   },
   {
     id: 'ollama',
@@ -92,7 +66,6 @@ export const PROVIDER_DEFS = [
     badge: 'local',
     hasBaseUrl: true,
     defaultBaseUrl: 'http://localhost:11434',
-    models: [], // populated dynamically via detection
   },
   {
     id: 'ollama_cloud',
@@ -101,11 +74,6 @@ export const PROVIDER_DEFS = [
     badge: 'cloud',
     keyPlaceholder: 'your Ollama API key',
     keyLink: 'https://ollama.com/settings/keys',
-    models: [
-      { id: 'gemma4:31b', label: 'Gemma 4 31B (free tier)' },
-      { id: 'gpt-oss:120b', label: 'GPT-OSS 120B (quality)' },
-      { id: 'gpt-oss:20b', label: 'GPT-OSS 20B (fast)' },
-    ],
   },
 ]
 
@@ -204,7 +172,7 @@ export function getProviderConfig(id) {
  * migrateLegacySettings() seeds an Ollama row ({available: false}) so the
  * Settings form has something to edit. That seed is not a choice: until the
  * Ollama check passes in Settings it must not shadow the deployment's own
- * Ollama model, or a first visit asks the server for a model (llama3.2) that
+ * Ollama model, or a first visit asks the server for a default model that
  * was never installed there.
  */
 export function getActiveProviderConfig(id) {
@@ -396,9 +364,11 @@ export function buildProviderHeaders(providerId, modelOverride = null) {
   } else if (providerId === 'ollama') {
     const baseUrl = cfg.baseUrl || 'http://localhost:11434'
     if (baseUrl !== 'http://localhost:11434') headers['X-AI-Base-URL'] = baseUrl
-    const model = resolvedModel || 'llama3.2'
-    headers['X-Ollama-Model'] = model
-    headers['X-AI-Model'] = model
+    // No model chosen: send none, and the server uses its default.
+    if (resolvedModel) {
+      headers['X-Ollama-Model'] = resolvedModel
+      headers['X-AI-Model'] = resolvedModel
+    }
   } else {
     if (cfg.apiKey) headers['X-AI-Key'] = cfg.apiKey
     if (resolvedModel) headers['X-AI-Model'] = resolvedModel
@@ -432,22 +402,47 @@ export function getProviderDisplayName(providerId) {
   return cfg?.name || providerId
 }
 
-/** Curated recommended models for a provider id. Empty for custom/unknown. */
-export function getProviderModels(providerId) {
-  return PROVIDER_DEFS.find(d => d.id === providerId)?.models ?? []
-}
-
 // ── Live model listing & connection testing ────────────────────────────────
 
 const _modelCache = new Map()
 
+const NO_DEFAULTS = Object.freeze({ model: null, fast: null, vision: null })
+
+/**
+ * One server capability record as the pickers show it. Recommended models
+ * keep the server's label and role ("<label> (quality)"); every
+ * other model is shown by its id, as before. `badges` lists what the
+ * provider (or the server's table) says the model can do.
+ */
+export function toPickerModel(record) {
+  const roles = (record.roles || []).filter(r => r !== 'vision' || record.roles.length === 1)
+  const label = record.recommended
+    ? `${record.label || record.id}${roles.length ? ` (${roles.join(', ')})` : ''}`
+    : record.id
+  const badges = []
+  if (record.vision === true) badges.push('vision')
+  if (record.tools === true) badges.push('tools')
+  return {
+    ...record,
+    label,
+    recommended: !!record.recommended,
+    badges,
+    // <option> text: the label plus the abilities, since an option holds no markup.
+    display: badges.length ? `${label} · ${badges.join(' · ')}` : label,
+  }
+}
+
 /**
  * Fetch the models a provider actually offers, using the stored credentials
  * (or explicit overrides before they're saved). Returns
- *   { models: [{id, label, recommended}], error: string|null }
- * Curated recommendations come first, then every other live model. Falls
- * back to recommendations alone when the provider can't enumerate models.
- * Cached per page load; pass { force: true } after changing credentials.
+ *   { models: [record + {label, recommended, badges, display}],
+ *     defaults: {model, fast, vision}, suggested: {embedding, vision},
+ *     listed: bool, error: string|null }
+ * The server puts its recommendations first, and recommends only models the
+ * provider listed. When the provider cannot be asked (offline, blocked, bad
+ * key), the server answers with its recommendations and an error.
+ * Cached per page load; pass { force: true } after changing credentials
+ * (that also asks the server to skip its own short cache).
  */
 export async function fetchProviderModels(providerId, { force = false, apiKey = undefined, baseUrl = undefined } = {}) {
   const cacheKey = providerId
@@ -462,17 +457,26 @@ export async function fetchProviderModels(providerId, { force = false, apiKey = 
   const url = baseUrl !== undefined ? baseUrl : cfg.baseUrl
   if (url) headers['X-AI-Base-URL'] = url
 
-  const recommended = getProviderModels(providerId).map(m => ({ ...m, recommended: true }))
   let result
   try {
     const { default: axios } = await import('axios')
-    const resp = await axios.post('/api/ai/models', null, { headers })
-    const liveIds = resp.data?.models || []
-    const seen = new Set(recommended.map(m => m.id))
-    const live = liveIds.filter(id => !seen.has(id)).map(id => ({ id, label: id, recommended: false }))
-    result = { models: [...recommended, ...live], error: resp.data?.error || null }
+    const options = { headers }
+    if (force) options.params = { refresh: true }
+    const resp = await axios.post('/api/ai/models', null, options)
+    const data = resp.data || {}
+    // A server from before capability records sends bare ids only.
+    const records = Array.isArray(data.records)
+      ? data.records
+      : (data.models || []).map(id => ({ id, label: id }))
+    result = {
+      models: records.map(toPickerModel),
+      defaults: { ...NO_DEFAULTS, ...(data.defaults || {}) },
+      suggested: data.suggested || {},
+      listed: data.listed ?? records.length > 0,
+      error: data.error || null,
+    }
   } catch (err) {
-    result = { models: recommended, error: err?.response?.data?.detail || err.message }
+    result = { models: [], defaults: { ...NO_DEFAULTS }, suggested: {}, listed: false, error: err?.response?.data?.detail || err.message }
   }
 
   if (!result.error && apiKey === undefined && baseUrl === undefined) {
@@ -552,7 +556,7 @@ export function migrateLegacySettings() {
   if (!configs.find(c => c.id === 'ollama')) {
     configs.push({
       id: 'ollama',
-      model: ollamaModel || 'llama3.2',
+      model: ollamaModel || '',
       baseUrl: 'http://localhost:11434',
       available: false,
     })
