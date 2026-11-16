@@ -2559,6 +2559,24 @@ def _get_structured_store(collection_id: str) -> StructuredStore:
     return indexer.vector_store.structured_store
 
 
+def _hidden_table_names(store: StructuredStore, collection_id: str) -> set[str]:
+    """SQL names of the tables of hidden documents, which no caller may read."""
+    hidden = _hidden_table_doc_ids(collection_id)
+    if not hidden:
+        return set()
+    return {t["table_name"] for t in store.list_tables() if t.get("document_id") in hidden}
+
+
+def _visible_schema(
+    store: StructuredStore, identifier: str, collection_id: str, identifier_type: str | None = None,
+) -> dict[str, Any] | None:
+    """The table's schema, or None when it does not exist or its document is hidden."""
+    schema = store.get_schema(identifier, identifier_type=identifier_type)
+    if schema and schema.get("document_id") in _hidden_table_doc_ids(collection_id):
+        return None
+    return schema
+
+
 def _no_table_error(
     store: StructuredStore, identifier: str, collection_id: str
 ) -> ValueError:
@@ -2574,7 +2592,11 @@ def _no_table_error(
         f"'{collection_id}'."
     )
     try:
-        suggestions = store.suggest_identifiers(identifier, limit=3)
+        hidden = _hidden_table_doc_ids(collection_id)
+        suggestions = [
+            s for s in store.suggest_identifiers(identifier, limit=3 + len(hidden))
+            if s.get("document_id") not in hidden
+        ][:3]
     except Exception:
         suggestions = []
     if suggestions:
@@ -2655,7 +2677,7 @@ def list_tables(collection_id: str | None = None) -> dict[str, Any]:
     """
     resolved_collection = _resolve_collection_id(collection_id)
     store = _get_structured_store(resolved_collection)
-    raw_tables = store.list_tables()
+    raw_tables = _visible_tables(resolved_collection, store.list_tables())
     # Strip column-role detail from the listing — it belongs in get_table_schema.
     tables = [
         {k: v for k, v in t.items() if k != "financial_roles"}
@@ -2698,7 +2720,7 @@ def get_table_schema(
     """
     resolved_collection = _resolve_collection_id(collection_id)
     store = _get_structured_store(resolved_collection)
-    schema = store.get_schema(identifier, identifier_type=identifier_type)
+    schema = _visible_schema(store, identifier, resolved_collection, identifier_type)
     if not schema:
         raise _no_table_error(store, identifier, resolved_collection)
     return _tool_response(_format_schema_summary(schema), "get_table_schema")
@@ -2741,7 +2763,7 @@ def get_table_rows(
     """
     resolved_collection = _resolve_collection_id(collection_id)
     store = _get_structured_store(resolved_collection)
-    schema = store.get_schema(identifier, identifier_type=identifier_type)
+    schema = _visible_schema(store, identifier, resolved_collection, identifier_type)
     if not schema:
         raise _no_table_error(store, identifier, resolved_collection)
     table_name = schema["table_name"]
@@ -2809,7 +2831,9 @@ def query_table(
     store = _get_structured_store(resolved_collection)
     capped_rows = max(1, min(int(max_rows), 2000))
     try:
-        result = store.execute_query(sql, max_rows=capped_rows)
+        result = store.execute_query(
+            sql, max_rows=capped_rows, hidden_tables=_hidden_table_names(store, resolved_collection)
+        )
     except SQLValidationError as e:
         raise ValueError(str(e))
     return _tool_response({
@@ -2879,7 +2903,7 @@ def aggregate_table(
 
     resolved_collection = _resolve_collection_id(collection_id)
     store = _get_structured_store(resolved_collection)
-    schema = store.get_schema(identifier, identifier_type=identifier_type)
+    schema = _visible_schema(store, identifier, resolved_collection, identifier_type)
     if not schema:
         raise _no_table_error(store, identifier, resolved_collection)
     table_name = schema["table_name"]
@@ -4570,7 +4594,7 @@ def _find_collection_for_document(document_id: str) -> tuple[str, dict[str, Any]
 
 
 def _hidden_table_doc_ids(collection_id: str) -> set[str]:
-    """Documents whose tables the resources must not show (see _is_hidden_doc)."""
+    """Documents whose tables no tool or resource may show (see _is_hidden_doc)."""
     try:
         return indexer_manager.get_indexer(collection_id).vector_store.metadata_store.get_hidden_document_ids()
     except Exception:

@@ -172,7 +172,8 @@ def test_collect_structured_tables_filters_by_selection(monkeypatch):
     store = SimpleNamespace(list_tables=lambda: [
         {"table_name": "t1", "document_id": "docA"}, {"table_name": "t2", "document_id": "docB"},
     ])
-    fake_indexer = SimpleNamespace(vector_store=SimpleNamespace(structured_store=store))
+    fake_indexer = SimpleNamespace(vector_store=SimpleNamespace(
+        structured_store=store, metadata_store=SimpleNamespace(get_hidden_document_ids=set)))
     import services.indexer_manager as im
 
     monkeypatch.setattr(im.indexer_manager, "get_indexer", lambda cid: fake_indexer)

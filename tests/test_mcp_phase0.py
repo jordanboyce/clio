@@ -40,6 +40,101 @@ def test_table_resources_hide_a_quarantined_table(indexer):
     assert mcp.resource_table(kept["document_id"])
 
 
+# ── F17: the table tools and inlining hide quarantined tables too ─────────
+
+
+def _two_tables(indexer):
+    """cities.csv quarantined, towns.csv kept; returns (held, kept, held_table_name)."""
+    held = mcp.write_document_sync("cities.csv", "city,pop\nBoise,235000\nNampa,100000\n")
+    kept = mcp.write_document_sync("towns.csv", "town,pop\nEagle,30000\n")
+    held_table = next(t["table_name"] for t in mcp.list_tables("default")["tables"]
+                      if t["filename"] == "cities.csv")
+    _quarantine(indexer, held["document_id"])
+    return held, kept, held_table
+
+
+def test_list_tables_hides_a_quarantined_table(indexer):
+    _two_tables(indexer)
+
+    listed = mcp.list_tables("default")
+    assert [t["filename"] for t in listed["tables"]] == ["towns.csv"]
+    assert listed["total_tables"] == 1
+
+
+def test_table_lookups_do_not_find_a_quarantined_table(indexer):
+    held, kept, held_table = _two_tables(indexer)
+
+    for identifier in ("cities.csv", held["document_id"], held_table):
+        for call in (
+            lambda: mcp.get_table_schema(identifier, collection_id="default"),
+            lambda: mcp.get_table_rows(identifier, collection_id="default"),
+            lambda: mcp.aggregate_table(identifier, "pop", "sum", collection_id="default"),
+        ):
+            with pytest.raises(ValueError, match="No structured table") as err:
+                call()
+            # The did-you-mean hint must not name the held table either.
+            assert "cities" not in _suggestions(err.value)
+
+    assert mcp.get_table_rows("towns.csv", collection_id="default")["rows"] == [["Eagle", 30000]]
+
+
+def _suggestions(error) -> str:
+    message = str(error)
+    return message.split("Did you mean", 1)[1] if "Did you mean" in message else ""
+
+
+def test_a_near_miss_does_not_suggest_a_quarantined_table(indexer):
+    _two_tables(indexer)
+
+    with pytest.raises(ValueError) as err:
+        mcp.get_table_schema("citie", collection_id="default")
+    assert "cities" not in str(err.value)
+    with pytest.raises(ValueError) as err:
+        mcp.get_table_schema("town", collection_id="default")
+    assert "towns.csv" in _suggestions(err.value)   # visible tables are still suggested
+
+
+def test_sql_cannot_read_a_quarantined_table(indexer):
+    _, _, held_table = _two_tables(indexer)
+    towns = mcp.list_tables("default")["tables"][0]["table_name"]
+
+    for sql in (
+        f'SELECT * FROM "{held_table}"',
+        f"SELECT * FROM {held_table.upper()}",
+        f'WITH c AS (SELECT * FROM "{held_table}") SELECT * FROM c',
+        f'SELECT * FROM "{towns}" WHERE "pop" < (SELECT MAX("pop") FROM "{held_table}")',
+        f'SELECT * FROM "{towns}" UNION ALL SELECT * FROM "{held_table}"',
+    ):
+        with pytest.raises(ValueError) as err:
+            mcp.query_table(sql, collection_id="default")
+        # Worded exactly as for a table that does not exist, so a refusal
+        # does not confirm the held table is there.
+        assert str(err.value).lower() == f"sql error: no such table: {held_table.lower()}"
+
+    with pytest.raises(ValueError) as missing:
+        mcp.query_table('SELECT * FROM "csv_data_never_existed"', collection_id="default")
+    assert str(missing.value) == "SQL error: no such table: csv_data_never_existed"
+
+    assert mcp.query_table(f'SELECT "town" FROM "{towns}"', collection_id="default")["rows"] == [["Eagle"]]
+
+
+def test_search_does_not_inline_a_quarantined_table(indexer):
+    _two_tables(indexer)
+
+    result = mcp.search_collection_sync("Boise population", collection_id="default", mode="keyword")
+    assert [t["filename"] for t in result.get("structured_tables") or []] == ["towns.csv"]
+    assert "235000" not in str(result)   # no row of the held table, inlined or as a passage
+
+
+def test_chat_and_search_inliners_leave_out_a_quarantined_table(indexer):
+    from services.structured_chat import collect_structured_tables
+
+    _two_tables(indexer)
+
+    tables, _ = collect_structured_tables(["default"])
+    assert [t["filename"] for t in tables] == ["towns.csv"]
+
+
 # ── F2: inline_row_threshold=0 turns table inlining off ───────────────────
 
 

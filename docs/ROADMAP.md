@@ -31,7 +31,7 @@ Evidence comes from three sources, marked where it matters:
 
 | Phase | Theme | Why it is here |
 |---|---|---|
-| 0 | Fix what is wrong today | Small defects that undercut trust; all S. F1-F16 shipped 2026-11-16 |
+| 0 | Fix what is wrong today | Small defects that undercut trust; all S. F1-F17 shipped 2026-11-16 |
 | 1 | A clean MCP contract | The power is there; the surface is inconsistent and heavy |
 | 2 | A Library you can depend on | The foundation (paper records, lookups, jobs) is the shaky part |
 | 3 | Models that fit the job | Suggestions ignore what a model can do |
@@ -43,11 +43,10 @@ Evidence comes from three sources, marked where it matters:
 
 ## Phase 0 — Fix what is wrong today
 
-F1-F16 shipped on 2026-11-16, each with a regression test (see the git log), together with B1 from Phase 4. Every "Read" item reproduced before it was fixed. The same pass found these, still open and all small:
+F1-F17 shipped on 2026-11-16, each with a regression test (see the git log), together with B1 from Phase 4. Every "Read" item reproduced before it was fixed. The same pass found these, still open and all small:
 
 | Id | Fix | Where | Evidence |
 |---|---|---|---|
-| F17 | The table tools (`list_tables`, `get_table_schema`, `get_table_rows`, `aggregate_table`, `query_table`) and search's table inlining still serve tables of quarantined documents. F1 fixed only the resources. | [mcp_server.py](../services/mcp_server.py) | Read |
 | F18 | A re-index restores only `local_reference` and `url`, so pasted (`text`) and synced (`folder_sync`) sources come back as plain uploads; a collection bundle import resets every `source_type`. Agent notes survive a re-index through the audit trail, but not a bundle import. | [reindex_service.py](../services/reindex_service.py) (about 172 and 628), `collection_bundle` | Read |
 | F19 | The citation map inside the Library loads through a bare `defineAsyncComponent`, so it is blank while loading and if it fails. Use `lazyView` like the other tabs. | [ResearchTab.vue:262](../frontend/src/components/ResearchTab.vue) | Read |
 | F20 | Onboarding's Ollama step picks the first installed model, which can be an embedding model. Use `defaults.model` from `/api/ai/models`. | [WelcomeOnboarding.vue](../frontend/src/components/WelcomeOnboarding.vue) | Read |
@@ -405,7 +404,7 @@ Do each split when a phase first touches the file.
 
 ## Suggested order of work
 
-1. **Week 1:** all of Phase 0, plus R9 (names) and B1 (protect human sources), since both are cheap and make later work clearer. Done on 2026-11-16, with R1, P1 and R9, except F17-F21.
+1. **Week 1:** all of Phase 0, plus R9 (names) and B1 (protect human sources), since both are cheap and make later work clearer. Done on 2026-11-16, with R1, P1 and R9, except F18-F21.
 2. **Then Phase 1A** (M1 → M2 → M3 → M4 → M5), splitting `mcp_server.py` as you go, then **1B** (the Connect tab).
 3. **Then Phase 2**: R1 (benchmark) → R2/R3/R5 (records) → R6/R7 (lookups) → R8/R8b (jobs) → R10 → R11.
 4. **Then Phase 3**, with U3 (Models page) in the same stretch.

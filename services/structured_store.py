@@ -33,7 +33,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import pandas as pd
 
@@ -1109,6 +1109,7 @@ class StructuredStore:
         self,
         sql: str,
         max_rows: int = _DEFAULT_MAX_QUERY_ROWS,
+        hidden_tables: Optional[Iterable[str]] = None,
     ) -> Dict[str, Any]:
         """Run a validated SELECT and return {columns, rows, row_count, truncated}.
 
@@ -1119,9 +1120,15 @@ class StructuredStore:
         sidestepped by reading other tables), and a progress handler stops
         it after :data:`_QUERY_TIMEOUT_SECONDS`. Both surface as
         :class:`SQLValidationError` with a message the caller can show.
+
+        ``hidden_tables`` names data tables this caller must not read (those
+        of quarantined documents). A read of one fails with SQLite's own
+        "no such table" wording, so the refusal does not confirm it exists.
         """
         cleaned = validate_select(sql)
         prefix = self.META_TABLE_PREFIX
+        hidden = {name.lower() for name in (hidden_tables or ())}
+        denied_hidden: List[str] = []
         # Every real table/view that is not structured data, plus SQLite's own
         # catalog names. CTE names also arrive as SQLITE_READ, so the rule is
         # "deny reads of these" rather than "allow only the prefix".
@@ -1135,6 +1142,9 @@ class StructuredStore:
                 return sqlite3.SQLITE_OK
             if action == sqlite3.SQLITE_READ:
                 name = (arg1 or '').lower()
+                if name in hidden:
+                    denied_hidden.append(arg1)
+                    return sqlite3.SQLITE_DENY
                 if name.startswith(prefix) or (name not in protected and not name.startswith('sqlite_')):
                     return sqlite3.SQLITE_OK
             return sqlite3.SQLITE_DENY
@@ -1147,6 +1157,8 @@ class StructuredStore:
 
         def _translate(e: sqlite3.Error) -> SQLValidationError:
             msg = str(e)
+            if denied_hidden:
+                return SQLValidationError(f'SQL error: no such table: {denied_hidden[0]}')
             if 'not authorized' in msg or 'prohibited' in msg:
                 return SQLValidationError(
                     'Query refused: only the structured data tables '

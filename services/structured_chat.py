@@ -798,10 +798,15 @@ def collect_structured_tables(
         stores[cid] = store
         try:
             tables = store.list_tables()
+            # Quarantined (and, for an outside consumer, local-only) sources
+            # are never inlined or advertised, exactly as retrieval hides them.
+            hidden = indexer.vector_store.metadata_store.get_hidden_document_ids()
         except Exception as e:
-            logger.warning(f"collect_structured_tables: list_tables failed for '{cid}': {e}")
+            logger.warning(f"collect_structured_tables: cannot list the tables of '{cid}': {e}")
             continue
         for t in tables:
+            if t.get("document_id") in hidden:
+                continue
             if selected is not None and t.get("document_id") not in selected:
                 continue
             t_copy = dict(t)
