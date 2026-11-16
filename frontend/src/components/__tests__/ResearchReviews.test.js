@@ -16,7 +16,7 @@ let wrapper
 let serverJobs = []
 async function mountReviews(briefs, props = {}) {
   http.get.mockImplementation(async (url) => {
-    if (url.startsWith('/api/research/briefs')) return { data: { briefs, unread: briefs.filter(b => !b.read_at).length } }
+    if (url.startsWith('/api/research/reviews')) return { data: { reviews: briefs, unread: briefs.filter(b => !b.read_at).length } }
     return { data: { jobs: serverJobs } }
   })
   wrapper = mount(ResearchReviews, {
@@ -50,7 +50,7 @@ describe('deleting reviews', () => {
     await w.findAll('button').find(b => b.text() === 'Delete permanently').trigger('click')
     await flushPromises()
 
-    expect(http.delete).toHaveBeenCalledWith(expect.stringContaining('/api/research/briefs/1?'))
+    expect(http.delete).toHaveBeenCalledWith(expect.stringContaining('/api/research/reviews/1?'))
     expect(w.findAll('[data-testid="review-row"]')).toHaveLength(1)
   })
 
@@ -103,14 +103,14 @@ describe('deleting reviews', () => {
   })
 
   it('reports a refused delete and keeps the list', async () => {
-    http.delete.mockRejectedValue({ message: 'A research job is running.' })
+    http.delete.mockRejectedValue({ message: 'A Library job is running.' })
     const w = await mountReviews([review(1)])
 
     await w.get('[data-testid="delete-all-reviews"]').trigger('click')
     await w.get('[data-testid="delete-all-reviews-confirm"]').trigger('click')
     await flushPromises()
 
-    expect(useUiStore().toasts[0].message).toContain('A research job is running.')
+    expect(useUiStore().toasts[0].message).toContain('A Library job is running.')
     expect(w.findAll('[data-testid="review-row"]')).toHaveLength(1)
   })
 

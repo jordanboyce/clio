@@ -59,7 +59,7 @@ def _job_slots() -> threading.BoundedSemaphore:
     global _slots
     with _slots_lock:
         if _slots is None:
-            limit = max(1, int(getattr(config.settings, "research_max_concurrent_jobs", 1) or 1))
+            limit = max(1, int(getattr(config.settings, "library_max_concurrent_jobs", 1) or 1))
             _slots = threading.BoundedSemaphore(limit)
         return _slots
 
@@ -84,7 +84,7 @@ def list_jobs(store: ResearchStore, limit: int = 50) -> List[dict]:
 
 def max_documents() -> int:
     """How many papers one job may cover."""
-    return max(1, int(getattr(config.settings, "research_max_job_documents", 200) or 200))
+    return max(1, int(getattr(config.settings, "library_max_job_documents", 200) or 200))
 
 
 def final_status(done: int, failed: int) -> str:
@@ -159,7 +159,7 @@ def start_job(
                     if live.cancel.wait(timeout=min(remaining, 60)):
                         store.update_job(job_id, status="cancelled", finished_at=now_iso(), current=None)
                         return
-            store.update_job(job_id, current="Waiting for another research job to finish")
+            store.update_job(job_id, current="Waiting for another Library job to finish")
             slots = _job_slots()
             while not slots.acquire(timeout=5):
                 if live.cancel.is_set():

@@ -284,7 +284,7 @@ wrinkle: **MCP clients authenticate with a token, not by signing in.**
   cited answer the in-app chat would give, with the numbered sources. It is
   the right call for a client whose own model is small or busy, or for an
   automation that just needs the answer; everything else stays
-  evidence-first (`research_documents`, `search_collection`), because the
+  evidence-first (`deep_search`, `search_collection`), because the
   intelligence belongs to the client's model. It does not exist without a
   deployment model, so a client never plans around it in vain.
 - **Sign in from the client (OAuth).** Claude Desktop, claude.ai, ChatGPT
@@ -558,7 +558,7 @@ in the same collection (Sources → the *Replaced by…* button on a row, or
 then ranks the older document `SUPERSEDED_PENALTY` (default `0.15`, on the same
 0–1 scale as the reranker probability) below an equally relevant current
 passage. It still appears when it is the only match, and every result from it
-carries `superseded_by: {document_id, filename}`. Chat, research and MCP tell the
+carries `superseded_by: {document_id, filename}`. Chat, deep search and MCP tell the
 model to prefer the current version and to say so when it cites the older one.
 For "what did v2 say" questions a search passes `filters.include_superseded: true`
 (MCP/chat tool argument, `/search` body, `clio_cli.py search --include-superseded`):
@@ -635,8 +635,8 @@ What protects the deployment when many people share it:
 | `RATE_LIMIT_DOCUMENTS_PER_MINUTE` | 600 | Per-identity calls under `/documents`/min: uploads, listings, page previews, job polling |
 | `RATE_LIMIT_DEFAULT_PER_MINUTE` | 120 | Everything else under `/api` |
 | `RATE_LIMIT_MCP_PER_MINUTE` | 0 | `/mcp` agent calls, keyed per personal token; 0 = unlimited |
-| `RESEARCH_MAX_CONCURRENT` | 3 | Parallel `research_documents` calls; extra callers queue |
-| `RESEARCH_QUEUE_TIMEOUT_SECONDS` | 60 | How long a queued research call waits before a retryable "busy" error |
+| `DEEP_SEARCH_MAX_CONCURRENT` | 3 | Parallel `deep_search` and `ask_documents` calls; extra callers queue (`RESEARCH_MAX_CONCURRENT` before R9, still read) |
+| `DEEP_SEARCH_QUEUE_TIMEOUT_SECONDS` | 60 | How long a queued deep search waits before a retryable "busy" error (`RESEARCH_QUEUE_TIMEOUT_SECONDS` before R9, still read) |
 | `WORKER_THREADS` | 64 | Worker threads shared by every MCP tool call, chat turn, upload and document read; callers queue beyond it |
 | `SCAN_MAX_CONCURRENT` | half the CPUs | Vector scans of large collections (50,000 chunks or more) running at once across all collections; extra searches wait in arrival order and smaller collections skip the line. `0` = unbounded. The default cannot see a container CPU quota such as `docker --cpus`, so set it by hand there |
 | `RERANK_MAX_CONCURRENT` | 2 | Cross-encoder reranking passes in flight at once (each uses every core); `0` = unbounded |

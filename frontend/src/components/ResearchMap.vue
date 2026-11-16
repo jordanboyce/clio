@@ -461,7 +461,7 @@ function load() {
 watch(() => [props.collectionId, props.refreshKey, settings.showCited, settings.minCitations,
   (props.documentIds || []).join(',')], load, { immediate: true })
 
-// Screening verdicts for one question, from Research → Screen.
+// Screening verdicts for one question, from Library → Screen.
 const questions = ref([])
 const relevanceQuestion = ref('')
 const verdicts = shallowRef({})

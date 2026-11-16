@@ -27,7 +27,7 @@ her work was to see that deeds and events were written down so they would not
 be forgotten. That is the job here too. The record remembers.
 
 [Deployment](docs/DEPLOYMENT.md) · [Architecture](docs/ARCHITECTURE.md) ·
-[Research workspace](docs/RESEARCH.md) · [Agentic research](docs/AGENTIC_RESEARCH.md) ·
+[Library](docs/RESEARCH.md) · [Deep search for agents](docs/AGENTIC_RESEARCH.md) ·
 [On-prem](docs/ONPREM.md) · [Behind a corporate firewall](docs/ENTERPRISE.md) · [App API](docs/APP_API.md) ·
 [Search on a static website](docs/STATIC_SEARCH.md) ·
 [Roadmap](docs/ROADMAP.md) · [The name](docs/BRAND.md) ·
@@ -96,7 +96,7 @@ docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 \
    checkouts came back late with no extension, three were late but covered
    by one, and one is still out. Leave the **Connect** tab open under
    **Try it** while it works and you'll see each call arrive: the client
-   connecting, then `research_documents`, `query_table` and the rest.
+   connecting, then `deep_search`, `query_table` and the rest.
 
    No token is needed while Clio is reachable from this machine only; read
    [If others can reach it](#if-others-can-reach-it) before that changes.
@@ -119,7 +119,7 @@ docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 \
 
 `:latest` is the full image (4.0 GB). `:slim` (1.6 GB) leaves out PyTorch,
 OCR for scanned PDFs and audio transcription, and keeps everything else:
-search, reranking, chat, research and every MCP tool. Both carry the version
+search, reranking, chat, the Library and every MCP tool. Both carry the version
 tags too (`:1.2.3`, `:1.2.3-slim`). `:bge` and `:bge-slim` (`:1.2.3-bge`,
 `:1.2.3-bge-slim`) are the same two images built around the
 `BAAI/bge-small-en-v1.5` embedding model instead of `all-MiniLM-L6-v2`; see
@@ -175,7 +175,7 @@ pip install -r requirements-postgres.txt  # PostgreSQL for the app database
    passages and needs no model at all.
 3. **Connect** — give the same knowledge to the AI client you already use
    (next section).
-4. **Research** — for papers and books: screen them against a
+4. **Library** — for papers and books: screen them against a
    question, rename downloads descriptively, follow their references, map who
    cites whom, and prepare reviews overnight ([guide](docs/RESEARCH.md)).
 
@@ -233,7 +233,7 @@ may see:
 |---|---|
 | `health_check`, `list_collections`, `get_collection_info` | Orientation: what is here, which embedding model, whether reranking is active |
 | `search_collection`, `search_all_collections` | One quick lookup; retrieval strategy is chosen per query |
-| `research_documents` | A multi-part question: focused subqueries, literal checks, diverse cited passages, coverage gaps |
+| `deep_search` | A multi-part question: focused subqueries, literal checks, diverse cited passages, coverage gaps. `research_documents` is its old name and still works for one release |
 | `find_in_documents`, `get_document_context` | Exact strings and identifiers; the surrounding text before quoting |
 | `read_document` | A text source exactly as stored, with the version to pass back when editing it |
 | `list_tables`, `get_table_schema`, `query_table`, `aggregate_table` | Counts, sums, filters and rankings over CSV/XLSX data, never guessed from passages |
@@ -333,10 +333,10 @@ goes through the app's access checks.
 |---|---|---|
 | **Ask a question and see the evidence** | Ask | Grounded answers cite `[Source N]`; open the passage, the page, and the original file. The assistant says when the sources do not establish something. |
 | **Find the exact passage or identifier** | Find | Automatic hybrid search (meaning + keywords, balanced per query: codes, names and quotes lean on exact words) without any answer model, then a local cross-encoder reranks the best candidates — on by default, nothing leaves the machine; exact strings, numbers, and negation stay intact. |
-| **Research a multi-part question** | Ask, MCP | `research_documents` runs focused subqueries, reports coverage gaps and weak evidence, and spans collections. [Guide](docs/AGENTIC_RESEARCH.md). |
+| **Deep search a multi-part question** | Ask, MCP | Ask's **Deep search** depth and the MCP tool `deep_search` run focused subqueries, report coverage gaps and weak evidence, and span collections. [Guide](docs/AGENTIC_RESEARCH.md). |
 | **Get a finished answer in one agent call** | MCP | `ask_documents` returns the grounded, cited answer the in-app chat would give, when the deployment runs a model of its own (`AI_PROVIDER`). For agents whose own model is small or busy, or automations that just need the answer. |
 | **Query spreadsheets, not just prose** | Ask, Find, MCP | CSV/XLSX become typed tables; counts, sums, filters, and rankings run as SQL, never as guessed passage search. Find returns the rows that contain every word you search for (a customer, an invoice number, a SKU), with no model needed. |
-| **Triage, organize and review papers and books** | Research | Screens sources against your question with verdicts backed by verified quotes, renames downloads to *year – authors – title*, downloads what a source cites, maps citations between your sources, and prepares reviews overnight; works on the sources you select. Metadata comes from the source or a catalogue (OpenAlex, Crossref, arXiv, Open Library), never a model. [Guide](docs/RESEARCH.md). |
+| **Triage, organize and review papers and books** | Library | Screens sources against your question with verdicts backed by verified quotes, renames downloads to *year – authors – title*, downloads what a source cites, maps citations between your sources, and prepares reviews overnight; works on the sources you select. Metadata comes from the source or a catalogue (OpenAlex, Crossref, arXiv, Open Library), never a model. [Guide](docs/RESEARCH.md). |
 | **Turn a collection into a document** | Reports | Source-grounded briefings, summaries, and reports with citations to review before sharing. |
 | **Teach it your house style or domain** | Saved instructions | Expertise packs add instructions and terminology per collection, versioned alongside the corpus. |
 | **Give your AI assistant a private knowledge source** | Connect | Claude Desktop, claude.ai, ChatGPT, Grok and Claude Code sign in through your identity provider; every client, including Codex, VS Code, Cursor, Windsurf, AnythingLLM, Hermes Agent and any MCP SDK, can also use a personal token. Agents can write notes and summaries back when a token allows it. |
@@ -490,8 +490,8 @@ of them. The ones that matter most:
 | `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` | The model the whole deployment uses; leave empty and each person picks one in Settings → AI Providers |
 | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL` | Where the search index runs: the built-in local model (default), an Ollama you run, or a hosted embedding API. Changing it means re-indexing |
 | `ENABLE_RERANKER`, `RERANKER_MODEL`, `RERANK_MAX_CONCURRENT` | The local cross-encoder that reorders the best candidates of every search; automatic by default |
-| `WORKER_THREADS`, `RATE_LIMIT_*`, `RESEARCH_MAX_CONCURRENT`, `SCAN_MAX_CONCURRENT` | How much concurrent work one host takes before callers queue ([Capacity](docs/DEPLOYMENT.md#capacity--scaling)) |
-| `RESEARCH_LOOKUP_ENABLED`, `RESEARCH_CONTACT_EMAIL` | Whether the Research workspace may look up printed DOIs, arXiv ids and ISBNs in OpenAlex, Crossref, arXiv and Open Library ([Research](docs/RESEARCH.md#settings)) |
+| `WORKER_THREADS`, `RATE_LIMIT_*`, `DEEP_SEARCH_MAX_CONCURRENT`, `SCAN_MAX_CONCURRENT` | How much concurrent work one host takes before callers queue ([Capacity](docs/DEPLOYMENT.md#capacity--scaling)) |
+| `RESEARCH_LOOKUP_ENABLED`, `RESEARCH_CONTACT_EMAIL` | Catalogue lookups: whether the Library may look up printed DOIs, arXiv ids and ISBNs in OpenAlex, Crossref, arXiv and Open Library ([Library](docs/RESEARCH.md#settings)) |
 | `COLLECTION_STORAGE_LIMIT_BYTES` | Most a single collection may hold (5 GiB default); extracted figures count toward it |
 | `EXTRACT_FIGURES`, `VISION_OCR_PROVIDER` | Whether pictures embedded in documents are pulled out and shown with results (on by default), and whether a vision model describes them so charts are findable by content (off unless a provider is set) |
 | `OFFLINE_MODE`, `CLIO_PROFILE` | No cloud providers, no downloads, no web fetching; refuse to start when unsafely exposed |
@@ -593,19 +593,19 @@ curl -X DELETE "http://localhost:8473/documents/4a3a2a313e0382fa?collection_id=d
 curl -X POST "http://localhost:8473/documents/bulk-delete" -H "Content-Type: application/json" \
   -d '{"collection_id": "default", "document_ids": ["4a3a2a313e0382fa"]}'    # or "everything": true
 
-# What was generated from a collection: research reviews, saved reports, or both
+# What was generated from a collection: Library reviews, saved reports, or both
 curl "http://localhost:8473/api/collections/default/outputs"
 curl -X DELETE "http://localhost:8473/api/collections/default/outputs?reviews=true&reports=true"
 ```
 
 Deleting removes the document's chunks and vectors and, for an upload, its
 stored file (a file indexed in place from your own folder is left alone). It
-cannot be undone. Research reviews and saved reports are kept when their source
+cannot be undone. Library reviews and saved reports are kept when their source
 goes, so adding the same file back brings its reviews back; delete them with the
 last call above, or from **Settings > Data**.
 
-**Research workspace** — `/api/research/*` (analysis, renaming, references,
-the citation graph, screening and review jobs) is listed in
+**Library** — `/api/research/*` (analysis, renaming, references,
+the citation map, screening and review jobs) is listed in
 [docs/RESEARCH.md](docs/RESEARCH.md#api). **Agents** should use the MCP
 endpoint rather than these routes ([Connect an AI client](#connect-an-ai-client)).
 
@@ -694,7 +694,7 @@ reinstall with `pip install -r requirements.txt`.
 
 One process serves everything, with a FAISS flat index, a keyword index and
 SQLite per collection. Hundreds to a few thousand documents per collection
-are routine. Indexing jobs queue per collection, research and reranking passes
+are routine. Indexing jobs queue per collection, deep searches and reranking passes
 have their own concurrency limits, and `scripts/mcp_load.py` measures what a
 host serves concurrently ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#capacity--scaling));
 `scripts/retrieval_bench.py` measures search quality and latency on a
@@ -775,7 +775,7 @@ of its own. Organisations that already run sign-in — their own OIDC provider
 or an authenticating proxy ([docs/IDENTITY.md](docs/IDENTITY.md)) — can set
 `PRIVATE_COLLECTIONS=true` for per-person collections: each collection is
 visible only to its owner until shared (read or readwrite share links),
-enforcement covers every entry point — search, documents, chat, research and
+enforcement covers every entry point — search, documents, chat, the Library and
 the `/mcp` tools — and everything created before the flag stays in a team
 tier everyone sees. The mode refuses to start without an identity source it
 can enforce. Details: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
@@ -842,7 +842,7 @@ Everything stateful lives in the data directory (`DATA_DIR`: `./data`, or the
 data/app.db                                 collections, settings, tokens, audit trail
 data/answer_cache.db                        cached answers (safe to drop)
 data/collections/<id>/documents/            the stored source files
-data/collections/<id>/indexes/metadata.db   chunks, document records, tables, research records
+data/collections/<id>/indexes/metadata.db   chunks, document records, tables, Library records
 data/collections/<id>/indexes/bm25.db       keyword index
 data/collections/<id>/indexes/*.index       vectors (FAISS)
 data/models/                                downloaded models (re-downloadable)
@@ -881,7 +881,7 @@ Vite + Pinia + Tailwind/DaisyUI on Node 20.19 or 22.12 and newer, built into
 `frontend/dist` (gitignored) and served with immutable cache
 headers for hashed assets. Docker builds it in a dedicated stage, and
 `run.sh` / `run.bat` build it on first run. How the pieces fit — retrieval,
-chat, MCP, governance, the research workspace — is in
+chat, MCP, governance, the Library — is in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```
@@ -893,14 +893,14 @@ clio/
 ├── services/            Business logic: extraction, chunking, embeddings, vector and keyword
 │                        indexes, retrieval and reranking, chat tools, MCP server, governance
 │   ├── indexing/        The indexing pipeline
-│   └── research/        The research workspace (papers and books)
+│   └── research/        The Library (papers and books)
 ├── models/schemas.py    Request and response models
 ├── frontend/            Vue 3 app (src/components, src/stores, src/utils)
 ├── skills/clio/         Agent skill and a dependency-free CLI
 ├── skills/clio-deploy/  Agent skill for installing Clio behind a corporate firewall
 ├── scripts/             Setup, backup, preflight, image packaging, load and retrieval benchmarks
 ├── tests/               Backend test suite (pytest)
-├── docs/                Deployment, architecture, identity, on-prem, air-gap, research guides
+├── docs/                Deployment, architecture, identity, on-prem, air-gap, Library guides
 ├── Dockerfile           Multi-stage image: frontend build, dependencies, slim runtime
 └── docker-compose*.yml  Standard, on-prem and hardened deployments
 ```
@@ -912,10 +912,10 @@ clio/
 **Does it need a cloud AI provider?**
 No. Without any model or API key you can add sources, search them with
 **Find** (passages and spreadsheet rows, with links to the page or row), use
-most of the Research workspace (analysis, renaming, references, the citation
+most of the Library (analysis, renaming, references, the citation
 map), and connect AI clients over MCP, whose own model then does the
 answering. Indexing, search and reranking run locally; only written answers
-(**Ask**, **Reports**, research verdicts and reviews, suggested questions)
+(**Ask**, **Reports**, Library screening verdicts and reviews, suggested questions)
 and describing pictures need a model, and asking a question in Ask with none
 connected runs it in Find instead. For answers, use any provider you trust —
 Anthropic, OpenAI, Gemini, OpenRouter, Ollama Cloud — or a model you run
@@ -940,7 +940,7 @@ types teaches it a format of your own.
 **How do I know an answer is right?**
 Every answer cites numbered sources you can open at the passage and page, and
 says when the sources do not establish something. Find shows the passages
-themselves with no model in between. In the Research workspace a model's
+themselves with no model in between. In the Library a model's
 statement is kept only if its quote is found in the source.
 
 **Can several people use it?**

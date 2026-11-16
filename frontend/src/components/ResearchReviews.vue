@@ -199,7 +199,7 @@ const starting = ref(false)
 let timer = null
 
 const providerName = computed(() => props.providerId ? getProviderDisplayName(props.providerId) : '')
-const reviewedIds = computed(() => new Set(props.papers.filter(p => p.briefs > 0).map(p => p.document_id)))
+const reviewedIds = computed(() => new Set(props.papers.filter(p => p.review_count > 0).map(p => p.document_id)))
 const unreviewedCount = computed(() => props.papers.filter(p => !reviewedIds.value.has(p.document_id)).length)
 const targetIds = computed(() => {
   if (scope.value === 'selected') return props.selectedIds
@@ -221,11 +221,11 @@ async function load() {
   try {
     const [j, b] = await Promise.all([
       researchApi.jobs(props.collectionId),
-      researchApi.briefs(props.collectionId, { unread: unreadOnly.value }),
+      researchApi.reviews(props.collectionId, { unread: unreadOnly.value }),
     ])
     const wasActive = jobs.value.some(isActive)
     jobs.value = j.jobs || []
-    briefs.value = b.briefs || []
+    briefs.value = b.reviews || []
     unread.value = b.unread || 0
     if (wasActive && !jobs.value.some(isActive)) emit('changed')
   } catch (err) {
@@ -246,7 +246,7 @@ async function start() {
   starting.value = true
   try {
     const out = await researchApi.startJob(props.collectionId, {
-      kind: 'brief',
+      kind: 'review',
       depth: depth.value,
       document_ids: targetIds.value,
       question: question.value.trim() || null,
@@ -303,7 +303,7 @@ async function toggle(b) {
 
 async function markRead(b, read) {
   try {
-    await researchApi.markBrief(props.collectionId, b.id, read)
+    await researchApi.markReview(props.collectionId, b.id, read)
     b.read_at = read ? new Date().toISOString() : null
     unread.value = briefs.value.filter(x => !x.read_at).length
     emit('changed')
@@ -314,7 +314,7 @@ async function markRead(b, read) {
 
 async function remove(b) {
   try {
-    await researchApi.deleteBrief(props.collectionId, b.id)
+    await researchApi.deleteReview(props.collectionId, b.id)
     briefs.value = briefs.value.filter(x => x.id !== b.id)
     unread.value = briefs.value.filter(x => !x.read_at).length
     if (openId.value === b.id) openId.value = null
@@ -347,6 +347,8 @@ function tldr(b) {
   return b.sections?.find(s => s.key === 'tldr')?.items?.[0]?.point || ''
 }
 
+// Job rows carry the stored kind, which kept its pre-R9 name: brief = review,
+// assess = screening.
 function jobTitle(job) {
   const kind = { brief: job.params?.depth === 'thorough' ? 'Thorough reviews' : 'Brief reviews', assess: 'Screening', analyze: 'Analysis' }[job.kind] || job.kind
   return job.params?.question ? `${kind} · “${job.params.question}”` : kind

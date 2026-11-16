@@ -14,7 +14,7 @@ describe('Ribbon', () => {
   it('shows every visible item with the current place marked', async () => {
     const wrapper = mountRibbon()
     const labels = wrapper.findAll('[data-ribbon-item]').map(b => b.attributes('aria-label'))
-    expect(labels.slice(0, 4)).toEqual(['Ask', 'Find', 'Research', 'Reports'])
+    expect(labels.slice(0, 4)).toEqual(['Ask', 'Find', 'Library', 'Reports'])
     expect(wrapper.findAll('.ribbon-divider').length).toBeGreaterThanOrEqual(4)
     expect(wrapper.get('[data-ribbon-item="research"]').attributes('aria-current')).toBeUndefined()   // map open
     expect(wrapper.find('.has-label').exists()).toBe(false)
@@ -25,7 +25,7 @@ describe('Ribbon', () => {
 
   it('shows names beside the icons when asked', () => {
     const wrapper = mountRibbon({ layout: { ...defaultLayout(), labels: true }, researchView: 'library' })
-    expect(wrapper.get('[data-ribbon-item="research"]').text()).toBe('Research')
+    expect(wrapper.get('[data-ribbon-item="research"]').text()).toBe('Library')
     expect(wrapper.get('[data-ribbon-item="research"]').attributes('aria-current')).toBe('page')
     expect(wrapper.get('[data-ribbon-item="research"]').attributes('data-tip')).toBeUndefined()
     wrapper.unmount()

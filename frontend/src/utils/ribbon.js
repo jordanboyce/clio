@@ -10,13 +10,17 @@
 // actions — and the ribbon draws a quiet divider where the group changes, so
 // Ask and Find read as the primary pair rather than two icons among twelve.
 // `hidden` marks the ones off by default: each is reachable elsewhere (the
-// Research view's own tabs, the command palette), so the default ribbon
+// Library's own tabs, the command palette), so the default ribbon
 // stays short and anyone who wants them can switch them on.
+//
+// Ids are stored in saved layouts, so they never change: the Library item is
+// still `research` (its tab was called Research before R9) and the citation
+// map is still `graph`.
 export const RIBBON_ITEMS = [
   { id: 'chat', label: 'Ask', tab: 'chat', group: 'ask' },
   { id: 'search', label: 'Find', tab: 'search', group: 'ask' },
-  { id: 'research', label: 'Research', tab: 'research', view: 'library', group: 'work' },
-  { id: 'graph', label: 'Citation graph', tab: 'research', view: 'map', group: 'work', hidden: true },
+  { id: 'research', label: 'Library', tab: 'research', view: 'library', group: 'work' },
+  { id: 'graph', label: 'Citation map', tab: 'research', view: 'map', group: 'work', hidden: true },
   { id: 'reviews', label: 'Reviews', tab: 'research', view: 'reviews', group: 'work', hidden: true },
   { id: 'cite', label: 'Cite & check', tab: 'research', view: 'write', group: 'work', hidden: true },
   { id: 'generate', label: 'Reports', tab: 'generate', group: 'work' },
@@ -29,6 +33,18 @@ export const RIBBON_ITEMS = [
   { id: 'notes', label: 'Notes and tools', action: 'notes', group: 'actions', hidden: true },
   { id: 'palette', label: 'Command palette', action: 'palette', group: 'actions', hidden: true },
 ]
+
+// The app's tabs by their internal id. The Library tab's id is `research`
+// (saved as the last open tab, and in old links); `library` is its name
+// since R9 and is accepted wherever a tab is named, such as ?tab=library.
+export const TABS = ['chat', 'search', 'generate', 'research', 'expertise', 'mcp', 'admin', 'settings', 'collections']
+const TAB_ALIASES = { library: 'research' }
+
+/** The internal tab id for a name from a link, storage or a caller; null when unknown. */
+export function resolveTab(name) {
+  const id = TAB_ALIASES[name] || name
+  return TABS.includes(id) ? id : null
+}
 
 const STORAGE_KEY = 'clio_ribbon'
 const KNOWN = new Set(RIBBON_ITEMS.map(i => i.id))

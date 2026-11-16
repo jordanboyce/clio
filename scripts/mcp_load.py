@@ -3,7 +3,7 @@
 Opens N concurrent MCP sessions (streamable HTTP, the same transport Claude,
 ChatGPT, Hermes, Grok and the SDKs use), and for a fixed duration has every
 session fire tool calls back to back from a realistic mix: quick searches,
-document reads, research calls, table listings and health checks. Meanwhile a
+document reads, deep searches, table listings and health checks. Meanwhile a
 probe hits GET /health every 250 ms — its latency is the event loop's
 responsiveness, which is what every *other* client experiences while the
 tools run. Reports throughput, per-tool latency percentiles and errors.
@@ -99,10 +99,10 @@ async def session_worker(idx: int, args, stats: Stats, deadline: float, doc_ids:
                         tool, params = "get_document_context", {"document_id": doc_id, "max_chars": 4000}
                         if doc_cid:
                             params["collection_id"] = doc_cid
-                    elif roll < args.mix_search + args.mix_context + args.mix_research:
+                    elif roll < args.mix_search + args.mix_context + args.mix_deep:
                         q = rng.choice(args.queries)
-                        tool, params = "research_documents", {"query": q, "top_k": 6, "max_context_chars": 6000}
-                    elif roll < args.mix_search + args.mix_context + args.mix_research + args.mix_tables:
+                        tool, params = "deep_search", {"query": q, "top_k": 6, "max_context_chars": 6000}
+                    elif roll < args.mix_search + args.mix_context + args.mix_deep + args.mix_tables:
                         tool, params = "list_tables", {}
                     else:
                         tool, params = "health_check", {}
@@ -209,7 +209,7 @@ def main() -> int:
     parser.add_argument("--queries", default="", help="file with one query per line")
     parser.add_argument("--mix-search", type=float, default=0.45)
     parser.add_argument("--mix-context", type=float, default=0.25)
-    parser.add_argument("--mix-research", type=float, default=0.10)
+    parser.add_argument("--mix-deep", "--mix-research", dest="mix_deep", type=float, default=0.10)
     parser.add_argument("--mix-tables", type=float, default=0.10)
     args = parser.parse_args()
     if args.queries:

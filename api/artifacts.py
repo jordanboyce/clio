@@ -309,7 +309,7 @@ def delete_collection_outputs(collection_id: str, reviews: bool = False, reports
     research = research_library.research_store(indexer)
     if reviews and any(job["status"] in ("queued", "running") for job in research_jobs.list_jobs(research)):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                            detail="A research job is running. Stop it or wait for it, then delete the reviews.")
+                            detail="A Library job is running. Stop it or wait for it, then delete the reviews.")
 
     deleted = {"reviews": 0, "screenings": 0, "reports": 0, "reports_held": 0}
     if reviews:

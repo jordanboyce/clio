@@ -290,12 +290,13 @@ def test_research_collection_cap_and_invisible_collections(multi_env, monkeypatc
         mcp.research_documents_sync("EQ-17", collection_ids=["*"])
 
 
-def test_registered_tool_accepts_collection_ids(multi_env):
+@pytest.mark.parametrize("name", ["deep_search", "research_documents"])
+def test_registered_tool_accepts_collection_ids(multi_env, name):
     mcp, _ = multi_env
-    tool = next(t for t in asyncio.run(mcp._clio_mcp.list_tools()) if t.name == "research_documents")
+    tool = next(t for t in asyncio.run(mcp._clio_mcp.list_tools()) if t.name == name)
     assert "collection_ids" in tool.inputSchema["properties"]
     _, structured = asyncio.run(mcp._clio_mcp.call_tool(
-        "research_documents", {"query": "EQ-17", "collection_ids": ["ops", "hr"]}))
+        name, {"query": "EQ-17", "collection_ids": ["ops", "hr"]}))
     assert structured["collection_ids"] == ["ops", "hr"]
 
 
@@ -312,7 +313,7 @@ def test_prompts_are_registered_and_render_tool_workflows():
     scoped = asyncio.run(mcp._clio_mcp.get_prompt(
         "research_question", {"question": "When must EQ-17 gear be returned?", "collection": "ops"}))
     text = scoped.messages[0].content.text
-    assert "research_documents" in text and "get_document_context" in text
+    assert "deep_search" in text and "get_document_context" in text
     assert '"ops"' in text and "do not establish" in text
 
     unscoped = asyncio.run(mcp._clio_mcp.get_prompt("find_exact_reference", {"identifier": "EQ-17"}))

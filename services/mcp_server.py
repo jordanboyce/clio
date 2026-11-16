@@ -201,8 +201,9 @@ _SERVER_INSTRUCTIONS = (
     "code, CSV/XLSX tables) and answers only from them. Every tool is scoped to "
     "the collections this credential may see; authorization is enforced server-"
     "side and cannot be widened by arguments. Start with list_collections when "
-    "the question names a collection, project, or archive. Use research_documents "
-    "for multi-part questions (pass collection_ids to span several collections), "
+    "the question names a collection, project, or archive. Use deep_search "
+    "for multi-part questions (pass collection_ids to span several collections; "
+    "research_documents is its old name and still works for one release), "
     "search_collection for one quick lookup, find_in_documents for exact strings, "
     "and get_document_context to read the surrounding text before quoting. For "
     "counts, sums, filters, or rankings over CSV/XLSX data use list_tables and the "
@@ -221,7 +222,8 @@ if _ASK_AVAILABLE:
     _SERVER_INSTRUCTIONS += (
         " When you want a finished, cited answer rather than passages to read, call "
         "ask_documents: it runs this deployment's own model over the same retrieval and "
-        "returns the answer with numbered sources; depth=\"research\" for multi-part questions."
+        "returns the answer with numbered sources; depth=\"deep\" for multi-part questions "
+        "(depth=\"research\" is the old spelling and still works)."
     )
 
 _clio_mcp = FastMCP(
@@ -257,7 +259,7 @@ def _tool_response(response: dict[str, Any], tool_name: str) -> dict[str, Any]:
 _AUDIT_DOC_KEYS = ("filename", "source", "document_id", "id")
 
 # Most distinct sources named in one audit row; the rest are counted, not
-# listed, so a wide research call stays a readable row.
+# listed, so a wide deep search stays a readable row.
 _AUDIT_DOC_LIMIT = 25
 
 # Most collection ids named in one audit row for a multi-collection call.
@@ -1308,36 +1310,36 @@ def _research_gate_reset() -> None:
 
 
 def _acquire_research_slot() -> _threading.BoundedSemaphore | None:
-    """Block for a research slot; None when the gate is disabled.
+    """Block for a deep-search slot; None when the gate is disabled.
 
-    Concurrency, not rate, is what protects a large collection: a research
-    call is several searches, and parallel calls from one agent turn would
+    Concurrency, not rate, is what protects a large collection: a deep
+    search is several searches, and parallel calls from one agent turn would
     otherwise all slow down together. Queueing keeps them fast and orderly;
     a bounded wait keeps a stuck caller from pinning everyone.
     """
     global _research_gate, _research_gate_size
-    size = int(settings.research_max_concurrent or 0)
+    size = int(settings.deep_search_max_concurrent or 0)
     if size <= 0:
         return None
     with _research_gate_lock:
         if _research_gate is None or _research_gate_size != size:
             _research_gate, _research_gate_size = _threading.BoundedSemaphore(size), size
         gate = _research_gate
-    if not gate.acquire(timeout=float(settings.research_queue_timeout_seconds)):
+    if not gate.acquire(timeout=float(settings.deep_search_queue_timeout_seconds)):
         raise ValueError(
-            f"Research is busy: {size} research calls are already running and none finished "
-            f"within {settings.research_queue_timeout_seconds:g}s. Retry shortly, or use "
+            f"Deep search is busy: {size} deep searches or answers are already running and none finished "
+            f"within {settings.deep_search_queue_timeout_seconds:g}s. Retry shortly, or use "
             "search_collection for a single quick lookup.")
     return gate
 
 
-# Upper bound on collections one research call may span. Each collection
+# Upper bound on collections one deep search may span. Each collection
 # multiplies the retrieval branches (up to seven per collection), and the call
 # holds a single concurrency slot for its whole duration.
 _RESEARCH_MAX_COLLECTIONS = 8
 
 
-def research_documents_sync(
+def deep_search_sync(
     query: str,
     collection_id: str | None = None,
     subqueries: list[str] | None = None,
@@ -1347,7 +1349,7 @@ def research_documents_sync(
     filters: dict[str, Any] | None = None,
     collection_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Shared research pipeline used by MCP and the in-app agent (gated)."""
+    """Shared deep-search pipeline used by MCP and the in-app agent (gated)."""
     gate = _acquire_research_slot()
     try:
         return _research_documents_impl(query, collection_id, subqueries, top_k,
@@ -1358,9 +1360,20 @@ def research_documents_sync(
             gate.release()
 
 
+# The pre-R9 name of deep_search_sync, for code that imports it.
+research_documents_sync = deep_search_sync
+
+# R9 renamed the MCP tool research_documents to deep_search. The old name
+# stays registered for one release and says so in every response.
+DEEP_SEARCH_DEPRECATION = (
+    "research_documents is the old name of deep_search and will be removed in a "
+    "future release. Call deep_search with the same arguments."
+)
+
+
 def _resolve_research_targets(collection_id: str | None, collection_ids: list[str] | None) -> list[str]:
-    """The ordered, de-duplicated, authorised set of collections a research
-    call spans. Every id goes through `_resolve_collection_id`, so a name is
+    """The ordered, de-duplicated, authorised set of collections a deep
+    search spans. Every id goes through `_resolve_collection_id`, so a name is
     accepted in place of an id and an invisible collection answers exactly
     like a missing one. `["*"]` means every collection the caller may see."""
     if not collection_ids:
@@ -1371,7 +1384,7 @@ def _resolve_research_targets(collection_id: str | None, collection_ids: list[st
     if any(str(c).strip() == "*" for c in collection_ids):
         requested = [c["id"] for c in _visible_collections() if c.get("id")]
         if not requested:
-            raise ValueError("No collections available to research.")
+            raise ValueError("No collections available to search.")
     else:
         requested = [str(c).strip() for c in collection_ids if str(c).strip()]
     if collection_id and str(collection_id).strip() not in requested:
@@ -1383,7 +1396,7 @@ def _resolve_research_targets(collection_id: str | None, collection_ids: list[st
             targets.append(cid)
     if len(targets) > _RESEARCH_MAX_COLLECTIONS:
         raise ValueError(
-            f"research_documents spans at most {_RESEARCH_MAX_COLLECTIONS} collections per call "
+            f"deep_search spans at most {_RESEARCH_MAX_COLLECTIONS} collections per call "
             f"({len(targets)} requested). Narrow collection_ids, or call search_all_collections "
             "first to find which collections matter.")
     return targets
@@ -1404,7 +1417,7 @@ def _research_documents_impl(
     targets = _resolve_research_targets(collection_id, collection_ids)
     profile = get_request_mcp_profile()
     if not profile.get("include_sources", settings.mcp_include_sources):
-        raise ValueError("Research requires source excerpts. Enable include_sources or use search_collection for metadata-only results.")
+        raise ValueError("Deep search requires source excerpts. Enable include_sources or use search_collection for metadata-only results.")
     resolved_filters = _normalize_search_filters(filters)
     excerpt_limit = max(100, min(int(profile.get("max_source_length") or settings.mcp_max_source_length), 2000))
     stores = {cid: (indexer_manager.get_indexer(cid), collection_service.get_collection(cid)) for cid in targets}
@@ -1503,8 +1516,8 @@ def _research_documents_impl(
     return payload
 
 
-@_clio_mcp.tool(title="Research documents", annotations=_read_only("Research documents"))
-async def research_documents(
+@_clio_mcp.tool(title="Deep search", annotations=_read_only("Deep search"))
+async def deep_search(
     query: str,
     collection_id: str | None = None,
     subqueries: Annotated[list[str], Field(max_length=3)] | None = None,
@@ -1514,7 +1527,7 @@ async def research_documents(
     filters: dict[str, Any] | None = None,
     collection_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Research a multi-part question with bounded, cited evidence.
+    """Search a multi-part question in depth, with bounded, cited evidence.
 
     Supply up to three focused subqueries, such as rule, exception and date.
     Combines hybrid searches, a keyword search, and literal checks for quoted
@@ -1528,7 +1541,7 @@ async def research_documents(
 
     Scope: one collection by default (collection_id, or the server default).
     Pass collection_ids — up to 8 ids from list_collections, or ["*"] for every
-    collection you can see — to research across several at once; each result
+    collection you can see — to search several at once; each result
     then names its collection_id, and `collections` lists each one with its
     `corpus_version`. A collection whose index fails is reported in
     `failed_collections` rather than silently dropped. Prefer
@@ -1546,10 +1559,31 @@ async def research_documents(
     when a passage is from an older, replaced version, and `duplicates` when
     the same text appears in other files. Numeric questions should use the structured-table tools.
     """
-    return await asyncio.to_thread(research_documents_sync, query,
+    return await asyncio.to_thread(deep_search_sync, query,
         collection_id=collection_id, subqueries=subqueries, top_k=top_k,
         max_per_document=max_per_document, max_context_chars=max_context_chars,
         filters=filters, collection_ids=collection_ids)
+
+
+@_clio_mcp.tool(title="Research documents (old name of deep_search)",
+                annotations=_read_only("Research documents (old name of deep_search)"))
+async def research_documents(
+    query: str,
+    collection_id: str | None = None,
+    subqueries: Annotated[list[str], Field(max_length=3)] | None = None,
+    top_k: Annotated[int, Field(ge=1, le=20)] = 8,
+    max_per_document: Annotated[int, Field(ge=1, le=10)] = 2,
+    max_context_chars: Annotated[int, Field(ge=1000, le=40000)] = 12000,
+    filters: dict[str, Any] | None = None,
+    collection_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Deprecated: the old name of deep_search, kept for one release. Same
+    arguments and result, plus a `deprecation` note. Call deep_search instead."""
+    result = await asyncio.to_thread(deep_search_sync, query,
+        collection_id=collection_id, subqueries=subqueries, top_k=top_k,
+        max_per_document=max_per_document, max_context_chars=max_context_chars,
+        filters=filters, collection_ids=collection_ids)
+    return {**result, "deprecation": DEEP_SEARCH_DEPRECATION}
 
 
 def search_collection_sync(
@@ -3727,13 +3761,16 @@ def ask_documents_sync(
     if not provider_name:
         raise ValueError(
             "ask_documents needs a deployment-wide model (AI_PROVIDER, AI_MODEL, ...). "
-            "Use research_documents and write the answer in the client instead."
+            "Use deep_search and write the answer in the client instead."
         )
     normalized = (question or "").strip()
     if not normalized:
         raise ValueError("question must not be empty")
-    if depth not in ("quick", "research"):
-        raise ValueError("depth must be 'quick' or 'research'")
+    if depth not in ("quick", "deep", "research"):
+        raise ValueError("depth must be 'quick' or 'deep'")
+    # "research" is the pre-R9 spelling of "deep". The response echoes the
+    # spelling the caller sent, so an existing caller sees no change.
+    requested_depth = depth
 
     resolved_collection = _resolve_collection_id(collection_id)
     collection = collection_service.get_collection(resolved_collection)
@@ -3769,7 +3806,7 @@ def ask_documents_sync(
     base_url = re.sub(r"/mcp/?$", "", (settings.mcp_public_url or "").strip()).rstrip("/")
 
     # One answer is several provider round-trips plus retrieval: it takes a
-    # research slot so a burst of agents queues instead of stampeding.
+    # deep-search slot so a burst of agents queues instead of stampeding.
     gate = _acquire_research_slot()
     done: dict[str, Any] | None = None
     try:
@@ -3808,7 +3845,7 @@ def ask_documents_sync(
         "answer": done.get("_answer") or "",
         "sources": sources,
         "citation_note": "Bracketed [Source N] markers in the answer refer to the numbered sources.",
-        "depth": done.get("depth") or depth,
+        "depth": requested_depth,
         "cached": bool(done.get("cached")),
         "model": usage.get("model"),
         "usage": {"input_tokens": usage.get("input_tokens", 0), "output_tokens": usage.get("output_tokens", 0)},
@@ -3816,6 +3853,9 @@ def ask_documents_sync(
     }
     if ids:
         payload["document_ids"] = ids
+    if requested_depth == "research":
+        payload["deprecation"] = ('depth="research" is the old name of depth="deep" and will be '
+                                  'removed in a future release.')
     return _tool_response(payload, "ask_documents")
 
 
@@ -3824,7 +3864,7 @@ if _ASK_AVAILABLE:
     async def ask_documents(
         question: str,
         collection_id: str | None = None,
-        depth: Literal["quick", "research"] = "quick",
+        depth: Literal["quick", "deep", "research"] = "quick",
         top_k: Annotated[int, Field(ge=1, le=20)] = 8,
         document_ids: list[str] | None = None,
         use_cache: bool = True,
@@ -3839,14 +3879,15 @@ if _ASK_AVAILABLE:
         the finding, not as a reason to retry.
 
         depth: "quick" (default) answers in one model pass from the retrieved
-        passages — fastest, right for most questions. "research" runs the full
-        investigation loop (focused subqueries, exact-phrase checks, document
-        reads) for multi-part or comparative questions; slower and costlier.
+        passages — fastest, right for most questions. "deep" (deep search)
+        runs the full investigation loop (focused subqueries, exact-phrase
+        checks, document reads) for multi-part or comparative questions;
+        slower and costlier. "research" is the old name of "deep".
         top_k: passages retrieved for the answer (1–20). document_ids:
         restrict the answer to these documents. use_cache: reuse an answer
         already generated for the same question over the same sources.
 
-        Prefer research_documents / search_collection when you want to read
+        Prefer deep_search / search_collection when you want to read
         the evidence yourself or combine it with other sources. Numeric
         questions over CSV/XLSX data are answered from the full tables here;
         the table tools remain the way to run your own filters and sums.
@@ -4011,7 +4052,7 @@ async def search(query: str) -> dict[str, Any]:
     `url`, and a short `text` excerpt. Searches the server's default (or
     URL-pinned) collection; when none is configured, every collection the
     credential may see. Clio-aware hosts should prefer `search_collection`
-    and `research_documents`, which take filters, modes and collections.
+    and `deep_search`, which take filters, modes and collections.
     """
     return await asyncio.to_thread(search_sync, query)
 
@@ -4878,7 +4919,7 @@ def prompt_research_question(question: str, collection: str = "") -> str:
     return (
         f"Research this question using only the indexed documents: {question.strip()}\n\n"
         + _prompt_scope_line(collection) +
-        "Call research_documents with up to three focused subqueries (for example the "
+        "Call deep_search with up to three focused subqueries (for example the "
         "rule, its exceptions, and effective dates). Read the coverage field: treat "
         "weak_evidence and no_selected_evidence as gaps, rephrase those subqueries once, "
         "and do not repeat a search that already succeeded. Before quoting a passage, "
@@ -4972,7 +5013,7 @@ def prompt_try_clio() -> str:
             f"Audit the equipment register in the Clio collection \"{SAMPLE_COLLECTION_NAME}\" "
             f"(collection_id \"{cid}\") against the policy documents in the same collection. "
             "The records are fictional; this is a demonstration of working from sources.\n\n"
-            "1. Establish the rules from the documents, not from memory: call research_documents "
+            "1. Establish the rules from the documents, not from memory: call deep_search "
             "for the standard return period, the field-team exception and when it took effect, and "
             "how extensions work. Call get_document_context before relying on a passage, and note "
             "which document each rule comes from and which one is only an informal note.\n"
@@ -4991,7 +5032,7 @@ def prompt_try_clio() -> str:
         "2. Call get_collection_info on it with detail=\"counts\", and list_tables to see whether "
         "it holds any CSV/XLSX tables.\n"
         "3. Think of one question those sources should answer well, and answer it with "
-        "research_documents, citing the filename for every claim and saying what the sources "
+        "deep_search, citing the filename for every claim and saying what the sources "
         "do not establish. If there is a table, also answer one count or ranking question with "
         "the table tools.\n\n"
         "Finish with three questions I could ask you about these sources next."

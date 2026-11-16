@@ -94,9 +94,9 @@
         </details>
       </section>
 
-      <!-- Worth my time? -->
+      <!-- Screening: is this source worth reading for a question? -->
       <section class="space-y-2" data-testid="paper-assess">
-        <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/55">Worth my time?</h4>
+        <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/55">Screening</h4>
         <form class="flex gap-2" @submit.prevent="assess">
           <input
             v-model="questionDraft"
@@ -105,7 +105,7 @@
             aria-label="What are you looking for in this paper?"
           />
           <button class="btn btn-sm" :disabled="questionDraft.trim().length < 3 || busy.assess">
-            <span v-if="busy.assess" class="loading loading-spinner loading-xs" />Check
+            <span v-if="busy.assess" class="loading loading-spinner loading-xs" />Screen
           </button>
         </form>
         <p v-if="!providerId" class="text-xs text-base-content/50">
@@ -136,8 +136,8 @@
             </ul>
           </details>
         </div>
-        <ul v-else-if="paper.assessments?.length" class="space-y-1">
-          <li v-for="a in paper.assessments.slice(0, 3)" :key="a.id" class="text-xs flex items-center gap-2">
+        <ul v-else-if="paper.screenings?.length" class="space-y-1">
+          <li v-for="a in paper.screenings.slice(0, 3)" :key="a.id" class="text-xs flex items-center gap-2">
             <span class="badge badge-xs" :class="VERDICTS[a.verdict]?.tone">{{ VERDICTS[a.verdict]?.label }}</span>
             <button class="link link-hover truncate text-left" @click="showSaved(a)">{{ a.question }}</button>
           </li>
@@ -149,17 +149,17 @@
         <div class="flex items-center justify-between gap-2">
           <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/55">Review</h4>
           <div v-if="paper.can_write && providerId" class="join">
-            <button class="btn btn-xs join-item" :disabled="busy.brief" @click="prepare('brief')">Prepare brief</button>
+            <button class="btn btn-xs join-item" :disabled="busy.brief" @click="prepare('brief')">Brief</button>
             <button class="btn btn-xs join-item" :disabled="busy.brief" @click="prepare('thorough')">Thorough</button>
           </div>
         </div>
         <p v-if="queuedReview" class="text-xs text-base-content/60">
           Being prepared in the background — it will appear under Reviews when it is ready.
         </p>
-        <template v-if="paper.brief_list?.length">
-          <ResearchBrief :brief="paper.brief_list[0]" :collection-id="collectionId" />
-          <p v-if="paper.brief_list.length > 1" class="text-xs text-base-content/50">
-            {{ paper.brief_list.length - 1 }} earlier review{{ paper.brief_list.length > 2 ? 's' : '' }} under Reviews.
+        <template v-if="paper.reviews?.length">
+          <ResearchBrief :brief="paper.reviews[0]" :collection-id="collectionId" />
+          <p v-if="paper.reviews.length > 1" class="text-xs text-base-content/50">
+            {{ paper.reviews.length - 1 }} earlier review{{ paper.reviews.length > 2 ? 's' : '' }} under Reviews.
           </p>
         </template>
         <p v-else-if="!queuedReview" class="text-xs text-base-content/50">
@@ -414,7 +414,7 @@ async function restore() {
 async function assess() {
   busy.assess = true
   try {
-    assessment.value = await researchApi.assess(props.collectionId, props.documentId, questionDraft.value.trim(), props.providerId)
+    assessment.value = await researchApi.screen(props.collectionId, props.documentId, questionDraft.value.trim(), props.providerId)
     if (assessment.value.saved_id) emit('changed')
   } catch (err) {
     ui.toastError(err, 'The check failed')
@@ -432,7 +432,7 @@ async function prepare(depth) {
   busy.brief = true
   try {
     const out = await researchApi.startJob(props.collectionId, {
-      kind: 'brief', depth, document_ids: [props.documentId],
+      kind: 'review', depth, document_ids: [props.documentId],
       question: questionDraft.value.trim() || null, skip_reviewed: false,
     }, props.providerId)
     queuedReview.value = Boolean(out.job)

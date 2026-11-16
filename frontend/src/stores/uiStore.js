@@ -23,8 +23,8 @@ export const useUiStore = defineStore('ui', () => {
     sourcesVersion.value++
   }
 
-  // Which Research view is showing (library | map | reviews); the ribbon can
-  // open Research straight onto its citation graph or review queue.
+  // Which Library view is showing (library | map | reviews | write); the
+  // ribbon can open the Library straight onto its citation map or reviews.
   const researchView = ref('library')
 
   let nextId = 1

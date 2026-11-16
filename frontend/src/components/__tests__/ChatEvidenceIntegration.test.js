@@ -8,7 +8,7 @@ import { useSelectionStore } from '../../stores/selectionStore'
 import { useStatsStore } from '../../stores/statsStore'
 import { useProviderStore } from '../../stores/providerStore'
 
-describe('Evidence in the research workspace', () => {
+describe('Evidence in Ask', () => {
   beforeEach(() => {
     localStorage.clear()
     sessionStorage.clear()
@@ -52,7 +52,7 @@ describe('Evidence in the research workspace', () => {
     ], null, [{ tool: 'search_documents', result: { results: [], total_results: 0 } }])
     const wrapper = mountChat()
     await flushPromises()
-    const activity = wrapper.findAll('details').find(details => details.text().includes('Research activity'))
+    const activity = wrapper.findAll('details').find(details => details.text().includes('Search activity'))
     expect(activity.element.open).toBe(false)
     await wrapper.get('button[data-source-number="1"]').trigger('click')
     expect(wrapper.findAll('details').find(details => details.text().includes('Review evidence')).element.open).toBe(true)
@@ -61,7 +61,7 @@ describe('Evidence in the research workspace', () => {
     wrapper.unmount()
   })
 
-  it('shows research coverage and keeps partial search failures visible', async () => {
+  it('shows deep search coverage and keeps partial search failures visible', async () => {
     useChatStore().addAssistantMessage('default', { role: 'assistant', content: 'Evidence is incomplete.' }, [], null, [
       { tool: 'research_documents', args: { query: 'Return policy' }, result: {
         total_results: 0, results: [], partial_failure: true,
@@ -70,7 +70,7 @@ describe('Evidence in the research workspace', () => {
     ])
     const wrapper = mountChat()
     await flushPromises()
-    const activity = wrapper.findAll('details').find(details => details.text().includes('Research activity'))
+    const activity = wrapper.findAll('details').find(details => details.text().includes('Search activity'))
     expect(activity.element.open).toBe(true)
     expect(activity.text()).toContain('Some steps failed')
     expect(activity.text()).toContain('Exceptions · Search failed')

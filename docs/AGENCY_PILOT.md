@@ -23,8 +23,8 @@ for decisions and for checking dates, exceptions, and source authority.
 2. Ask: **Under EQ-17, when must equipment be returned?** Show the answer and
    select its `[Source N]` references. Read the actual passage and open the original.
 3. Ask: **Does the rule differ for field teams after July 1, 2026?** Explain the
-   effective amendment and demonstrate follow-up document searches in Research
-   activity. The answer should distinguish the general rule from the exception.
+   effective amendment and demonstrate follow-up document searches in Search
+   activity (choose **Deep search** under the question). The answer should distinguish the general rule from the exception.
 4. Ask: **Who approved the amendment?** The provided documents do not say. The
    assistant should acknowledge missing evidence rather than invent a name.
 5. Select only the original policy and ask about field-team exceptions again.
@@ -41,7 +41,7 @@ for decisions and for checking dates, exceptions, and source authority.
 - One-click citation review with passages, locations, labels, and original links.
 - Source numbering spans initial retrieval and follow-up agent searches/context
   fetches, including across collections. Search ranks are not citation numbers.
-- Completed research activity collapses; failed steps stay visible.
+- Completed search activity collapses; failed steps stay visible.
 - Source scope is always visible, with a direct return to a selected-source scope.
 - New chat preferences start with hybrid retrieval; existing preferences persist.
 - Streaming chat honors reranking, includes its token usage, and keeps earlier

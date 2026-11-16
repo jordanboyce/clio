@@ -1020,7 +1020,7 @@
               <p class="text-xs text-base-content/55 mt-1 leading-relaxed max-w-[52ch]">
                 Permanently deletes every source and index in
                 <span class="font-medium text-base-content/75">{{ collectionStore.currentCollection?.name || 'Default' }}</span>.
-                The collection itself remains. This cannot be undone. Research reviews and saved reports are kept: adding the same file back brings its reviews back. To remove them too, use the option below.
+                The collection itself remains. This cannot be undone. Library reviews and saved reports are kept: adding the same file back brings its reviews back. To remove them too, use the option below.
               </p>
               <div v-if="clearJob" class="mt-2 max-w-[52ch]" role="status" data-testid="clear-progress">
                 <progress
@@ -1124,7 +1124,7 @@
         </p>
         <label class="flex items-center gap-2 py-1 text-sm cursor-pointer">
           <input v-model="deleteReviews" type="checkbox" class="checkbox checkbox-sm" data-testid="outputs-reviews" />
-          {{ countOf(outputs?.reviews || 0, 'research review', 'research reviews') }} and {{ countOf(outputs?.screenings || 0, 'screening verdict', 'screening verdicts') }}
+          {{ countOf(outputs?.reviews || 0, 'Library review', 'Library reviews') }} and {{ countOf(outputs?.screenings || 0, 'screening verdict', 'screening verdicts') }}
         </label>
         <label class="flex items-center gap-2 py-1 text-sm cursor-pointer">
           <input v-model="deleteReports" type="checkbox" class="checkbox checkbox-sm" data-testid="outputs-reports" />
@@ -2195,7 +2195,7 @@ const clearAllData = async () => {
   }
 }
 
-// Generated work: reviews and verdicts (research), saved reports (artifacts).
+// Generated work: reviews and verdicts (Library), saved reports (artifacts).
 const outputs = ref(null)
 const outputsModal = ref(null)
 const deleteReviews = ref(true)

@@ -1,6 +1,6 @@
 import { ref, watch } from 'vue'
 
-// Citation helpers shared by Research, the source panel and Ask. The server
+// Citation helpers shared by the Library, the source panel and Ask. The server
 // builds every citation (one implementation of the style rules, from the
 // source's own record); this file only chooses the style, copies, downloads
 // and splices citations into an answer.

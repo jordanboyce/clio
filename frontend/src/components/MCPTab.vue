@@ -900,7 +900,7 @@ const downloadName = (meta) => {
 const catalog = ref(null)
 const catalogError = ref('')
 const CATALOG_GROUPS = [
-  { title: 'Search and research', match: /^(search|fetch|search_|research_|find_)/ },
+  { title: 'Search', match: /^(search|fetch|search_|deep_search|research_|find_)/ },
   { title: 'Read documents', match: /^(get_document|list_recent|get_collection|list_collections|health)/ },
   { title: 'Tables', match: /table/ },
   { title: 'Write, index and jobs', match: /^(write_|reindex|update_|list_index|get_index)/ },

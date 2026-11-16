@@ -19,7 +19,7 @@ Every change of marking is in the audit trail (`collection.classification`, `doc
 
 | Service | Outside when |
 |---|---|
-| AI model (chat, reports, research, search with AI, starter questions) | Any hosted provider. Ollama or an OpenAI-compatible server whose address is not inside |
+| AI model (chat, reports, Library screening and reviews, search with AI, starter questions) | Any hosted provider. Ollama or an OpenAI-compatible server whose address is not inside |
 | Embedding provider | Any hosted provider. Ollama or an OpenAI-compatible server whose address is not inside |
 | Vision OCR, figure descriptions, the model's content review | The model they use is outside |
 | MCP clients and registered apps on `/api/v1` | Always. Where an agent sends what it reads is not this server's to know |
@@ -37,7 +37,7 @@ A marked source is not picked out and the rest served. A collection reaches a mo
 
 What that means in practice:
 
-- Chat, reports and research with an outside model are refused with a 403 that says why and what would work. Nothing is read first and no provider is built. Asking across all collections leaves the closed ones out.
+- Chat, reports and Library screening and reviews with an outside model are refused with a 403 that says why and what would work. Nothing is read first and no provider is built. Asking across all collections leaves the closed ones out.
 - Search with AI rerank or synthesis still answers, without the AI steps.
 - MCP clients and registered apps do not see the collection at all, whatever their token or allowlist says. It answers as not found.
 - With an outside embedding provider, the collection is indexed and searched by keyword only.

@@ -30,7 +30,7 @@ _MAX_STRUCTURED_ROWS_PER_TOOL = 200
 _MAX_SCHEMA_PROMPT_COLS = 40
 
 SUPPORTED_TOOLS = {
-    "research_documents",
+    "deep_search",
     "find_in_documents",
     "query_table",
     "search_documents",
@@ -119,8 +119,8 @@ def build_tool_use_instructions() -> str:
         "tools in parallel. After tool results come back you'll get another "
         "turn to either call more tools or produce the final answer.\n\n"
         "DOCUMENT RETRIEVAL:\n"
-        '  - research_documents — multi-query research with bounded evidence and coverage gaps. Use for comparisons, exceptions and multi-part questions.\n'
-        '    <tool_call>{"tool":"research_documents","query":"What does EQ-17 require?","subqueries":["EQ-17 exceptions","EQ-17 effective dates"],"top_k":8}</tool_call>\n'
+        '  - deep_search — multi-query search with bounded evidence and coverage gaps. Use for comparisons, exceptions and multi-part questions. (research_documents is its old name and still works.)\n'
+        '    <tool_call>{"tool":"deep_search","query":"What does EQ-17 require?","subqueries":["EQ-17 exceptions","EQ-17 effective dates"],"top_k":8}</tool_call>\n'
         '  - find_in_documents — literal phrase or identifier lookup (not regex).\n'
         '    <tool_call>{"tool":"find_in_documents","pattern":"EQ-17","max_results":10}</tool_call>\n'
         '  - search_documents — search of the collection (meaning and exact '
@@ -208,6 +208,10 @@ def parse_tool_calls(response_text: str) -> List[Dict[str, Any]]:
 
 
 _TOOL_ALIASES = {
+    # research_documents is the pre-R9 name of deep_search, kept for one
+    # release. Not advertised in agent_tools, so a turn never spends tokens on
+    # both names; a model that still emits the old one is served.
+    "research_documents": "deep_search",
     "query_structured_table": "query_table",
     "search": "search_documents",
     "search_collection": "search_documents",
@@ -345,7 +349,7 @@ def execute_tool_calls(
         args_for_log: Dict[str, Any] = {}
 
         try:
-            if tool == "research_documents":
+            if tool == "deep_search":
                 filters = call.get("filters")
                 if selection is not None:
                     filters = selection.merge_search_filters(filters)
@@ -355,7 +359,7 @@ def execute_tool_calls(
                     "max_per_document": call.get("max_per_document", 2),
                     "max_context_chars": call.get("max_context_chars", 12000), "filters": filters,
                 }
-                data = mcp.research_documents_sync(**args_for_log)
+                data = mcp.deep_search_sync(**args_for_log)
 
             elif tool == "find_in_documents":
                 filters = call.get("filters")

@@ -26,7 +26,7 @@ async function mountTab() {
     if (url.startsWith('/api/research/papers')) {
       return { data: { papers, stats: {}, capabilities: {}, can_write: true, naming: { default_pattern: '{title}', fields: ['title'] } } }
     }
-    if (url.startsWith('/api/research/assessments')) return { data: { items: [], questions: [] } }
+    if (url.startsWith('/api/research/screening')) return { data: { items: [], questions: [] } }
     if (url.startsWith('/api/research/jobs')) return { data: { jobs: Object.values(serverJobs) } }
     return { data: {} }
   })
@@ -75,7 +75,7 @@ afterEach(() => {
 describe('Analyze and Screen at the same time', () => {
   it('clears both spinners: starting Screen does not orphan the Analyze poll', async () => {
     const w = await mountTab()
-    await w.get('input[aria-label="Research question to screen sources against"]').setValue('root depth?')
+    await w.get('input[aria-label="Question to screen sources against"]').setValue('root depth?')
 
     await analyzeButton(w).trigger('click')
     await flushPromises()
@@ -104,7 +104,7 @@ describe('Analyze and Screen at the same time', () => {
 describe('a finish that is not clean says so', () => {
   async function screenUntil(finalJob) {
     const w = await mountTab()
-    await w.get('input[aria-label="Research question to screen sources against"]').setValue('root depth?')
+    await w.get('input[aria-label="Question to screen sources against"]').setValue('root depth?')
     await screenButton(w).trigger('click')
     await flushPromises()
     serverJobs.s1 = finalJob

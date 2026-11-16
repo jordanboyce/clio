@@ -46,7 +46,7 @@ class ChatEvidence:
             collection_id = payload.get("collection_id") or (item.get("args") or {}).get("collection_id")
             if not collection_id:
                 continue
-            if item.get("tool") in ("search_documents", "research_documents"):
+            if item.get("tool") in ("search_documents", "deep_search", "research_documents"):
                 for passage in payload.get("results") or []:
                     self._register(passage, collection_id, passage, "excerpt")
             elif item.get("tool") == "find_in_documents":

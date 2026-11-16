@@ -30,7 +30,7 @@ import { AlertTriangle, RefreshCw, RotateCcw } from 'lucide-vue-next'
 
 defineProps({
   failed: { type: Boolean, default: false },
-  // What is loading, as the ribbon names it ("Research"); empty for overlays.
+  // What is loading, as the ribbon names it ("Library"); empty for overlays.
   name: { type: String, default: '' },
 })
 defineEmits(['retry'])

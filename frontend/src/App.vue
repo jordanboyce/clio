@@ -174,7 +174,7 @@
       ></div>
 
       <!-- Left sidebar: sources (resizable). Shown wherever the source
-           selection matters: Ask, Find, Research and Reports. -->
+           selection matters: Ask, Find, Library and Reports. -->
       <aside
         v-show="hasSourcesPanel"
         class="bg-base-100 overflow-hidden flex flex-col"
@@ -1390,7 +1390,7 @@ import StudioSidebar from './components/StudioSidebar.vue'
 import WorkspaceNav from './components/WorkspaceNav.vue'
 import AppRibbon from './components/AppRibbon.vue'
 import RibbonCustomizeDialog from './components/RibbonCustomizeDialog.vue'
-import { ribbonItems, visibleItems } from './utils/ribbon.js'
+import { resolveTab, ribbonItems, visibleItems } from './utils/ribbon.js'
 import { useLayoutStore } from './stores/layoutStore'
 import ReviewBell from './components/ReviewBell.vue'
 import FeatureStatus from './components/FeatureStatus.vue'
@@ -1407,7 +1407,7 @@ import ChatTab from './components/ChatTab.vue'
 // (a dropped connection, or a deploy under an open tab).
 const SearchTab = lazyView(() => import('./components/SearchTab.vue'), { name: 'Find' })
 const ArtifactsTab = lazyView(() => import('./components/ArtifactsTab.vue'), { name: 'Reports' })
-const ResearchTab = lazyView(() => import('./components/ResearchTab.vue'), { name: 'Research' })
+const ResearchTab = lazyView(() => import('./components/ResearchTab.vue'), { name: 'Library' })
 const SettingsTab = lazyView(() => import('./components/SettingsTab.vue'), { name: 'Settings' })
 const MCPTab = lazyView(() => import('./components/MCPTab.vue'), { name: 'Connect' })
 const ShareModal = lazyView(() => import('./components/ShareModal.vue'))
@@ -1486,9 +1486,8 @@ const setGlobalProvider = (pid) => {
 }
 
 // Restore the last active tab so a refresh doesn't dump the user back in Chat
-const VALID_TABS = ['chat', 'search', 'generate', 'research', 'expertise', 'mcp', 'admin', 'settings', 'collections']
 const savedTab = localStorage.getItem('active_tab')
-const activeTab = ref(VALID_TABS.includes(savedTab) ? savedTab : 'chat')
+const activeTab = ref(resolveTab(savedTab) || 'chat')
 watch(activeTab, (tab) => localStorage.setItem('active_tab', tab))
 
 // Resizable sidebar
@@ -1648,7 +1647,7 @@ function storageTitle(collection) {
 const isCollectionsView = computed(() => activeTab.value === 'collections')
 const isWorkspaceView = computed(() => ['chat', 'search'].includes(activeTab.value))
 // The Sources panel follows the selection: wherever selected sources scope
-// the work (Ask, Find, Research, Reports), the panel is there to change it.
+// the work (Ask, Find, Library, Reports), the panel is there to change it.
 const SOURCES_TABS = ['chat', 'search', 'research', 'generate']
 const hasSourcesPanel = computed(() => SOURCES_TABS.includes(activeTab.value))
 const navigateMobile = (tab) => {
@@ -2026,7 +2025,7 @@ const onChatTabToggled = (enabled) => {
 }
 
 const switchTab = (tabName) => {
-  activeTab.value = tabName
+  activeTab.value = resolveTab(tabName) || tabName
 }
 
 // The footer's feature panel: land on the settings that change what it shows.
@@ -2131,8 +2130,8 @@ const paletteCommands = computed(() => {
   if (chatTabEnabled.value) add('Go to', 'Ask', MessageSquare, () => switchTab('chat'), { keys: ['G', 'A'], keywords: 'chat question' })
   add('Go to', 'Find', Search, () => switchTab('search'), { keys: ['G', 'F'], keywords: 'search passages' })
   add('Go to', 'Connect', Plug, () => switchTab('mcp'), { keys: ['G', 'C'], keywords: 'mcp token claude chatgpt client' })
-  add('Go to', 'Research', LibraryBig, () => { ui.researchView = 'library'; switchTab('research') }, { keys: ['G', 'R'], keywords: 'research papers books citations references abstracts reviews' })
-  add('Go to', 'Citation graph', Network, () => { ui.researchView = 'map'; switchTab('research') }, { keywords: 'graph map citations network obsidian' })
+  add('Go to', 'Library', LibraryBig, () => { ui.researchView = 'library'; switchTab('research') }, { keys: ['G', 'L'], keywords: 'research papers books citations references abstracts reviews screening' })
+  add('Go to', 'Citation map', Network, () => { ui.researchView = 'map'; switchTab('research') }, { keywords: 'graph map citations network obsidian' })
   add('Go to', 'Cite & check a draft', Quote, () => { ui.researchView = 'write'; switchTab('research') }, { keywords: 'citation bibliography references bibtex ris zotero endnote apa mla chicago ieee harvard quote verify draft' })
   if (!isCompact.value) add('Layout', 'Customize the ribbon', SlidersHorizontal, () => { showRibbonCustomize.value = true }, { keywords: 'sidebar icons toolbar hide reorder' })
   add('Go to', 'Reports', FileText, () => switchTab('generate'), { keywords: 'generate briefing summary' })
@@ -2204,7 +2203,7 @@ const onGlobalKeydown = (e) => {
   if (key === 'g' || key === 'G') { goPrefixUntil = now + 1200; return }
   if (goPrefixUntil > now) {
     goPrefixUntil = 0
-    const target = { a: chatTabEnabled.value ? 'chat' : null, f: 'search', c: 'mcp', r: 'research', p: 'research', o: 'collections', s: 'settings' }[key.toLowerCase()]
+    const target = { a: chatTabEnabled.value ? 'chat' : null, f: 'search', c: 'mcp', l: 'research', r: 'research', p: 'research', o: 'collections', s: 'settings' }[key.toLowerCase()]
     if (target) { e.preventDefault(); switchTab(target) }
   }
 }
@@ -2459,8 +2458,9 @@ onMounted(async () => {
     window.history.replaceState({}, '', window.location.pathname)
   }
   // ?tab=admin deep link (report-notification emails point here).
-  const wantedTab = params.get('tab')
-  if (wantedTab && VALID_TABS.includes(wantedTab)) {
+  // ?tab=library opens the Library, and so does ?tab=research, its old name.
+  const wantedTab = resolveTab(params.get('tab'))
+  if (wantedTab) {
     activeTab.value = wantedTab
     window.history.replaceState({}, '', window.location.pathname)
   }

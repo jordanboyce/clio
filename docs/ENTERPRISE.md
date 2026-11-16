@@ -288,7 +288,7 @@ and have your proxy:
 - terminate TLS, and forward to Clio on a network nothing else can reach;
 - send `X-Forwarded-For` and `X-Forwarded-Proto`, and **strip** any client copy of
   `X-Forwarded-User`;
-- leave response buffering off, and allow read timeouts of 15 minutes, because research
+- leave response buffering off, and allow read timeouts of 15 minutes, because deep-search
   answers can take minutes between bytes;
 - allow request bodies up to your largest upload.
 

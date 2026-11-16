@@ -1,4 +1,6 @@
-"""Research workspace endpoints: the paper library over a collection.
+"""Library endpoints (the Library tab, called Research before R9): the paper
+library over a collection. The URL prefix stays /api/research; see
+docs/RESEARCH.md, "API".
 
 Business logic lives in services/research; this module resolves access,
 builds the model provider from the request (exactly as /api/chat does) and
@@ -14,10 +16,10 @@ import asyncio
 import logging
 import re
 import time
-from typing import Dict, List, Literal, Optional
+from typing import Annotated, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Response, status
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 from api.deps import get_indexer, require_collection_access
 from middleware.user_context import get_request_user
@@ -75,14 +77,22 @@ class AssessRequest(BaseModel):
     provider: Optional[str] = Field(None, description="AI provider; omit for the model-free evidence view")
 
 
+# Job kinds as the API names them since R9, mapped to the kind stored on the
+# job row (and returned in it). The stored names are the pre-R9 ones and are
+# still accepted.
+_JOB_KINDS = {"screen": "assess", "review": "brief", "assess": "assess", "brief": "brief"}
+
+
 class JobRequest(BaseModel):
-    kind: Literal["assess", "brief"] = Field(..., description="assess | brief")
+    kind: Annotated[Literal["screen", "review", "assess", "brief"], AfterValidator(_JOB_KINDS.get)] = Field(
+        ..., description="screen | review (\"assess\" and \"brief\" are the old names, still accepted). "
+                         "Job rows report the stored kind: assess or brief.")
     document_ids: Optional[List[str]] = Field(None, description="Papers to cover; omit for all")
     question: Optional[str] = Field(None, max_length=1000)
     depth: Literal["brief", "thorough"] = Field("brief", description="brief | thorough (brief jobs)")
     provider: str = Field(..., description="AI provider the job runs on")
     not_before: Optional[str] = Field(None, description="ISO time to start at (e.g. tonight)")
-    skip_reviewed: bool = Field(True, description="Brief jobs: skip papers that already have a review at this depth")
+    skip_reviewed: bool = Field(True, description="Review jobs: skip papers that already have a review at this depth")
 
 
 class BriefReadRequest(BaseModel):
@@ -231,6 +241,9 @@ def _paper_summary(doc: dict, paper: Optional[dict], counts: dict) -> dict:
         "references": counts.get("references", {}).get(did, 0),
         "links": counts.get("links", {}).get(did, 0),
         "cited_by": counts.get("cited_by", {}).get(did, 0),
+        "review_count": counts.get("briefs", {}).get(did, 0),
+        "unread_reviews": counts.get("unread", {}).get(did, 0),
+        # Pre-R9 names of the two counts above, kept for one release.
         "briefs": counts.get("briefs", {}).get(did, 0),
         "unread_briefs": counts.get("unread", {}).get(did, 0),
     }
@@ -272,7 +285,8 @@ def list_papers(collection_id: str = "default") -> dict:
             "analyzed": sum(1 for p in items if p["analyzed"]),
             "renameable": sum(1 for p in items if p["suggested_filename"]
                               and p["suggested_filename"] != p["filename"]),
-            "unread_briefs": sum(p["unread_briefs"] for p in items),
+            "unread_reviews": sum(p["unread_reviews"] for p in items),
+            "unread_briefs": sum(p["unread_reviews"] for p in items),  # pre-R9 name
         },
         "capabilities": _capabilities(),
         "can_write": _can_write(collection_id),
@@ -299,8 +313,11 @@ def get_paper(document_id: str, collection_id: str = "default") -> dict:
         for r in store.list_references(kind="reference")
         if r.get("matched_document_id") == document_id and r["document_id"] in names
     ]
-    out["assessments"] = store.list_assessments(document_id=document_id, limit=10)
-    out["brief_list"] = store.list_briefs(document_id=document_id, limit=10)
+    out["screenings"] = store.list_assessments(document_id=document_id, limit=10)
+    out["reviews"] = store.list_briefs(document_id=document_id, limit=10)
+    # Pre-R9 names of the two lists above, kept for one release.
+    out["assessments"] = out["screenings"]
+    out["brief_list"] = out["reviews"]
     out["capabilities"] = _capabilities()
     out["can_write"] = _can_write(collection_id)
     return out
@@ -552,13 +569,13 @@ class GraphRequest(BaseModel):
     min_citations: int = Field(2, ge=1, le=20)
 
 
-@router.get("/api/research/graph", tags=["research"], summary="Citation graph of the collection's sources")
+@router.get("/api/research/graph", tags=["research"], summary="Citation map of the collection's sources")
 def citation_graph(collection_id: str = "default", include_external: bool = True, min_citations: int = 2) -> dict:
     return citation_graph_for(GraphRequest(include_external=include_external,
                                            min_citations=max(1, min(int(min_citations), 20))), collection_id)
 
 
-@router.post("/api/research/graph", tags=["research"], summary="Citation graph of selected sources")
+@router.post("/api/research/graph", tags=["research"], summary="Citation map of selected sources")
 def citation_graph_for(body: GraphRequest, collection_id: str = "default") -> dict:
     """With ``document_ids`` the map holds only those sources, the citations
     among them, and the works several of them cite."""
@@ -616,10 +633,16 @@ def network_analysis_for(body: NetworkRequest, collection_id: str = "default") -
     return network.cached(key, compute)
 
 
-# ── assessment ──────────────────────────────────────────────────────────
+# ── screening ───────────────────────────────────────────────────────────
+# R9 renamed "assess" to "screen" and "briefs" to "reviews" in the API too.
+# The old paths and job kinds are served for one release; the database keeps
+# its names (research_assessments, research_briefs, job kinds "assess" and
+# "brief"), and so do the job rows the API returns.
 
-@router.post("/api/research/papers/{document_id}/assess", tags=["research"],
-             summary="Is this paper worth reading for my question?")
+@router.post("/api/research/papers/{document_id}/screen", tags=["research"],
+             summary="Screening: is this paper worth reading for my question?")
+@router.post("/api/research/papers/{document_id}/assess", tags=["research"], deprecated=True,
+             summary="Old name of /screen, kept for one release")
 def assess_paper(
     document_id: str,
     body: AssessRequest,
@@ -652,7 +675,10 @@ def assess_paper(
     return {**result, "saved_id": saved["id"] if saved else None, "question": body.question}
 
 
-@router.get("/api/research/assessments", tags=["research"], summary="A reading list: saved verdicts for a question")
+@router.get("/api/research/screening", tags=["research"],
+            summary="A reading list: saved screening verdicts for a question")
+@router.get("/api/research/assessments", tags=["research"], deprecated=True,
+            summary="Old name of /screening, kept for one release")
 def reading_list(question: Optional[str] = None, collection_id: str = "default") -> dict:
     indexer = _indexer(collection_id)
     store = library.research_store(indexer)
@@ -676,7 +702,7 @@ def reading_list(question: Optional[str] = None, collection_id: str = "default")
 # ── background jobs ─────────────────────────────────────────────────────
 
 @router.post("/api/research/jobs", tags=["research"], status_code=status.HTTP_202_ACCEPTED,
-             summary="Assess or review many papers in the background (e.g. overnight)")
+             summary="Screen or review many papers in the background (e.g. overnight)")
 def start_research_job(
     body: JobRequest,
     collection_id: str = "default",
@@ -685,7 +711,7 @@ def start_research_job(
 ) -> dict:
     # kind and depth are Literals on JobRequest (422 on anything else).
     if body.kind == "assess" and not (body.question or "").strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="An assessment job needs a question")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A screening job needs a question")
     indexer = _indexer(collection_id)
     _require_write(collection_id)
     user = get_request_user()
@@ -737,13 +763,13 @@ def start_research_job(
     return {"job": job}
 
 
-@router.get("/api/research/jobs", tags=["research"], summary="Recent research jobs")
+@router.get("/api/research/jobs", tags=["research"], summary="Recent Library jobs")
 def list_research_jobs(collection_id: str = "default") -> dict:
     indexer = _indexer(collection_id)
     return {"jobs": jobs_service.list_jobs(library.research_store(indexer))}
 
 
-@router.get("/api/research/jobs/{job_id}", tags=["research"], summary="One research job")
+@router.get("/api/research/jobs/{job_id}", tags=["research"], summary="One Library job")
 def get_research_job(job_id: str, collection_id: str = "default") -> dict:
     indexer = _indexer(collection_id)
     store = library.research_store(indexer)
@@ -754,7 +780,7 @@ def get_research_job(job_id: str, collection_id: str = "default") -> dict:
     return job
 
 
-@router.post("/api/research/jobs/{job_id}/cancel", tags=["research"], summary="Stop a research job")
+@router.post("/api/research/jobs/{job_id}/cancel", tags=["research"], summary="Stop a Library job")
 def cancel_research_job(job_id: str, collection_id: str = "default") -> dict:
     indexer = _indexer(collection_id)
     _require_write(collection_id)
@@ -765,7 +791,7 @@ def cancel_research_job(job_id: str, collection_id: str = "default") -> dict:
 
 
 @router.delete("/api/research/jobs", tags=["research"],
-               summary="Clear finished research jobs from the list (their reviews and verdicts stay)")
+               summary="Clear finished Library jobs from the list (their reviews and verdicts stay)")
 def clear_research_jobs(collection_id: str = "default") -> dict:
     indexer = _indexer(collection_id)
     _require_write(collection_id)
@@ -773,7 +799,7 @@ def clear_research_jobs(collection_id: str = "default") -> dict:
 
 
 @router.delete("/api/research/jobs/{job_id}", tags=["research"],
-               summary="Remove one finished research job from the list (its reviews and verdicts stay)")
+               summary="Remove one finished Library job from the list (its reviews and verdicts stay)")
 def remove_research_job(job_id: str, collection_id: str = "default") -> dict:
     indexer = _indexer(collection_id)
     _require_write(collection_id)
@@ -788,8 +814,7 @@ def remove_research_job(job_id: str, collection_id: str = "default") -> dict:
 
 # ── review queue ────────────────────────────────────────────────────────
 
-@router.get("/api/research/briefs", tags=["research"], summary="Prepared reviews, newest first")
-def list_briefs(collection_id: str = "default", unread: bool = False, document_id: Optional[str] = None) -> dict:
+def _review_items(collection_id: str, unread: bool, document_id: Optional[str]) -> List[dict]:
     indexer = _indexer(collection_id)
     store = library.research_store(indexer)
     docs = {d["document_id"]: d for d in _papers(indexer)}
@@ -802,10 +827,25 @@ def list_briefs(collection_id: str = "default", unread: bool = False, document_i
         paper = papers.get(brief["document_id"]) or {}
         items.append({**brief, "filename": doc.get("filename"), "title": paper.get("title"),
                       "authors": paper.get("authors") or [], "year": paper.get("year")})
+    return items
+
+
+@router.get("/api/research/reviews", tags=["research"], summary="Prepared reviews, newest first")
+def list_reviews(collection_id: str = "default", unread: bool = False, document_id: Optional[str] = None) -> dict:
+    items = _review_items(collection_id, unread, document_id)
+    return {"reviews": items, "unread": sum(1 for b in items if not b.get("read_at"))}
+
+
+@router.get("/api/research/briefs", tags=["research"], deprecated=True,
+            summary="Old name of /reviews (the list is under \"briefs\"), kept for one release")
+def list_briefs(collection_id: str = "default", unread: bool = False, document_id: Optional[str] = None) -> dict:
+    items = _review_items(collection_id, unread, document_id)
     return {"briefs": items, "unread": sum(1 for b in items if not b.get("read_at"))}
 
 
-@router.post("/api/research/briefs/{brief_id}/read", tags=["research"], summary="Mark a review read or unread")
+@router.post("/api/research/reviews/{brief_id}/read", tags=["research"], summary="Mark a review read or unread")
+@router.post("/api/research/briefs/{brief_id}/read", tags=["research"], deprecated=True,
+             summary="Old name of /reviews/{id}/read, kept for one release")
 def mark_brief(brief_id: int, body: BriefReadRequest = BriefReadRequest(), collection_id: str = "default") -> dict:
     indexer = _indexer(collection_id)
     if not library.research_store(indexer).mark_brief_read(brief_id, body.read):
@@ -813,7 +853,9 @@ def mark_brief(brief_id: int, body: BriefReadRequest = BriefReadRequest(), colle
     return {"id": brief_id, "read": body.read}
 
 
-@router.delete("/api/research/briefs/{brief_id}", tags=["research"], summary="Delete a review")
+@router.delete("/api/research/reviews/{brief_id}", tags=["research"], summary="Delete a review")
+@router.delete("/api/research/briefs/{brief_id}", tags=["research"], deprecated=True,
+               summary="Old name of DELETE /reviews/{id}, kept for one release")
 def delete_brief(brief_id: int, collection_id: str = "default") -> dict:
     indexer = _indexer(collection_id)
     _require_write(collection_id)

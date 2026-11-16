@@ -180,7 +180,7 @@ def test_try_clio_audits_the_sample_set_when_it_is_there(monkeypatch):
         {"id": "c0ffee", "name": mcp.SAMPLE_COLLECTION_NAME},
     ])
     text = asyncio.run(mcp._clio_mcp.get_prompt("try_clio", {})).messages[0].content.text
-    assert '"c0ffee"' in text and "query_table" in text and "research_documents" in text
+    assert '"c0ffee"' in text and "query_table" in text and "deep_search" in text
     assert "cannot settle" in text
 
 
@@ -189,5 +189,5 @@ def test_try_clio_tours_any_other_server(monkeypatch):
 
     monkeypatch.setattr(mcp, "_visible_collections", lambda: [{"id": "default", "name": "Default"}])
     text = asyncio.run(mcp._clio_mcp.get_prompt("try_clio", {})).messages[0].content.text
-    assert "list_collections" in text and "research_documents" in text
+    assert "list_collections" in text and "deep_search" in text
     assert mcp.SAMPLE_COLLECTION_NAME not in text

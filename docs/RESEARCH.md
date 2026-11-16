@@ -1,12 +1,12 @@
-# Research: papers and books
+# Library: papers and books
 
-**Research** (in the ribbon, or `G` then `R`; under *More* on a phone) turns a collection of papers,
+**Library** (in the ribbon, or `G` then `L`; under *More* on a phone) turns a collection of papers,
 books and reports into a library a lab can work from. It was built around
 requests from lab researchers:
 
-| Request | What Research does |
+| Request | What the Library does |
 |---|---|
-| "Is this worth my time? Does it actually contain what I need?" | **Worth my time?** on one source, or **Screen** the library against a question. Each source gets a verdict (*worth reading*, *partly relevant*, *not about this*, *can't tell from the text*) backed by quotes from it, plus the passages where it discusses the question. |
+| "Is this worth my time? Does it actually contain what I need?" | **Screening**: screen one source, or **Screen** the library, against a question. Each source gets a verdict (*worth reading*, *partly relevant*, *not about this*, *can't tell from the text*) backed by quotes from it, plus the passages where it discusses the question. |
 | "Rename downloads to something descriptive" | **Rename to descriptive names** builds `2021 - Okafor et al - Root Hydraulics Predict Drought Survival.pdf` from the source's own title, authors and year. Preview first, choose a pattern, undo per source. |
 | "Download everything it cites and links to" | A source's **References** lists every entry of its reference lists (a book's per-chapter lists and bibliography included) and every link in its text. **Download…** fetches open copies (arXiv, open-access PDFs) into the collection; references you already have are marked *In your library*. |
 | "A visual map of my library and its abstracts" | **Citation map** lays out who cites whom, plus the works several of your sources cite that you don't have yet. Click a card to read its abstract. |
@@ -15,7 +15,7 @@ requests from lab researchers:
 
 ## Your selection is the scope
 
-The checkboxes in the Sources panel and the ones in the Research list are the
+The checkboxes in the Sources panel and the ones in the Library's paper list are the
 **same selection** that Ask and Find use. When sources are selected, every
 action here works on them only: analyzing, screening, renaming, reviews and
 the citation map. A bar at the top says how many are selected, with *Clear
@@ -46,7 +46,7 @@ A Markdown source takes its title from its first heading.
 ## Why you can trust what it shows
 
 The worry researchers raise first is fabrication: a summary that sounds right
-but says something the source never said. Research is built so that cannot
+but says something the source never said. The Library is built so that cannot
 pass silently.
 
 **Metadata is never written by a model.** Title, authors, year, DOI, ISBN,
@@ -88,7 +88,7 @@ context. The quotes and page links are there so you can check in seconds.
 
 Citing correctly is where AI writing most often fails: a quote with one word
 changed, the right author on the wrong page, a reference to a paper nobody
-wrote. **Cite & check** (the fourth Research view; *Cite & check a draft* in
+wrote. **Cite & check** (the fourth Library view; *Cite & check a draft* in
 the command palette) is built so that cannot pass unnoticed, and so that none
 of it needs the text to leave the server.
 
@@ -192,8 +192,8 @@ collection lacks.
 - With a selection, a source of the collection outside it appears as *in the
   collection, not selected*; a cited work with an open copy can be downloaded
   from its card.
-- The ribbon's *Citation graph* item (off by default; switch it on in
-  *Customize the ribbon*) opens Research straight on the graph.
+- The ribbon's *Citation map* item (off by default; switch it on in
+  *Customize the ribbon*) opens the Library straight on the map.
 
 ### Key papers, people and concepts
 
@@ -227,10 +227,10 @@ analysis is in the API (`GET /api/research/network`).
 
 - Analysis, renaming, references, links, the citation map, citations and
   exports, and the draft check (all but claim verdicts) need **no model**.
-- *Worth my time?* without a model shows where the source discusses your
+- *Screening* without a model shows where the source discusses your
   question (Clio's own retrieval inside it), with no verdict.
-- `OFFLINE_MODE` or `RESEARCH_LOOKUP_ENABLED=false` turns off catalogue
-  lookups; details then come from the source's text alone. Downloading uses
+- `OFFLINE_MODE`, or **Catalogue lookups** off in *Settings, Features*
+  (`RESEARCH_LOOKUP_ENABLED=false`), turns off catalogue lookups; details then come from the source's text alone. Downloading uses
   the same link fetcher as *Add link* and is off when it is
   (`LINK_INDEXING_ENABLED=false`, offline mode).
 
@@ -243,11 +243,11 @@ an outbound path.
 
 1. Add PDFs to a collection as usual (or download them from a source's
    references). Select some in the Sources panel to work on just those.
-2. Open **Research** and press **Analyze**. This reads each source's record
+2. Open **Library** and press **Analyze**. This reads each source's record
    and reference lists in the background. **Read again** re-reads sources
    analyzed by an earlier version.
 3. Type what you are looking for and press **Screen** to sort by relevance,
-   or open a source and ask *Worth my time?*.
+   or open a source and screen it under *Screening*.
 4. **Rename to descriptive names** when the file names are unhelpful. Fields:
    `{year}`, `{authors}` (*Okafor et al*, *Hale & Ruiz*), `{first_author}`,
    `{title}`, `{venue}`, `{doi}`. Titles printed in capitals are written in
@@ -263,23 +263,25 @@ an outbound path.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `RESEARCH_LOOKUP_ENABLED` | `true` | Consult OpenAlex, Crossref, arXiv and Open Library by printed identifier |
+| `RESEARCH_LOOKUP_ENABLED` | `true` | Catalogue lookups (the switch of that name in *Settings, Features*): consult OpenAlex, Crossref, arXiv and Open Library by printed identifier |
 | `RESEARCH_CONTACT_EMAIL` | empty | Sent to OpenAlex/Crossref as they request (faster, politer service) |
 | `RESEARCH_LOOKUP_TIMEOUT_SECONDS` | `15` | Per catalogue request |
-| `RESEARCH_MAX_JOB_DOCUMENTS` | `200` | Sources one background job may cover |
-| `RESEARCH_MAX_CONCURRENT_JOBS` | `1` | Review/screening jobs running at once; the rest wait |
+| `LIBRARY_MAX_JOB_DOCUMENTS` | `200` | Sources one background job may cover (`RESEARCH_MAX_JOB_DOCUMENTS` before R9, still read) |
+| `LIBRARY_MAX_CONCURRENT_JOBS` | `1` | Review/screening jobs running at once; the rest wait (`RESEARCH_MAX_CONCURRENT_JOBS` before R9, still read) |
+
+A setting set only under its old name still works, and the server log names it at startup so it can be renamed.
 
 ## Permissions and limits
 
 - Reading the library, the map and reviews needs read access. Analyzing,
   renaming, downloading and starting jobs need edit access; downloading also
   needs the acceptable-use acknowledgement every way of adding sources needs.
-  A read-only user can still ask *Worth my time?*; the result is not saved.
+  A read-only user can still screen one source; the result is not saved.
   Citing, exporting and checking a draft need read access; correcting a
   source's details needs edit access. A draft is limited to 60,000 characters
   per check; the model judges at most 30 cited claims per check, and
   suggestions stop at 25.
-- Research records live in the collection's own index database, so collection
+- Library records live in the collection's own index database, so collection
   export/import and backups carry them.
 - Analysis, screening and reviews run as background jobs in the server
   process, and jobs do not survive a restart. A restart stops a running job
@@ -292,7 +294,7 @@ an outbound path.
   errors* (`done_with_errors` in the API, with a failure count). Any job that
   does not finish cleanly, including a budget stop or a cancel, shows a toast
   in the Library. Analyze on more sources than one job may cover
-  (`RESEARCH_MAX_JOB_DOCUMENTS`) is split into several jobs that run in turn.
+  (`LIBRARY_MAX_JOB_DOCUMENTS`) is split into several jobs that run in turn.
 - A catalogue that times out, rate-limits or errors is reported as not
   looked up, never as "no record" or "no open copy found", and is tried
   again next time.
@@ -304,6 +306,15 @@ an outbound path.
 
 ## API
 
+The Library's routes keep the prefix `/api/research` (the tab was called Research
+before R9). Since R9 the paths say *screen*, *screening* and *reviews*; the older
+paths (`/assess`, `/assessments`, `/briefs`) and job kinds (`assess`, `brief`) are
+still served for one release and are marked deprecated in `/docs`. Job rows report
+the stored kind, `assess` for screening and `brief` for reviews. A paper carries
+`review_count` and `unread_reviews` (and, from `/papers/{id}`, the lists `reviews`
+and `screenings`) beside the old `briefs`, `unread_briefs`, `brief_list` and
+`assessments`.
+
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/research/papers` | Library with records, counts and suggested names |
@@ -314,13 +325,13 @@ an outbound path.
 | POST | `/api/research/rename` | Rename many; `dry_run` previews |
 | POST | `/api/research/references/resolve` | Look for open copies (catalogues) |
 | POST | `/api/research/references/download` | Fetch references and links into the collection |
-| GET / POST | `/api/research/graph` | Citation graph (`include_external`, `min_citations`; POST takes `document_ids`) |
-| POST | `/api/research/papers/{id}/assess` | Worth my time? (model optional) |
-| GET | `/api/research/assessments` | Saved verdicts for a question, ranked |
-| POST | `/api/research/jobs` | Background screening (`assess`) or reviews (`brief`), optional `not_before` |
+| GET / POST | `/api/research/graph` | Citation map (`include_external`, `min_citations`; POST takes `document_ids`) |
+| POST | `/api/research/papers/{id}/screen` | Screen one source against a question (model optional); old path `/assess` |
+| GET | `/api/research/screening` | Saved screening verdicts for a question, ranked; old path `/assessments` |
+| POST | `/api/research/jobs` | Background screening (`kind: screen`) or reviews (`kind: review`), optional `not_before` |
 | GET/POST | `/api/research/jobs`, `/jobs/{id}`, `/jobs/{id}/cancel` | Job progress and cancellation |
 | DELETE | `/api/research/jobs`, `/jobs/{id}` | Clear finished jobs from the list (all, or one); their reviews and verdicts stay, and a waiting or running job is refused (409) |
-| GET/POST/DELETE | `/api/research/briefs`, `/briefs/{id}/read`, `/briefs/{id}` | The review queue |
+| GET/POST/DELETE | `/api/research/reviews`, `/reviews/{id}/read`, `/reviews/{id}` | The review queue (list under `reviews`); old paths `/briefs…` (list under `briefs`) |
 | GET / DELETE | `/api/collections/{id}/outputs` (`reviews`, `reports`) | Count, or delete, everything generated from a collection, including reviews of sources since deleted |
 | PATCH | `/api/research/papers/{id}/record` | Correct citation details (`changes`), or put back what was read (`revert`); edit access |
 | POST | `/api/research/citations` | Citations for `document_ids` or `passages` (`[{document_id, page}]`) in a `style`; `export`: `bibtex`, `ris`, `csl-json` |

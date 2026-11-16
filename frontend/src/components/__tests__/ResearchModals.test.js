@@ -23,7 +23,7 @@ let wrapper
 afterEach(() => { wrapper?.unmount(); wrapper = null })
 
 describe('Customize the ribbon', () => {
-  const items = [{ id: 'research', label: 'Research', group: 'work' }]
+  const items = [{ id: 'research', label: 'Library', group: 'work' }]
 
   it('opens as a modal when asked, and tells the parent on any native close', async () => {
     wrapper = mount(RibbonCustomizeDialog, { props: { open: false, items, layout: defaultLayout() }, attachTo: document.body })
@@ -53,7 +53,7 @@ describe('Download references', () => {
     http.get.mockResolvedValue({ data: {
       document_id: 'd1', filename: 'd1.pdf', title: 'Paper', authors: [], analyzed: true, references: 2, links: 0,
       reference_list: [{ id: 1, ordinal: 1, raw_text: 'A ref', status: 'unresolved', kind: 'reference' }],
-      link_list: [], cited_by_list: [], assessments: [], brief_list: [], provenance: {}, details: {}, missing: [],
+      link_list: [], cited_by_list: [], screenings: [], reviews: [], provenance: {}, details: {}, missing: [],
       capabilities: { link_download: true, registry_lookups: true }, can_write: true,
     } })
     wrapper = mount(ResearchPaperPanel, {

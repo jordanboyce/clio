@@ -55,7 +55,7 @@
       </ol>
     </details>
     <p v-else-if="!streaming && content" class="mt-3 text-xs text-base-content/70 leading-relaxed">
-      No document passages attached. Review any table results in Research activity, or ask for supporting passages.
+      No document passages attached. Review any table results in Search activity, or ask for supporting passages.
     </p>
   </div>
 </template>

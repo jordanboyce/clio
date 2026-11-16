@@ -43,8 +43,10 @@ were not given answers exactly like one that does not exist ("not found, call
 3. Results are passages with a document and page. Before relying on a
    passage, read around it with `get_document_context` (or `fetch`). Snippets
    can cut off the sentence that qualifies the claim.
-4. For a multi-part question use `research_documents`. If the deployment runs
-   its own model, `ask_documents` returns a finished cited answer in one call.
+4. For a multi-part question use `deep_search` (`research_documents` is its
+   old name and still works for one release). If the deployment runs its own
+   model, `ask_documents` returns a finished cited answer in one call
+   (`depth="deep"` for multi-part questions).
 5. CSV/Excel files are typed SQL tables: `list_tables`, `get_table_schema`,
    then `query_table` (read-only SELECT) or `aggregate_table`. Do not
    estimate numbers from text snippets when a table exists.
@@ -147,7 +149,7 @@ enumerate from search results; they are the top few passages, not the corpus.
 
 ## Network analysis
 
-Which papers, authors and concepts hold a research collection together, and why.
+Which papers, authors and concepts hold a collection of papers (the Library) together, and why.
 The method is Healy's "Using Metadata to Find Paul Revere": a few structural
 measures on membership data find the brokers. That is the whole claim. A high
 score describes a position in these links, not the quality of the work.

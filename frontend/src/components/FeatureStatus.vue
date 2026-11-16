@@ -82,7 +82,7 @@ const STATES = {
 // Short enough that all of them fit in the footer at 1280 px.
 const SHORT = {
   semantic: 'Semantic', reranker: 'Rerank', ocr: 'OCR', transcription: 'Speech', figures: 'Figures',
-  ai: 'AI', research: 'Research', links: 'Links', git: 'Git', mcp: 'MCP', pii: 'PII',
+  ai: 'AI', research: 'Catalogues', links: 'Links', git: 'Git', mcp: 'MCP', pii: 'PII',
 }
 const REFRESH_MS = 60000
 

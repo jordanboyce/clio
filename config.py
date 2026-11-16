@@ -23,6 +23,34 @@ SECURE_PROFILE_DEFAULTS = {
 }
 
 
+# Environment names renamed in R9 (2026-11-16), new name -> old name. Both
+# are read through each field's AliasChoices, new name first; the old one is
+# kept for one release and named in a startup log line (main.py) when it is
+# the only one set.
+RENAMED_SETTINGS = {
+    "DEEP_SEARCH_MAX_CONCURRENT": "RESEARCH_MAX_CONCURRENT",
+    "DEEP_SEARCH_QUEUE_TIMEOUT_SECONDS": "RESEARCH_QUEUE_TIMEOUT_SECONDS",
+    "LIBRARY_MAX_CONCURRENT_JOBS": "RESEARCH_MAX_CONCURRENT_JOBS",
+    "LIBRARY_MAX_JOB_DOCUMENTS": "RESEARCH_MAX_JOB_DOCUMENTS",
+}
+
+
+def legacy_setting_names(env_file: str | os.PathLike | None = None) -> list[tuple[str, str]]:
+    """(old, new) for every renamed setting set only under its old name, in
+    the process environment or the env file. Names compare case-insensitively,
+    as the settings themselves do."""
+    present = {k.upper() for k in os.environ}
+    path = Path(env_file if env_file is not None else Settings.model_config.get("env_file") or ".env")
+    try:
+        from dotenv import dotenv_values
+        if path.is_file():
+            present |= {k.upper() for k in dotenv_values(path)}
+    except Exception:  # noqa: BLE001 - a log line must never stop startup
+        pass
+    return [(old, new) for new, old in RENAMED_SETTINGS.items()
+            if old in present and new not in present]
+
+
 # What the bundled frontend needs and nothing more. Inline styles are for Vue's
 # style bindings; data: and blob: images for page previews and generated figures.
 DEFAULT_CONTENT_SECURITY_POLICY = (
@@ -322,7 +350,7 @@ class Settings(BaseSettings):
     mcp_server_id: str = "clio"
     mcp_default_collection: str = "default"
     # Single-shot search defaults for agents. Hybrid with 8 passages: an agent
-    # that reaches for search_collection instead of research_documents still
+    # that reaches for search_collection instead of deep_search still
     # sees enough to notice when the corpus disagrees with its first guess.
     mcp_top_k: int = 8
     mcp_mode: Literal["auto", "semantic", "keyword", "hybrid"] = "auto"
@@ -507,13 +535,19 @@ class Settings(BaseSettings):
     # real ceiling is CPU. A chat turn holds one slot for its whole loop.
     worker_threads: int = 64
 
-    # research_documents runs up to seven retrieval branches against the
-    # vector index and metadata store. Parallel research calls compete for
-    # CPU on large collections, so callers queue for a slot instead of
-    # slowing each other down; a call that waits longer than the timeout is
-    # refused with a retryable error. 0 = no gate.
-    research_max_concurrent: int = 3
-    research_queue_timeout_seconds: float = 60.0
+    # deep_search runs up to seven retrieval branches against the vector
+    # index and metadata store. Parallel deep searches compete for CPU on
+    # large collections, so callers queue for a slot instead of slowing each
+    # other down; a call that waits longer than the timeout is refused with a
+    # retryable error. 0 = no gate. The RESEARCH_* names are the pre-R9
+    # spellings and are still read (RENAMED_SETTINGS below).
+    deep_search_max_concurrent: int = Field(
+        3, validation_alias=AliasChoices("DEEP_SEARCH_MAX_CONCURRENT", "RESEARCH_MAX_CONCURRENT")
+    )
+    deep_search_queue_timeout_seconds: float = Field(
+        60.0, validation_alias=AliasChoices("DEEP_SEARCH_QUEUE_TIMEOUT_SECONDS",
+                                            "RESEARCH_QUEUE_TIMEOUT_SECONDS")
+    )
 
     # Provider tokens (input+output) one identity may spend on chat per UTC
     # day. 0 = unlimited. Cached answers are free and still served once the
@@ -758,7 +792,7 @@ class Settings(BaseSettings):
     # which carries the project URL as Wikimedia requires).
     link_user_agent: str = ""
 
-    # Research workspace (services/research). Paper metadata and reference
+    # Library (services/research). Paper metadata and reference
     # resolution consult scholarly registries — OpenAlex, Crossref and the
     # arXiv API — by an identifier printed in the paper, so a field is
     # either read from the paper or from the registry record, never written
@@ -768,10 +802,16 @@ class Settings(BaseSettings):
     research_lookup_enabled: bool = True
     research_contact_email: str = ""
     research_lookup_timeout_seconds: float = 15.0
-    # How many papers one background review job may cover, and how many such
-    # jobs run at once across the process (each holds a model connection).
-    research_max_job_documents: int = 200
-    research_max_concurrent_jobs: int = 1
+    # How many papers one background Library job (analysis, screening,
+    # reviews) may cover, and how many such jobs run at once across the
+    # process (each holds a model connection). RESEARCH_MAX_JOB_DOCUMENTS and
+    # RESEARCH_MAX_CONCURRENT_JOBS are the pre-R9 names and are still read.
+    library_max_job_documents: int = Field(
+        200, validation_alias=AliasChoices("LIBRARY_MAX_JOB_DOCUMENTS", "RESEARCH_MAX_JOB_DOCUMENTS")
+    )
+    library_max_concurrent_jobs: int = Field(
+        1, validation_alias=AliasChoices("LIBRARY_MAX_CONCURRENT_JOBS", "RESEARCH_MAX_CONCURRENT_JOBS")
+    )
 
     # Audio transcription (meeting recordings via local Whisper)
     # The full image includes the "base" model. Any other model is read from

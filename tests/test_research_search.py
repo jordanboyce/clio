@@ -179,8 +179,8 @@ def test_empty_filters_result_and_denied_scope_do_not_search(mcp_env, monkeypatc
 def test_research_concurrency_gate_queues_then_refuses(mcp_env, monkeypatch):
     import threading
     mcp, indexer, _ = mcp_env
-    monkeypatch.setattr(mcp.settings, "research_max_concurrent", 1)
-    monkeypatch.setattr(mcp.settings, "research_queue_timeout_seconds", 0.2)
+    monkeypatch.setattr(mcp.settings, "deep_search_max_concurrent", 1)
+    monkeypatch.setattr(mcp.settings, "deep_search_queue_timeout_seconds", 0.2)
     mcp._research_gate_reset()
     release = threading.Event()
     started = threading.Event()
@@ -232,7 +232,8 @@ def test_standard_search_table_inlining_honors_document_selection(mcp_env, monke
 
 
 @pytest.mark.parametrize("tool,fields", [
-    ("research_documents", {"query": "exceptions"}),
+    ("deep_search", {"query": "exceptions"}),
+    ("research_documents", {"query": "exceptions"}),   # the pre-R9 name, still dispatched
     ("find_in_documents", {"pattern": "EQ-17"}),
 ])
 def test_chat_tools_cannot_expand_selected_sources(mcp_env, monkeypatch, tool, fields):
@@ -247,7 +248,9 @@ def test_chat_tools_cannot_expand_selected_sources(mcp_env, monkeypatch, tool, f
     evidence = ChatEvidence([])
     evidence.observe(result)
     assert evidence.results[0][0].document_id == "doc-a"
-    assert all(t in tool_names() for t in ["research_documents", "find_in_documents"])
+    assert all(t in tool_names() for t in ["deep_search", "find_in_documents"])
+    # The old name is dispatched, never advertised: a turn does not pay for both.
+    assert "research_documents" not in tool_names()
     assert len(openai_tools()) == len(anthropic_tools())
     # With a selection active the collection is pinned: a collection_id from
     # the model (an id, or the name it saw in the overview) is ignored.
@@ -256,3 +259,31 @@ def test_chat_tools_cannot_expand_selected_sources(mcp_env, monkeypatch, tool, f
     assert pinned[0]["args"]["collection_id"] == "ops"
     denied_ids = execute_tool_calls([{"tool": tool, **fields, "filters": {"document_ids": ["doc-b"]}}], context)
     assert "outside the sources" in denied_ids[0]["error"]
+
+
+# ── R9: research_documents is renamed deep_search ───────────────────────
+
+def test_deep_search_is_the_tool_and_the_old_name_still_answers_with_a_note(mcp_env):
+    mcp, _, _ = mcp_env
+    tools = {t.name: t for t in asyncio.run(mcp._clio_mcp.list_tools())}
+    assert tools["deep_search"].annotations.readOnlyHint is True
+    assert tools["deep_search"].inputSchema["properties"] == tools["research_documents"].inputSchema["properties"]
+    assert "deep_search" in tools["research_documents"].description
+    args = {"query": "EQ-17", "filters": {"document_ids": ["doc-a"]}}
+    _, new = asyncio.run(mcp._clio_mcp.call_tool("deep_search", args))
+    _, old = asyncio.run(mcp._clio_mcp.call_tool("research_documents", args))
+    assert "deprecation" not in new
+    assert "deep_search" in old.pop("deprecation")
+    assert old == new and new["results"][0]["chunk_id"] == "allowed"
+    # Code that imports the old function name still works.
+    assert mcp.research_documents_sync is mcp.deep_search_sync
+
+
+def test_instructions_and_prompts_name_deep_search_and_the_old_name():
+    import services.mcp_server as mcp
+    from services.research_search import RESEARCH_INSTRUCTIONS
+
+    assert "deep_search" in mcp._SERVER_INSTRUCTIONS and "research_documents" in mcp._SERVER_INSTRUCTIONS
+    assert "deep_search" in RESEARCH_INSTRUCTIONS and "research_documents" not in RESEARCH_INSTRUCTIONS
+    for prompt in (mcp.prompt_research_question("What does EQ-17 require?"),):
+        assert "deep_search" in prompt and "research_documents" not in prompt

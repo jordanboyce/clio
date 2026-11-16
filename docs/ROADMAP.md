@@ -10,7 +10,7 @@ Clio owns the trustworthy data layer; the intelligence layer lives upstream in w
 
 Two front doors, equally important:
 
-- **People**, through Clio's own Ask / Find / Research UI.
+- **People**, through Clio's own Ask / Find / Library UI.
 - **Agents**, over MCP, using Clio as a shared second brain: several agents reading, writing and linking notes over time, alongside the documents people add.
 
 Rules that apply to every phase below:
@@ -33,7 +33,7 @@ Evidence comes from three sources, marked where it matters:
 |---|---|---|
 | 0 | Fix what is wrong today | Small defects that undercut trust; all S. F1-F16 shipped 2026-11-16 |
 | 1 | A clean MCP contract | The power is there; the surface is inconsistent and heavy |
-| 2 | Research you can depend on | The foundation (paper records, lookups, jobs) is the shaky part |
+| 2 | A Library you can depend on | The foundation (paper records, lookups, jobs) is the shaky part |
 | 3 | Models that fit the job | Suggestions ignore what a model can do |
 | 4 | Second-brain primitives | What agents still cannot do with notes |
 | 5 | Core UX | Viewer, failures, settings, vocabulary |
@@ -49,7 +49,7 @@ F1-F16 shipped on 2026-11-16, each with a regression test (see the git log), tog
 |---|---|---|---|
 | F17 | The table tools (`list_tables`, `get_table_schema`, `get_table_rows`, `aggregate_table`, `query_table`) and search's table inlining still serve tables of quarantined documents. F1 fixed only the resources. | [mcp_server.py](../services/mcp_server.py) | Read |
 | F18 | A re-index restores only `local_reference` and `url`, so pasted (`text`) and synced (`folder_sync`) sources come back as plain uploads; a collection bundle import resets every `source_type`. Agent notes survive a re-index through the audit trail, but not a bundle import. | [reindex_service.py](../services/reindex_service.py) (about 172 and 628), `collection_bundle` | Read |
-| F19 | The citation map inside the Research tab loads through a bare `defineAsyncComponent`, so it is blank while loading and if it fails. Use `lazyView` like the other tabs. | [ResearchTab.vue:262](../frontend/src/components/ResearchTab.vue) | Read |
+| F19 | The citation map inside the Library loads through a bare `defineAsyncComponent`, so it is blank while loading and if it fails. Use `lazyView` like the other tabs. | [ResearchTab.vue:262](../frontend/src/components/ResearchTab.vue) | Read |
 | F20 | Onboarding's Ollama step picks the first installed model, which can be an embedding model. Use `defaults.model` from `/api/ai/models`. | [WelcomeOnboarding.vue](../frontend/src/components/WelcomeOnboarding.vue) | Read |
 | F21 | GitHub Models was retired on 2026-07-30 but is still offered as a provider. | [ai_service.py](../services/ai_service.py), `services/model_catalog.py` | Read |
 
@@ -94,14 +94,14 @@ Also: give `get_document_context` a continuation (today a long unpaged document 
 *Done when:* one contract test walks every tool and asserts the envelope.
 
 **M4 — Tool profiles. (M)**
-Let a connection choose how much it loads: `?tools=core`, `research`, `notes` or `full`, also settable per token. Read-only tokens never list write tools. `search`/`fetch` (the ChatGPT shape) appear only in their own profile.
+Let a connection choose how much it loads: `?tools=core`, `library`, `notes` or `full`, also settable per token. Read-only tokens never list write tools. `search`/`fetch` (the ChatGPT shape) appear only in their own profile.
 
 Suggested `core` (about 8 tools): `list_collections`, `search` (see M5), `read_document`, `get_document_context`, `find_in_documents`, `list_documents`, `query_table`, `write_document` when the token allows it.
 *Done when:* `tools/list` for `core` is under 4k tokens, measured by a test that fails if it grows.
 
 **M5 — Fewer, clearer retrieval tools. (M)**
 - Fold `search_all_collections` into `search_collection`: `collection_id` accepts one id, a list, or `"all"`.
-- Keep `research_documents` as the multi-query tool, but rename it (see R9; the word "research" means four things today).
+- Keep `deep_search` as the multi-query tool (R9 renamed it from `research_documents`; drop the old name one release after R9).
 - Fold `list_recent_documents` and `get_collection_facets` into `list_documents` (`sort=recent`, `include=facets`).
 - Default `get_collection_info` to counts; the 200-document array becomes opt-in.
 - Stop attaching up to 150 rows of every small table, plus the collection summary, to every search ([mcp_server.py:1580](../services/mcp_server.py)). Return table names and let the agent ask.
@@ -144,7 +144,7 @@ Today an open deployment and the shared password both get full write access, whi
 
 ---
 
-## Phase 2 — Research you can depend on
+## Phase 2 — A Library you can depend on
 
 **What is wrong.** The parts that check things are solid: citation formatting, quote verification and the draft checker are deterministic and well tested. The shaky parts are underneath and around them.
 
@@ -157,7 +157,7 @@ Today an open deployment and the shared password both get full write access, whi
 2. **Outside lookups fail silently** (F8), and a blocked site waits out a 15-second timeout per request with no "catalogues unreachable" state.
 3. **Jobs live in memory.** A restart loses running and scheduled work. Stop takes effect only between documents.
 4. **The flow has no visible order and no end product.** Nothing produces a cited review across sources.
-5. **"Research" names four different things.**
+5. **"Research" named four different things.** Fixed by R9.
 
 ### 2A. Records you can trust
 
@@ -210,7 +210,7 @@ Analysis needs no model, yet it runs only when someone presses "Analyze" (`analy
 
 ### 2C. Jobs that survive
 
-**R8 — Durable research jobs. (L)**
+**R8 — Durable Library jobs. (L)**
 - Store the queue, schedule and per-document progress in the database.
 - Resume or re-queue at startup; mark interrupted work as interrupted at boot, not when someone next looks.
 - Check for Stop between model calls, not between documents, and show "Stopping…".
@@ -236,6 +236,14 @@ Progress, errors and Stop currently live only under Reviews. Analyze and Screen 
 | briefs (API) / Reviews (UI); assess / Screen / "Worth my time?" / verdict | **Reviews** and **Screening**, in the API as well |
 | "Citation map" (tab) / "Citation graph" (ribbon, palette) | **Citation map** |
 
+*Shipped 2026-11-16.* Every old name still works for one release, each with a test:
+- **MCP:** `deep_search` is the tool; `research_documents` stays registered and adds a `deprecation` note to its response. The in-app agent dispatches the old name as an alias. Server `instructions`, prompts and the skill name the new tool and say the old one still works.
+- **Depth:** `deep`; `research` is accepted by `/api/chat`, `ask_documents` and `/api/v1` (whose response echoes the spelling sent; `ask_documents` adds a `deprecation` note). The answer cache keys deep search as `research` whichever spelling arrives, so the two share entries and answers cached before the rename still hit; quick never shares with deep.
+- **Settings:** `DEEP_SEARCH_MAX_CONCURRENT`, `DEEP_SEARCH_QUEUE_TIMEOUT_SECONDS`, `LIBRARY_MAX_CONCURRENT_JOBS`, `LIBRARY_MAX_JOB_DOCUMENTS`; the `RESEARCH_*` spellings are still read, and startup logs a line naming each one set only under its old name.
+- **REST:** the prefix stays `/api/research` (the app's own API, with the tables, the job rows and every client already on it; moving it would double every route for no reader's benefit). Added `/papers/{id}/screen`, `/screening`, `/reviews…`, job kinds `screen` and `review`, and `review_count`, `unread_reviews`, `reviews`, `screenings` on papers; the old paths, kinds and fields are served and marked deprecated in `/docs`. Job rows still report the stored kinds `assess` and `brief`. Database names are unchanged.
+- **Frontend:** the internal tab id stays `research`, so `?tab=research`, saved ribbon layouts and the last open tab keep working; `?tab=library` and `G` `L` are new. The Library's first view is now *Papers*. A saved `chat_depth` or answer of `research` reads as Deep search.
+- Left as they were: `RESEARCH_LOOKUP_ENABLED` and `RESEARCH_CONTACT_EMAIL` (runtime settings saved by the Features page; the switch is labelled *Catalogue lookups*), the MCP prompt `research_question` (an id clients may have saved), the feature id `research` in `/api/system/features`, component file names, `services/research/`, and the review depth names *brief* and *thorough*.
+
 **R10 — Show the order. (M)**
 The first visit should read as four steps with their state: *Analyzed 10/10 → Screened for "…" 6/10 → Reviewed 3/10 → Cite & check*. Each step says what it needs ("needs a model" where true, shown before you type) and what it will cost (number of model calls). Screening skips sources already screened for the same question.
 
@@ -246,7 +254,7 @@ Add "Write up" on a selection: a literature summary built only from statements t
 Replace "betweenness", "constraint" and "modularity" with what they mean ("bridges two groups", "cited by many of your sources"). Keep the honest "too small to rank" warning; it is good.
 
 **R13 — Library over MCP. (M)**
-Agents can format and check citations but cannot list papers, read reviews or verdicts, or start screening. Add `list_papers`, `get_paper` (record, review, verdicts) and `screen_papers` in the `research` tool profile (M4).
+Agents can format and check citations but cannot list papers, read reviews or verdicts, or start screening. Add `list_papers`, `get_paper` (record, review, screening verdicts) and `screen_papers` in the `library` tool profile (M4).
 
 ---
 
@@ -390,20 +398,20 @@ Do each split when a phase first touches the file.
 - **One registration style** for tools (there are three), and one helper for the excerpt clamp (copied six times) and the document-list serializer (copied four times). Do with M3.
 - **`SourcesSidebar.vue` (2,871), `App.vue` (2,543), `SettingsTab.vue` (2,313)** → feature components with stores. Collections, the jobs drawer and three modals move out of `App.vue`. Do with U2, U3, U5.
 - **One modal pattern** (`useModal`). Do with F14.
-- **Tests where there are none**: Research components, onboarding, command palette, ModelPicker; MCP resources; lookups under failure; one browser end-to-end test of add source → ask → open citation.
-- **Research API N+1**: `get_paper` loads every reference twice and the document list three times per open ([api/research.py:289](../api/research.py)).
+- **Tests where there are none**: Library components, onboarding, command palette, ModelPicker; MCP resources; lookups under failure; one browser end-to-end test of add source → ask → open citation.
+- **Library API N+1**: `get_paper` loads every reference twice and the document list three times per open ([api/research.py:289](../api/research.py)).
 
 ---
 
 ## Suggested order of work
 
-1. **Week 1:** all of Phase 0, plus R9 (names) and B1 (protect human sources), since both are cheap and make later work clearer. Done on 2026-11-16, with R1 and P1, except R9 and F17-F21.
+1. **Week 1:** all of Phase 0, plus R9 (names) and B1 (protect human sources), since both are cheap and make later work clearer. Done on 2026-11-16, with R1, P1 and R9, except F17-F21.
 2. **Then Phase 1A** (M1 → M2 → M3 → M4 → M5), splitting `mcp_server.py` as you go, then **1B** (the Connect tab).
 3. **Then Phase 2**: R1 (benchmark) → R2/R3/R5 (records) → R6/R7 (lookups) → R8/R8b (jobs) → R10 → R11.
 4. **Then Phase 3**, with U3 (Models page) in the same stretch.
 5. **Then Phase 4** from B2 onward, and **Phase 5** by value: U1, U2, U4/U5/U6, then the rest.
 
-Two decisions are yours before the work reaches them: M9 (should open and password callers be read-only by default) and R8 (how a research job resumes without a stored key). R9 is decided: the Research tab becomes Library.
+Two decisions are yours before the work reaches them: M9 (should open and password callers be read-only by default) and R8 (how a Library job resumes without a stored key). R9 shipped: the Research tab is now the Library.
 
 ---
 
@@ -425,7 +433,7 @@ Items below predate this plan. Where one overlaps a numbered item above, the num
 
 ### Toolbox — extensibility
 
-- **MCP expansion** — let external agents trigger re-indexing and metadata updates, not just read documents (`write_document` shipped 2026-09-11; cross-collection `research_documents`, `corpus_version` freshness tokens and MCP prompts shipped 2026-09-17; `reindex_document`, `update_document_metadata`, `list_index_jobs`/`get_index_job`, ChatGPT-shape `search`/`fetch`, schema limits and titles on every tool, and a live `GET /api/mcp/catalog` shipped 2026-10-08; shipped 2026-10-23: `ask_documents` for a finished cited answer in one call when the deployment runs its own model, every synchronous tool off the event loop with a `WORKER_THREADS`-sized pool, `scripts/mcp_load.py` to measure a host's envelope, and Connect-tab entries for Hermes Agent and any streamable-HTTP client). Progress notifications during long research calls need the streamable transport switched from JSON responses to SSE, which is a deployment-affecting change to make deliberately.
+- **MCP expansion** — let external agents trigger re-indexing and metadata updates, not just read documents (`write_document` shipped 2026-09-11; cross-collection `research_documents`, `corpus_version` freshness tokens and MCP prompts shipped 2026-09-17; `reindex_document`, `update_document_metadata`, `list_index_jobs`/`get_index_job`, ChatGPT-shape `search`/`fetch`, schema limits and titles on every tool, and a live `GET /api/mcp/catalog` shipped 2026-10-08; shipped 2026-10-23: `ask_documents` for a finished cited answer in one call when the deployment runs its own model, every synchronous tool off the event loop with a `WORKER_THREADS`-sized pool, `scripts/mcp_load.py` to measure a host's envelope, and Connect-tab entries for Hermes Agent and any streamable-HTTP client). Progress notifications during long deep searches need the streamable transport switched from JSON responses to SSE, which is a deployment-affecting change to make deliberately.
 - **Agents in the browser (WebMCP)** — prototype shipped 2026-11-04: the page registers the read-only MCP tools with `document.modelContext` where a browser has it (Chromium origin trial, Chrome 149 to 162, flag `enable-webmcp-testing`), calls go through `/mcp` with the page's own session, and the Connect tab reports what this browser supports. Decided by feature detection, not the user agent. Open: the API is a moving W3C draft (the namespace already moved from `navigator` to `document`), so re-check it when the trial ends; whether to offer write tools behind a confirmation; an origin-trial token for hosted deployments; and a check against a real in-browser agent (Gemini in Chrome, an agent extension) once one can call page tools on a stable channel. Of the other built-in browser AI surfaces, only on-device translate/summarize of a passage (Translator, Summarizer, stable since Chrome 138) looks worth a display-only enhancement; the Prompt API as a zero-setup answer model is held back because Clio's answer pipeline, citation checks and cache are server-side, and the browser embedder would tie an index to a Chrome build.
 - **PWA** — a web manifest and theme-color meta shipped 2026-09-12 (installable from the browser menu); an offline service worker is the remaining step.
 

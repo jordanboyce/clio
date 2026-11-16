@@ -112,14 +112,14 @@ describe('Delete generated reviews and reports', () => {
   })
 
   it('shows a refusal rather than losing it', async () => {
-    http.delete.mockRejectedValue({ message: 'A research job is running.' })
+    http.delete.mockRejectedValue({ message: 'A Library job is running.' })
     const { w } = await dataSection()
 
     await w.get('[data-testid="delete-outputs"]').trigger('click')
     await w.get('[data-testid="outputs-confirm"]').trigger('click')
     await flushPromises()
 
-    expect(w.text()).toContain('A research job is running.')
+    expect(w.text()).toContain('A Library job is running.')
   })
 
   it('is closed to read-only people', async () => {

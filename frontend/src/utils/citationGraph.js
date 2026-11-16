@@ -240,7 +240,7 @@ export function communityLegend(network) {
   return rows
 }
 
-// The screening verdicts of Research → Screen, for one question.
+// The screening verdicts of Library → Screen, for one question.
 export const RELEVANCE_LEGEND = [
   { group: 'relevant', label: 'Worth reading' },
   { group: 'partial', label: 'Partly relevant' },

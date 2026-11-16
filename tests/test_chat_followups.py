@@ -156,7 +156,7 @@ def test_quick_depth_answers_in_one_pass_and_suggests_followups(monkeypatch, str
     call = provider.complete_with_tools.call_args.kwargs
     assert call["tools"] == []
     assert "Do not run document searches" in call["system"]
-    assert "research_documents" not in call["system"]
+    assert "deep_search" not in call["system"]
     # The follow-up prompt saw the question, the answer and the source name.
     followup_prompt = provider.complete.call_args.kwargs["prompt"]
     assert "How long?" in followup_prompt and "Five days" in followup_prompt and "policy.pdf" in followup_prompt
@@ -182,7 +182,7 @@ def test_quick_depth_keeps_table_tools_when_large_tables_exist(monkeypatch):
     assert names == {"list_tables", "get_table_schema", "get_table_rows", "query_table", "aggregate_table"}
 
 
-def test_research_depth_is_the_default_and_related_can_be_disabled(monkeypatch):
+def test_deep_depth_is_the_default_and_related_can_be_disabled(monkeypatch):
     provider = Mock()
     provider.supports_native_tools.return_value = True
     provider.complete_with_tools.return_value = {"text": "Answer.", "tool_calls": [], "usage": {}}
@@ -195,11 +195,11 @@ def test_research_depth_is_the_default_and_related_can_be_disabled(monkeypatch):
             "provider": "ollama", "use_cache": False, "related": False,
         })
     body = response.json()
-    assert body["depth"] == "research"
+    assert body["depth"] == "deep"
     assert body["related_questions"] == []
     provider.complete.assert_not_called()
     call = provider.complete_with_tools.call_args.kwargs
-    assert len(call["tools"]) > 5 and "research_documents" in call["system"]
+    assert len(call["tools"]) > 5 and "deep_search" in call["system"]
 
 
 def test_quick_depth_on_the_prose_fallback_runs_one_pass_without_tool_protocol(monkeypatch):

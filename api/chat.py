@@ -37,6 +37,7 @@ from services.structured_chat import (
     strip_tool_calls,
 )
 from models.schemas import (
+    normalize_depth,
     AIUsage,
     AIUsageDetail,
     ChatMessage,
@@ -125,6 +126,16 @@ def _corpus_version(collection_id: str) -> str:
         return "?"
 
 
+def _cache_depth_token(chat_request: ChatRequest) -> str:
+    """The depth as the answer cache spells it. Deep search was called
+    "research" before R9 and its cached answers are keyed that way, so the
+    token stays "research": "deep" and "research" requests share one entry,
+    and answers cached before the rename are still found. Quick never
+    shares an entry with deep."""
+    depth = normalize_depth(getattr(chat_request, "depth", "deep") or "deep")
+    return "quick" if depth == "quick" else "research"
+
+
 def _request_fingerprint(chat_request: ChatRequest, collection_ids: list[str], model: str) -> str:
     """Everything besides the question that decides the answer.
 
@@ -144,7 +155,7 @@ def _request_fingerprint(chat_request: ChatRequest, collection_ids: list[str], m
         f"mode={getattr(chat_request.mode, 'value', chat_request.mode)}",
         f"top_k={chat_request.top_k}",
         f"rerank={int(bool(chat_request.rerank))}",
-        f"depth={getattr(chat_request, 'depth', 'research')}",
+        f"depth={_cache_depth_token(chat_request)}",
         "selection=" + ",".join(_selected_document_ids(chat_request) or []),
     ]
     for cid in collection_ids:
@@ -286,9 +297,10 @@ def _cache_lookup(cache_ctx, threshold: float | None = None):
 
 # ── Answer depth and follow-ups ─────────────────────────────────────────────
 # depth='quick' answers in one pass from the retrieved context: no document
-# research tools, so time-to-answer is one provider round-trip. Large tables
+# search tools, so time-to-answer is one provider round-trip. Large tables
 # are the exception — they only exist behind the table tools, so those stay
-# callable. depth='research' is the full agent loop.
+# callable. depth='deep' (deep search; 'research' before R9) is the full
+# agent loop.
 
 _TABLE_TOOL_NAMES = frozenset({
     "list_tables", "get_table_schema", "get_table_rows", "query_table", "aggregate_table",
@@ -296,11 +308,11 @@ _TABLE_TOOL_NAMES = frozenset({
 
 
 def _is_quick(chat_request: ChatRequest) -> bool:
-    return getattr(chat_request, "depth", "research") == "quick"
+    return normalize_depth(getattr(chat_request, "depth", "deep")) == "quick"
 
 
 def _tools_for_depth(chat_request: ChatRequest, tools_spec: list, tool_tables) -> list:
-    """The tool list a turn may use: everything for research, only the table
+    """The tool list a turn may use: everything for deep search, only the table
     tools (and only when large tables exist) for a quick answer."""
     if not _is_quick(chat_request):
         return tools_spec

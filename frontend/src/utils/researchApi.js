@@ -1,7 +1,8 @@
 import http from './http'
 import { buildProviderHeaders, getAPIProviderName } from './aiProviders.js'
 
-// The Research view's calls to /api/research. Every call is scoped to one
+// The Library's calls to /api/research (the URL prefix kept its pre-R9 name;
+// the paths use the R9 names: screen, screening, reviews). Every call is scoped to one
 // collection; the ones that run a model carry the active provider's headers
 // exactly as Ask does, so a team key or the deployment's model just works.
 
@@ -43,12 +44,12 @@ export const researchApi = {
       graph, include_external: includeExternal, min_citations: minCitations,
       document_ids: documentIds?.length ? documentIds : null,
     }).then(r => r.data),
-  assess: (cid, id, question, providerId) => {
+  screen: (cid, id, question, providerId) => {
     const { provider, headers } = modelArgs(providerId)
-    return http.post(`/api/research/papers/${encodeURIComponent(id)}/assess?${q(cid)}`,
+    return http.post(`/api/research/papers/${encodeURIComponent(id)}/screen?${q(cid)}`,
       { question, provider }, { headers, timeout: 180000 }).then(r => r.data)
   },
-  readingList: (cid, question) => http.get(`/api/research/assessments?${q(cid, { question })}`).then(r => r.data),
+  readingList: (cid, question) => http.get(`/api/research/screening?${q(cid, { question })}`).then(r => r.data),
   startJob: (cid, body, providerId) => {
     const { provider, headers } = modelArgs(providerId)
     return http.post(`/api/research/jobs?${q(cid)}`, { ...body, provider }, { headers }).then(r => r.data)
@@ -58,10 +59,10 @@ export const researchApi = {
   // Finished jobs only, and only their place in the list: what they wrote stays.
   removeJob: (cid, jobId) => http.delete(`/api/research/jobs/${jobId}?${q(cid)}`).then(r => r.data),
   clearJobs: (cid) => http.delete(`/api/research/jobs?${q(cid)}`).then(r => r.data),
-  briefs: (cid, { unread = false, documentId = null } = {}) =>
-    http.get(`/api/research/briefs?${q(cid, { unread: unread || null, document_id: documentId })}`).then(r => r.data),
-  markBrief: (cid, id, read = true) => http.post(`/api/research/briefs/${id}/read?${q(cid)}`, { read }).then(r => r.data),
-  deleteBrief: (cid, id) => http.delete(`/api/research/briefs/${id}?${q(cid)}`).then(r => r.data),
+  reviews: (cid, { unread = false, documentId = null } = {}) =>
+    http.get(`/api/research/reviews?${q(cid, { unread: unread || null, document_id: documentId })}`).then(r => r.data),
+  markReview: (cid, id, read = true) => http.post(`/api/research/reviews/${id}/read?${q(cid)}`, { read }).then(r => r.data),
+  deleteReview: (cid, id) => http.delete(`/api/research/reviews/${id}?${q(cid)}`).then(r => r.data),
   // { changes: {field: value}, revert: [field] }: a person's corrections to a source's record.
   correct: (cid, id, changes = {}, revert = []) =>
     http.patch(`/api/research/papers/${encodeURIComponent(id)}/record?${q(cid)}`, { changes, revert })

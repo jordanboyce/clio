@@ -13,9 +13,9 @@ from typing import Any, Dict, List
 # Canonical tool list. `parameters` is JSON Schema (draft-7-compatible).
 _TOOLS: List[Dict[str, Any]] = [
     {
-        "name": "research_documents",
+        "name": "deep_search",
         "description": (
-            "Research a comparison or multi-part question using multiple focused "
+            "Search a comparison or multi-part question using multiple focused "
             "queries, hybrid/keyword/literal retrieval, rank fusion and document "
             "diversity. Returns bounded passages, coverage gaps and follow-up "
             "context arguments. Supply subqueries for separate requirements, "
@@ -38,7 +38,7 @@ _TOOLS: List[Dict[str, Any]] = [
     },
     {
         "name": "find_in_documents",
-        "description": "Find a literal phrase, policy ID or code identifier in indexed text. Preserves punctuation. Returns matching passages and chunk anchors for context; use research_documents for conceptual questions.",
+        "description": "Find a literal phrase, policy ID or code identifier in indexed text. Preserves punctuation. Returns matching passages and chunk anchors for context; use deep_search for conceptual questions.",
         "parameters": {
             "type": "object",
             "properties": {

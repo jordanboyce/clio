@@ -423,6 +423,9 @@ def test_numeric_limits_carry_schema_constraints():
     expected = {
         ("search_collection", "top_k"): (1, 20),
         ("search_all_collections", "top_k_per_collection"): (1, 10),
+        ("deep_search", "top_k"): (1, 20),
+        ("deep_search", "max_per_document"): (1, 10),
+        ("deep_search", "max_context_chars"): (1000, 40000),
         ("research_documents", "top_k"): (1, 20),
         ("research_documents", "max_per_document"): (1, 10),
         ("research_documents", "max_context_chars"): (1000, 40000),
@@ -435,6 +438,7 @@ def test_numeric_limits_carry_schema_constraints():
         schema = _schema(tools[name], param)
         assert schema.get("minimum") == lo, (name, param, schema)
         assert schema.get("maximum") == hi, (name, param, schema)
+    assert _schema(tools["deep_search"], "subqueries")["maxItems"] == 3
     assert _schema(tools["research_documents"], "subqueries")["maxItems"] == 3
     assert _schema(tools["get_index_job"], "job_id")["minimum"] == 1
     assert tools["update_document_metadata"].inputSchema["properties"]["sensitivity"]["anyOf"][0]["enum"] == [

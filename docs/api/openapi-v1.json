@@ -125,9 +125,10 @@
         "properties": {
           "depth": {
             "default": "quick",
-            "description": "quick: one model pass. research: a full investigation, slower and costlier.",
+            "description": "quick: one model pass. deep: a full investigation (deep search), slower and costlier. research: the old name of deep, still accepted. The response echoes the value sent.",
             "enum": [
               "quick",
+              "deep",
               "research"
             ],
             "title": "Depth",

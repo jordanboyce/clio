@@ -683,7 +683,7 @@ export const MCP_CLIENT_GROUPS = [
             },
           }),
         ],
-        hint: 'pip install mcp. Call health_check first on a new server, then list_collections; research_documents for multi-part questions, ask_documents (when present) for a finished cited answer. With several collections chosen, open one session per URL.',
+        hint: 'pip install mcp. Call health_check first on a new server, then list_collections; deep_search for multi-part questions, ask_documents (when present) for a finished cited answer. With several collections chosen, open one session per URL.',
       },
       {
         key: 'typescript-sdk',

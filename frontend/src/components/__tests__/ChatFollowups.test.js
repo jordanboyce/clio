@@ -86,28 +86,46 @@ describe('Follow-ups, depth and the chat library', () => {
   it('remembers the chosen depth and lets a quick answer be taken deeper', async () => {
     useChatStore().addMessage('default', { role: 'user', content: 'How long?' })
     useChatStore().addAssistantMessage('default', { role: 'assistant', content: 'Five days.', depth: 'quick' }, [], null)
-    global.fetch.mockResolvedValue(sseResponse([{ type: 'text_delta', delta: 'Five working days.' }, doneEvent({ depth: 'research' })]))
+    global.fetch.mockResolvedValue(sseResponse([{ type: 'text_delta', delta: 'Five working days.' }, doneEvent({ depth: 'deep' })]))
     const wrapper = mountChat()
     await flushPromises()
 
     const radios = wrapper.findAll('[role="radiogroup"][aria-label="Answer depth"] [role="radio"]')
     expect(radios[0].attributes('aria-checked')).toBe('true')
     await radios[1].trigger('click')
-    expect(localStorage.getItem('chat_depth')).toBe('research')
+    expect(radios[1].text()).toBe('Deep search')
+    expect(localStorage.getItem('chat_depth')).toBe('deep')
     await radios[0].trigger('click')
 
     await wrapper.findAll('button').find((b) => b.text() === 'Go deeper').trigger('click')
     await flushPromises()
     const body = sentBody()
-    expect(body.depth).toBe('research')
+    expect(body.depth).toBe('deep')
     expect(body.use_cache).toBe(false)
     expect(body.messages).toEqual([{ role: 'user', content: 'How long?' }])
     const last = useChatStore().getMessages('default').at(-1)
     expect(last.content).toBe('Five working days.')
-    expect(last.depth).toBe('research')
-    // A research answer offers a plain regenerate, not another "deeper".
+    expect(last.depth).toBe('deep')
+    // A deep answer offers a plain regenerate, not another "deeper".
     expect(wrapper.findAll('button').some((b) => b.text() === 'Go deeper')).toBe(false)
     expect(wrapper.findAll('button').some((b) => b.text() === 'Regenerate')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('reads the pre-R9 "research" depth, saved or on an old answer, as Deep search', async () => {
+    localStorage.setItem('chat_depth', 'research')
+    useChatStore().addMessage('default', { role: 'user', content: 'How long?' })
+    useChatStore().addAssistantMessage('default', { role: 'assistant', content: 'Five days.', depth: 'research' }, [], null)
+    global.fetch.mockResolvedValue(sseResponse([{ type: 'text_delta', delta: 'Five working days.' }, doneEvent({ depth: 'deep' })]))
+    const wrapper = mountChat()
+    await flushPromises()
+
+    const radios = wrapper.findAll('[role="radiogroup"][aria-label="Answer depth"] [role="radio"]')
+    expect(radios[1].attributes('aria-checked')).toBe('true')
+    expect(wrapper.text()).toContain('Deep search')
+    expect(wrapper.text()).not.toMatch(/\bResearch\b/)
+    // An old deep answer is not offered "Go deeper" either.
+    expect(wrapper.findAll('button').some((b) => b.text() === 'Go deeper')).toBe(false)
     wrapper.unmount()
   })
 

@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import Enum
 from typing import Annotated, List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import AfterValidator, BaseModel, BeforeValidator, Field
 
 
 def default_ai_provider() -> str:
@@ -22,6 +22,17 @@ AIProviderName = Annotated[
           description="AI provider, such as 'anthropic', 'openai', 'openai_compatible' or 'ollama'. "
                       "Omitted = the deployment's own (AI_PROVIDER)."),
 ]
+
+
+def normalize_depth(depth: str) -> str:
+    """The canonical answer depth: "quick" or "deep". "research" is the pre-R9
+    spelling of "deep" and is accepted for one release wherever a depth is."""
+    return "deep" if depth == "research" else depth
+
+
+# What a request may send as a depth; the value the code sees is always
+# "quick" or "deep".
+AnswerDepth = Annotated[Literal["quick", "deep", "research"], AfterValidator(normalize_depth)]
 
 
 class ChunkMetadata(BaseModel):
@@ -465,11 +476,12 @@ class ChatRequest(BaseModel):
                     "collection). Retrieval, tool calls, table queries, the overview and "
                     "citations all stay inside the selection. Omitted = every source in scope.",
     )
-    depth: Literal["quick", "research"] = Field(
-        "research",
+    depth: AnswerDepth = Field(
+        "deep",
         description="'quick' answers in one pass from the retrieved context (large tables "
-                    "stay queryable); 'research' lets the assistant run document searches "
-                    "and verification tools before answering.",
+                    "stay queryable); 'deep' (deep search) lets the assistant run document "
+                    "searches and verification tools before answering. 'research' is the "
+                    "old name of 'deep' and still accepted.",
     )
     related: bool = Field(
         True,
@@ -497,7 +509,7 @@ class ChatResponse(BaseModel):
     related_questions: List[str] = Field(
         default_factory=list, description="Suggested follow-up questions for this answer"
     )
-    depth: str = Field("research", description="The answer depth this turn ran at")
+    depth: str = Field("deep", description="The answer depth this turn ran at: 'quick' or 'deep'")
 
 
 class StarterQuestionsRequest(BaseModel):

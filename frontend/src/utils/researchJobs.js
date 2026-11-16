@@ -1,4 +1,4 @@
-// Research jobs (analyze, screen, review) as the server reports them, and
+// Library jobs (analyze, screen, review) as the server reports them, and
 // what to tell the person when one ends.
 //
 // The server's states (services/research/jobs.py): queued and running are

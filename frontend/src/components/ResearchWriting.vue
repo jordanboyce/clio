@@ -391,7 +391,7 @@ async function exportAs(format) {
 </script>
 
 <script>
-// Module scope: kept while the Research view switches tabs, gone on reload.
+// Module scope: kept while the Library switches views, gone on reload.
 import { reactive as _reactive } from 'vue'
 const draftState = _reactive({ text: '', checkedText: '', suggest: true })
 </script>

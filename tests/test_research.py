@@ -756,7 +756,7 @@ def test_finished_jobs_can_be_removed_but_not_ones_still_going(tmp_path):
 def test_job_size_is_capped(tmp_path, monkeypatch):
     from services.metadata_store import MetadataStore
     MetadataStore(tmp_path / "m.db")
-    monkeypatch.setattr(config.settings, "research_max_job_documents", 2)
+    monkeypatch.setattr(config.settings, "library_max_job_documents", 2)
     with pytest.raises(ValueError, match="at most 2"):
         jobs.start_job(collection_id="c", store=ResearchStore(tmp_path / "m.db"), kind="brief",
                        documents=[{"document_id": str(i)} for i in range(3)], work=lambda d, j: None, params={})
@@ -799,7 +799,7 @@ def client(indexer, monkeypatch):
 
 def test_api_library_flow(client):
     listed = client.get("/api/research/papers?collection_id=c1").json()
-    assert listed["stats"] == {"papers": 3, "analyzed": 0, "renameable": 0, "unread_briefs": 0}
+    assert listed["stats"] == {"papers": 3, "analyzed": 0, "renameable": 0, "unread_reviews": 0, "unread_briefs": 0}
     assert listed["can_write"] is True and listed["capabilities"]["registry_lookups"] is False
 
     detail = client.post("/api/research/papers/doc-2/analyze?collection_id=c1", json={}).json()
@@ -928,3 +928,80 @@ def test_api_assess_with_model_saves_the_verdict(client, monkeypatch):
     reading = client.get("/api/research/assessments?collection_id=c1&question=Does conductance predict survival?").json()
     assert [i["document_id"] for i in reading["items"]] == ["doc-1"]
     assert reading["questions"] == ["Does conductance predict survival?"]
+
+
+# ── R9 names: reviews and screening, with the old paths kept ────────────
+
+def test_api_screening_under_its_new_and_old_paths(client, monkeypatch):
+    p2 = _pid_of("Methods.", client.api.get_indexer("c1"))
+    fake = FakeProvider(lambda prompt: {"verdict": "partial", "summary": "", "points": [
+        {"point": "survival", "quote": "Survival was 31% higher in the top conductance quartile", "passage": p2}]})
+    monkeypatch.setattr(client.api, "_provider", lambda *args: (fake, "fake-model"))
+    monkeypatch.setattr(client.api, "record_chat_usage", lambda *a, **k: None)
+    question = "Does conductance predict survival?"
+    out = client.post("/api/research/papers/doc-1/screen?collection_id=c1",
+                      json={"question": question, "provider": "anthropic"}).json()
+    assert out["verdict"] == "partial" and out["saved_id"]
+    new = client.get(f"/api/research/screening?collection_id=c1&question={question}").json()
+    old = client.get(f"/api/research/assessments?collection_id=c1&question={question}").json()
+    assert new == old and [i["document_id"] for i in new["items"]] == ["doc-1"]
+    # The old single-paper path still screens.
+    assert client.post("/api/research/papers/doc-1/assess?collection_id=c1",
+                       json={"question": question, "provider": "anthropic"}).json()["verdict"] == "partial"
+    paper = client.get("/api/research/papers/doc-1?collection_id=c1").json()
+    assert paper["screenings"] and paper["screenings"] == paper["assessments"]
+    # Both spellings are in the description, the old ones marked deprecated.
+    spec = client.app.openapi()["paths"]
+    assert spec["/api/research/papers/{document_id}/assess"]["post"]["deprecated"] is True
+    assert not spec["/api/research/papers/{document_id}/screen"]["post"].get("deprecated")
+
+
+def test_api_review_jobs_and_queue_under_their_new_and_old_names(client, monkeypatch):
+    fake = FakeProvider(lambda prompt: {"tldr": []})
+    monkeypatch.setattr(client.api, "_provider", lambda *args: (fake, "fake-model"))
+    monkeypatch.setattr(client.api, "record_chat_usage", lambda *a, **k: None)
+    started = client.post("/api/research/jobs?collection_id=c1", json={
+        "kind": "review", "document_ids": ["doc-1", "doc-2"], "provider": "anthropic"}).json()
+    jobs.wait_for(started["job"]["job_id"])
+    # The job row keeps the stored kind.
+    assert client.get(f"/api/research/jobs/{started['job']['job_id']}?collection_id=c1").json()["kind"] == "brief"
+
+    new = client.get("/api/research/reviews?collection_id=c1&unread=true").json()
+    old = client.get("/api/research/briefs?collection_id=c1&unread=true").json()
+    assert new["unread"] == old["unread"] == 2
+    assert new["reviews"] == old["briefs"] and "briefs" not in new
+    listed = {p["document_id"]: p for p in client.get("/api/research/papers?collection_id=c1").json()["papers"]}
+    assert listed["doc-1"]["review_count"] == listed["doc-1"]["briefs"] == 1
+    assert listed["doc-1"]["unread_reviews"] == listed["doc-1"]["unread_briefs"] == 1
+    paper = client.get("/api/research/papers/doc-1?collection_id=c1").json()
+    assert paper["reviews"] and paper["reviews"] == paper["brief_list"]
+
+    first, second = new["reviews"]
+    assert client.post(f"/api/research/reviews/{first['id']}/read?collection_id=c1", json={}).json()["read"]
+    assert client.post(f"/api/research/briefs/{second['id']}/read?collection_id=c1", json={}).json()["read"]
+    assert client.get("/api/research/reviews?collection_id=c1&unread=true").json()["unread"] == 0
+    assert client.delete(f"/api/research/reviews/{first['id']}?collection_id=c1").json() == {"deleted": first["id"]}
+    assert client.delete(f"/api/research/briefs/{second['id']}?collection_id=c1").json() == {"deleted": second["id"]}
+    assert client.get("/api/research/reviews?collection_id=c1").json()["reviews"] == []
+
+    # The old job kind is still accepted; an unknown one is refused.
+    again = client.post("/api/research/jobs?collection_id=c1", json={
+        "kind": "brief", "document_ids": ["doc-1"], "provider": "anthropic"}).json()
+    jobs.wait_for(again["job"]["job_id"])
+    assert client.post("/api/research/jobs?collection_id=c1", json={
+        "kind": "summarise", "document_ids": ["doc-1"], "provider": "anthropic"}).status_code == 422
+
+
+def test_api_screening_job_under_its_new_name(client, monkeypatch):
+    fake = FakeProvider(lambda prompt: {"verdict": "not_relevant", "summary": "", "points": []})
+    monkeypatch.setattr(client.api, "_provider", lambda *args: (fake, "fake-model"))
+    monkeypatch.setattr(client.api, "record_chat_usage", lambda *a, **k: None)
+    assert client.post("/api/research/jobs?collection_id=c1", json={
+        "kind": "screen", "document_ids": ["doc-1"], "provider": "anthropic"}).status_code == 400  # needs a question
+    started = client.post("/api/research/jobs?collection_id=c1", json={
+        "kind": "screen", "question": "root depth", "document_ids": ["doc-1"], "provider": "anthropic"}).json()
+    jobs.wait_for(started["job"]["job_id"])
+    job = client.get(f"/api/research/jobs/{started['job']['job_id']}?collection_id=c1").json()
+    assert job["kind"] == "assess" and job["status"] == "done"
+    reading = client.get("/api/research/screening?collection_id=c1&question=root depth").json()
+    assert [i["document_id"] for i in reading["items"]] == ["doc-1"]

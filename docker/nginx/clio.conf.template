@@ -30,7 +30,7 @@ server {
     proxy_buffering  off;
     proxy_cache      off;
 
-    # A research answer can run for minutes between bytes.
+    # A deep-search answer can run for minutes between bytes.
     proxy_read_timeout 900s;
     proxy_send_timeout 900s;
 

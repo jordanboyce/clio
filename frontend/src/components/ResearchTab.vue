@@ -2,13 +2,13 @@
   <div class="max-w-6xl mx-auto py-4 space-y-4" data-testid="research-tab">
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h2 class="text-lg font-semibold">Research</h2>
+        <h2 class="text-lg font-semibold">Library</h2>
         <p class="text-sm text-base-content/60">
           Decide what to read, keep papers and books findable, and follow what they cite. Details come from each
           source's own text<span v-if="capabilities.registry_lookups"> or the catalogue record for the identifier it prints</span>.
         </p>
       </div>
-      <div class="segmented" role="tablist" aria-label="Research view">
+      <div class="segmented" role="tablist" aria-label="Library view">
         <button
           v-for="v in views"
           :key="v.id"
@@ -19,7 +19,7 @@
           @click="view = v.id"
         >
           <component :is="v.icon" :size="14" aria-hidden="true" />{{ v.label }}
-          <span v-if="v.id === 'reviews' && stats.unread_briefs" class="badge badge-primary badge-xs tabular-nums">{{ stats.unread_briefs }}</span>
+          <span v-if="v.id === 'reviews' && stats.unread_reviews" class="badge badge-primary badge-xs tabular-nums">{{ stats.unread_reviews }}</span>
         </button>
       </div>
     </div>
@@ -59,7 +59,7 @@
                 v-model="question"
                 class="input input-bordered input-sm flex-1 min-w-[16rem]"
                 placeholder="What are you looking for? e.g. effect of root depth on drought survival"
-                aria-label="Research question to screen sources against"
+                aria-label="Question to screen sources against"
                 list="research-questions"
               />
               <datalist id="research-questions">
@@ -139,7 +139,7 @@
                     {{ VERDICTS[verdicts[p.document_id].verdict]?.label }}
                   </span>
                   <span class="text-base-content/45 tabular-nums space-x-2">
-                    <span v-if="p.unread_briefs" class="text-primary">● review</span>
+                    <span v-if="p.unread_reviews" class="text-primary">● review</span>
                     <span v-if="p.cited_by" :title="`Cited by ${p.cited_by} of your sources`">↖ {{ p.cited_by }}</span>
                     <span v-if="p.references" :title="`${p.references} references`">≡ {{ p.references }}</span>
                   </span>
@@ -271,7 +271,8 @@ import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useSelectionStore } from '../stores/selectionStore'
 
 const views = [
-  { id: 'library', label: 'Library', icon: Library },
+  // The tab itself is the Library; its first view is the list of papers.
+  { id: 'library', label: 'Papers', icon: Library },
   { id: 'map', label: 'Citation map', icon: Network },
   { id: 'reviews', label: 'Reviews', icon: NotebookPen },
   { id: 'write', label: 'Cite & check', icon: Quote },
@@ -292,7 +293,7 @@ const isWide = ref(wideQuery ? wideQuery.matches : true)
 const onWide = (e) => { isWide.value = e.matches }
 wideQuery?.addEventListener?.('change', onWide)
 
-// Shared with the ribbon, which can open Research on a given view.
+// Shared with the ribbon, which can open the Library on a given view.
 const view = computed({ get: () => ui.researchView, set: (v) => { ui.researchView = v } })
 const papers = ref([])
 const stats = ref({})
@@ -475,7 +476,7 @@ async function screen() {
   screening.value = true
   try {
     const out = await researchApi.startJob(collectionId.value, {
-      kind: 'assess', question: question.value.trim(), document_ids: screenTargets.value,
+      kind: 'screen', question: question.value.trim(), document_ids: screenTargets.value,
     }, providerId.value)
     sort.value = 'verdict'
     poller.watch([out.job.job_id], {

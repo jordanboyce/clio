@@ -229,8 +229,10 @@ class AskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(..., min_length=1, max_length=MAX_QUERY_CHARS)
-    depth: Literal["quick", "research"] = Field(
-        "quick", description="quick: one model pass. research: a full investigation, slower and costlier."
+    depth: Literal["quick", "deep", "research"] = Field(
+        "quick", description="quick: one model pass. deep: a full investigation (deep search), slower "
+                             "and costlier. research: the old name of deep, still accepted. The "
+                             "response echoes the value sent."
     )
     top_k: int = Field(8, ge=1, le=MAX_TOP_K)
     document_ids: Optional[List[str]] = Field(None, max_length=1000, description="Answer from only these documents")

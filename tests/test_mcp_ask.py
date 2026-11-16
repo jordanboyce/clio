@@ -110,7 +110,27 @@ def test_rejects_bad_inputs(deployment_model):
     with pytest.raises(ValueError, match="empty"):
         mcp.ask_documents_sync("   ")
     with pytest.raises(ValueError, match="depth"):
-        mcp.ask_documents_sync("q", depth="deep")
+        mcp.ask_documents_sync("q", depth="thorough")
+
+
+@pytest.mark.parametrize("sent", ["deep", "research"])
+def test_deep_and_its_old_spelling_run_the_same_deep_answer(deployment_model, monkeypatch, sent):
+    """R9: depth="deep" is the name; "research" still works, is echoed back as
+    sent (so an existing caller sees no change) and carries a note."""
+    from api import chat as chat_api
+
+    seen: dict = {}
+    done = {"type": "done", "depth": "deep", "cached": False, "sources": [], "structured_results": [],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "model": "m"}, "_answer": "A."}
+    monkeypatch.setattr(chat_api, "_run_turn", _scripted_turn([done], seen))
+    monkeypatch.setattr(chat_api, "_prepare_turn", lambda req, cid, hint: ("ctx", None))
+    monkeypatch.setattr(chat_api, "check_daily_budget", lambda user: None)
+
+    out = mcp.ask_documents_sync("Compare the rules", depth=sent)
+
+    assert seen["request"].depth == "deep"
+    assert out["depth"] == sent
+    assert ("deprecation" in out) == (sent == "research")
 
 
 def test_tool_is_absent_without_a_deployment_model():

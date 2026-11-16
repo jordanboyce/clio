@@ -1,10 +1,15 @@
-# Agentic document research
+# Deep search
 
-The in-app agent and MCP clients can use `research_documents` to investigate a
+Ask's **Deep search** depth (the in-app agent) and MCP clients can use `deep_search` to investigate a
 question through several searches, return a diverse set of passages, and see
 which subquestions still lack selected evidence. `find_in_documents` complements
 this with literal phrase and identifier lookup. Both feed the app's numbered
 citations and evidence viewer.
+
+`deep_search` was called `research_documents` before R9 (2026-11-16). The old
+name still works over MCP and in the in-app agent for one release; its responses
+carry a `deprecation` note. Likewise `ask_documents` and `/api/v1` accept
+`depth="research"` as the old spelling of `depth="deep"`.
 
 ## Try it
 
@@ -16,12 +21,12 @@ described in [the agency pilot guide](AGENCY_PILOT.md), then ask:
 > check when each applies, and cite the supporting passages. Tell me what the
 > documents do not establish.
 
-Use a configured answer-generation model. The model chooses its tool calls;
-the research instructions encourage focused subquestions and context verification.
-Open **Research activity** to inspect returned passages, retrieval coverage, and
+Use a configured answer-generation model and choose **Deep search** under the
+question. The model chooses its tool calls; the deep-search instructions encourage focused subquestions and context verification.
+Open **Search activity** to inspect returned passages, retrieval coverage, and
 any failed steps. Click the answer's numbered citations to check its evidence.
 
-An MCP client can call `research_documents` with arguments like:
+An MCP client can call `deep_search` with arguments like:
 
 ```json
 {
@@ -71,15 +76,17 @@ identifier, and inspect the relevant implementation or runbook context.
   methods, a search trace, coverage, and a suggested context lookup. Identity is
   not a versioned snapshot or proof that the source content has not changed.
 - Failed branches remain visible as failures. Other branches can still supply
-  useful evidence; the app keeps partially failed research activity open.
-- Research calls are gated by concurrency, not rate: `RESEARCH_MAX_CONCURRENT`
+  useful evidence; the app keeps partially failed search activity open.
+- Deep searches are gated by concurrency, not rate: `DEEP_SEARCH_MAX_CONCURRENT`
   (default 3) slots, and a caller that waits longer than
-  `RESEARCH_QUEUE_TIMEOUT_SECONDS` (default 60) gets a retryable "busy" error.
+  `DEEP_SEARCH_QUEUE_TIMEOUT_SECONDS` (default 60) gets a retryable "busy" error.
+  `RESEARCH_MAX_CONCURRENT` and `RESEARCH_QUEUE_TIMEOUT_SECONDS`, their pre-R9
+  names, are still read.
   `/mcp` has its own rate-limit class, `RATE_LIMIT_MCP_PER_MINUTE`, keyed on
   the personal token and unlimited (0) by default, because agents fan out
   tool calls and handle 429s badly.
 
-Research works in one collection per call by default. Over MCP, `collection_ids`
+Deep search works in one collection per call by default. Over MCP, `collection_ids`
 (up to eight ids or names, or `["*"]` for every collection the credential can
 see) fans the same branches out across several collections and fuses them into
 one ranked list: score-ranked for the hybrid and keyword branches, interleaved
@@ -108,7 +115,7 @@ still enforced per tool.
 
 `retrieved` means at least one *strong* passage came from a query's retrieval
 branches. `weak_evidence` means the query only matched single-branch passages
-ranked below third place in that branch: research fills `top_k` with whatever
+ranked below third place in that branch: deep search fills `top_k` with whatever
 survives, so this separates agreement between branches from a stray match. Each
 result also carries `evidence_strength` (`strong` or `weak`), and coverage lists
 `strong_evidence_ids` separately. `no_selected_evidence` means nothing survived

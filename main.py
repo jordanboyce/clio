@@ -168,6 +168,15 @@ def _check_security_posture() -> None:
         )
 
 
+def _log_renamed_settings() -> None:
+    """Name each pre-R9 setting still in use, so an operator renames it
+    before the old spelling is dropped. The value itself is honoured."""
+    from config import legacy_setting_names
+
+    for old, new in legacy_setting_names():
+        logger.warning("%s is the old name of %s; it still works for now, but rename it.", old, new)
+
+
 def _size_worker_pools() -> None:
     """Give both thread pools WORKER_THREADS slots.
 
@@ -197,6 +206,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager - initialize and cleanup services."""
     async with mcp_server_lifespan():
         logger.info("Initializing Clio API...")
+        _log_renamed_settings()
         _size_worker_pools()
 
         # Jobs do not survive the process that ran them, but their rows do.

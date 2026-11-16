@@ -22,10 +22,10 @@ const Loaded = defineComponent({
 describe('lazyView', () => {
   it('shows a named loading state while the chunk is on its way', async () => {
     let resolve
-    const View = lazyView(() => new Promise((r) => { resolve = r }), { name: 'Research' })
+    const View = lazyView(() => new Promise((r) => { resolve = r }), { name: 'Library' })
     const wrapper = mount(View)
     await wait(200)
-    expect(wrapper.get('[data-testid="lazy-view-fallback"]').text()).toBe('Opening Research…')
+    expect(wrapper.get('[data-testid="lazy-view-fallback"]').text()).toBe('Opening Library…')
 
     resolve(Loaded)
     await settle()
@@ -51,13 +51,13 @@ describe('lazyView', () => {
       return calls <= 2
         ? Promise.reject(new Error('Failed to fetch dynamically imported module'))
         : Promise.resolve(Loaded)
-    }, { name: 'Research' })
+    }, { name: 'Library' })
     const wrapper = mount(View)
     await settle()
 
     expect(calls).toBe(2) // one silent retry first
     const fallback = wrapper.get('[data-testid="lazy-view-fallback"]')
-    expect(fallback.text()).toContain('Research could not be loaded')
+    expect(fallback.text()).toContain('Library could not be loaded')
     expect(fallback.text()).toContain('Reload Clio')
 
     await wrapper.get('[data-testid="lazy-view-retry"]').trigger('click')

@@ -27,7 +27,7 @@ def _store(tmp_path):
 # ── F4: analyzing more sources than one job may cover ───────────────────
 
 def test_analyze_more_sources_than_one_job_covers_splits_the_work(client, monkeypatch):
-    monkeypatch.setattr(config.settings, "research_max_job_documents", 2)
+    monkeypatch.setattr(config.settings, "library_max_job_documents", 2)
     response = client.post("/api/research/analyze?collection_id=c1", json={})
     assert response.status_code == 202, response.text
     out = response.json()

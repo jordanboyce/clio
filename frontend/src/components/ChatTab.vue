@@ -358,7 +358,7 @@
                      where the auto-scroll anchor keeps it in view as it streams) -->
                 <details v-if="msg.structuredResults && msg.structuredResults.length > 0" class="mt-3 space-y-2" :open="msg.streaming || msg.structuredResults.some(sr => sr.error || sr.result?.partial_failure)">
                   <summary class="cursor-pointer text-xs text-base-content/70 py-2" aria-live="polite">
-                    Research activity · {{ msg.structuredResults.filter(sr => sr.tool !== '_thinking').length }} steps
+                    Search activity · {{ msg.structuredResults.filter(sr => sr.tool !== '_thinking').length }} steps
                     <span v-if="msg.streaming"> · Working…</span>
                     <span v-else-if="msg.structuredResults.some(sr => sr.error || sr.result?.partial_failure)"> · Some steps failed</span>
                   </summary>
@@ -461,7 +461,7 @@
                     </div>
 
                     <!-- Document search results -->
-                    <div v-else-if="['search_documents', 'research_documents'].includes(sr.tool) && sr.result?.results" class="px-3 py-2 space-y-1">
+                    <div v-else-if="['search_documents', 'deep_search', 'research_documents'].includes(sr.tool) && sr.result?.results" class="px-3 py-2 space-y-1">
                       <p v-if="sr.result.partial_failure" class="text-xs text-warning">Some searches failed. Evidence may be incomplete.</p>
                       <ul v-if="sr.result.coverage" class="text-xs space-y-1 pb-2">
                         <li v-for="(item, coverageIndex) in sr.result.coverage" :key="coverageIndex">
@@ -545,10 +545,10 @@
                   v-if="!msg.streaming && (msg.aiUsage || msg.content)"
                   class="flex items-center gap-x-2 gap-y-1 mt-2.5 flex-wrap text-xs text-base-content/45"
                 >
-                  <span v-if="msg.depth" class="inline-flex items-center gap-1" :title="msg.depth === 'quick' ? 'Quick answer: one pass from the retrieved passages' : 'Research answer: document searches and verification ran before answering'">
+                  <span v-if="msg.depth" class="inline-flex items-center gap-1" :title="msg.depth === 'quick' ? 'Quick answer: one pass from the retrieved passages' : 'Deep search: document searches and verification ran before answering'">
                     <Zap v-if="msg.depth === 'quick'" :size="10" aria-hidden="true" />
                     <Search v-else :size="10" aria-hidden="true" />
-                    {{ msg.depth === 'quick' ? 'Quick' : 'Research' }}
+                    {{ depthLabel(msg.depth) }}
                   </span>
                   <template v-if="msg.cached">
                     <span aria-hidden="true">·</span>
@@ -572,7 +572,7 @@
                       class="btn btn-ghost btn-xs h-5 min-h-0 px-1.5 gap-1 text-base-content/50 hover:text-base-content"
                       title="Answer again with document searches and verification"
                       :disabled="loading"
-                      @click="rerunAnswer(index, { depth: 'research' })"
+                      @click="rerunAnswer(index, { depth: 'deep' })"
                     >
                       <Search :size="11" aria-hidden="true" />
                       <span class="text-xs">Go deeper</span>
@@ -604,7 +604,7 @@
                   <button
                     v-if="msg.content && msg.sources?.length && !msg.streaming"
                     class="btn btn-ghost btn-xs h-5 min-h-0 px-1.5 text-base-content/50 hover:text-base-content gap-1"
-                    :title="`Copy the answer with ${styleLabel(citationStyle)} citations and a reference list (change the style in Research › Cite & check)`"
+                    :title="`Copy the answer with ${styleLabel(citationStyle)} citations and a reference list (change the style in Library › Cite & check)`"
                     :aria-label="citedMessageIndex === index ? 'Copied with citations' : `Copy answer with ${styleLabel(citationStyle)} citations`"
                     data-testid="copy-with-citations"
                     @click="copyWithCitations(msg, index)"
@@ -708,7 +708,7 @@
               >
                 /
               </button>
-              <!-- Answer depth: the one-tap Quick / Research choice. Without a
+              <!-- Answer depth: the one-tap Quick / Deep search choice. Without a
                    model there is no answer to shape, and the room goes to the
                    labelled Find passages button on a phone. -->
               <div v-if="!findsInstead" class="join rounded-full border border-base-300" role="radiogroup" aria-label="Answer depth">
@@ -727,14 +727,15 @@
                 <button
                   type="button"
                   class="btn btn-xs join-item gap-1 border-0 rounded-r-full"
-                  :class="depth === 'research' ? 'btn-active' : 'btn-ghost text-base-content/60'"
+                  :class="depth === 'deep' ? 'btn-active' : 'btn-ghost text-base-content/60'"
                   role="radio"
-                  :aria-checked="depth === 'research'"
-                  title="Research: runs document searches and verification before answering. Slower, more thorough."
-                  @click="depth = 'research'"
+                  :aria-checked="depth === 'deep'"
+                  title="Deep search: runs document searches and verification before answering. Slower, more thorough."
+                  data-testid="depth-deep"
+                  @click="depth = 'deep'"
                 >
                   <Search :size="12" aria-hidden="true" />
-                  Research
+                  Deep search
                 </button>
               </div>
               <span v-if="selectedProvider" class="badge badge-xs hidden sm:inline-flex" :class="providerBadgeClass(selectedProvider)">{{ providerDisplayName(selectedProvider) }}</span>
@@ -797,6 +798,7 @@ import AnswerEvidence from './AnswerEvidence.vue'
 import { answerWithReferences } from '../utils/answerEvidence'
 import { answerWithCitations, citeSources, copyRich, styleLabel, useCitationStyle } from '../utils/citations.js'
 import { researchApi } from '../utils/researchApi.js'
+import { depthLabel, normalizeDepth } from '../utils/answerDepth.js'
 import { CornerDownRight, Feather, MessageSquare, ScrollText, FileText, ArrowUp, Trash2, Layers, Database, Plus, History, ChevronDown, SlidersHorizontal, Table2, Search, BookOpen, ListTree, Wrench, Copy, Check, RefreshCw, Zap, Download, Square, Info, CircleAlert, X, Bot, Sparkles, Quote } from 'lucide-vue-next'
 import { useChatStore } from '../stores/chatStore'
 import { useCollectionStore } from '../stores/collectionStore'
@@ -909,11 +911,11 @@ const seedCacheThreshold = async () => {
   }
 }
 // Answer depth. Quick answers in one pass from the retrieved passages (large
-// tables stay queryable); Research runs document searches and verification
+// tables stay queryable); Deep search runs document searches and verification
 // first. Quick is the default: time-to-answer is the product's metric, and
-// "Go deeper" on any quick answer is one click.
-const DEPTHS = ['quick', 'research']
-const depth = ref(DEPTHS.includes(localStorage.getItem('chat_depth')) ? localStorage.getItem('chat_depth') : 'quick')
+// "Go deeper" on any quick answer is one click. A choice saved before R9 is
+// 'research', which is read as 'deep'.
+const depth = ref(normalizeDepth(localStorage.getItem('chat_depth')) || 'quick')
 // Set by "Go deeper" / "Regenerate" for the one turn they trigger.
 const depthOverride = ref('')
 
@@ -1165,7 +1167,9 @@ const isNumeric = (v) => typeof v === 'number' || (typeof v === 'string' && v !=
 
 // Map agent tool names to a renderer label, icon, and primary detail.
 const TOOL_META = {
-  research_documents:      { label: 'Researching sources',   icon: Search,   color: 'text-info' },
+  deep_search:             { label: 'Searching in depth',   icon: Search,   color: 'text-info' },
+  // Pre-R9 name of deep_search, still in saved conversations.
+  research_documents:      { label: 'Searching in depth',   icon: Search,   color: 'text-info' },
   find_in_documents:       { label: 'Finding exact wording',  icon: Search,   color: 'text-info' },
   search_documents:        { label: 'Searching documents',  icon: Search,   color: 'text-info' },
   get_document_context:    { label: 'Reading document',     icon: BookOpen, color: 'text-info' },
@@ -1372,7 +1376,7 @@ const runInlineSlashCommand = async (input) => {
 const forceFresh = ref(false)
 
 // Ask the question behind an answer again — always fresh, optionally at a
-// different depth ("Go deeper" reruns a quick answer as research).
+// different depth ("Go deeper" reruns a quick answer as a deep search).
 const rerunAnswer = async (index, { depth: nextDepth } = {}) => {
   if (loading.value) return
   const msgs = messages.value

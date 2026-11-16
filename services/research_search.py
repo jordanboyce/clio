@@ -1,4 +1,4 @@
-"""Bounded multi-query research, independent of transport and model provider.
+"""Deep search: bounded multi-query retrieval, independent of transport and model provider.
 
 Callbacks must enforce collection visibility, source filters, and quarantine.
 No provider calls or query expansion are hidden here: the caller supplies the
@@ -11,7 +11,7 @@ from collections import Counter
 
 
 RESEARCH_INSTRUCTIONS = (
-    "For comparisons or multi-part document questions, use research_documents "
+    "For comparisons or multi-part document questions, use deep_search "
     "with up to three focused subqueries (for example the rule, exceptions, and "
     "effective date). Keep identifiers and negation intact. Inspect its coverage "
     "and suggested_next fields; a match is not proof of an answer. Use "
@@ -227,7 +227,7 @@ def research(query, subqueries, search, find, *, top_k=8, max_per_document=2,
                                          **({"chunk_id": first["chunk_id"]} if first.get("chunk_id") else {"page_number": first.get("page_number", 1)}),
                                          "max_chars": 6000}})
     if any(not c["evidence_ids"] for c in coverage):
-        next_steps.append({"tool": "research_documents", "reason": "Some questions lack selected evidence. Rephrase those questions or narrow the source filters; do not assume the answer."})
+        next_steps.append({"tool": "deep_search", "reason": "Some questions lack selected evidence. Rephrase those questions or narrow the source filters; do not assume the answer."})
     elif any(c["status"] == "weak_evidence" for c in coverage):
         next_steps.append({"tool": "get_document_context", "reason": "Some questions have only weak evidence (one branch, low rank). Read the passage in context before relying on it, or rephrase the question."})
     return {"queries": queries, "results": selected, "total_results": len(selected),

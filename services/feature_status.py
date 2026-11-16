@@ -163,14 +163,16 @@ def _ai() -> Dict[str, Any]:
 def _research() -> Dict[str, Any]:
     from services.research.lookup import lookup_available
 
-    label = "Research"
+    # The id stays "research" (saved settings and the Features form key on
+    # it); what it controls, and what people read, is catalogue lookups.
+    label = "Catalogue lookups"
     if lookup_available():
-        return _feature("research", label, ON, "Papers are organised and checked, with citations looked up in "
-                                               "public catalogues. Those are tested when used.")
+        return _feature("research", label, ON, "Library papers get their citation details and references "
+                                               "looked up in public catalogues. Those are tested when used.")
     return _feature("research", label, LIMITED,
-                    "Papers are organised and checked from their own text. Catalogue lookups are off"
+                    "Library papers are organised and checked from their own text. Catalogue lookups are off"
                     + (" in offline mode." if settings.offline_mode else "."),
-                    "" if settings.offline_mode else "Turn lookups on in Settings, Features.")
+                    "" if settings.offline_mode else "Turn catalogue lookups on in Settings, Features.")
 
 
 def _links() -> Dict[str, Any]:
