@@ -185,7 +185,7 @@
               v-if="paper.capabilities?.link_download"
               class="btn btn-xs btn-outline"
               :disabled="busy.download"
-              @click="downloadDialog = true"
+              @click="downloadModal.open()"
             >Download…</button>
           </div>
         </div>
@@ -232,9 +232,9 @@
     </div>
 
     <!-- Download dialog -->
-    <dialog class="modal" :open="downloadDialog" @close="downloadDialog = false">
+    <dialog :ref="downloadModal.dialogRef" class="modal" aria-labelledby="research-download-title" @close="downloadModal.onClosed">
       <div class="modal-box max-w-md space-y-3">
-        <h3 class="font-semibold">Download references</h3>
+        <h3 id="research-download-title" class="font-semibold">Download references</h3>
         <p class="text-sm text-base-content/70">
           Fetches each reference into this collection. Open PDFs come from arXiv and the open-access copies
           OpenAlex knows about; paywalled papers are skipped unless you ask for their landing pages.
@@ -248,7 +248,7 @@
           Fetch publisher pages when there is no open PDF
         </label>
         <div class="modal-action">
-          <button class="btn btn-sm btn-ghost" @click="downloadDialog = false">Cancel</button>
+          <button class="btn btn-sm btn-ghost" @click="downloadModal.close()">Cancel</button>
           <button class="btn btn-sm btn-primary" :disabled="busy.download" @click="download">
             <span v-if="busy.download" class="loading loading-spinner loading-xs" />Download
           </button>
@@ -257,7 +257,7 @@
           <li v-for="s in downloadResult.skipped" :key="s.reference_id">{{ truncate(s.text, 80) }} — {{ s.reason }}</li>
         </ul>
       </div>
-      <form method="dialog" class="modal-backdrop"><button @click="downloadDialog = false">close</button></form>
+      <form method="dialog" class="modal-backdrop"><button aria-label="Close">close</button></form>
     </dialog>
   </aside>
 </template>
@@ -271,6 +271,8 @@ import ResearchCitePanel from './ResearchCitePanel.vue'
 import { researchApi, VERDICTS, pageUrl, sourceLabel, abstractLabel, isOpening } from '../utils/researchApi.js'
 import { useUiStore } from '../stores/uiStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
+import { useModal } from '../composables/useModal'
+import { finishNotice, isActive } from '../utils/researchJobs.js'
 
 const props = defineProps({
   documentId: { type: String, required: true },
@@ -291,7 +293,7 @@ const questionDraft = ref(props.question || '')
 const assessment = ref(null)
 const queuedReview = ref(false)
 const refLimit = ref(25)
-const downloadDialog = ref(false)
+const downloadModal = useModal()
 const includeLinks = ref(false)
 const includePages = ref(false)
 const downloadResult = ref(null)
@@ -354,9 +356,11 @@ async function analyze() {
     const poll = async () => {
       try {
         const job = (await researchApi.jobs(props.collectionId)).jobs.find(j => j.job_id === out.job.job_id)
-        if (job && ['queued', 'running'].includes(job.status)) { analyzeTimer = setTimeout(poll, 2000); return }
+        if (isActive(job)) { analyzeTimer = setTimeout(poll, 2000); return }
         busy.analyze = false
-        if (job?.failed) ui.notify(job.errors?.[0]?.error || 'Analysis failed', 'error')
+        const notice = finishNotice(job ? [job] : [], { noun: 'Analysis', past: 'analyzed', failed: 'could not be read' },
+          { missing: job ? 0 : 1 })
+        if (notice) ui.notify(notice.message, notice.type, { duration: 6000 })
         if (props.documentId === documentId) await load()
         emit('changed')
       } catch (err) {
@@ -443,7 +447,9 @@ async function prepare(depth) {
 async function resolveAll() {
   busy.resolve = true
   try {
-    await researchApi.resolve(props.collectionId, { document_id: props.documentId })
+    const out = await researchApi.resolve(props.collectionId, { document_id: props.documentId })
+    // A catalogue that could not be asked is not "no open copy": say so.
+    if (out?.lookup_failed) ui.notify(out.message, 'warning', { duration: 8000 })
     await load()
   } catch (err) {
     ui.toastError(err, 'Lookup failed')
@@ -462,7 +468,7 @@ async function download() {
     if (out.job) jobsStore.addUploadJob(out.job)
     const n = out.queued?.length || 0
     ui.notify(n ? `Downloading ${n} item${n === 1 ? '' : 's'} into this collection` : 'Nothing new to download', n ? 'success' : 'info')
-    if (n && !out.skipped?.length) downloadDialog.value = false
+    if (n && !out.skipped?.length) downloadModal.close()
     await load()
   } catch (err) {
     ui.toastError(err, 'Download failed')

@@ -57,7 +57,8 @@
             v-if="!panelVisible"
             class="btn btn-sm border-base-300 bg-base-100/95 shadow-sm pointer-events-auto"
             title="Show the map overview"
-            @click="settings.showPanel = true"
+            data-testid="show-overview"
+            @click="setOverview(true)"
           ><PanelRightOpen :size="15" aria-hidden="true" />Overview</button>
         </div>
 
@@ -139,10 +140,16 @@
       </div>
 
       <!-- Side panel: the open source, the selected node, or the map overview.
-           Docked beside the canvas when the map is wide enough; over it when not. -->
+           Docked beside the canvas when the map is wide enough (panelLayout).
+           When it is not, the overview opens only when asked for, and then
+           below the map, never over the graph; a selected node or open
+           source still shows over it, as the thing just asked for. -->
+      <Teleport v-if="panelVisible" :to="`#${belowId}`" :disabled="!overviewBelow" defer>
       <aside
-        v-if="panelVisible"
-        class="side-panel absolute inset-y-0 right-0 z-30 flex w-full max-w-[23rem] flex-col border-l border-base-300 bg-base-100 shadow-xl @3xl:static @3xl:shadow-none @3xl:shrink-0 select-text"
+        class="side-panel flex flex-col border-base-300 bg-base-100 select-text"
+        :class="overviewBelow ? 'w-full max-h-[26rem] rounded-box border'
+          : layout.docked ? 'static shrink-0 border-l' : 'absolute inset-y-0 right-0 z-30 border-l shadow-xl'"
+        :style="overviewBelow ? null : { width: layout.docked ? `${layout.widthRem}rem` : `min(100%, ${layout.widthRem}rem)` }"
         :aria-label="showDetails ? 'Source details' : selected ? 'Selected node' : 'Map overview'"
         data-testid="graph-panel"
       >
@@ -226,7 +233,7 @@
                 <span v-if="settings.showCited"> · {{ insights.missingTotal }} cited work{{ insights.missingTotal === 1 ? '' : 's' }} you don't have</span>
               </p>
             </div>
-            <button class="btn btn-ghost btn-xs btn-square" aria-label="Hide the overview" title="Hide the overview" @click="settings.showPanel = false"><PanelRightClose :size="15" /></button>
+            <button class="btn btn-ghost btn-xs btn-square" aria-label="Hide the overview" title="Hide the overview" @click="setOverview(false)"><PanelRightClose :size="15" /></button>
           </header>
           <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-3 space-y-5 text-sm wrap-anywhere" data-testid="graph-overview">
             <div v-if="graph && !insights.links" class="rounded-box bg-base-200/70 p-3 text-xs space-y-2">
@@ -339,7 +346,9 @@
           </div>
         </template>
       </aside>
+      </Teleport>
     </div>
+    <div :id="belowId" data-testid="graph-below" />
   </div>
 </template>
 
@@ -354,7 +363,8 @@ import {
 import {
   DEFAULT_SETTINGS, RELEVANCE_LEGEND, SIZE_OPTIONS, SLIDERS, TYPE_LEGEND, communityLegend, connections,
   groupOf, isAsCited, labelAlpha, labelRank, loadSettings, mapInsights, matchesQuery, metricIndex, metricRadius,
-  neighborIds, nodeRadius, placeLabels, saveSettings, shortLabel, visibleGraph, wrapLabel, yearRange, yearStrength,
+  neighborIds, nodeRadius, panelLayout, placeLabels, saveSettings, shortLabel, visibleGraph, wrapLabel, yearRange,
+  yearStrength,
 } from '../utils/citationGraph.js'
 import ResearchNetworkPanel from './ResearchNetworkPanel.vue'
 import { researchApi, authorsShort, abstractLabel, VERDICTS } from '../utils/researchApi.js'
@@ -507,12 +517,37 @@ const focus = computed(() => {
 watch(selectedId, (id) => {
   abstractOpen.value = false
   for (const key of Object.keys(expanded)) delete expanded[key]
-  if (id) settings.showPanel = true
+  if (id && layout.value.autoOverview) settings.showPanel = true
   if (!id && localOf.value) localOf.value = null
 })
 
+// The map's own width decides where the panel goes (panelLayout). Where it
+// can only float over the graph, the overview stays closed until the person
+// opens it, and that choice is not saved as the wide-screen preference.
+const frameWidth = ref(0)
+const layout = computed(() => panelLayout(frameWidth.value))
+const overviewOnNarrow = ref(false)
+let frameObserver = null
+watch(frame, (el) => {
+  frameObserver?.disconnect()
+  frameObserver = null
+  if (!el) return
+  frameWidth.value = el.getBoundingClientRect().width
+  if (typeof ResizeObserver !== 'undefined') {
+    frameObserver = new ResizeObserver(() => { frameWidth.value = el.getBoundingClientRect().width })
+    frameObserver.observe(el)
+  }
+}, { flush: 'post' })
+function setOverview(open) {
+  if (layout.value.autoOverview) settings.showPanel = open
+  else overviewOnNarrow.value = open
+}
+const overviewShown = computed(() => layout.value.autoOverview ? settings.showPanel : overviewOnNarrow.value)
+const overviewBelow = computed(() => !layout.value.docked && overviewShown.value && !showDetails.value && !selected.value)
+const belowId = `research-map-below-${Math.random().toString(36).slice(2, 9)}`
+
 const showDetails = computed(() => Boolean(props.detailsId && slots.details))
-const panelVisible = computed(() => showDetails.value || Boolean(selected.value) || settings.showPanel)
+const panelVisible = computed(() => showDetails.value || Boolean(selected.value) || overviewShown.value)
 
 // The source open in the details panel is the one lit on the map.
 watch(() => props.detailsId, (id) => {
@@ -849,6 +884,7 @@ onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
   resizeObserver?.disconnect()
+  frameObserver?.disconnect()
   themeObserver?.disconnect()
   if (fg) { fg.pauseAnimation(); fg._destructor?.() }
   fg = null

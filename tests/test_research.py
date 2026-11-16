@@ -664,13 +664,21 @@ def test_one_unanswerable_part_does_not_sink_a_thorough_review(indexer, monkeypa
     assert any("1 part(s) could not be read" in n for n in out["notes"])
 
 
-def test_screening_gives_no_verdict_instead_of_failing_when_the_model_never_answers(indexer):
+def test_screening_fails_with_the_reason_when_the_model_never_answers(indexer):
+    # A failed call is not "can't tell from the text": it raises, as reviews do.
     from services.research import passages
     passages._LOW_EFFORT.clear()
-    result = relevance.assess(indexer, "doc-1", "Does root conductance predict survival?",
-                              provider=ReasoningProvider({}, accepts_effort=False), model="reasoner")
-    assert result["verdict"] == "not_established"
-    assert any("whole answer budget" in n for n in result["notes"])
+    with pytest.raises(passages.ModelReplyError, match="whole answer budget"):
+        relevance.assess(indexer, "doc-1", "Does root conductance predict survival?",
+                         provider=ReasoningProvider({}, accepts_effort=False), model="reasoner")
+
+
+def test_screening_fails_when_the_model_answer_cannot_be_read(indexer):
+    from services.research import passages
+    with pytest.raises(passages.ModelReplyError, match="could not be read") as raised:
+        relevance.assess(indexer, "doc-1", "Does root conductance predict survival?",
+                         provider=FakeProvider("Sure! It is relevant."), model="fake-model")
+    assert raised.value.usage["output_tokens"] == 50          # the spent tokens still count
 
 
 # ── jobs ────────────────────────────────────────────────────────────────
@@ -692,7 +700,9 @@ def test_job_records_progress_failures_and_finish(tmp_path):
                          work=work, params={}, finish=lambda: finished.append(True))
     jobs.wait_for(job["job_id"])
     final = store.get_job(job["job_id"])
-    assert final["status"] == "done" and (final["done"], final["failed"]) == (2, 1)
+    # Some papers failed: not plain "done", but still a finished job.
+    assert final["status"] == "done_with_errors" and (final["done"], final["failed"]) == (2, 1)
+    assert final["finished"] is True
     assert final["errors"] == [{"document_id": "bad", "filename": "bad.pdf", "error": "could not read"}]
     assert seen == [("a", job["job_id"]), ("b", job["job_id"])] and finished == [True]
 

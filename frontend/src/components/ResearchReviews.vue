@@ -161,6 +161,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import ResearchBrief from './ResearchBrief.vue'
+import { JOB_STATE_BADGES, JOB_STATE_LABELS, isActive } from '../utils/researchJobs.js'
 import { researchApi, authorsShort, nextLocalTime } from '../utils/researchApi.js'
 import { getProviderDisplayName } from '../utils/aiProviders.js'
 import { useUiStore } from '../stores/uiStore'
@@ -213,7 +214,6 @@ const startLabel = computed(() => {
   return `${today ? 'today' : 'tomorrow'} at ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
 })
 
-const isActive = (job) => ['queued', 'running'].includes(job.status)
 const finishedCount = computed(() => jobs.value.filter(j => !isActive(j)).length)
 const clearing = ref(false)
 
@@ -353,10 +353,10 @@ function jobTitle(job) {
 }
 function jobStatus(job) {
   if (job.status === 'queued' && job.params?.not_before) return 'Scheduled'
-  return { queued: 'Waiting', running: 'Running', done: 'Done', failed: 'Stopped', cancelled: 'Cancelled' }[job.status] || job.status
+  return JOB_STATE_LABELS[job.status] || (isActive(job) ? job.status : 'Finished')
 }
 function jobTone(job) {
-  return { running: 'badge-info', done: 'badge-success', failed: 'badge-error', cancelled: 'badge-ghost' }[job.status] || 'badge-ghost'
+  return JOB_STATE_BADGES[job.status] || 'badge-ghost'
 }
 function when2(iso) {
   if (!iso) return ''

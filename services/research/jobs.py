@@ -12,6 +12,12 @@ model) and held in memory for the job's lifetime only; it is never written
 down. Like index jobs, research jobs do not survive a restart: a job the
 process no longer knows is reported failed with the reason, and finished
 papers keep their results. ``not_before`` lets a job wait for a quiet hour.
+
+A job ends in one of four states (``FINISHED``): ``done`` (every paper
+worked), ``done_with_errors`` (some worked, some failed: ``failed`` and
+``errors`` say which), ``failed`` (none worked, a budget stop, or a crash)
+and ``cancelled``. Every job row also carries ``finished``, so a client
+that only knows the older states can still tell a job has ended.
 """
 
 from __future__ import annotations
@@ -29,6 +35,8 @@ from services.research.store import ResearchStore, now_iso
 logger = logging.getLogger(__name__)
 
 KINDS = ("analyze", "assess", "brief")
+ACTIVE = ("queued", "running")
+FINISHED = ("done", "done_with_errors", "failed", "cancelled")
 MAX_DELAY_HOURS = 48
 RESTART_REASON = "Stopped: the server restarted while this job was running."
 
@@ -74,6 +82,18 @@ def list_jobs(store: ResearchStore, limit: int = 50) -> List[dict]:
     return store.list_jobs(limit=limit)
 
 
+def max_documents() -> int:
+    """How many papers one job may cover."""
+    return max(1, int(getattr(config.settings, "research_max_job_documents", 200) or 200))
+
+
+def final_status(done: int, failed: int) -> str:
+    """The state a job that worked through its papers ends in."""
+    if not failed:
+        return "done"
+    return "done_with_errors" if done else "failed"
+
+
 def _parse_time(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
@@ -104,7 +124,7 @@ def start_job(
     stop the job early (the user's daily token budget ran out)."""
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
-    limit = int(getattr(config.settings, "research_max_job_documents", 200) or 200)
+    limit = max_documents()
     if len(documents) > limit:
         raise ValueError(f"A job may cover at most {limit} papers; select fewer.")
     try:
@@ -175,7 +195,12 @@ def start_job(
                         finish()
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("Research job %s finishing step failed: %s", job_id, exc)
-                status = "done" if done or not failed else "failed"
+                        # Not silent: the papers worked, but the last step did not.
+                        failed_step = f"The finishing step failed: {str(exc)[:240] or exc.__class__.__name__}"
+                        errors.append({"document_id": None, "filename": None, "error": failed_step})
+                status = final_status(done, failed)
+                if status == "done" and any(e.get("document_id") is None for e in errors):
+                    status = "done_with_errors"
                 store.update_job(job_id, status=status, finished_at=now_iso(), current=None,
                                  done=done, failed=failed, errors=errors)
             finally:

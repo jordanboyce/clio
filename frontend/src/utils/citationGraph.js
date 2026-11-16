@@ -55,6 +55,21 @@ const SIZE_IDS = SIZE_OPTIONS.map(o => o.id)
 // Community colours come from this many theme slots; the rest share one.
 export const COMMUNITY_SLOTS = 8
 
+// Where the map's side panel goes, by the width of the map (px). From
+// PANEL_DOCK_WIDTH it sits beside the graph; below that it can only float
+// over it, so the overview opens there only when asked for. It also opens
+// by itself only where docking it still leaves most of the map to the graph.
+export const PANEL_DOCK_WIDTH = 768
+export const OVERVIEW_AUTO_WIDTH = 1024
+export function panelLayout(width) {
+  const w = Number(width) || 0
+  return {
+    docked: w >= PANEL_DOCK_WIDTH,
+    autoOverview: w >= OVERVIEW_AUTO_WIDTH,
+    widthRem: w >= OVERVIEW_AUTO_WIDTH ? 23 : 20,
+  }
+}
+
 const STORAGE_KEY = 'clio_graph_settings'
 
 // Settings are a per-viewer preference, like Obsidian's; storage can be
