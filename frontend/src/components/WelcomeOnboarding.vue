@@ -273,7 +273,10 @@ const emit = defineEmits(['complete', 'skip', 'samples'])
 // Two stages: the answer model, then the search index. The index step is
 // skipped when it is already ready (the baked Docker image) or when this
 // person cannot change deployment settings (a non-admin on a hosted site).
-const STEPS = ['Answers', 'Search index', 'Sources']
+// Adding sources is not a step here: it happens in the Sources panel, which
+// App opens and highlights once this screen closes, so a third dot could
+// never become current.
+const STEPS = ['Answers', 'Search index']
 const stage = ref('provider')
 const stepIndex = computed(() => (stage.value === 'embeddings' ? 1 : 0))
 const userStore = useUserStore()
