@@ -21,11 +21,14 @@ Two routes to the same data; use whichever your runtime supports.
    standard library only. Reads `CLIO_URL` and `CLIO_TOKEN` from the
    environment.
 
-`CLIO_TOKEN` is a personal access token (Settings -> MCP in the web app) or the
-deployment's shared password. Never print it, write it into a file you commit,
-or pass it on a command line. Tokens are read-only unless the owner allowed
-writes, and may be limited to certain collections: a 403 means you were not
-given that collection, so report it instead of working around it.
+`CLIO_TOKEN` is a personal access token (made in the web app's Connect tab) or
+the deployment's shared password. A personal token works on `/mcp` only; the
+CLI needs the shared password. Never print it, write it into a file you
+commit, or pass it on a command line. Tokens are read-only unless the owner
+allowed writes, and may be limited to certain collections. A collection you
+were not given answers exactly like one that does not exist ("not found, call
+`list_collections`"), so if a collection the user named is missing from
+`list_collections`, report that instead of working around it.
 
 ## Answer a question
 
@@ -34,7 +37,9 @@ given that collection, so report it instead of working around it.
 2. `search_collection` (or `search`) with the user's own wording. Retrieval is
    automatic; do not tune modes. Exact identifiers (ticket numbers, error
    codes, function names) and quoted phrases work. If you need a literal
-   string or regex, use `find_in_documents`.
+   string or regex, use `find_in_documents`. A regex is limited to 1,000
+   characters and 10 seconds per call; `scan_complete: false` means it
+   stopped early, so narrow the pattern rather than trusting "no match".
 3. Results are passages with a document and page. Before relying on a
    passage, read around it with `get_document_context` (or `fetch`). Snippets
    can cut off the sentence that qualifies the claim.
@@ -101,10 +106,15 @@ enumerate from search results; they are the top few passages, not the corpus.
 
 ## Add documents
 
-- One note or result from your work: MCP `write_document`
-  (`create` / `replace` / `append`). It needs a write-enabled token and
-  returns an error otherwise. An error means the source was left as it was.
-  Prefer `append` when several agents share a note: every append lands. To edit
+- One note or result from your work: MCP `create_document` (new note only) or
+  `append_to_document` (adds to the end, keeps every byte). Neither can destroy
+  text, so hosts need not ask before each call. `write_document`
+  (`create` / `replace` / `append`) does all three. Writes need a write-enabled
+  token and return an error otherwise. An error means the source was left as
+  it was. Notes you write are marked `source_type: "agent_note"`. You may
+  `replace` your own notes, but not a file a person uploaded, unless the
+  token's owner also allowed replacing uploads; appending to one is allowed.
+  Prefer appending when several agents share a note: every append lands. To edit
   a note, `read_document`, change that text, then `replace` with the
   `expected_document_id` it gave you; if someone else changed the note first the
   write is refused, so read it again and redo your edit. Do not rebuild a note
@@ -173,32 +183,14 @@ Reading a response:
 - Key concepts come from a capitalised-phrase heuristic, so cited names and PDF-glued
   words can appear among them. Do not present that list as a clean topic list.
 
-Pitfalls when changing this code:
-
-- NetworkX is pure Python only in part. `nx.pagerank` imports SciPy, and without SciPy
-  `nx.constraint` and `nx.effective_size` take a path that ran for minutes on a dense
-  200-node graph. The slim image has no SciPy, hence `pagerank` and `structural_holes`
-  in `network.py`; tests hold them equal to NetworkX's results.
-- Never pass tie strength as `weight` to betweenness: NetworkX reads it as a distance,
-  so the strongest ties look longest. Betweenness here counts hops.
-- Run Louvain on integer labels. A set of strings iterates differently per process, so
-  a fixed seed alone does not give the same communities.
-- Do not key a cache on `corpus_version` alone: analysis rewrites the research tables
-  without touching `documents`. Add `ResearchStore.version_token()`.
-- A reference matched before its target was quarantined keeps `matched_document_id`.
-  Pass `hidden_ids` to `build_graph`. Test it with `min_citations=1`: at the default of 2
-  a work cited once never becomes a node, so the test passes with the leak present.
-- Entity stoplists must hold the stored form, which is plural-stripped (`proceeding`,
-  `analysi`). Run them through `normalize_entity`.
-- Citation edges point citer to cited. Sort endpoints only when building the undirected
-  view, and read the weight from the original direction.
-
 ## When something is wrong
 
 | Symptom | Meaning / action |
 |---|---|
-| 401 | Missing or wrong `CLIO_TOKEN` |
-| 403 | Token not allowed on that collection or not write-enabled |
+| 401 | Missing or wrong `CLIO_TOKEN`, or a personal token used outside `/mcp` (the CLI needs the shared password) |
+| "Collection … not found" | Wrong id or name, or a collection this token was not given; the two look the same on purpose. Check `list_collections` |
+| A write tool refuses | The token is read-only, or you may not change that collection; the error says which. Report it rather than retrying |
+| 403 (CLI) | The signed-in user may not change that collection |
 | 413 | Collection storage cap reached; tell the administrator |
 | 429 | Rate limited; wait and retry once |
 | 503 on search | Embedding model not ready; `clio_cli.py status` shows why |

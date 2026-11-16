@@ -195,6 +195,34 @@ collection lacks.
 - The ribbon's *Citation graph* item (off by default; switch it on in
   *Customize the ribbon*) opens Research straight on the graph.
 
+### Key papers, people and concepts
+
+The map's overview panel also says which papers, authors and concepts hold
+the collection together. The method is Healy's "Using Metadata to Find Paul
+Revere": a few structural measures on who cites whom, who writes with whom and
+which concepts appear together find the *brokers*, the items that link groups
+that would otherwise be apart.
+
+- **Key papers** lists the papers that bridge separate groups. Each one names
+  the groups it links and the citations that show it; click one to find it on
+  the map. Two measures sit beside it, each with its meaning spelled out:
+  *betweenness* (how often it lies on the shortest path between other
+  sources) and *constraint* (how far its links are tied up in one group).
+- **Key people** does the same for authors, from co-authorship. Before naming
+  a person as a broker, read the note on names under the list: author names
+  are normalised, and a false merge of two people invents a broker.
+- **Key concepts** come from capitalised phrases in the text, a heuristic, so
+  cited names and words glued together in the PDF can appear among them.
+- A high score describes a position in these links, not the quality of the
+  work.
+- When the collection is too small or too fragmented for the measures to mean
+  much (under 50 nodes, 50 links or 30 sources, or less than half the nodes
+  connected), the panel says so first. Treat its lists as a starting point
+  then, not a finding.
+
+Results are cached until the collection or its analysis changes. The same
+analysis is in the API (`GET /api/research/network`).
+
 ## Without a model, or offline
 
 - Analysis, renaming, references, links, the citation map, citations and
@@ -253,9 +281,21 @@ an outbound path.
   suggestions stop at 25.
 - Research records live in the collection's own index database, so collection
   export/import and backups carry them.
-- Analysis and reviews run as background jobs in the server process. A
-  restart stops a running job (finished sources keep their results) and it is
-  reported as stopped. A job can be scheduled up to 48 hours ahead.
+- Analysis, screening and reviews run as background jobs in the server
+  process, and jobs do not survive a restart. A restart stops a running job
+  (finished sources keep their results) and drops every queued or scheduled
+  one. The next time the job list is read, each of them shows as failed with
+  "the server restarted while this job was running"; start it again. A job can
+  be scheduled up to 48 hours ahead, so for a long wait, schedule it on a
+  server you will not restart in the meantime.
+- A job where some sources worked and some failed ends as *Finished with
+  errors* (`done_with_errors` in the API, with a failure count). Any job that
+  does not finish cleanly, including a budget stop or a cancel, shows a toast
+  in the Library. Analyze on more sources than one job may cover
+  (`RESEARCH_MAX_JOB_DOCUMENTS`) is split into several jobs that run in turn.
+- A catalogue that times out, rate-limits or errors is reported as not
+  looked up, never as "no record" or "no open copy found", and is tried
+  again next time.
 - Model usage from screening and reviews counts toward the daily token budget
   (`CHAT_DAILY_TOKEN_BUDGET`); a job that reaches it stops and says so.
 - The rules that read titles, authors and references are heuristics tuned for

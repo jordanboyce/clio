@@ -647,18 +647,21 @@ Embedding can switch to an Ollama you run or a hosted provider instead.
 install its CA as described in
 [Corporate SSL configuration](#corporate-ssl-configuration).
 
-**A document fails to index.** The job's entry in the activity drawer names
-the file and the reason. Common causes are an encrypted or corrupted PDF
+**A document fails to index.** Open the Background jobs panel (the jobs icon
+in the header): the job's entry names the file and the reason. Dismissing the
+entry discards that record, so note the reason first. Common causes are an encrypted or corrupted PDF
 (`pdfinfo file.pdf` tells you), a spreadsheet with an unusual encoding, or a
 file type Clio does not read.
 
-**A scanned PDF indexes with 0 chunks.** It has no text layer. Turn on OCR in
-Settings → OCR — *Vision AI* (a vision-capable model from a provider you
-already use, best on difficult scans) or *Local* (Tesseract:
+**A scanned PDF indexes with 0 chunks.** It has no text layer. Turn on
+*OCR scanned PDFs* in Settings → Indexing. The engine is under Advanced on the
+same page: *Vision AI* (a vision-capable model from a provider you already
+use, best on difficult scans) or *Local* (Tesseract:
 `pip install -r requirements-ocr.txt`; on Windows without Docker also install
 Tesseract and Poppler on `PATH`; Docling, `requirements-docling.txt` or
-`--build-arg WITH_DOCLING=1`, is the higher-quality local option) — then
-re-index the document.
+`--build-arg WITH_DOCLING=1`, is the higher-quality local option). OCR applies
+to new uploads, so remove the PDF and add it again, or use *Re-index this
+collection* on the same page to re-read every source.
 
 **Search returns nothing.** Check that the collection has documents
 (`curl "http://localhost:8473/documents?collection_id=…"`) and that the app is
