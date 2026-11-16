@@ -224,9 +224,10 @@ def test_expired_share_gives_no_access(db):
 def test_mcp_tokens(db):
     created = db.create_mcp_token(
         "a@example.org", "laptop", "hash-1", "asy_mcp_abc",
-        collection_scope=["c1"], can_write=True, allowlist=True,
+        collection_scope=["c1"], can_write=True, allowlist=True, can_overwrite_uploads=True,
     )
     assert created["can_write"] is True
+    assert created["can_overwrite_uploads"] is True
     assert created["allowlist"] is True
     assert created["collection_scope"] == ["c1"]
 
@@ -234,6 +235,7 @@ def test_mcp_tokens(db):
     assert found["id"] == created["id"]
     assert found["collection_scope"] == ["c1"]
     assert found["can_write"] is True
+    assert found["can_overwrite_uploads"] is True
     assert db.get_mcp_token_by_hash("nope") is None
 
     db.touch_mcp_token(created["id"])
@@ -244,6 +246,37 @@ def test_mcp_tokens(db):
     assert db.revoke_mcp_token(created["id"], "someone-else@example.org") is False
     assert db.revoke_mcp_token(created["id"], "a@example.org") is True
     assert db.revoke_mcp_token(created["id"], "a@example.org") is False
+
+
+def test_an_older_token_table_gains_the_overwrite_grant_switched_off(db):
+    """Start-up adds can_overwrite_uploads to a database from before it; old tokens stay without it."""
+    def run(sql):
+        if isinstance(db, SQLiteBackend):
+            from services.sqlite_utils import sqlite_connect
+
+            with sqlite_connect(db.db_path) as conn:
+                conn.execute(sql)
+                conn.commit()
+            return
+        conn = db._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+            conn.commit()
+        finally:
+            db._put(conn)
+
+    run("ALTER TABLE mcp_tokens DROP COLUMN can_overwrite_uploads")
+    run("INSERT INTO mcp_tokens (id, user_id, name, token_hash, token_prefix, created_at) "
+        "VALUES ('old', 'a@example.org', 'old agent', 'hash-old', 'asy_mcp_old', '2026-01-01T00:00:00')")
+    db._init_db()
+
+    assert db.get_mcp_token_by_hash("hash-old")["can_overwrite_uploads"] is False
+    assert db.list_mcp_tokens("a@example.org")[0]["can_overwrite_uploads"] is False
+    granted = db.create_mcp_token("a@example.org", "curator", "hash-new", "asy_mcp_new",
+                                  can_write=True, can_overwrite_uploads=True)
+    assert granted["can_overwrite_uploads"] is True
+    assert db.get_mcp_token_by_hash("hash-new")["can_overwrite_uploads"] is True
 
 
 def test_anonymous_mcp_tokens_use_null_owner(db):

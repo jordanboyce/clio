@@ -478,6 +478,28 @@ async def get_ollama_status():
     return detect_ollama(settings.ollama_base_url)
 
 
+def _ollama_models(base_url: str, timeout: float = 2.0) -> Optional[List[dict]]:
+    """Capability records for every model an Ollama server has, or None when
+    it does not answer. Each record keeps the listing's ``size``,
+    ``modified_at`` and ``detected_by`` (capabilities, families, or None for
+    "by name") next to the catalog's fields."""
+    from services import model_catalog
+    from services.ai_service import ollama_model_records
+
+    try:
+        raw = ollama_model_records(base_url, timeout=timeout)
+    except Exception:
+        return None
+    out = []
+    for r in raw:
+        record = model_catalog.complete_record("ollama", r)
+        record.update({k: r.get(k) for k in ("size", "modified_at", "detected_by")})
+        if record["detected_by"] is None and record["pattern_fields"]:
+            record["detected_by"] = "name"
+        out.append(record)
+    return out
+
+
 @router.get(
     "/api/ollama/vision-models",
     summary="List Ollama models that support vision/image input",
@@ -485,64 +507,33 @@ async def get_ollama_status():
 )
 async def get_ollama_vision_models():
     """
-    Return only Ollama models that support vision by checking each model's
-    architecture families via /api/show. Vision models include 'clip' in their
-    families list (CLIP is the vision encoder used by all multimodal Ollama models).
-    Falls back to name-based detection if /api/show is unavailable.
+    Return only the Ollama models that take images and answer in text.
+
+    Ollama 0.6+ reports this itself (the ``vision`` and ``completion``
+    capabilities); that is what decides. For older Ollama the vision encoder
+    in the model's families (clip, mllama) decides, and failing that the
+    model name: ``vision_detected_by`` says which (capabilities, families,
+    name). ``suggested`` is a model worth pulling when none is installed.
     """
-    import httpx
-    import asyncio
+    from services import model_catalog
 
-    status = detect_ollama(settings.ollama_base_url)
-    if not status.get("available"):
-        return {"available": False, "models": [], "error": status.get("error")}
+    suggested = model_catalog.suggested("ollama", "vision")
+    records = await asyncio.to_thread(_ollama_models, settings.ollama_base_url, 5.0)
+    if records is None:
+        return {"available": False, "models": [], "suggested": suggested,
+                "error": "Ollama is not running or not accessible"}
 
-    base_url = status.get("base_url", settings.ollama_base_url).rstrip("/")
-    all_models = status.get("models", [])
-
-    # Known vision model name patterns as a fallback
-    VISION_NAME_PATTERNS = [
-        "llava", "vl", "vision", "minicpm-v", "moondream",
-        "bakllava", "cogvlm", "internvl", "clip",
+    vision = [
+        {"name": r["id"], "size": r["size"], "modified_at": r["modified_at"],
+         "vision_detected_by": r["detected_by"] or "name",
+         "context_tokens": r["context_tokens"], "tools": r["tools"]}
+        for r in records if r["vision"] is True and "chat" in r["kinds"]
     ]
-
-    def name_looks_like_vision(name: str) -> bool:
-        name_lower = name.lower()
-        return any(p in name_lower for p in VISION_NAME_PATTERNS)
-
-    async def check_model_vision(client: httpx.AsyncClient, model: dict) -> Optional[dict]:
-        try:
-            resp = await client.post(
-                f"{base_url}/api/show",
-                json={"name": model["name"]},
-                timeout=5.0,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                families = data.get("details", {}).get("families") or []
-                if "clip" in families or "mllama" in families:
-                    return {**model, "vision_detected_by": "families"}
-            # Fall back to name heuristic
-            if name_looks_like_vision(model["name"]):
-                return {**model, "vision_detected_by": "name"}
-            return None
-        except Exception:
-            # If /api/show fails entirely, use name heuristic
-            if name_looks_like_vision(model["name"]):
-                return {**model, "vision_detected_by": "name"}
-            return None
-
-    async def gather_vision_models():
-        async with httpx.AsyncClient() as client:
-            tasks = [check_model_vision(client, m) for m in all_models]
-            results = await asyncio.gather(*tasks)
-        return [r for r in results if r is not None]
-
-    vision_models = await gather_vision_models()
     return {
         "available": True,
-        "models": vision_models,
-        "total_models": len(all_models),
+        "models": vision,
+        "total_models": len(records),
+        "suggested": suggested,
     }
 
 
@@ -706,27 +697,6 @@ def _huggingface_reachable(timeout: float = 3.0) -> bool:
         return False
 
 
-def _ollama_tags(base_url: str, timeout: float = 2.0) -> Optional[List[str]]:
-    """Model names an Ollama server lists, or None when it does not answer."""
-    import httpx
-
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.get(f"{base_url.rstrip('/')}/api/tags")
-            resp.raise_for_status()
-            return [m.get("name", "") for m in resp.json().get("models", []) if m.get("name")]
-    except Exception:
-        return None
-
-
-_OLLAMA_EMBED_HINTS = ("embed", "minilm", "bge", "e5")
-
-
-def _looks_like_embedding_model(name: str) -> bool:
-    lowered = name.lower()
-    return any(h in lowered for h in _OLLAMA_EMBED_HINTS)
-
-
 @router.get(
     "/api/embedding/status",
     summary="Is the embedding model ready, loading, downloading, missing?",
@@ -776,6 +746,7 @@ async def embedding_options():
         INSTALL_FASTEMBED,
         INSTALL_TORCH,
     )
+    from services import model_catalog
     from services.embedding_providers import (
         EMBEDDING_PROVIDERS,
         CLOUD_EMBEDDING_PROVIDERS,
@@ -808,11 +779,11 @@ async def embedding_options():
     tags: Optional[List[str]]
     if offline:
         hf_reachable = None
-        tags = await asyncio.to_thread(_ollama_tags, settings.ollama_base_url)
+        tags = await asyncio.to_thread(_ollama_models, settings.ollama_base_url)
     else:
         hf_reachable, tags = await asyncio.gather(
             asyncio.to_thread(_huggingface_reachable),
-            asyncio.to_thread(_ollama_tags, settings.ollama_base_url),
+            asyncio.to_thread(_ollama_models, settings.ollama_base_url),
         )
 
     hosted = []
@@ -861,8 +832,10 @@ async def embedding_options():
         "ollama": {
             "reachable": ollama_reachable,
             "base_url": settings.ollama_base_url,
-            "embedding_models": [t for t in (tags or []) if _looks_like_embedding_model(t)],
-            "suggested": "nomic-embed-text",
+            # Ollama's own "embedding" capability decides; the name patterns
+            # only stand in for Ollama too old to report one.
+            "embedding_models": [r["id"] for r in (tags or []) if "embedding" in r["kinds"]],
+            "suggested": model_catalog.suggested("ollama", "embedding"),
         },
         "hosted": hosted,
     }

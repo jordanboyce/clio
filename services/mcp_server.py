@@ -129,6 +129,19 @@ def get_request_mcp_can_write() -> bool:
     return _request_mcp_can_write.get(True)
 
 
+# Whether this MCP request may replace a source a person uploaded. Only a
+# personal token minted with ``can_overwrite_uploads`` carries it; every other
+# caller (shared password, SSO session, app key, in-process chat) is refused,
+# because a replace keeps no copy of the person's version.
+_request_mcp_can_overwrite_uploads: ContextVar[bool] = ContextVar(
+    "clio_request_mcp_can_overwrite_uploads", default=False
+)
+
+
+def get_request_mcp_can_overwrite_uploads() -> bool:
+    return _request_mcp_can_overwrite_uploads.get(False)
+
+
 # Which personal token made this call, for the audit trail. None for every
 # other caller (SSO session, shared password, in-process chat), whose
 # identity the audit layer already resolves from the user contextvar.
@@ -392,6 +405,17 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _inline_row_threshold(value: Any) -> int:
+    """Rows up to which search inlines a whole table; 0 turns inlining off.
+
+    Only a missing value (None or an empty query parameter) takes the
+    default: 0 is a real setting, so it must never fall through an ``or``.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return _DEFAULT_INLINE_ROW_THRESHOLD
+    return max(0, min(int(value), 2000))
+
+
 def _normalize_profile(profile: dict[str, Any]) -> dict[str, Any]:
     normalized = {
         "collection_id": profile.get("collection_id") or settings.mcp_default_collection,
@@ -400,7 +424,7 @@ def _normalize_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "semantic_weight": _clamp_weight(profile.get("semantic_weight", settings.mcp_semantic_weight)),
         "include_sources": _coerce_bool(profile.get("include_sources"), settings.mcp_include_sources),
         "max_source_length": max(100, min(int(profile.get("max_source_length", settings.mcp_max_source_length)), 2000)),
-        "inline_row_threshold": max(0, min(int(profile.get("inline_row_threshold", _DEFAULT_INLINE_ROW_THRESHOLD)), 2000)),
+        "inline_row_threshold": _inline_row_threshold(profile.get("inline_row_threshold")),
     }
 
     if normalized["mode"] not in {"auto", "semantic", "keyword", "hybrid"}:
@@ -1561,7 +1585,7 @@ def search_collection_sync(
     resolved_weight = _clamp_weight(request_profile.get("semantic_weight", settings.mcp_semantic_weight))
     resolved_include_sources = request_profile.get("include_sources", settings.mcp_include_sources)
     resolved_max_source_length = max(100, min(int(request_profile.get("max_source_length") or settings.mcp_max_source_length), 2000))
-    resolved_inline_row_threshold = max(0, min(int(request_profile.get("inline_row_threshold") or _DEFAULT_INLINE_ROW_THRESHOLD), 2000))
+    resolved_inline_row_threshold = _inline_row_threshold(request_profile.get("inline_row_threshold"))
 
     collection = collection_service.get_collection(resolved_collection)
     collection_name = _mcp_safe_name(collection, resolved_collection)
@@ -2094,6 +2118,130 @@ def _document_context_payload(
 
 _FIND_EXCERPT_PAD_CHARS = 80
 _FIND_MAX_RESULTS = 100
+# A caller's regex is untrusted. Python's re cannot be interrupted and holds
+# the GIL while it matches, so one backtracking pattern (`(a+)+$`, or
+# `.*.*.*x` over a 1,000-character chunk) would freeze the whole server, not
+# just its worker. The pattern is therefore length-capped and run in a child
+# interpreter that is killed when the call's time budget runs out.
+_FIND_REGEX_MAX_PATTERN_CHARS = 1000
+_FIND_REGEX_TIME_BUDGET_S = 10.0
+_FIND_REGEX_BATCH_ROWS = 200
+
+# Reads {"pattern", "flags"}, then one JSON string per line; answers each line
+# with [start, end] of the first match or null. Stdlib only, run with -I -S.
+_REGEX_WORKER_SOURCE = """
+import json, re, sys
+inp, out = sys.stdin.buffer, sys.stdout.buffer
+cfg = json.loads(inp.readline())
+rx = re.compile(cfg["pattern"], cfg["flags"])
+for line in inp:
+    m = rx.search(json.loads(line))
+    out.write(b"null\\n" if m is None else ("[%d,%d]\\n" % (m.start(), m.end())).encode("ascii"))
+    out.flush()
+"""
+
+
+class _InProcessRegex:
+    """Fallback when no child interpreter can start (for example a frozen
+    build). The budget is checked between chunks only, so a single
+    pathological chunk can still run long; the child scanner has no such gap."""
+
+    def __init__(self, regex: "_re.Pattern[str]", deadline: float):
+        self.regex, self.deadline = regex, deadline
+
+    def search_batch(self, texts: list[str]) -> tuple[list[tuple[int, int] | None], bool]:
+        import time
+
+        spans: list[tuple[int, int] | None] = []
+        for text in texts:
+            if time.monotonic() > self.deadline:
+                return spans, True
+            m = self.regex.search(text)
+            spans.append((m.start(), m.end()) if m else None)
+        return spans, False
+
+    def close(self) -> None:
+        pass
+
+
+class _ChildRegex:
+    """Runs one call's regex in a child interpreter that is killed at the deadline."""
+
+    def __init__(self, pattern: str, flags: int, deadline: float):
+        import queue
+        import subprocess
+        import sys
+
+        if getattr(sys, "frozen", False) or not sys.executable:
+            raise OSError("no Python interpreter to run the pattern in")
+        extra = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+        self.deadline = deadline
+        self.proc = subprocess.Popen(
+            [sys.executable, "-I", "-S", "-c", _REGEX_WORKER_SOURCE],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **extra,
+        )
+        self.results: "queue.Queue[Any]" = queue.Queue()
+        _threading.Thread(target=self._read, daemon=True).start()
+        self._write(json.dumps({"pattern": pattern, "flags": flags}).encode("ascii") + b"\n")
+
+    def _read(self) -> None:
+        try:
+            for line in self.proc.stdout:
+                self.results.put(json.loads(line))
+        except Exception:  # noqa: BLE001 - a killed child ends the stream either way
+            pass
+        finally:
+            self.results.put(StopIteration)
+
+    def _write(self, payload: bytes) -> None:
+        try:
+            self.proc.stdin.write(payload)
+            self.proc.stdin.flush()
+        except (OSError, ValueError):  # killed at the deadline
+            pass
+
+    def search_batch(self, texts: list[str]) -> tuple[list[tuple[int, int] | None], bool]:
+        """Spans for each text in order, and whether the budget ran out first."""
+        import queue
+        import time
+
+        payload = b"".join(json.dumps(t).encode("ascii") + b"\n" for t in texts)
+        # A child stuck on one chunk stops reading, so the write may block:
+        # it gets its own thread and the deadline is enforced here.
+        _threading.Thread(target=self._write, args=(payload,), daemon=True).start()
+        spans: list[tuple[int, int] | None] = []
+        for _ in texts:
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                return spans, True
+            try:
+                item = self.results.get(timeout=remaining)
+            except queue.Empty:
+                return spans, True
+            if item is StopIteration:
+                raise ValueError("The regular expression search stopped unexpectedly; try a simpler pattern.")
+            spans.append(tuple(item) if item else None)
+        return spans, False
+
+    def close(self) -> None:
+        try:
+            self.proc.kill()
+            self.proc.wait(timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
+        for stream in (self.proc.stdin, self.proc.stdout):
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _open_regex_scanner(pattern: str, regex: "_re.Pattern[str]", deadline: float):
+    try:
+        return _ChildRegex(pattern, regex.flags, deadline)
+    except OSError as e:
+        logger.warning("find_in_documents: regex runs in-process, budget checked between chunks only (%s)", e)
+        return _InProcessRegex(regex, deadline)
 
 
 def _find_literal_excerpt(text: str, pattern: str, case_insensitive: bool) -> tuple[int, str] | None:
@@ -2135,7 +2283,11 @@ def _find_regex_excerpt(
     m = regex.search(text)
     if not m:
         return None
-    idx, end_idx = m.start(), m.end()
+    return _span_excerpt(text, m.start(), m.end())
+
+
+def _span_excerpt(text: str, idx: int, end_idx: int) -> tuple[int, str, str]:
+    """(offset, excerpt_with_markers, matched_text) for a match at text[idx:end_idx]."""
     matched = text[idx:end_idx]
     start = max(0, idx - _FIND_EXCERPT_PAD_CHARS)
     end = min(len(text), end_idx + _FIND_EXCERPT_PAD_CHARS)
@@ -2172,6 +2324,11 @@ def find_in_documents_sync(
 
     regex: "_re.Pattern[str] | None" = None
     if not literal:
+        if len(pattern) > _FIND_REGEX_MAX_PATTERN_CHARS:
+            raise ValueError(
+                f"Regular expression is {len(pattern)} characters; the limit is "
+                f"{_FIND_REGEX_MAX_PATTERN_CHARS}. Use a shorter pattern."
+            )
         flags = 0 if case_sensitive else _re.IGNORECASE
         try:
             regex = _re.compile(pattern, flags)
@@ -2189,72 +2346,107 @@ def find_in_documents_sync(
     collection = collection_service.get_collection(resolved_collection)
     label_cache = {}
 
-    def _scan() -> tuple[list[dict[str, Any]], int]:
+    def _candidates():
         # Literal ASCII patterns are prefiltered in SQL (INSTR), so only
         # candidate chunks stream out of the database; regex and non-ASCII
         # patterns stream the whole corpus through a cursor without ever
         # materializing it in memory. Matches are always re-verified here.
         sql_prefilter = pattern if (literal and pattern.isascii()) else None
-        rows = metadata_store.iter_chunk_texts(
-            substring=sql_prefilter, case_sensitive=case_sensitive
-        )
+        for row in metadata_store.iter_chunk_texts(substring=sql_prefilter, case_sensitive=case_sensitive):
+            if row[1] in hidden_docs:
+                continue
+            if allowed_chunks is not None and row[0] not in allowed_chunks:
+                continue
+            yield row
 
+    def _regex_hits(scan_state: dict[str, Any]):
+        """(row, (offset, excerpt, matched) | None) in corpus order, within the budget."""
+        import itertools
+        import time
+
+        scanner = _open_regex_scanner(pattern, regex, time.monotonic() + _FIND_REGEX_TIME_BUDGET_S)
+        rows = _candidates()
+        try:
+            while True:
+                batch = list(itertools.islice(rows, _FIND_REGEX_BATCH_ROWS))
+                if not batch:
+                    return
+                spans, out_of_time = scanner.search_batch([row[4] or "" for row in batch])
+                for row, span in zip(batch, spans):
+                    yield row, (_span_excerpt(row[4] or "", *span) if span else None)
+                if out_of_time:
+                    scan_state["stopped"] = "time_budget"
+                    return
+        finally:
+            scanner.close()
+            rows.close()
+
+    def _literal_hits():
+        for row in _candidates():
+            hit = _find_literal_excerpt(row[4] or "", pattern, case_insensitive=not case_sensitive)
+            yield row, ((hit[0], hit[1], pattern) if hit else None)
+
+    scan_state: dict[str, Any] = {"stopped": None}
+
+    def _scan() -> tuple[list[dict[str, Any]], int]:
         matches: list[dict[str, Any]] = []
         scanned = 0
-        for chunk_id, document_id, filename, page_number, text in rows:
-            if document_id in hidden_docs:
-                continue
-            if allowed_chunks is not None and chunk_id not in allowed_chunks:
-                continue
-            scanned += 1
-            text = text or ""
-            if regex is not None:
-                hit = _find_regex_excerpt(text, regex)
+        hits = _regex_hits(scan_state) if regex is not None else _literal_hits()
+        try:
+            for (chunk_id, document_id, filename, page_number, _text), hit in hits:
+                scanned += 1
                 if not hit:
                     continue
                 offset, excerpt, matched = hit
-            else:
-                literal_hit = _find_literal_excerpt(text, pattern, case_insensitive=not case_sensitive)
-                if not literal_hit:
-                    continue
-                offset, excerpt = literal_hit
-                matched = pattern
-            if document_id not in label_cache:
-                from services.governance import effective_sensitivity
-                info = metadata_store.get_document_info(document_id) or {}
-                label_cache[document_id] = effective_sensitivity(collection, info.get("sensitivity"))
-            excerpt = pii_detector.redact_if_enabled(excerpt)
-            entry = {
-                "filename": filename,
-                "document_id": document_id,
-                "chunk_id": chunk_id,
-                "page_number": page_number,
-                "offset": offset,
-                "excerpt": excerpt,
-                "match": matched,
-                "sensitivity": label_cache[document_id],
-            }
-            mark = mark_passage(excerpt)
-            if mark:
-                entry["instruction_text"] = mark
-            matches.append(entry)
-            if len(matches) >= capped:
-                break
+                if document_id not in label_cache:
+                    from services.governance import effective_sensitivity
+                    info = metadata_store.get_document_info(document_id) or {}
+                    label_cache[document_id] = effective_sensitivity(collection, info.get("sensitivity"))
+                excerpt = pii_detector.redact_if_enabled(excerpt)
+                entry = {
+                    "filename": filename,
+                    "document_id": document_id,
+                    "chunk_id": chunk_id,
+                    "page_number": page_number,
+                    "offset": offset,
+                    "excerpt": excerpt,
+                    "match": matched,
+                    "sensitivity": label_cache[document_id],
+                }
+                mark = mark_passage(excerpt)
+                if mark:
+                    entry["instruction_text"] = mark
+                matches.append(entry)
+                if len(matches) >= capped:
+                    break
+        finally:
+            hits.close()
         return matches, scanned
 
     matches, scanned = ([], 0) if allowed_chunks == set() else _scan()
 
-    return _tool_response({
+    payload: dict[str, Any] = {
         "collection_id": resolved_collection,
         "pattern": pattern,
         "literal": bool(literal),
         "case_sensitive": bool(case_sensitive),
         "total_matches": len(matches),
         "chunks_scanned": scanned,
-        "truncated": len(matches) >= capped,
+        # True whenever more matches may exist: the result cap was hit, or the
+        # scan stopped early (see scan_complete).
+        "truncated": len(matches) >= capped or bool(scan_state["stopped"]),
+        "scan_complete": not scan_state["stopped"],
         "matches": matches,
         "filters_applied": resolved_filters,
-    }, "find_in_documents")
+    }
+    if scan_state["stopped"] == "time_budget":
+        payload["stopped_reason"] = "time_budget"
+        payload["note"] = (
+            f"The regular expression scan stopped after {_FIND_REGEX_TIME_BUDGET_S:g} seconds, having "
+            f"checked {scanned} chunks, so these matches are partial and later chunks were not searched. "
+            "Narrow it with filters, anchor or simplify the pattern, or use literal=true."
+        )
+    return _tool_response(payload, "find_in_documents")
 
 
 @_clio_mcp.tool(title="Find exact text", annotations=_read_only("Find exact text"))
@@ -2945,6 +3137,13 @@ from services.code_extractor import SUPPORTED_CODE_EXTENSIONS as _CODE_EXTS
 _WRITABLE_EXTENSIONS = {".md", ".txt", ".json", ".jsonl", ".csv", ".html", ".htm"} | set(_CODE_EXTS)
 _WRITE_MAX_CHARS = 2_000_000
 _WRITE_MODES = ("create", "replace", "append")
+# Modes that drop the current text. Append keeps every byte already there.
+_DESTRUCTIVE_WRITE_MODES = ("replace",)
+# Notes an agent wrote through write_document. A stored file like an upload,
+# typed apart so a person's own uploads can be protected from agent replaces
+# (the same mechanism that marks pasted notes 'text' and synced files
+# 'folder_sync').
+AGENT_NOTE_SOURCE_TYPE = "agent_note"
 # Refused everywhere, not only where they break: a collection moves between
 # Linux and Windows in a bundle. On NTFS a colon writes an alternate stream, and
 # the visible file stays empty. Most file systems stop at 255 bytes per name.
@@ -3049,6 +3248,41 @@ def _appended_text(file_path: Path, filename: str, content: str) -> str:
     return previous + separator + content
 
 
+def _is_agent_note(collection_id: str, row: dict[str, Any]) -> bool:
+    """Whether this stored source was written by an agent rather than uploaded by a person.
+
+    New notes carry ``source_type='agent_note'``. Notes written before that
+    marker existed, and notes a full re-index has rebuilt as plain uploads
+    (it keeps only reference and URL types), are recognised from the audit
+    trail: every write_document version records a ``document.upload`` event
+    with ``via: "mcp"`` under its document_id, and the document_id is the
+    hash of the bytes, so it survives a re-index. A version whose event says
+    it kept the type ``upload`` (an agent appended to a person's file) stays
+    the person's. Anything that cannot be shown to be an agent's is a person's.
+    """
+    source_type = row.get("source_type") or "upload"
+    if source_type == AGENT_NOTE_SOURCE_TYPE:
+        return True
+    if source_type != "upload" or not row.get("document_id"):
+        return False
+    try:
+        from services import audit
+
+        events = audit.list_events(
+            limit=50, action="document.upload", collection_id=collection_id,
+            document_id=row["document_id"],
+        )
+    except Exception as e:  # noqa: BLE001 - unknown means a person's file
+        logger.warning("write_document: could not read the audit trail for %s: %s", row.get("document_id"), e)
+        return False
+    for event in events:
+        detail = event.get("detail") if isinstance(event.get("detail"), dict) else {}
+        if (detail.get("via") == "mcp" and detail.get("mode") in _WRITE_MODES
+                and detail.get("source_type", AGENT_NOTE_SOURCE_TYPE) == AGENT_NOTE_SOURCE_TYPE):
+            return True
+    return False
+
+
 def _install_stored_file(staged: Path, file_path: Path) -> None:
     """Atomically put the new bytes under the note's name."""
     os.replace(staged, file_path)
@@ -3140,7 +3374,7 @@ def _write_document_locked(
             "overwrite it or mode='append' to add to the end of it."
         )
     for row in existing:
-        if (row.get("source_type") or "upload") != "upload":
+        if (row.get("source_type") or "upload") not in ("upload", AGENT_NOTE_SOURCE_TYPE):
             raise ValueError(
                 f"'{safe_filename}' comes from {row.get('source_path')}, so an edit here would "
                 "not reach that file and the next sync would bring the old text back. Edit the "
@@ -3151,6 +3385,14 @@ def _write_document_locked(
             f"A job running on this collection is adding a file named '{safe_filename}'. "
             "Nothing was changed; retry when the job has finished."
         )
+
+    # A person's upload stays theirs: an agent may append to it, and replace
+    # it only with a token that carries the explicit grant.
+    person_owned = [row for row in existing if not _is_agent_note(resolved, row)]
+    new_source_type = "upload" if person_owned else AGENT_NOTE_SOURCE_TYPE
+    refuse_overwrite = bool(
+        person_owned and mode in _DESTRUCTIVE_WRITE_MODES and not get_request_mcp_can_overwrite_uploads()
+    )
 
     final_content = content
     if existing and mode == "append":
@@ -3182,6 +3424,15 @@ def _write_document_locked(
                     "read_document, redo your edit on that text, and retry."
                 )
             twin = store.get_document_info(document_id)
+            # Writing back the text already there changes nothing, so it is allowed.
+            if refuse_overwrite and not (twin and twin.get("filename") == safe_filename):
+                raise ValueError(
+                    f"'{safe_filename}' was uploaded by a person, not written by an agent, so "
+                    f"mode='{mode}' is refused: it would keep no copy of their version. Nothing "
+                    "was changed. Use mode='append' to add to it, or write your version under "
+                    "a new filename. Replacing uploads needs a token minted with "
+                    "'can_overwrite_uploads'."
+                )
             if twin and twin.get("filename") != safe_filename:
                 if existing:
                     raise ValueError(
@@ -3215,6 +3466,10 @@ def _write_document_locked(
                     meta = indexer.index_document(
                         staged, safe_filename, collection_id=resolved, uploaded_by=uploaded_by,
                     )
+                    if new_source_type != "upload":
+                        store.update_document_source(
+                            document_id, source_path=None, source_type=new_source_type,
+                        )
                 except (BlockedContentError, ContentRejectedError) as e:
                     raise ValueError(f"{e}{kept_note}")
                 except Exception as e:
@@ -3264,6 +3519,8 @@ def _write_document_locked(
             "files": [safe_filename], "document_ids": [meta.document_id],
             "indexed": 1, "failed": 0, "via": "mcp", "mode": mode,
             "replaced_document_id": replaced_id,
+            # Read back by _is_agent_note once a re-index has reset the column.
+            "source_type": new_source_type,
         },
     )
 
@@ -3282,6 +3539,7 @@ def _write_document_locked(
         "total_chunks": meta.total_chunks,
         "policy_status": policy_status,
         "characters": len(final_content),
+        "source_type": new_source_type,
     }
     if replaced_id:
         payload["replaced_document_id"] = replaced_id
@@ -3361,6 +3619,11 @@ async def write_document(
         existing source.
 
     To remove a source, use the app; there is deliberately no delete tool.
+
+    Sources a person uploaded cannot be replaced from here unless the token
+    was minted with 'can_overwrite_uploads'; appending to them is allowed.
+    To add or append without the host asking you to confirm a destructive
+    action every time, use `create_document` or `append_to_document`.
     """
     return await asyncio.to_thread(
         write_document_sync,
@@ -3369,6 +3632,50 @@ async def write_document(
         collection_id=collection_id,
         mode=mode,
         expected_document_id=expected_document_id,
+    )
+
+
+# MCP annotations belong to a tool, not to one of its modes, so the two modes
+# that never drop text get tools of their own that hosts can run unprompted.
+# They are write_document under a fixed mode: same gates, same response.
+@_clio_mcp.tool(title="Create document", annotations=_mutating("Create document", destructive=False, idempotent=True))
+async def create_document(
+    filename: str,
+    content: str,
+    collection_id: str | None = None,
+) -> dict[str, Any]:
+    """Add a new text source to a collection. Never changes an existing one.
+
+    The same as `write_document` with mode="create": refused if a source with
+    this filename already exists. Parameters, limits and the response are
+    those of `write_document`.
+    """
+    return await asyncio.to_thread(
+        write_document_sync, filename, content, collection_id=collection_id, mode="create",
+    )
+
+
+@_clio_mcp.tool(
+    title="Append to document",
+    annotations=_mutating("Append to document", destructive=False, idempotent=False),
+)
+async def append_to_document(
+    filename: str,
+    content: str,
+    collection_id: str | None = None,
+    expected_document_id: str | None = None,
+) -> dict[str, Any]:
+    """Add text to the end of a source, keeping everything already in it.
+
+    The same as `write_document` with mode="append": the existing text stays
+    byte for byte, `content` follows it, and the source is re-indexed. Creates
+    the source when there is none. Pass `expected_document_id` (from
+    `read_document`) to refuse the write if the source changed meanwhile.
+    Parameters, limits and the response are those of `write_document`.
+    """
+    return await asyncio.to_thread(
+        write_document_sync, filename, content, collection_id=collection_id,
+        mode="append", expected_document_id=expected_document_id,
     )
 
 
@@ -4202,7 +4509,11 @@ async def mcp_catalog() -> dict[str, Any]:
 
 
 def _find_collection_for_document(document_id: str) -> tuple[str, dict[str, Any]] | None:
-    """Search all collections for a document_id. Returns (collection_id, doc_info) or None."""
+    """Search all collections for a document_id. Returns (collection_id, doc_info) or None.
+
+    A hidden document (quarantined, or withheld from this consumer) is not
+    found, exactly as every document tool treats it.
+    """
     for c in _visible_collections():
         cid = c.get("id")
         if not cid:
@@ -4210,15 +4521,30 @@ def _find_collection_for_document(document_id: str) -> tuple[str, dict[str, Any]
         try:
             indexer = indexer_manager.get_indexer(cid)
             doc_info = indexer.vector_store.metadata_store.get_document_info(document_id)
-            if doc_info:
+            if doc_info and not _is_hidden_doc(doc_info):
                 return cid, doc_info
         except Exception:
             continue
     return None
 
 
+def _hidden_table_doc_ids(collection_id: str) -> set[str]:
+    """Documents whose tables the resources must not show (see _is_hidden_doc)."""
+    try:
+        return indexer_manager.get_indexer(collection_id).vector_store.metadata_store.get_hidden_document_ids()
+    except Exception:
+        return set()
+
+
+def _visible_tables(collection_id: str, tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    hidden = _hidden_table_doc_ids(collection_id)
+    return [t for t in tables if t.get("document_id") not in hidden] if hidden else tables
+
+
 def _find_collection_for_table(identifier: str) -> tuple[str, dict[str, Any]] | None:
-    """Search all collections for a table identifier. Returns (collection_id, schema) or None."""
+    """Search all collections for a table identifier. Returns (collection_id, schema) or None.
+
+    Tables of hidden documents are not found."""
     for c in _visible_collections():
         cid = c.get("id")
         if not cid:
@@ -4226,7 +4552,7 @@ def _find_collection_for_table(identifier: str) -> tuple[str, dict[str, Any]] | 
         try:
             store = _get_structured_store(cid)
             schema = store.get_schema(identifier)
-            if schema:
+            if schema and schema.get("document_id") not in _hidden_table_doc_ids(cid):
                 return cid, schema
         except Exception:
             continue
@@ -4302,7 +4628,7 @@ def resource_collection_schema(id: str) -> dict[str, Any]:
     """
     resolved = _resolve_collection_id(id)
     store = _get_structured_store(resolved)
-    raw_tables = store.list_tables()
+    raw_tables = _visible_tables(resolved, store.list_tables())
     schemas = []
     for t in raw_tables:
         full = store.get_schema(t["table_name"])
@@ -4434,7 +4760,7 @@ def resource_collection_tables(id: str) -> dict[str, Any]:
     """
     resolved = _resolve_collection_id(id)
     store = _get_structured_store(resolved)
-    raw_tables = store.list_tables()
+    raw_tables = _visible_tables(resolved, store.list_tables())
     tables = [
         {k: v for k, v in t.items() if k != "financial_roles"}
         for t in raw_tables
@@ -4758,6 +5084,9 @@ class ToggleableMCPApp:
         scope_token = _request_mcp_token_scope.set(state.get("mcp_token_scope") or None)
         allowlist_token = _request_mcp_token_allowlist.set(bool(state.get("mcp_token_allowlist", False)))
         write_token = _request_mcp_can_write.set(bool(state.get("mcp_token_can_write", True)))
+        overwrite_token = _request_mcp_can_overwrite_uploads.set(
+            bool(state.get("mcp_token_can_overwrite_uploads", False))
+        )
         token_id_token = _request_mcp_token_id.set(state.get("mcp_token_id") or None)
         identity_token = _request_mcp_identity.set(state.get("auth_identity") or None)
         # Bind the verified identity for private-collections scoping. The auth
@@ -4789,6 +5118,7 @@ class ToggleableMCPApp:
                 reset_request_user(user_token)
             _request_mcp_identity.reset(identity_token)
             _request_mcp_token_id.reset(token_id_token)
+            _request_mcp_can_overwrite_uploads.reset(overwrite_token)
             _request_mcp_can_write.reset(write_token)
             _request_mcp_token_allowlist.reset(allowlist_token)
             _request_mcp_token_scope.reset(scope_token)

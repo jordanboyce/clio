@@ -106,7 +106,7 @@ CREATE INDEX IF NOT EXISTS idx_research_briefs_doc ON research_briefs(document_i
 CREATE TABLE IF NOT EXISTS research_jobs (
     job_id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,         -- analyze | assess | brief
-    status TEXT NOT NULL,       -- queued | running | done | failed | cancelled
+    status TEXT NOT NULL,       -- queued | running | done | done_with_errors | failed | cancelled
     params TEXT,
     total INTEGER DEFAULT 0,
     done INTEGER DEFAULT 0,
@@ -505,6 +505,8 @@ class ResearchStore:
         item = dict(row)
         item["params"] = _loads(item.get("params"), {})
         item["errors"] = _loads(item.get("errors"), [])
+        # Lets a client that knows only some of the states tell a job has ended.
+        item["finished"] = item.get("status") not in ("queued", "running")
         return item
 
     def create_job(self, job_id: str, kind: str, params: dict, total: int,

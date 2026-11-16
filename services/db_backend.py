@@ -243,6 +243,7 @@ class DatabaseBackend(ABC):
             row["collection_scope"] = None
         row["can_write"] = bool(row.get("can_write"))
         row["allowlist"] = bool(row.get("allowlist"))
+        row["can_overwrite_uploads"] = bool(row.get("can_overwrite_uploads"))
         row["use_count"] = int(row.get("use_count") or 0)
         row.setdefault("expires_at", None)
         return row
@@ -254,6 +255,7 @@ class DatabaseBackend(ABC):
         can_write: bool = False,
         expires_at: Optional[str] = None,
         allowlist: bool = False,
+        can_overwrite_uploads: bool = False,
     ) -> Dict[str, Any]:
         """collection_scope: ids of *restricted* collections this token may
         reach over MCP. Restricted collections are otherwise never exposed
@@ -262,7 +264,9 @@ class DatabaseBackend(ABC):
         expires_at: ISO timestamp after which verify_token refuses the token;
         None means it never expires.
         allowlist: when true, collection_scope is the *only* set of
-        collections the token may see over MCP (not just a restricted grant)."""
+        collections the token may see over MCP (not just a restricted grant).
+        can_overwrite_uploads: whether the token may replace a source a person
+        uploaded (write_document mode='replace'); needs can_write."""
         ...
 
     @abstractmethod

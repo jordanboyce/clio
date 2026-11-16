@@ -31,6 +31,8 @@ class MCPTokenRequest(BaseModel):
     # When true, collection_scope is the ONLY set of collections the token
     # may see over MCP (any sensitivity), not merely a restricted grant.
     allowlist: StrictBool = False
+    # Lets agents replace a source a person uploaded. Needs can_write.
+    can_overwrite_uploads: StrictBool = False
 
 
 @router.get(
@@ -138,6 +140,9 @@ async def create_mcp_token(body: MCPTokenRequest, user_id: Optional[str] = Depen
         allowlist: optional bool (default false). Makes collection_scope the
             only collections the token may see over MCP, whatever their
             sensitivity. Requires a non-empty scope.
+        can_overwrite_uploads: optional bool (default false). Lets agents
+            holding this token replace a source a person uploaded; without
+            it such a replace is refused. Requires can_write.
     """
     from services import audit
     from services.collection_service import collection_service
@@ -158,13 +163,15 @@ async def create_mcp_token(body: MCPTokenRequest, user_id: Optional[str] = Depen
         record = mcp_tokens.generate_token(
             user_id, name, collection_scope=scope or None, can_write=can_write,
             expires_in_days=body.expires_in_days, allowlist=body.allowlist,
+            can_overwrite_uploads=body.can_overwrite_uploads,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     audit.record("mcp_token.create", actor=user_id, target=record.get("id"),
                  detail={"name": record.get("name"), "collection_scope": scope or None,
                          "can_write": can_write, "expires_at": record.get("expires_at"),
-                         "allowlist": bool(body.allowlist)})
+                         "allowlist": bool(body.allowlist),
+                         "can_overwrite_uploads": bool(body.can_overwrite_uploads)})
     return record
 
 

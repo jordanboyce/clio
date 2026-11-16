@@ -1,5 +1,5 @@
 <template>
-  <dialog class="modal" :open="open" aria-labelledby="ribbon-customize-title" @close="$emit('close')" @keydown.esc="$emit('close')">
+  <dialog :ref="modal.dialogRef" class="modal" aria-labelledby="ribbon-customize-title" @close="modal.onClosed">
     <div class="modal-box max-w-sm space-y-3">
       <div>
         <h3 id="ribbon-customize-title" class="font-semibold">Customize the ribbon</h3>
@@ -46,17 +46,18 @@
       </ul>
       <div class="modal-action mt-2">
         <button class="btn btn-sm btn-ghost" @click="update(defaultLayout())">Reset to default</button>
-        <button class="btn btn-sm btn-primary" @click="$emit('close')">Done</button>
+        <button class="btn btn-sm btn-primary" @click="modal.close()">Done</button>
       </div>
     </div>
-    <form method="dialog" class="modal-backdrop"><button @click="$emit('close')">close</button></form>
+    <form method="dialog" class="modal-backdrop"><button aria-label="Close">close</button></form>
   </dialog>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ChevronDown, ChevronUp, GripVertical } from 'lucide-vue-next'
 import { defaultLayout, moveItem, placeBefore, toggleHidden } from '../utils/ribbon.js'
+import { useModal } from '../composables/useModal'
 
 // Every item the person may use, in ribbon order; unticked ones are hidden.
 const props = defineProps({
@@ -65,6 +66,13 @@ const props = defineProps({
   layout: { type: Object, required: true },
 })
 const emit = defineEmits(['close', 'update:layout'])
+
+// A real modal (focus trap, inert page, Escape) whose open state follows the
+// `open` prop; any native close (Escape, backdrop, Done) tells the parent.
+const modal = useModal({ onClose: () => emit('close') })
+const sync = (open) => (open ? modal.open() : modal.close())
+watch(() => props.open, sync)
+onMounted(() => { if (props.open) sync(true) })
 
 const hiddenSet = computed(() => new Set(props.layout.hidden))
 const GROUP_LABELS = { ask: 'Ask', work: 'Work', share: 'Share', actions: 'Action' }

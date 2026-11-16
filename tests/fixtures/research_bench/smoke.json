@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "description": "Committed smoke set for scripts/research_bench.py: eight invented documents (written by make_smoke_pdfs.py; every name, title, DOI and arXiv id is made up) that reproduce failure shapes seen on real papers. They exist so the benchmark runs with no download and no network; their numbers say nothing about real accuracy. Bump `version` when a document or a label changes.",
+  "entries": [
+    {
+      "id": "smoke-clean-article",
+      "file": "smoke/smoke-clean-article.pdf",
+      "filename": "lighthouse-indexing.pdf",
+      "kind": "preprint",
+      "columns": 1,
+      "licence": "CC0 (invented for this benchmark)",
+      "labels": {"title": "Lighthouse Indexing for Coastal Sensor Archives", "authors": ["Ines Halvorsen", "Tomasz Wierzbicki", "Amara Okonjo"], "year": 2026, "arxiv_id": "2611.99901", "doi": "10.5555/smoke.2026.0001", "isbn": null},
+      "note": "the easy case: one column, arXiv stamp and DOI printed"
+    },
+    {
+      "id": "smoke-two-column",
+      "file": "smoke/smoke-two-column.pdf",
+      "filename": "2024.wir-1.12.pdf",
+      "kind": "conference",
+      "columns": 2,
+      "licence": "CC0 (invented for this benchmark)",
+      "labels": {"title": "Sparse Lexicons Outperform Dense Maps on Short Harbour Logbook Queries", "authors": ["Rhea Castellanos", "Bram Vos", "Keiko Tanabe"], "year": 2024, "arxiv_id": null, "doi": "10.5555/wir.2024.012", "isbn": null},
+      "note": "venue header, two-line title, author line with affiliation marks and no commas"
+    },
+    {
+      "id": "smoke-lost-spaces",
+      "file": "smoke/smoke-lost-spaces.pdf",
+      "filename": "tidal-memory.pdf",
+      "kind": "preprint",
+      "columns": 1,
+      "licence": "CC0 (invented for this benchmark)",
+      "labels": {"title": "Tidal Memory in Long Sensor Records", "authors": ["Oskar Lindgren", "Wen Zhao", "Priya Raman", "Tomas Ruiz"], "year": 2025, "arxiv_id": null, "doi": null, "isbn": null},
+      "note": "words separated by kerning rather than space characters, so the text layer runs them together"
+    },
+    {
+      "id": "smoke-epigraph",
+      "file": "smoke/smoke-epigraph.pdf",
+      "filename": "storm-surge-memory.pdf",
+      "kind": "journal",
+      "columns": 1,
+      "licence": "CC0 (invented for this benchmark)",
+      "labels": {"title": "Storm Surge Memory in Enclosed Harbours", "authors": ["Dmitri Volkov", "Ayesha Karim"], "year": 2023, "arxiv_id": null, "doi": null, "isbn": null},
+      "note": "a quotation and the name of the person quoted sit above the title"
+    },
+    {
+      "id": "smoke-title-image",
+      "file": "smoke/smoke-title-image.pdf",
+      "filename": "gulls.pdf",
+      "kind": "journal",
+      "columns": 1,
+      "licence": "CC0 (invented for this benchmark)",
+      "labels": {"title": "Counting Gulls with Rooftop Cameras", "authors": ["Lena Okafor", "Sami Haddad"], "year": 2022, "arxiv_id": null, "doi": null, "isbn": null},
+      "note": "the title is an image; the text layer starts with the authors and the abstract"
+    },
+    {
+      "id": "smoke-scan",
+      "file": "smoke/smoke-scan.pdf",
+      "filename": "scan_0042.pdf",
+      "kind": "scanned",
+      "columns": 1,
+      "licence": "CC0 (invented for this benchmark)",
+      "labels": {"title": "Notes on Breakwater Settlement at the Old Quay", "authors": ["Harriet Calloway"], "year": 1987, "arxiv_id": null, "doi": null, "isbn": null},
+      "note": "an image-only page: nothing can be read without OCR"
+    },
+    {
+      "id": "smoke-book",
+      "file": "smoke/smoke-book.pdf",
+      "filename": "salt-marsh-grasses.pdf",
+      "kind": "book",
+      "columns": 1,
+      "licence": "CC0 (invented for this benchmark)",
+      "labels": {"title": "A Field Guide to Salt Marsh Grasses", "authors": ["Pilar Montenegro"], "year": 2019, "arxiv_id": null, "doi": null, "isbn": "9780306406157"},
+      "note": "cover with \"by\" line, copyright page with an ISBN, preface"
+    },
+    {
+      "id": "smoke-report",
+      "file": "smoke/smoke-report.pdf",
+      "filename": "breakwater-review-2021.pdf",
+      "kind": "report",
+      "columns": 1,
+      "licence": "CC0 (invented for this benchmark)",
+      "labels": {"title": "Annual Review of Breakwater Condition", "authors": [], "year": 2021, "arxiv_id": null, "doi": null, "isbn": null},
+      "accept": {"authors": [["Harbour Authority Engineering Office"]]},
+      "note": "a corporate author and no identifiers at all"
+    }
+  ]
+}

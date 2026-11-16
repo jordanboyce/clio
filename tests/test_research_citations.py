@@ -327,6 +327,18 @@ def test_a_model_verdict_stands_only_on_a_verified_quote(indexer):
     assert "Conductance did not predict growth rate" in provider.prompts[0]
 
 
+def test_an_unreadable_model_reply_says_so_instead_of_going_quiet(indexer):
+    # A reply that is not the JSON asked for used to leave no verdicts and no note.
+    out = _check(indexer, "Conductance did not predict growth rate (Okafor et al., 2021). "
+                          "Conductance also predicted sapling height (Okafor et al., 2021).",
+                 provider=FakeProvider("I think both claims look fine to me."), model="fake-model")
+    note = next(n for n in out["notes"] if "reply could not be read" in n)
+    assert "2 cited claims have no verdict" in note
+    assert out["summary"]["claims_judged"] == 0
+    # The claims still show the passages to check by hand.
+    assert _kinds(out).count("claim_evidence") == 2
+
+
 def test_numbered_citations_without_a_list_say_what_is_needed(indexer):
     out = _check(indexer, "Thresholds vary [1].")
     assert any("reference list" in n for n in out["notes"])

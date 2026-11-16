@@ -1562,34 +1562,73 @@ def list_provider_models(  # sync: provider round-trip runs in the threadpool
     x_ai_key: str = Header(None),
     x_ai_provider: str = Header(None),
     x_ai_base_url: str = Header(None),
+    refresh: bool = Query(False, description="Ask the provider again instead of answering from the short cache."),
 ):
     """
-    List the models an AI provider offers, using the caller's credentials.
+    List the models an AI provider offers, using the caller's credentials,
+    with one capability record per model.
 
-    Same header contract as /api/ai/validate-key. Providers that cannot
-    enumerate models return an empty list — the frontend then falls back to
-    its curated recommendations. Missing X-AI-Key falls back to a
-    server-stored team key for that provider, if one exists.
+    Same header contract as /api/ai/validate-key. Missing X-AI-Key falls back
+    to a server-stored team key for that provider, if one exists.
+
+    Response:
+
+    - ``records``: one object per model — ``id``, ``label``, ``kinds`` (chat,
+      embedding, image, speech, transcription, moderation, rerank, video,
+      realtime, other; [] when not known), ``vision``, ``tools``,
+      ``context_tokens``, ``embedding_dimensions``, ``max_input_tokens``
+      (None when not known), ``source`` (where ``kinds`` came from:
+      provider, pattern or unknown), ``pattern_fields`` (fields filled from
+      the server's name table rather than the provider), ``recommended`` and
+      ``roles``. Recommendations come first, and only models the provider
+      listed are recommended.
+    - ``defaults``: ``model``, ``fast`` and ``vision`` — what the server uses
+      when a request names no model (None when nothing fits).
+    - ``listed``: whether the provider answered. When it did not (offline,
+      blocked, bad key), ``records`` are the server's recommendations and
+      ``error`` says why.
+    - ``models``: **deprecated**, kept for one release: the bare ids, [] when
+      the provider listed nothing — exactly what this returned before.
+
+    Listings are cached for a few minutes per provider, endpoint and key;
+    ``refresh=true`` asks again.
     """
-    x_ai_provider = x_ai_provider or default_ai_provider()
-    try:
-        if x_ai_provider not in ALL_AI_PROVIDERS:
-            return {"models": [], "error": f"Invalid provider: {x_ai_provider}"}
+    from services import model_catalog
 
-        api_key = x_ai_key
-        if not api_key and x_ai_provider != "ollama":
+    x_ai_provider = x_ai_provider or default_ai_provider()
+    if x_ai_provider not in ALL_AI_PROVIDERS:
+        return {"models": [], "records": [], "defaults": {"model": None, "fast": None, "vision": None},
+                "suggested": {"embedding": None, "vision": None},
+                "listed": False, "error": f"Invalid provider: {x_ai_provider}"}
+
+    api_key = x_ai_key
+    if not api_key and x_ai_provider != "ollama":
+        try:
             from services.app_database import app_db
             api_key = app_db.get_agent_api_key(x_ai_provider) or None
+        except Exception:
+            api_key = None
 
-        try:
-            provider = _provider_from_headers(x_ai_provider, api_key or "", x_ai_base_url)
-        except _ProviderHeaderError as e:
-            return {"models": [], "error": str(e)}
+    list_records = None
+    error = None
+    try:
+        provider = _provider_from_headers(x_ai_provider, api_key or "", x_ai_base_url)
+        list_records = provider.list_model_records
+    except _ProviderHeaderError as e:
+        error = str(e)
+    except Exception as e:  # offline mode, missing SDK, bad URL: answer from the table
+        logger.warning(f"Model listing unavailable for {x_ai_provider}: {e}")
+        error = str(e)
 
-        return {"models": provider.list_models(), "error": None}
-    except Exception as e:
-        logger.warning(f"Model listing failed for {x_ai_provider}: {e}")
-        return {"models": [], "error": str(e)}
+    result = model_catalog.catalog(
+        x_ai_provider, list_records,
+        key=model_catalog.cache_key(x_ai_provider, api_key, x_ai_base_url),
+        refresh=refresh is True,  # a direct call passes the Query default object
+    )
+    if result["error"]:
+        logger.warning(f"Model listing failed for {x_ai_provider}: {result['error']}")
+    result.pop("cached", None)
+    return {**result, "error": error or result["error"]}
 
 
 @router.get(

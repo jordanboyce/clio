@@ -323,7 +323,11 @@ def analyze_paper(document_id: str, body: AnalyzeOneRequest = AnalyzeOneRequest(
              summary="Analyze many papers in the background (no model involved)")
 def analyze_many(body: AnalyzeRequest, response: Response, collection_id: str = "default") -> dict:
     """202 with a job when something was queued; 200 with ``job: null``
-    when every selected paper is already analyzed."""
+    when every selected paper is already analyzed.
+
+    Analysis needs no model, so a selection larger than one job may cover
+    is split into several jobs that run one after another: ``jobs`` lists
+    them all and ``job`` is the first (what older clients follow)."""
     indexer = _indexer(collection_id)
     _require_write(collection_id)
     store = library.research_store(indexer)
@@ -334,14 +338,26 @@ def analyze_many(body: AnalyzeRequest, response: Response, collection_id: str = 
     if not docs:
         response.status_code = status.HTTP_200_OK
         return {"job": None, "message": "Every selected source is already analyzed."}
-    job = jobs_service.start_job(
-        collection_id=collection_id, store=store, kind="analyze", documents=docs,
-        work=lambda d, _job_id: library.analyze_document(collection_id, indexer, d["document_id"],
-                                                         use_registry=body.use_registry, store=store),
-        finish=lambda: library.match_library(store, _papers(indexer)),
-        params={"use_registry": body.use_registry}, created_by=get_request_user(),
-    )
-    return {"job": job}
+    size = jobs_service.max_documents()
+    chunks = [docs[i:i + size] for i in range(0, len(docs), size)]
+    started: List[dict] = []
+    for n, chunk in enumerate(chunks, start=1):
+        params = {"use_registry": body.use_registry}
+        if len(chunks) > 1:
+            params.update(part=n, parts=len(chunks))
+        try:
+            started.append(jobs_service.start_job(
+                collection_id=collection_id, store=store, kind="analyze", documents=chunk,
+                work=lambda d, _job_id: library.analyze_document(collection_id, indexer, d["document_id"],
+                                                                 use_registry=body.use_registry, store=store),
+                finish=lambda: library.match_library(store, _papers(indexer)),
+                params=params, created_by=get_request_user(),
+            ))
+        except ValueError as e:
+            for job in started:
+                jobs_service.cancel_job(store, job["job_id"])
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"job": started[0], "jobs": started}
 
 
 @router.post("/api/research/papers/{document_id}/rename", tags=["research"],
@@ -448,7 +464,13 @@ async def resolve_references(body: ResolveRequest, collection_id: str = "default
                             detail="This collection holds data marked local only, so its references are not "
                                    "sent to outside catalogues.")
     resolved = await asyncio.to_thread(library.resolve_references, store, refs)
-    return {"references": resolved}
+    failed = [r for r in resolved if r.get("lookup_failed")]
+    out: Dict[str, object] = {"references": resolved, "lookup_failed": len(failed)}
+    if failed:
+        out["message"] = (f"{len(failed)} reference{'' if len(failed) == 1 else 's'} could not be looked up "
+                          f"because the catalogue could not be reached ({failed[0]['lookup_failed']}). "
+                          "Nothing was recorded for them; try again later.")
+    return out
 
 
 @router.post("/api/research/references/download", tags=["research"], status_code=status.HTTP_202_ACCEPTED,
@@ -477,6 +499,8 @@ async def download_references(body: DownloadRequest, response: Response, collect
             continue
         reason = ("already in this collection" if ref.get("status") == "in_library"
                   else "already queued" if ref.get("status") == "queued"
+                  else f"not looked up: the catalogue could not be reached ({ref['lookup_failed']}); try again later"
+                  if ref.get("lookup_failed")
                   else "no open copy found" + ("" if body.include_pages else " (landing pages not requested)"))
         skipped.append({"reference_id": ref["id"], "text": (ref.get("raw_text") or "")[:200], "reason": reason})
 
@@ -684,7 +708,12 @@ def start_research_job(
         # Asked again for each paper: one may have been marked since the job began.
         data_controls.guard_model_call(collection_id, provider)
         if body.kind == "assess":
-            result = relevance.assess(indexer, doc["document_id"], question, provider=provider, model=model)
+            try:
+                result = relevance.assess(indexer, doc["document_id"], question, provider=provider, model=model)
+            except relevance.ModelReplyError as exc:
+                # The paper counts as failed (no verdict saved); the tokens were still spent.
+                _record_usage(user, collection_id, body.provider, getattr(exc, "usage", None) or {}, started)
+                raise
             _record_usage(user, collection_id, body.provider, result.get("usage") or {}, started)
             store.add_assessment(doc["document_id"], question, result, job_id=job_id)
         else:

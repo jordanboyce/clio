@@ -1379,6 +1379,7 @@ import http from './utils/http'
 import { useModal } from './composables/useModal'
 import { useWebMcp } from './composables/useWebMcp'
 import { lazyView } from './utils/lazyView'
+import { tabAfterCollectionSwitch } from './utils/collectionSwitch'
 
 const chatTabEnabled = ref(true)
 
@@ -1401,17 +1402,18 @@ import ExportCollectionModal from './components/ExportCollectionModal.vue'
 import ImportCollectionModal from './components/ImportCollectionModal.vue'
 import ChatTab from './components/ChatTab.vue'
 
-// Every tab but Ask lives in its own chunk; lazyView keeps a chunk that has
-// gone missing (deploy under an open tab) from rendering as an empty pane.
-const SearchTab = lazyView(() => import('./components/SearchTab.vue'))
-const ArtifactsTab = lazyView(() => import('./components/ArtifactsTab.vue'))
-const ResearchTab = lazyView(() => import('./components/ResearchTab.vue'))
-const SettingsTab = lazyView(() => import('./components/SettingsTab.vue'))
-const MCPTab = lazyView(() => import('./components/MCPTab.vue'))
+// Every tab but Ask lives in its own chunk; lazyView says which tab is
+// opening while its chunk loads, and offers Try again if the chunk fails
+// (a dropped connection, or a deploy under an open tab).
+const SearchTab = lazyView(() => import('./components/SearchTab.vue'), { name: 'Find' })
+const ArtifactsTab = lazyView(() => import('./components/ArtifactsTab.vue'), { name: 'Reports' })
+const ResearchTab = lazyView(() => import('./components/ResearchTab.vue'), { name: 'Research' })
+const SettingsTab = lazyView(() => import('./components/SettingsTab.vue'), { name: 'Settings' })
+const MCPTab = lazyView(() => import('./components/MCPTab.vue'), { name: 'Connect' })
 const ShareModal = lazyView(() => import('./components/ShareModal.vue'))
-const ExpertiseLibrary = lazyView(() => import('./components/ExpertiseLibrary.vue'))
+const ExpertiseLibrary = lazyView(() => import('./components/ExpertiseLibrary.vue'), { name: 'Saved instructions' })
 const WelcomeOnboarding = lazyView(() => import('./components/WelcomeOnboarding.vue'))
-const AdminTab = lazyView(() => import('./components/AdminTab.vue'))
+const AdminTab = lazyView(() => import('./components/AdminTab.vue'), { name: 'Administration' })
 const AcceptableUseModal = lazyView(() => import('./components/AcceptableUseModal.vue'))
 import { SENSITIVITY_HELP, classificationInfo, classificationTitle, labelBadgeClass, showLabel } from './utils/governance'
 import ClassificationBadge from './components/ClassificationBadge.vue'
@@ -2159,7 +2161,7 @@ const paletteCommands = computed(() => {
 
   for (const c of collectionStore.sortedCollections) {
     if (c.id === current) continue
-    add('Switch collection', c.name, Layers, () => selectCollectionAndNavigate(c.id), {
+    add('Switch collection', c.name, Layers, () => pickCollection(c.id), {
       swatch: c.color,
       detail: `${c.document_count || 0} ${(c.document_count || 0) === 1 ? 'doc' : 'docs'}`,
       keywords: 'collection switch open',
@@ -2212,13 +2214,11 @@ const selectCollectionAndNavigate = (collectionId) => {
   activeTab.value = chatTabEnabled.value ? 'chat' : 'search'
 }
 
-// Picker: switch in place. Only the overview (which has no conversation to
-// stay in) and tabs unrelated to a collection hand you back to Ask/Find.
+// Picker and palette: switch in place, on whatever tab you are on. Only the
+// overview (which has no conversation to stay in) hands you back to Ask/Find.
 const pickCollection = (collectionId) => {
   collectionStore.setCurrentCollection(collectionId)
-  if (!['chat', 'search', 'generate', 'expertise'].includes(activeTab.value)) {
-    activeTab.value = chatTabEnabled.value ? 'chat' : 'search'
-  }
+  activeTab.value = tabAfterCollectionSwitch(activeTab.value, { chatEnabled: chatTabEnabled.value })
 }
 
 const openCreateCollectionModal = () => {

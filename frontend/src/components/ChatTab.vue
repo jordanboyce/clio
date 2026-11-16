@@ -708,8 +708,10 @@
               >
                 /
               </button>
-              <!-- Answer depth: the one-tap Quick / Research choice -->
-              <div class="join rounded-full border border-base-300" role="radiogroup" aria-label="Answer depth">
+              <!-- Answer depth: the one-tap Quick / Research choice. Without a
+                   model there is no answer to shape, and the room goes to the
+                   labelled Find passages button on a phone. -->
+              <div v-if="!findsInstead" class="join rounded-full border border-base-300" role="radiogroup" aria-label="Answer depth">
                 <button
                   type="button"
                   class="btn btn-xs join-item gap-1 border-0 rounded-l-full"
@@ -750,6 +752,21 @@
             >
               <Square :size="12" fill="currentColor" aria-hidden="true" />
             </button>
+            <!-- With no model, sending runs the question as a Find search, and
+                 the button says so instead of looking broken. -->
+            <button
+              v-else-if="findsInstead"
+              type="button"
+              class="btn btn-sm btn-primary rounded-full gap-1 transition-all"
+              :class="{ 'btn-disabled opacity-40': sendDisabled }"
+              :disabled="sendDisabled"
+              @click="sendMessage"
+              title="No AI model is connected: find the matching passages instead"
+              data-testid="chat-send"
+            >
+              <Search :size="14" aria-hidden="true" />
+              Find passages
+            </button>
             <button
               v-else
               type="button"
@@ -759,13 +776,14 @@
               @click="sendMessage"
               title="Send message"
               aria-label="Send message"
+              data-testid="chat-send"
             >
               <ArrowUp :size="16" aria-hidden="true" />
             </button>
           </div>
         </div>
         <p class="hidden sm:block text-[11px] text-base-content/30 mt-1.5 text-center">
-          <span class="kbd-hint">Enter</span> to send · <span class="kbd-hint">Shift</span> <span class="kbd-hint">Enter</span> for a new line · <span class="kbd-hint">/</span> for commands
+          <span class="kbd-hint">Enter</span> {{ findsInstead ? 'to find passages' : 'to send' }} · <span class="kbd-hint">Shift</span> <span class="kbd-hint">Enter</span> for a new line · <span class="kbd-hint">/</span> for commands
         </p>
       </div>
 
@@ -919,8 +937,15 @@ const sendDisabled = computed(() => {
   // Slash commands don't need a provider or indexed content —
   // they read collection metadata directly.
   if (isSlashCommand(inputMessage.value)) return false
-  return !hasAnyProvider.value || documentCount.value === 0
+  // No model is not a reason to refuse: sendMessage runs the question as a
+  // Find search instead, from the button exactly as from Enter. Touch
+  // keyboards rely on the button (Enter adds a line there), so a disabled
+  // button left them no way to send at all.
+  return documentCount.value === 0
 })
+
+// Known to have no model (not merely still loading the server's list).
+const findsInstead = computed(() => providerStore.serverLoaded && !hasAnyProvider.value)
 
 // True while an SSE streaming message is in-flight (has been added to store but not finalized)
 const hasStreamingMessage = computed(() =>

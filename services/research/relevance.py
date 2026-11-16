@@ -50,7 +50,8 @@ _PROMPT = (
 
 def assess(indexer, document_id: str, question: str, provider=None, model: Optional[str] = None) -> dict:
     """Assess one paper. Without a provider, returns the retrieval layer only
-    (``verdict`` None)."""
+    (``verdict`` None). Raises :class:`ModelReplyError` when the model gives
+    no answer or one that cannot be read."""
     question = " ".join((question or "").split())[:MAX_QUESTION_CHARS]
     if not question:
         raise ValueError("A question is required")
@@ -71,19 +72,17 @@ def assess(indexer, document_id: str, question: str, provider=None, model: Optio
     leading = list(passages)[:LEADING_PASSAGES]
     shown = select(passages, leading + hit_ids, BUDGET_CHARS)
     prompt = _PROMPT.format(rules=GROUNDING_RULES, question=question, passages=render(shown))
-    try:
-        text, usage = complete(provider, model, prompt, max_tokens=1400)
-    except ModelReplyError as exc:
-        result["verdict"] = "not_established"
-        result["notes"].append(f"No verdict: {exc}")
-        return result
+    # A model that gives no usable answer raises (as reviews do): recording
+    # "can't tell from the text" would pass a failed call off as a verdict.
+    text, usage = complete(provider, model, prompt, max_tokens=1400)
     result["usage"] = add_usage({}, usage)
     result["model"] = usage.get("model") or model or ""
     parsed = parse_json_object(text)
     if not parsed:
-        result["verdict"] = "not_established"
-        result["notes"].append("The model's answer could not be read, so no verdict is given.")
-        return result
+        error = ModelReplyError("The model's answer could not be read (it was not the JSON the "
+                                "screening asks for), so no verdict was recorded.")
+        error.usage = result["usage"]
+        raise error
 
     # Quotes are checked against the passages the model was shown — a quote
     # from a passage it never saw is a quote it made up.

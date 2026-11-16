@@ -726,6 +726,7 @@ def check_draft(indexer, documents: List[dict], papers: Dict[str, dict], text: s
                               "chunk_id": h["chunk_id"], "text": h["text"][:500]} for h in hits]
 
     judged = 0
+    unread = 0  # claims sent to the model whose reply could not be read
     if provider is not None and claims:
         by_doc: Dict[str, List[dict]] = {}
         for claim in claims[:MAX_MODEL_CLAIMS]:
@@ -757,7 +758,13 @@ def check_draft(indexer, documents: List[dict], papers: Dict[str, dict], text: s
                     continue
                 add_usage(usage, call_usage)
                 parsed = parse_json_object(reply) or {}
-                for row in parsed.get("claims") or []:
+                rows = parsed.get("claims")
+                if not isinstance(rows, list) or not rows:
+                    unread += len(batch)
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
                     try:
                         claim = batch[int(row.get("claim")) - 1]
                     except (TypeError, ValueError, IndexError):
@@ -780,6 +787,11 @@ def check_draft(indexer, documents: List[dict], papers: Dict[str, dict], text: s
                                             "page": p["page"], "chunk_id": p["chunk_id"],
                                             "printed_page": citations.printed_page(lib.items[did], p["page"])}
                     judged += 1
+        if unread:
+            notes.append(f"The model's reply could not be read, so {unread} cited claim"
+                         f"{'' if unread == 1 else 's'} {'has' if unread == 1 else 'have'} no verdict. "
+                         "The passages that match each one are shown to check yourself; try again, "
+                         "or try another model.")
 
     for claim in claims:
         item = lib.items[claim["document_id"]]

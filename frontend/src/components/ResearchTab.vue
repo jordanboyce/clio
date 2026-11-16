@@ -218,9 +218,9 @@
     </div>
 
     <!-- Rename preview -->
-    <dialog class="modal" :open="renameOpen" @close="renameOpen = false">
+    <dialog :ref="renameModal.dialogRef" class="modal" aria-labelledby="research-rename-title" @close="renameModal.onClosed">
       <div class="modal-box max-w-3xl space-y-3">
-        <h3 class="font-semibold">Rename to descriptive names</h3>
+        <h3 id="research-rename-title" class="font-semibold">Rename to descriptive names</h3>
         <p class="text-sm text-base-content/70">
           Names are built from each source's title, authors and year as found in it (or in its catalogue record).
           Sources without a known title are left alone. Each keeps its original name, so this can be undone one at a time.
@@ -240,13 +240,13 @@
           </li>
         </ul>
         <div class="modal-action">
-          <button class="btn btn-sm btn-ghost" @click="renameOpen = false">Cancel</button>
+          <button class="btn btn-sm btn-ghost" @click="renameModal.close()">Cancel</button>
           <button class="btn btn-sm btn-primary" :disabled="!renameChecked.length || renaming" @click="renameSelected">
             <span v-if="renaming" class="loading loading-spinner loading-xs" />Rename {{ renameChecked.length }}
           </button>
         </div>
       </div>
-      <form method="dialog" class="modal-backdrop"><button @click="renameOpen = false">close</button></form>
+      <form method="dialog" class="modal-backdrop"><button aria-label="Close">close</button></form>
     </dialog>
   </div>
 </template>
@@ -261,6 +261,8 @@ import ResearchWriting from './ResearchWriting.vue'
 // The map brings the canvas force graph; load it only when the map is opened.
 const ResearchMap = defineAsyncComponent(() => import('./ResearchMap.vue'))
 import { researchApi, VERDICTS, authorsShort } from '../utils/researchApi.js'
+import { createJobPoller, finishNotice } from '../utils/researchJobs.js'
+import { useModal } from '../composables/useModal'
 import { missingLabel } from '../utils/citations.js'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useProviderStore } from '../stores/providerStore'
@@ -309,11 +311,17 @@ const verdicts = ref({})
 const analyzing = ref(false)
 const screening = ref(false)
 const renameOpen = ref(false)
+// A real modal (focus trap, inert page, Escape); closing by any route lands in onClose.
+const renameModal = useModal({ onClose: () => { renameOpen.value = false } })
 const renaming = ref(false)
 const pattern = ref('')
 const renameChecked = ref([])
-let pollTimer = null
 let previewTimer = null
+// Analyze and Screen each follow their own jobs: one starting never stops
+// the other's poll (whose spinner would then never clear).
+const poller = createJobPoller(async (cid) => (await researchApi.jobs(cid)).jobs || [])
+const ANALYZE_WORDS = { noun: 'Analysis', past: 'analyzed', failed: 'could not be read' }
+const SCREEN_WORDS = { noun: 'Screening', past: 'screened', failed: 'could not be screened' }
 
 async function loadPapers() {
   if (!collectionId.value) return
@@ -368,7 +376,7 @@ watch(() => jobsStore.dataRefreshTick, () => {
 })
 
 onBeforeUnmount(() => {
-  clearTimeout(pollTimer); clearTimeout(verdictTimer); clearTimeout(previewTimer)
+  poller.stopAll(); clearTimeout(verdictTimer); clearTimeout(previewTimer)
   wideQuery?.removeEventListener?.('change', onWide)
 })
 
@@ -427,21 +435,10 @@ function onChanged() {
   refreshKey.value++
 }
 
-function pollJob(jobId, done) {
-  clearTimeout(pollTimer)
-  pollTimer = setTimeout(async () => {
-    try {
-      const { jobs } = await researchApi.jobs(collectionId.value)
-      const job = jobs.find(j => j.job_id === jobId)
-      if (job && ['queued', 'running'].includes(job.status)) {
-        if (job.done) done(job, false)
-        return pollJob(jobId, done)
-      }
-      done(job, true)
-    } catch {
-      pollJob(jobId, done)
-    }
-  }, 2500)
+// Any finish that is not clean (failures, a budget stop, a cancel) says so.
+function reportFinish(jobs, words, extra) {
+  const notice = finishNotice(jobs, words, extra)
+  if (notice) ui.notify(notice.message, notice.type, { duration: notice.type === 'error' ? 8000 : 6000 })
 }
 
 function analyzeAgain() {
@@ -455,13 +452,17 @@ async function analyzeNew({ onlyNew = true } = {}) {
       only_new: onlyNew, document_ids: selectionCount.value ? scopeIds.value : null,
     })
     if (!out.job) { analyzing.value = false; return loadPapers() }
-    pollJob(out.job.job_id, (job, finished) => {
-      loadPapers()
-      if (finished) {
+    // A big selection comes back as several jobs (one after another).
+    const ids = (out.jobs?.length ? out.jobs : [out.job]).map(j => j.job_id)
+    poller.watch(ids, {
+      context: collectionId.value,
+      onProgress: (jobs) => { if (jobs.some(j => j.done)) loadPapers() },
+      onFinished: (jobs, extra) => {
         analyzing.value = false
+        loadPapers()
         refreshKey.value++
-        if (job?.failed) ui.notify(`${job.failed} source(s) could not be read`, 'warning')
-      }
+        reportFinish(jobs, ANALYZE_WORDS, extra)
+      },
     })
   } catch (err) {
     analyzing.value = false
@@ -477,12 +478,14 @@ async function screen() {
       kind: 'assess', question: question.value.trim(), document_ids: screenTargets.value,
     }, providerId.value)
     sort.value = 'verdict'
-    pollJob(out.job.job_id, (job, finished) => {
-      loadVerdicts()
-      if (finished) {
+    poller.watch([out.job.job_id], {
+      context: collectionId.value,
+      onProgress: (jobs) => { if (jobs.some(j => j.done)) loadVerdicts() },
+      onFinished: (jobs, extra) => {
         screening.value = false
-        if (job?.failed) ui.notify(`${job.failed} source(s) could not be screened`, 'warning')
-      }
+        loadVerdicts()
+        reportFinish(jobs, SCREEN_WORDS, extra)
+      },
     })
   } catch (err) {
     screening.value = false
@@ -527,6 +530,7 @@ watch(pattern, () => {
 async function openRenamePreview() {
   pattern.value = pattern.value || naming.value.default_pattern
   renameOpen.value = true
+  renameModal.open()
   await refreshPreview({ checkAll: true })
 }
 
@@ -536,7 +540,7 @@ async function renameSelected() {
     const out = await researchApi.renameMany(collectionId.value, renameChecked.value, pattern.value)
     ui.notify(`Renamed ${out.renamed.length} source${out.renamed.length === 1 ? '' : 's'}`
       + (out.skipped.length ? ` · ${out.skipped.length} left as they were` : ''), 'success')
-    renameOpen.value = false
+    renameModal.close()
     ui.sourcesChanged()
     onChanged()
   } catch (err) {

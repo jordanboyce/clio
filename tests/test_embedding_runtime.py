@@ -19,6 +19,8 @@ import services.embedding_status as status_mod
 from services.app_database import SQLiteBackend, app_db
 from services.config_manager import config_manager
 from services.embedding_status import embedding_status
+from services.ai_service import ollama_entry_record
+from services.model_catalog import complete_record
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -95,6 +97,19 @@ FAKE_CATALOG = {
     },
 }
 
+
+
+def ollama_records(*models):
+    """What api.system._ollama_models returns, for (name, capabilities)
+    pairs; capabilities None is an Ollama too old to report them, which
+    falls back to the name."""
+    out = []
+    for name, caps in models:
+        entry = {"name": name, "details": {}}
+        if caps is not None:
+            entry["capabilities"] = caps
+        out.append(complete_record("ollama", ollama_entry_record(entry)))
+    return out
 
 @pytest.fixture(autouse=True)
 def quiet_status():
@@ -505,7 +520,7 @@ def client(fresh_db, monkeypatch, local_settings):
     monkeypatch.setattr(im.indexer_manager, "_embedding_services", {})
     monkeypatch.setattr(embedder, "local_model_cached", lambda name, backend=None: True)
     monkeypatch.setattr(system, "_huggingface_reachable", lambda timeout=3.0: True)
-    monkeypatch.setattr(system, "_ollama_tags", lambda base_url, timeout=2.0: None)
+    monkeypatch.setattr(system, "_ollama_models", lambda base_url, timeout=2.0: None)
     return TestClient(main.app)
 
 
@@ -540,7 +555,10 @@ def test_health_carries_embedding_status(client):
 def test_options_recommends_local_when_available(client, monkeypatch):
     from api import system
     monkeypatch.setattr(embedder, "local_model_cached", lambda name, backend=None: False)
-    monkeypatch.setattr(system, "_ollama_tags", lambda base_url, timeout=2.0: ["nomic-embed-text:latest", "llama3:8b", "bge-m3"])
+    # Ollama reports which models embed; "house-vectors" is one only because it says so.
+    monkeypatch.setattr(system, "_ollama_models", lambda base_url, timeout=2.0: ollama_records(
+        ("nomic-embed-text:latest", ["embedding"]), ("llama3:8b", ["completion", "tools"]),
+        ("house-vectors:latest", ["embedding"]), ("bge-m3", None)))
     body = client.get("/api/embedding/options").json()
     assert body["recommended"] == "local"
     assert body["offline_mode"] is False
@@ -558,7 +576,7 @@ def test_options_recommends_local_when_available(client, monkeypatch):
     assert body["ollama"] == {
         "reachable": True,
         "base_url": settings.ollama_base_url,
-        "embedding_models": ["nomic-embed-text:latest", "bge-m3"],
+        "embedding_models": ["nomic-embed-text:latest", "house-vectors:latest", "bge-m3"],
         "suggested": "nomic-embed-text",
     }
     hosted = {h["id"]: h for h in body["hosted"]}
@@ -573,14 +591,14 @@ def test_options_falls_back_to_ollama_then_hosted(client, monkeypatch, fresh_db)
     from api import system
     monkeypatch.setattr(embedder, "fastembed_importable", lambda: False)
     monkeypatch.setattr(embedder, "sentence_transformers_importable", lambda: False)
-    monkeypatch.setattr(system, "_ollama_tags", lambda base_url, timeout=2.0: ["nomic-embed-text"])
+    monkeypatch.setattr(system, "_ollama_models", lambda base_url, timeout=2.0: ollama_records(("nomic-embed-text", ["embedding"])))
     body = client.get("/api/embedding/options").json()
     assert body["local"]["available"] is False
     assert body["local"]["backend"] is None
     assert "pip install fastembed" in body["local"]["install_hint"]
     assert body["recommended"] == "ollama"
 
-    monkeypatch.setattr(system, "_ollama_tags", lambda base_url, timeout=2.0: None)
+    monkeypatch.setattr(system, "_ollama_models", lambda base_url, timeout=2.0: None)
     fresh_db.set_agent_api_key("google", "AIza-team")
     body = client.get("/api/embedding/options").json()
     assert body["ollama"]["reachable"] is False

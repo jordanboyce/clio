@@ -112,5 +112,6 @@ def test_deployment_endpoint_lists_models_with_server_key(gateway, monkeypatch):
     result = list_provider_models(
         x_ai_provider="openai_compatible", x_ai_base_url="", x_ai_key="",
     )
-    assert result == {"models": ["private-chat-model"], "error": None}
+    assert result["models"] == ["private-chat-model"] and result["error"] is None
+    assert [r["id"] for r in result["records"]] == ["private-chat-model"]
     assert requests == [("GET", "/v1/models", "Bearer example-key")]

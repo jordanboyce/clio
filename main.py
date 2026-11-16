@@ -624,6 +624,8 @@ async def require_auth(request, call_next):
             request.state.mcp_token_allowlist = bool(token_record.get("allowlist"))
             # Adding/updating sources over MCP is opt-in per token.
             request.state.mcp_token_can_write = bool(token_record.get("can_write"))
+            # Replacing a person's upload is a separate, narrower grant.
+            request.state.mcp_token_can_overwrite_uploads = bool(token_record.get("can_overwrite_uploads"))
             # Which credential made the call, for the MCP audit trail. The
             # id, never the token — the plaintext is unrecoverable by design.
             request.state.mcp_token_id = token_record.get("id")

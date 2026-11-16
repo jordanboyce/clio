@@ -126,7 +126,7 @@ const emit = defineEmits(['done', 'skip'])
 const loading = ref(true)
 const options = ref(null)
 const choice = ref('local')
-const ollamaModel = ref('nomic-embed-text')
+const ollamaModel = ref('')  // set from the server's options
 const hostedId = ref('')
 const hostedKey = ref('')
 const busy = ref(false)
@@ -138,8 +138,8 @@ const hostedChoices = computed(() => (options.value?.hosted || []).filter(h => !
 const hosted = computed(() => hostedChoices.value.find(h => h.id === hostedId.value) || null)
 const ollamaChoices = computed(() => {
   const present = options.value?.ollama?.embedding_models || []
-  const suggested = options.value?.ollama?.suggested || 'nomic-embed-text'
-  return Array.from(new Set([...present, suggested]))
+  const suggested = options.value?.ollama?.suggested
+  return Array.from(new Set([...present, ...(suggested ? [suggested] : [])]))
 })
 
 const cards = computed(() => {

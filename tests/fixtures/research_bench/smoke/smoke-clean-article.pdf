@@ -1,0 +1,77 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+2 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Type /Pages /Kids [7 0 R 9 0 R] /Count 2 >>
+endobj
+6 0 obj
+<< /Length 1523 >>
+stream
+BT /F1 9.0 Tf 20.0 600.0 Td (arXiv:2611.99901v2 [cs.DB] 3 Nov 2026) Tj ET
+BT /F2 18.0 Tf 72.0 700.0 Td (Lighthouse Indexing for Coastal Sensor Archives) Tj ET
+BT /F1 11.0 Tf 72.0 676.0 Td (Ines Halvorsen, Tomasz Wierzbicki and Amara Okonjo) Tj ET
+BT /F1 9.0 Tf 72.0 662.0 Td (Department of Marine Informatics, Northshore Institute) Tj ET
+BT /F2 11.0 Tf 72.0 630.0 Td (Abstract) Tj ET
+BT /F3 10.0 Tf 72.0 614.0 Td (The survey covered forty-two stations along the northern shore over three winters. Each station) Tj ET
+BT /F3 10.0 Tf 72.0 601.5 Td (logged water level, salinity and temperature every ten minutes, and the archive now holds about) Tj ET
+BT /F3 10.0 Tf 72.0 589.0 Td (nineteen million readings. We describe how the readings were cleaned, how gaps were marked rather) Tj ET
+BT /F3 10.0 Tf 72.0 576.5 Td (than filled, and how the archive answers range queries in under a second.) Tj ET
+BT /F2 11.0 Tf 72.0 548.0 Td (1 Introduction) Tj ET
+BT /F3 10.0 Tf 72.0 532.0 Td (The survey covered forty-two stations along the northern shore over three winters. Each station) Tj ET
+BT /F3 10.0 Tf 72.0 519.5 Td (logged water level, salinity and temperature every ten minutes, and the archive now holds about) Tj ET
+BT /F3 10.0 Tf 72.0 507.0 Td (nineteen million readings. We describe how the readings were cleaned, how gaps were marked rather) Tj ET
+BT /F3 10.0 Tf 72.0 494.5 Td (than filled, and how the archive answers range queries in under a second.) Tj ET
+BT /F1 8.0 Tf 72.0 60.0 Td (doi: 10.5555/smoke.2026.0001) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 5 0 R /MediaBox [0 0 612 792] /Contents 6 0 R /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R /F4 4 0 R >> >> >>
+endobj
+8 0 obj
+<< /Length 440 >>
+stream
+BT /F2 12.0 Tf 72.0 720.0 Td (References) Tj ET
+BT /F3 9.0 Tf 72.0 702.0 Td ([1] H. Lindqvist and P. Oduya. Tide gauge drift over decades. Imaginary Ocean Letters, 2019.) Tj ET
+BT /F3 9.0 Tf 72.0 687.0 Td ([2] M. Ferreira. Compressing sensor archives without losing gaps. Journal of Invented Systems, 2021.) Tj ET
+BT /F3 9.0 Tf 72.0 672.0 Td ([3] K. Abara, L. Brandt. Range queries over irregular time series. arXiv:2611.99950, 2026.) Tj ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 5 0 R /MediaBox [0 0 612 792] /Contents 8 0 R /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R /F4 4 0 R >> >> >>
+endobj
+10 0 obj
+<< /Producer (clio research_bench smoke fixture) >>
+endobj
+11 0 obj
+<< /Type /Catalog /Pages 5 0 R >>
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000015 00000 n 
+0000000112 00000 n 
+0000000214 00000 n 
+0000000313 00000 n 
+0000000411 00000 n 
+0000000474 00000 n 
+0000002049 00000 n 
+0000002205 00000 n 
+0000002696 00000 n 
+0000002852 00000 n 
+0000002920 00000 n 
+trailer
+<< /Size 12 /Root 11 0 R /Info 10 0 R >>
+startxref
+2970
+%%EOF

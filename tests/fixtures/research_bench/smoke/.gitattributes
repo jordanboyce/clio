@@ -1,0 +1,4 @@
+# Generated PDFs with plain-text content streams: no NUL bytes, so git would
+# take them for text and core.autocrlf would rewrite their line endings,
+# breaking the byte offsets in their xref tables.
+*.pdf binary

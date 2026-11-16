@@ -158,15 +158,24 @@ def analyze_document(collection_id: str, indexer, document_id: str,
         notes.append("Catalogue lookups were skipped: this source is marked local only.")
     if use_registry and lookup.lookup_available():
         record, how = None, ""
+        unreachable: List[str] = []
         for how, ident, fetch in (("ISBN", fields["isbn"], lookup.by_isbn),
                                   ("DOI", fields["doi"], lookup.by_doi),
                                   ("arXiv id", fields["arxiv_id"], lookup.by_arxiv)):
             if ident and not record:
-                record = _confirm_registry(fetch(ident), printed_in, how, where, notes)
+                try:
+                    answer = fetch(ident)
+                except lookup.Unreachable as exc:
+                    unreachable.append(f"the {how} lookup: {exc}")
+                    continue
+                record = _confirm_registry(answer, printed_in, how, where, notes)
                 if record:
                     break
         if not record and fields["title"]:
-            record = lookup.by_title(fields["title"], printed_in, fields["year"])
+            try:
+                record = lookup.by_title(fields["title"], printed_in, fields["year"])
+            except lookup.Unreachable as exc:
+                unreachable.append(f"the title search: {exc}")
             how = "title search"
         if record:
             detail = (f"{record['source']} record for the {how} printed {where}"
@@ -181,6 +190,11 @@ def analyze_document(collection_id: str, indexer, document_id: str,
             if not fields["abstract"] and record.get("abstract"):
                 fields["abstract"] = record["abstract"]
                 provenance["abstract"] = {"source": record["source"], "kind": "abstract", "detail": detail}
+        elif unreachable:
+            # Not "no record": the catalogue was never really asked.
+            notes.append("The catalogue could not be reached (" + "; ".join(unreachable) + "), so its "
+                         "details come from its own text for now. Read it again later to try the "
+                         "catalogue once more.")
         elif not notes or "registry" not in " ".join(notes):
             notes.append("No scholarly registry record could be confirmed for this document; "
                          "its details come from its own text.")
@@ -341,7 +355,10 @@ def correct_record(store: ResearchStore, document_id: str, changes: Dict[str, ob
 # ── reference resolution (registry) ─────────────────────────────────────
 
 def resolve_reference(entry: dict) -> dict:
-    """Find an open copy for one reference. Returns the fields to update."""
+    """Find an open copy for one reference. Returns the fields to update.
+
+    Raises :class:`lookup.Unreachable` when the catalogue could not be
+    asked: "no open copy found" is only ever the catalogue's own answer."""
     update: Dict[str, object] = {}
     record = None
     via = ""
@@ -380,7 +397,13 @@ def resolve_references(store: ResearchStore, references: Iterable[dict]) -> List
         if entry.get("resolved_kind") == "pdf":
             out.append(entry)
             continue
-        update = resolve_reference(entry) if lookup.lookup_available() else {}
+        try:
+            update = resolve_reference(entry) if lookup.lookup_available() else {}
+        except lookup.Unreachable as exc:
+            # Nothing is saved: the reference keeps whatever it had, and the
+            # caller is told this one was not really looked up.
+            out.append({**entry, "lookup_failed": str(exc)})
+            continue
         if update:
             store.update_reference(entry["id"], **update)
             entry = {**entry, **update}

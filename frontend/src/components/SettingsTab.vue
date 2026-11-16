@@ -301,7 +301,7 @@
                         :value="editBuffer.model"
                         @change="onModelSelect('ollama', $event.target.value)"
                       >
-                        <option v-for="m in modelsFor('ollama')" :key="m.id" :value="m.id">{{ m.label }}</option>
+                        <option v-for="m in modelsFor('ollama')" :key="m.id" :value="m.id">{{ m.display }}</option>
                       </select>
                     </div>
                   </div>
@@ -383,10 +383,10 @@
                     >
                       <option value="">Use provider defaults</option>
                       <optgroup v-if="recommendedModels(def.id).length" label="Recommended">
-                        <option v-for="m in recommendedModels(def.id)" :key="m.id" :value="m.id">{{ m.label }}</option>
+                        <option v-for="m in recommendedModels(def.id)" :key="m.id" :value="m.id">{{ m.display }}</option>
                       </optgroup>
                       <optgroup v-if="otherModels(def.id).length" label="All models">
-                        <option v-for="m in otherModels(def.id)" :key="m.id" :value="m.id">{{ m.label }}</option>
+                        <option v-for="m in otherModels(def.id)" :key="m.id" :value="m.id">{{ m.display }}</option>
                       </optgroup>
                       <option value="__custom__">Custom model id…</option>
                     </select>
@@ -478,10 +478,10 @@
                   >
                     <option value="">Use endpoint default</option>
                     <optgroup v-if="recommendedModels(cp.id).length" label="Recommended">
-                      <option v-for="m in recommendedModels(cp.id)" :key="m.id" :value="m.id">{{ m.label }}</option>
+                      <option v-for="m in recommendedModels(cp.id)" :key="m.id" :value="m.id">{{ m.display }}</option>
                     </optgroup>
                     <optgroup v-if="otherModels(cp.id).length" label="All models">
-                      <option v-for="m in otherModels(cp.id)" :key="m.id" :value="m.id">{{ m.label }}</option>
+                      <option v-for="m in otherModels(cp.id)" :key="m.id" :value="m.id">{{ m.display }}</option>
                     </optgroup>
                     <option value="__custom__">Custom model id…</option>
                   </select>
@@ -728,7 +728,7 @@
                   </span>
                 </p>
                 <p v-else-if="embeddingOllamaStatus === 'ok' && !embeddingOllamaModels.length" class="text-xs text-warning mt-1">
-                  Ollama is running but has no embedding model. Run <code>ollama pull nomic-embed-text</code> there first.
+                  Ollama is running but has no embedding model.<template v-if="embeddingOllamaSuggested"> Run <code>ollama pull {{ embeddingOllamaSuggested }}</code> there first.</template>
                 </p>
               </div>
 
@@ -900,9 +900,9 @@
                   <div v-else-if="ocrOllamaVisionLoading" class="text-xs text-base-content/60 py-2">Checking models…</div>
                   <div v-else class="alert alert-warning py-2 text-xs">
                     <span v-if="ocrOllamaVisionTotal > 0">
-                      {{ ocrOllamaVisionTotal }} model(s) installed but none support vision. Try: <code>ollama pull qwen2.5-vl</code>
+                      {{ ocrOllamaVisionTotal }} model(s) installed but none support vision.<template v-if="ocrOllamaVisionSuggested"> Try: <code>ollama pull {{ ocrOllamaVisionSuggested }}</code></template>
                     </span>
-                    <span v-else>Ollama not running or no models installed. <code>ollama pull qwen2.5-vl</code></span>
+                    <span v-else>Ollama not running or no models installed.<template v-if="ocrOllamaVisionSuggested"> <code>ollama pull {{ ocrOllamaVisionSuggested }}</code></template></span>
                   </div>
                 </div>
               </div>
@@ -1286,6 +1286,7 @@ const visionApiKey = ref('')
 const ocrOllamaVisionModels = ref([])
 const ocrOllamaVisionLoading = ref(false)
 const ocrOllamaVisionTotal = ref(0)
+const ocrOllamaVisionSuggested = ref('')  // a vision model worth pulling, named by the server
 
 // Local Ollama context window (server-side setting; applies to all Ollama calls)
 const ollamaNumCtx = ref(8192)
@@ -1298,7 +1299,7 @@ const embeddingCatalog = ref([])
 const embeddingCatalogError = ref('')
 const embeddingProvider = ref('local')
 const loadedEmbeddingProvider = ref('local')
-const embeddingModel = ref('all-MiniLM-L6-v2')      // saved local model
+const embeddingModel = ref('')                     // saved local model
 const remoteEmbeddingModel = ref('')                // saved model for any other provider
 const embeddingModelChoice = ref('')                // select value; '__other__' = free text
 const embeddingCustomModel = ref('')
@@ -1314,6 +1315,7 @@ const embeddingSaveError = ref('')
 const embeddingTesting = ref(false)
 const embeddingTestResult = ref(null)               // { ok, model, dimensions, seconds } | { ok:false, error }
 const embeddingOllamaModels = ref([])
+const embeddingOllamaSuggested = ref('')  // an embedding model worth pulling, named by the server
 const embeddingOllamaStatus = ref(null)             // null | 'checking' | 'ok' | 'error'
 
 const embeddingProviderOptions = computed(() =>
@@ -1410,20 +1412,6 @@ const onEmbeddingProviderChange = () => {
   if (p.id === 'ollama') detectEmbeddingOllama()
 }
 
-// Preferred *vision-capable* model per provider for OCR. OCR needs image input,
-// so we default to a known multimodal model rather than blindly reusing the
-// provider's chat model (which may be text-only, e.g. gpt-oss).
-const OCR_DEFAULT_MODELS = {
-  openai: 'gpt-4o',
-  anthropic: 'claude-opus-4-6',
-  google: 'gemini-2.0-flash',
-  grok: 'grok-2-vision-1212',
-  github: 'openai/gpt-4o',
-  openrouter: 'openai/gpt-4o',
-  ollama_cloud: 'gemma4:31b',
-  ollama: '',
-  none: '',
-}
 
 // Providers OCR can reuse: everything the user configured for chat, minus
 // custom OpenAI-compatible endpoints (those need a base_url OCR doesn't carry yet).
@@ -1434,7 +1422,7 @@ const ocrConfiguredProviders = computed(() =>
     .map((id) => ({ value: id, label: getProviderDisplayName(id) }))
 )
 
-const onOcrProviderChange = () => {
+const onOcrProviderChange = async () => {
   const id = visionProvider.value
 
   if (id === 'none') {
@@ -1453,12 +1441,15 @@ const onOcrProviderChange = () => {
   }
 
   // Cloud / hosted provider: reuse the key from its saved config so the user
-  // doesn't re-enter anything. For the model, use the provider's known
-  // vision-capable default (OCR needs image input) over its chat model, which
-  // may be text-only.
+  // doesn't re-enter anything. OCR needs image input, so the model is the
+  // server's vision default for this provider (or a listed model that reads
+  // images) over the chat model, which may be text-only.
   const cfg = getProviderConfig(id) || {}
   visionApiKey.value = cfg.apiKey || ''
-  visionModel.value = OCR_DEFAULT_MODELS[id] || cfg.model || ''
+  const { models, defaults } = await fetchProviderModels(id)
+  if (visionProvider.value !== id) return  // changed again while this loaded
+  const readsImages = models.find(m => m.vision === true && m.kinds?.includes('chat'))
+  visionModel.value = defaults?.vision || readsImages?.id || cfg.model || ''
   saveOCRSettings()
 }
 
@@ -1468,6 +1459,7 @@ const refreshOcrOllamaVisionModels = async () => {
     const response = await http.get('/api/ollama/vision-models')
     ocrOllamaVisionModels.value = response.data.models || []
     ocrOllamaVisionTotal.value = response.data.total_models || 0
+    ocrOllamaVisionSuggested.value = response.data.suggested || ''
     if (ocrOllamaVisionModels.value.length > 0 && !ocrOllamaVisionModels.value.find(m => m.name === visionModel.value)) {
       visionModel.value = ocrOllamaVisionModels.value[0].name
     }
@@ -1513,10 +1505,14 @@ const loadEmbeddingCatalog = async () => {
   }
 }
 
+// The built-in model the server's embedding catalog names as its default.
+const localEmbeddingDefault = () =>
+  embeddingCatalog.value.find((p) => p.id === 'local')?.default_model || ''
+
 const loadEmbeddingSettings = async (data) => {
   embeddingProvider.value = data.embedding_provider || 'local'
   loadedEmbeddingProvider.value = embeddingProvider.value
-  embeddingModel.value = data.embedding_model || 'all-MiniLM-L6-v2'
+  embeddingModel.value = data.embedding_model || ''
   remoteEmbeddingModel.value = data.remote_embedding_model || ''
   embeddingBaseUrl.value = data.embedding_base_url || ''
   ollamaBaseUrl.value = data.ollama_base_url || 'http://localhost:11434'
@@ -1526,6 +1522,7 @@ const loadEmbeddingSettings = async (data) => {
   embeddingApiKeySet.value = Boolean(data.embedding_api_key_set)
   embeddingTestResult.value = null
   await loadEmbeddingCatalog()
+  if (!embeddingModel.value) embeddingModel.value = localEmbeddingDefault()
   if (embeddingProvider.value === 'local') {
     setEmbeddingModelFromValue(embeddingModel.value)
   } else {
@@ -1541,7 +1538,7 @@ const embeddingPayload = () => {
     embedding_base_url: embeddingBaseUrl.value,
   }
   if (embeddingProvider.value === 'local') {
-    payload.embedding_model = effectiveEmbeddingModel.value || 'all-MiniLM-L6-v2'
+    payload.embedding_model = effectiveEmbeddingModel.value || localEmbeddingDefault()
   } else {
     payload.remote_embedding_model = effectiveEmbeddingModel.value
   }
@@ -1614,19 +1611,19 @@ const detectEmbeddingOllama = async () => {
   embeddingOllamaStatus.value = 'checking'
   embeddingOllamaModels.value = []
   const current = effectiveEmbeddingModel.value
-  try {
-    const resp = await http.get('/api/ollama/status')
-    if (resp.data.available) {
-      // Only embedding-capable models are useful here; fall back to the
-      // full list when the daemon reports nothing recognisable.
-      const all = resp.data.models || []
-      const embedLike = all.filter((m) => /embed|minilm|bge|arctic|e5|gte/i.test(m.name))
-      embeddingOllamaModels.value = embedLike.length ? embedLike : all
-      embeddingOllamaStatus.value = 'ok'
-    } else {
-      embeddingOllamaStatus.value = 'error'
-    }
-  } catch {
+  // Ollama says which of its models embed (the server's capability record);
+  // the server falls back to name patterns only for Ollama too old to say.
+  const { models, suggested, listed } = await fetchProviderModels('ollama', {
+    baseUrl: ollamaBaseUrl.value?.trim() || undefined,
+    force: true,
+  })
+  embeddingOllamaSuggested.value = suggested?.embedding || ''
+  if (listed) {
+    embeddingOllamaModels.value = models
+      .filter((m) => m.kinds?.includes('embedding'))
+      .map((m) => ({ name: m.id }))
+    embeddingOllamaStatus.value = 'ok'
+  } else {
     embeddingOllamaStatus.value = 'error'
   }
   setEmbeddingModelFromValue(current)
@@ -1959,15 +1956,11 @@ const getProviderModelLabel = (id) => {
 }
 
 // ── Live model lists ──
-// Curated recommendations render immediately; the full list arrives from
-// fetchProviderModels (backend POST /api/ai/models) once credentials exist.
+// Everything, recommendations included, comes from fetchProviderModels
+// (backend POST /api/ai/models); the server answers from its own table when
+// the provider cannot be asked.
 
-const modelsFor = (id) => {
-  const st = modelState.value[id]
-  if (st?.models?.length) return st.models
-  const def = PROVIDER_DEFS.find(d => d.id === id)
-  return (def?.models || []).map(m => ({ ...m, recommended: true }))
-}
+const modelsFor = (id) => modelState.value[id]?.models || []
 const recommendedModels = (id) => modelsFor(id).filter(m => m.recommended)
 const otherModels = (id) => modelsFor(id).filter(m => !m.recommended)
 
@@ -2081,16 +2074,17 @@ const detectOllama = async () => {
   ollamaCheckStatus.value = 'checking'
   ollamaError.value = ''
   const baseUrl = editBuffer.value.baseUrl?.trim() || 'http://localhost:11434'
-  const { models, error } = await fetchProviderModels('ollama', { baseUrl, force: true })
+  const { models, defaults, error } = await fetchProviderModels('ollama', { baseUrl, force: true })
   if (models.length > 0) {
     ollamaCheckStatus.value = 'available'
     modelState.value = { ...modelState.value, ollama: { loading: false, models, error: null } }
-    // Pre-select the stored model if still present, else the first detected one
+    // Pre-select the stored model if still present, else the server's
+    // default (an installed chat model), else the first detected one
     const stored = getProviderConfig('ollama')?.model
     if (stored && models.some(m => m.id === stored)) {
       editBuffer.value.model = stored
     } else if (!models.some(m => m.id === editBuffer.value.model)) {
-      editBuffer.value.model = models[0].id
+      editBuffer.value.model = defaults?.model || models[0].id
     }
     return true
   }

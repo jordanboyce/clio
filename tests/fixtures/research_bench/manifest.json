@@ -1,0 +1,1952 @@
+{
+  "version": 1,
+  "description": "Labelled real papers, reports and books for scripts/research_bench.py. Files are not committed: `--download` fetches each `url` into the cache and checks `sha256`. `filename` is the name the document is indexed under. `labels` describe the file in hand; `accept` lists other values a careful reader would also accept as correct for this file. Bump `version` whenever an entry, a label or a file changes: numbers compare only within one version.",
+  "entries": [
+    {
+      "id": "arxiv-1706.03762",
+      "filename": "1706.03762.pdf",
+      "url": "https://export.arxiv.org/pdf/1706.03762v7",
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "bytes": 2215244,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Attention Is All You Need",
+        "authors": [
+          "Ashish Vaswani",
+          "Noam Shazeer",
+          "Niki Parmar",
+          "Jakob Uszkoreit",
+          "Llion Jones",
+          "Aidan N. Gomez",
+          "Lukasz Kaiser",
+          "Illia Polosukhin"
+        ],
+        "year": 2017,
+        "arxiv_id": "1706.03762",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.1706.03762"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-1810.04805",
+      "filename": "1810.04805.pdf",
+      "url": "https://export.arxiv.org/pdf/1810.04805v2",
+      "sha256": "5692a5514787a8c6727b4ff3b726a3385798bc68e12138d1d4af83947e2acf6e",
+      "bytes": 775166,
+      "kind": "preprint",
+      "columns": 2,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+        "authors": [
+          "Jacob Devlin",
+          "Ming-Wei Chang",
+          "Kenton Lee",
+          "Kristina Toutanova"
+        ],
+        "year": 2018,
+        "arxiv_id": "1810.04805",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "year": [
+          2019
+        ],
+        "doi": [
+          "10.18653/v1/N19-1423",
+          "10.48550/arXiv.1810.04805"
+        ]
+      },
+      "note": "v2 is the NAACL 2019 camera-ready"
+    },
+    {
+      "id": "arxiv-2005.11401",
+      "filename": "2005.11401.pdf",
+      "url": "https://export.arxiv.org/pdf/2005.11401v4",
+      "sha256": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+      "bytes": 885323,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+        "authors": [
+          "Patrick Lewis",
+          "Ethan Perez",
+          "Aleksandra Piktus",
+          "Fabio Petroni",
+          "Vladimir Karpukhin",
+          "Naman Goyal",
+          "Heinrich Küttler",
+          "Mike Lewis",
+          "Wen-tau Yih",
+          "Tim Rocktäschel",
+          "Sebastian Riedel",
+          "Douwe Kiela"
+        ],
+        "year": 2020,
+        "arxiv_id": "2005.11401",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.2005.11401"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-2004.04906",
+      "filename": "2004.04906.pdf",
+      "url": "https://export.arxiv.org/pdf/2004.04906v3",
+      "sha256": "3e67fc1a9977715acf722d85f0b7d124b03715e975f6310a4d6c12094190912f",
+      "bytes": 383508,
+      "kind": "preprint",
+      "columns": 2,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Dense Passage Retrieval for Open-Domain Question Answering",
+        "authors": [
+          "Vladimir Karpukhin",
+          "Barlas Oğuz",
+          "Sewon Min",
+          "Patrick Lewis",
+          "Ledell Wu",
+          "Sergey Edunov",
+          "Danqi Chen",
+          "Wen-tau Yih"
+        ],
+        "year": 2020,
+        "arxiv_id": "2004.04906",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.18653/v1/2020.emnlp-main.550",
+          "10.48550/arXiv.2004.04906"
+        ]
+      },
+      "note": "author line broken by affiliation marks"
+    },
+    {
+      "id": "arxiv-2212.10496",
+      "filename": "2212.10496.pdf",
+      "url": "https://export.arxiv.org/pdf/2212.10496v1",
+      "sha256": "dc0ae3c5584ed146beee122e6a9ad9c48547dde048d53e9be8435d8f1d354531",
+      "bytes": 424964,
+      "kind": "preprint",
+      "columns": 2,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Precise Zero-Shot Dense Retrieval without Relevance Labels",
+        "authors": [
+          "Luyu Gao",
+          "Xueguang Ma",
+          "Jimmy Lin",
+          "Jamie Callan"
+        ],
+        "year": 2022,
+        "arxiv_id": "2212.10496",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.18653/v1/2023.acl-long.99",
+          "10.48550/arXiv.2212.10496"
+        ]
+      },
+      "note": "live check 2026-11: four authors merged into one name"
+    },
+    {
+      "id": "arxiv-2312.10997",
+      "filename": "2312.10997.pdf",
+      "url": "https://export.arxiv.org/pdf/2312.10997v5",
+      "sha256": "396a0fadeb4cd40f5c8ccc36b73a0815f6cb4d7f6bfa53b6c48c1f9aba7c7e02",
+      "bytes": 1662567,
+      "kind": "preprint",
+      "columns": 2,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Retrieval-Augmented Generation for Large Language Models: A Survey",
+        "authors": [
+          "Yunfan Gao",
+          "Yun Xiong",
+          "Xinyu Gao",
+          "Kangxiang Jia",
+          "Jinliu Pan",
+          "Yuxi Bi",
+          "Yi Dai",
+          "Jiawei Sun",
+          "Meng Wang",
+          "Haofen Wang"
+        ],
+        "year": 2023,
+        "arxiv_id": "2312.10997",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.2312.10997"
+        ]
+      },
+      "note": "live check 2026-11: title replaced by run-together body text"
+    },
+    {
+      "id": "arxiv-2401.18059",
+      "filename": "2401.18059.pdf",
+      "url": "https://export.arxiv.org/pdf/2401.18059v1",
+      "sha256": "01319e2e6e6ecfd504ee1bbda41d023f9e060bd3505ab3c161baa1d6d696cf75",
+      "bytes": 2547113,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval",
+        "authors": [
+          "Parth Sarthi",
+          "Salman Abdullah",
+          "Aditi Tuli",
+          "Shubh Khanna",
+          "Anna Goldie",
+          "Christopher D. Manning"
+        ],
+        "year": 2024,
+        "arxiv_id": "2401.18059",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.2401.18059"
+        ]
+      },
+      "note": "ICLR 2024 header above the title"
+    },
+    {
+      "id": "arxiv-2310.11511",
+      "filename": "2310.11511.pdf",
+      "url": "https://export.arxiv.org/pdf/2310.11511v1",
+      "sha256": "d9eaa1398abac0df67a9d0933a5bf8b6d9d83d2e72da2a486073cd842dd52978",
+      "bytes": 1405127,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection",
+        "authors": [
+          "Akari Asai",
+          "Zeqiu Wu",
+          "Yizhong Wang",
+          "Avirup Sil",
+          "Hannaneh Hajishirzi"
+        ],
+        "year": 2023,
+        "arxiv_id": "2310.11511",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.2310.11511"
+        ]
+      },
+      "note": "title set in capitals"
+    },
+    {
+      "id": "arxiv-2112.04426",
+      "filename": "2112.04426.pdf",
+      "url": "https://export.arxiv.org/pdf/2112.04426v3",
+      "sha256": "1b3e89b589b73d51ca76cb7d98f22fa5438f8b13e05363613bc6b3199f9777f4",
+      "bytes": 1566448,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "Improving language models by retrieving from trillions of tokens",
+        "authors": [
+          "Sebastian Borgeaud",
+          "Arthur Mensch",
+          "Jordan Hoffmann",
+          "Trevor Cai",
+          "Eliza Rutherford",
+          "Katie Millican",
+          "George van den Driessche",
+          "Jean-Baptiste Lespiau",
+          "Bogdan Damoc",
+          "Aidan Clark",
+          "Diego de Las Casas",
+          "Aurelia Guy",
+          "Jacob Menick",
+          "Roman Ring",
+          "Tom Hennigan",
+          "Saffron Huang",
+          "Loren Maggiore",
+          "Chris Jones",
+          "Albin Cassirer",
+          "Andy Brock",
+          "Michela Paganini",
+          "Geoffrey Irving",
+          "Oriol Vinyals",
+          "Simon Osindero",
+          "Karen Simonyan",
+          "Jack W. Rae",
+          "Erich Elsen",
+          "Laurent Sifre"
+        ],
+        "year": 2021,
+        "arxiv_id": "2112.04426",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.2112.04426"
+        ]
+      },
+      "note": "28 authors"
+    },
+    {
+      "id": "arxiv-1512.03385",
+      "filename": "1512.03385.pdf",
+      "url": "https://export.arxiv.org/pdf/1512.03385v1",
+      "sha256": "1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a",
+      "bytes": 819383,
+      "kind": "preprint",
+      "columns": 2,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Deep Residual Learning for Image Recognition",
+        "authors": [
+          "Kaiming He",
+          "Xiangyu Zhang",
+          "Shaoqing Ren",
+          "Jian Sun"
+        ],
+        "year": 2015,
+        "arxiv_id": "1512.03385",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.1512.03385"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-1412.6980",
+      "filename": "1412.6980.pdf",
+      "url": "https://export.arxiv.org/pdf/1412.6980v9",
+      "sha256": "eab9c73ae2ceda884b94830bda99312254bac4806f6c9f045cbab90721ecda31",
+      "bytes": 584641,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Adam: A Method for Stochastic Optimization",
+        "authors": [
+          "Diederik P. Kingma",
+          "Jimmy Ba"
+        ],
+        "year": 2014,
+        "arxiv_id": "1412.6980",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "year": [
+          2015
+        ],
+        "doi": [
+          "10.48550/arXiv.1412.6980"
+        ]
+      },
+      "note": "\"Published as a conference paper at ICLR 2015\""
+    },
+    {
+      "id": "arxiv-1301.3781",
+      "filename": "1301.3781.pdf",
+      "url": "https://export.arxiv.org/pdf/1301.3781v3",
+      "sha256": "a44d7e22d2005752271c9cc1929c6462d4c8270916b063977992a883e3a54362",
+      "bytes": 228716,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Efficient Estimation of Word Representations in Vector Space",
+        "authors": [
+          "Tomas Mikolov",
+          "Kai Chen",
+          "Greg Corrado",
+          "Jeffrey Dean"
+        ],
+        "year": 2013,
+        "arxiv_id": "1301.3781",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.1301.3781"
+        ]
+      },
+      "note": "one author per line with affiliations between"
+    },
+    {
+      "id": "arxiv-1409.0473",
+      "filename": "1409.0473.pdf",
+      "url": "https://export.arxiv.org/pdf/1409.0473v7",
+      "sha256": "84801c8410da51b449d379d2fa4939a416123f2c93991077a680f863026022a7",
+      "bytes": 444482,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Neural Machine Translation by Jointly Learning to Align and Translate",
+        "authors": [
+          "Dzmitry Bahdanau",
+          "Kyunghyun Cho",
+          "Yoshua Bengio"
+        ],
+        "year": 2014,
+        "arxiv_id": "1409.0473",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "year": [
+          2015
+        ],
+        "doi": [
+          "10.48550/arXiv.1409.0473"
+        ]
+      },
+      "note": "\"Published as a conference paper at ICLR 2015\""
+    },
+    {
+      "id": "arxiv-2104.08663",
+      "filename": "2104.08663.pdf",
+      "url": "https://export.arxiv.org/pdf/2104.08663v4",
+      "sha256": "1925755aeb627123d1a63c66f02e5aa2432f7e92751a02bea7c8c3b6bbb6ec33",
+      "bytes": 2094824,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "CC BY-SA 4.0",
+      "labels": {
+        "title": "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models",
+        "authors": [
+          "Nandan Thakur",
+          "Nils Reimers",
+          "Andreas Rücklé",
+          "Abhishek Srivastava",
+          "Iryna Gurevych"
+        ],
+        "year": 2021,
+        "arxiv_id": "2104.08663",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "title": [
+          "BEIR: A Heterogenous Benchmark for Zero-shot Evaluation of Information Retrieval Models"
+        ],
+        "doi": [
+          "10.48550/arXiv.2104.08663"
+        ]
+      },
+      "note": "printed title differs from the arXiv listing (Heterogeneous / Heterogenous)"
+    },
+    {
+      "id": "arxiv-1908.10084",
+      "filename": "1908.10084.pdf",
+      "url": "https://export.arxiv.org/pdf/1908.10084v1",
+      "sha256": "92366d22fc0521350d6cbe0ad72bcee754f90e88181d7b4a8e2adb1e7e594fec",
+      "bytes": 548961,
+      "kind": "preprint",
+      "columns": 2,
+      "source": "arXiv",
+      "licence": "CC BY-SA 4.0",
+      "labels": {
+        "title": "Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks",
+        "authors": [
+          "Nils Reimers",
+          "Iryna Gurevych"
+        ],
+        "year": 2019,
+        "arxiv_id": "1908.10084",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.18653/v1/D19-1410",
+          "10.48550/arXiv.1908.10084"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-2002.08909",
+      "filename": "2002.08909.pdf",
+      "url": "https://export.arxiv.org/pdf/2002.08909v1",
+      "sha256": "0ec1a7ab3de5514c6d3baa8af0322816d4ee7cd4c14b9f2c450cbc9da9e6b363",
+      "bytes": 419037,
+      "kind": "preprint",
+      "columns": 2,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "REALM: Retrieval-Augmented Language Model Pre-Training",
+        "authors": [
+          "Kelvin Guu",
+          "Kenton Lee",
+          "Zora Tung",
+          "Panupong Pasupat",
+          "Ming-Wei Chang"
+        ],
+        "year": 2020,
+        "arxiv_id": "2002.08909",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.2002.08909"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-2201.11903",
+      "filename": "2201.11903.pdf",
+      "url": "https://export.arxiv.org/pdf/2201.11903v6",
+      "sha256": "7d9f878c23b460e4566aa4ec9201b1abfb3b8faefb2b1356e411cb90fef72a12",
+      "bytes": 891773,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+        "authors": [
+          "Jason Wei",
+          "Xuezhi Wang",
+          "Dale Schuurmans",
+          "Maarten Bosma",
+          "Brian Ichter",
+          "Fei Xia",
+          "Ed Chi",
+          "Quoc Le",
+          "Denny Zhou"
+        ],
+        "year": 2022,
+        "arxiv_id": "2201.11903",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.2201.11903"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-1907.11692",
+      "filename": "1907.11692.pdf",
+      "url": "https://export.arxiv.org/pdf/1907.11692v1",
+      "sha256": "76a3872d244793563a5b000b818cbaf0ca8972ab1145d32be474c05b2a8f3070",
+      "bytes": 209675,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "RoBERTa: A Robustly Optimized BERT Pretraining Approach",
+        "authors": [
+          "Yinhan Liu",
+          "Myle Ott",
+          "Naman Goyal",
+          "Jingfei Du",
+          "Mandar Joshi",
+          "Danqi Chen",
+          "Omer Levy",
+          "Mike Lewis",
+          "Luke Zettlemoyer",
+          "Veselin Stoyanov"
+        ],
+        "year": 2019,
+        "arxiv_id": "1907.11692",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.1907.11692"
+        ]
+      },
+      "note": "author marks split the names across lines"
+    },
+    {
+      "id": "arxiv-2106.09685",
+      "filename": "2106.09685.pdf",
+      "url": "https://export.arxiv.org/pdf/2106.09685v2",
+      "sha256": "e9a0d3128767db616085dc0f4e6e455e672e89af823e8ed1282793682787395a",
+      "bytes": 1609513,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "LoRA: Low-Rank Adaptation of Large Language Models",
+        "authors": [
+          "Edward J. Hu",
+          "Yelong Shen",
+          "Phillip Wallis",
+          "Zeyuan Allen-Zhu",
+          "Yuanzhi Li",
+          "Shean Wang",
+          "Lu Wang",
+          "Weizhu Chen"
+        ],
+        "year": 2021,
+        "arxiv_id": "2106.09685",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.2106.09685"
+        ]
+      },
+      "note": "title in capitals with a hyphenated line break"
+    },
+    {
+      "id": "arxiv-2302.13971",
+      "filename": "2302.13971.pdf",
+      "url": "https://export.arxiv.org/pdf/2302.13971v1",
+      "sha256": "2e663675ae36ad12adb2f5a05281bac2747ecf8d23d92bedd9f937a89fee7136",
+      "bytes": 726566,
+      "kind": "preprint",
+      "columns": 2,
+      "source": "arXiv",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "LLaMA: Open and Efficient Foundation Language Models",
+        "authors": [
+          "Hugo Touvron",
+          "Thibaut Lavril",
+          "Gautier Izacard",
+          "Xavier Martinet",
+          "Marie-Anne Lachaux",
+          "Timothée Lacroix",
+          "Baptiste Rozière",
+          "Naman Goyal",
+          "Eric Hambro",
+          "Faisal Azhar",
+          "Aurelien Rodriguez",
+          "Armand Joulin",
+          "Edouard Grave",
+          "Guillaume Lample"
+        ],
+        "year": 2023,
+        "arxiv_id": "2302.13971",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.2302.13971"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-2004.12832",
+      "filename": "2004.12832.pdf",
+      "url": "https://export.arxiv.org/pdf/2004.12832v2",
+      "sha256": "2e487d9b96e3c2e5e286d843e98a066adc0442faa3a6e8ddbd1771221bf9ae14",
+      "bytes": 4918165,
+      "kind": "preprint",
+      "columns": 2,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT",
+        "authors": [
+          "Omar Khattab",
+          "Matei Zaharia"
+        ],
+        "year": 2020,
+        "arxiv_id": "2004.12832",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.1145/3397271.3401075",
+          "10.48550/arXiv.2004.12832"
+        ]
+      },
+      "note": "ACM layout; ligatures dropped from the text layer"
+    },
+    {
+      "id": "arxiv-2307.03172",
+      "filename": "2307.03172.pdf",
+      "url": "https://export.arxiv.org/pdf/2307.03172v3",
+      "sha256": "653b29619eae2ae4b361d7bdcdc06db4bedcb1b0eabe31814036beca8c1af0b1",
+      "bytes": 747542,
+      "kind": "preprint",
+      "columns": 2,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Lost in the Middle: How Language Models Use Long Contexts",
+        "authors": [
+          "Nelson F. Liu",
+          "Kevin Lin",
+          "John Hewitt",
+          "Ashwin Paranjape",
+          "Michele Bevilacqua",
+          "Fabio Petroni",
+          "Percy Liang"
+        ],
+        "year": 2023,
+        "arxiv_id": "2307.03172",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.1162/tacl_a_00638",
+          "10.48550/arXiv.2307.03172"
+        ],
+        "year": [
+          2024
+        ]
+      }
+    },
+    {
+      "id": "arxiv-1503.02531",
+      "filename": "1503.02531.pdf",
+      "url": "https://export.arxiv.org/pdf/1503.02531v1",
+      "sha256": "74e6689115c539db499f9d6153edecb364059926fd45402454f8210442444c5a",
+      "bytes": 106630,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Distilling the Knowledge in a Neural Network",
+        "authors": [
+          "Geoffrey Hinton",
+          "Oriol Vinyals",
+          "Jeff Dean"
+        ],
+        "year": 2015,
+        "arxiv_id": "1503.02531",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.1503.02531"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-2010.11929",
+      "filename": "2010.11929.pdf",
+      "url": "https://export.arxiv.org/pdf/2010.11929v2",
+      "sha256": "8ce7b83971a14508ca711a27c875c9b6914c4f6767cf3150fb1ca6c07aa056d6",
+      "bytes": 3743814,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale",
+        "authors": [
+          "Alexey Dosovitskiy",
+          "Lucas Beyer",
+          "Alexander Kolesnikov",
+          "Dirk Weissenborn",
+          "Xiaohua Zhai",
+          "Thomas Unterthiner",
+          "Mostafa Dehghani",
+          "Matthias Minderer",
+          "Georg Heigold",
+          "Sylvain Gelly",
+          "Jakob Uszkoreit",
+          "Neil Houlsby"
+        ],
+        "year": 2020,
+        "arxiv_id": "2010.11929",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "year": [
+          2021
+        ],
+        "doi": [
+          "10.48550/arXiv.2010.11929"
+        ]
+      },
+      "note": "\"Published as a conference paper at ICLR 2021\""
+    },
+    {
+      "id": "arxiv-1406.2661",
+      "filename": "1406.2661.pdf",
+      "url": "https://export.arxiv.org/pdf/1406.2661v1",
+      "sha256": "ff5819e3a7b713c3bd3107b7de3d51fe0a347aa5d8444f0efdcf2345ef0a8b63",
+      "bytes": 530482,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Generative Adversarial Nets",
+        "authors": [
+          "Ian J. Goodfellow",
+          "Jean Pouget-Abadie",
+          "Mehdi Mirza",
+          "Bing Xu",
+          "David Warde-Farley",
+          "Sherjil Ozair",
+          "Aaron Courville",
+          "Yoshua Bengio"
+        ],
+        "year": 2014,
+        "arxiv_id": "1406.2661",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "title": [
+          "Generative Adversarial Networks"
+        ],
+        "doi": [
+          "10.48550/arXiv.1406.2661"
+        ]
+      },
+      "note": "printed title (Nets) differs from the arXiv listing (Networks)"
+    },
+    {
+      "id": "arxiv-hep-th_9711200",
+      "filename": "hep-th_9711200.pdf",
+      "url": "https://export.arxiv.org/pdf/hep-th/9711200v3",
+      "sha256": "b711c300aac9a8c93d84451675554da8829d4b7d3c1ae23cdd16e94523975f06",
+      "bytes": 246327,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv default distribution (submitted before licences were recorded; not redistributable)",
+      "labels": {
+        "title": "The Large N Limit of Superconformal Field Theories and Supergravity",
+        "authors": [
+          "Juan M. Maldacena"
+        ],
+        "year": 1997,
+        "arxiv_id": "hep-th/9711200",
+        "doi": "10.1023/A:1026654312961",
+        "isbn": null
+      },
+      "accept": {
+        "year": [
+          1998,
+          1999
+        ],
+        "doi": [
+          "10.48550/arXiv.hep-th/9711200"
+        ]
+      },
+      "note": "old-style arXiv id"
+    },
+    {
+      "id": "arxiv-math_0211159",
+      "filename": "math_0211159.pdf",
+      "url": "https://export.arxiv.org/pdf/math/0211159v1",
+      "sha256": "945e278613c45ea1ab617b28c3095783d0e68958dc0546dfcfa9b42b9674fbe1",
+      "bytes": 325949,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv default distribution (submitted before licences were recorded; not redistributable)",
+      "labels": {
+        "title": "The entropy formula for the Ricci flow and its geometric applications",
+        "authors": [
+          "Grisha Perelman"
+        ],
+        "year": 2002,
+        "arxiv_id": "math/0211159",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.math/0211159"
+        ]
+      },
+      "note": "old-style arXiv id; single author"
+    },
+    {
+      "id": "arxiv-astro-ph_9805201",
+      "filename": "astro-ph_9805201.pdf",
+      "url": "https://export.arxiv.org/pdf/astro-ph/9805201v1",
+      "sha256": "5edf2da6f5ff6438649e818e82ea86c7a168fbe1294fa165a252f9640b24e039",
+      "bytes": 883303,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv default distribution (submitted before licences were recorded; not redistributable)",
+      "labels": {
+        "title": "Observational Evidence from Supernovae for an Accelerating Universe and a Cosmological Constant",
+        "authors": [
+          "Adam G. Riess",
+          "Alexei V. Filippenko",
+          "Peter Challis",
+          "Alejandro Clocchiattia",
+          "Alan Diercks",
+          "Peter M. Garnavich",
+          "Ron L. Gilliland",
+          "Craig J. Hogan",
+          "Saurabh Jha",
+          "Robert P. Kirshner",
+          "B. Leibundgut",
+          "M. M. Phillips",
+          "David Reiss",
+          "Brian P. Schmidt",
+          "Robert A. Schommer",
+          "R. Chris Smith",
+          "J. Spyromilio",
+          "Christopher Stubbs",
+          "Nicholas B. Suntzeff",
+          "John Tonry"
+        ],
+        "year": 1998,
+        "arxiv_id": "astro-ph/9805201",
+        "doi": "10.1086/300499",
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.astro-ph/9805201"
+        ]
+      },
+      "note": "old-style arXiv id; 20 authors"
+    },
+    {
+      "id": "arxiv-quant-ph_9508027",
+      "filename": "quant-ph_9508027.pdf",
+      "url": "https://export.arxiv.org/pdf/quant-ph/9508027v2",
+      "sha256": "96ba03bbfa27ea6a9ab5f1795cb62166948a6de4d8da84f9f43044bb5ab58838",
+      "bytes": 315663,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv default distribution (submitted before licences were recorded; not redistributable)",
+      "labels": {
+        "title": "Polynomial-Time Algorithms for Prime Factorization and Discrete Logarithms on a Quantum Computer",
+        "authors": [
+          "Peter W. Shor"
+        ],
+        "year": 1995,
+        "arxiv_id": "quant-ph/9508027",
+        "doi": "10.1137/S0097539795293172",
+        "isbn": null
+      },
+      "accept": {
+        "year": [
+          1996,
+          1997
+        ],
+        "doi": [
+          "10.48550/arXiv.quant-ph/9508027"
+        ]
+      },
+      "note": "old-style arXiv id"
+    },
+    {
+      "id": "arxiv-2007.01282",
+      "filename": "2007.01282.pdf",
+      "url": "https://export.arxiv.org/pdf/2007.01282v2",
+      "sha256": "f1ee7e927c3fb31beb2146f8c205692a91b40dadd65d80e025c6686e4d430953",
+      "bytes": 326612,
+      "kind": "preprint",
+      "columns": 2,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Leveraging Passage Retrieval with Generative Models for Open Domain Question Answering",
+        "authors": [
+          "Gautier Izacard",
+          "Edouard Grave"
+        ],
+        "year": 2020,
+        "arxiv_id": "2007.01282",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.2007.01282"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-2005.14165",
+      "filename": "2005.14165.pdf",
+      "url": "https://export.arxiv.org/pdf/2005.14165v4",
+      "sha256": "97fd272f1fdfc18677462d0292f5fbf26ca86b4d1b485c2dba03269b643a0e83",
+      "bytes": 6768044,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Language Models are Few-Shot Learners",
+        "authors": [
+          "Tom B. Brown",
+          "Benjamin Mann",
+          "Nick Ryder",
+          "Melanie Subbiah",
+          "Jared Kaplan",
+          "Prafulla Dhariwal",
+          "Arvind Neelakantan",
+          "Pranav Shyam",
+          "Girish Sastry",
+          "Amanda Askell",
+          "Sandhini Agarwal",
+          "Ariel Herbert-Voss",
+          "Gretchen Krueger",
+          "Tom Henighan",
+          "Rewon Child",
+          "Aditya Ramesh",
+          "Daniel M. Ziegler",
+          "Jeffrey Wu",
+          "Clemens Winter",
+          "Christopher Hesse",
+          "Mark Chen",
+          "Eric Sigler",
+          "Mateusz Litwin",
+          "Scott Gray",
+          "Benjamin Chess",
+          "Jack Clark",
+          "Christopher Berner",
+          "Sam McCandlish",
+          "Alec Radford",
+          "Ilya Sutskever",
+          "Dario Amodei"
+        ],
+        "year": 2020,
+        "arxiv_id": "2005.14165",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "doi": [
+          "10.48550/arXiv.2005.14165"
+        ]
+      },
+      "note": "31 authors, 75 pages"
+    },
+    {
+      "id": "arxiv-1910.10683",
+      "filename": "1910.10683.pdf",
+      "url": "https://export.arxiv.org/pdf/1910.10683v4",
+      "sha256": "ad07e47cedf437a4156419ce5d3076e08a3e59bbfd6dac7cc53df1009cdcbe7f",
+      "bytes": 1190021,
+      "kind": "preprint",
+      "columns": 1,
+      "source": "arXiv",
+      "licence": "arXiv non-exclusive distribution licence (not redistributable)",
+      "labels": {
+        "title": "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer",
+        "authors": [
+          "Colin Raffel",
+          "Noam Shazeer",
+          "Adam Roberts",
+          "Katherine Lee",
+          "Sharan Narang",
+          "Michael Matena",
+          "Yanqi Zhou",
+          "Wei Li",
+          "Peter J. Liu"
+        ],
+        "year": 2019,
+        "arxiv_id": "1910.10683",
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "year": [
+          2020
+        ],
+        "doi": [
+          "10.48550/arXiv.1910.10683"
+        ]
+      },
+      "note": "JMLR 2020 header above the title"
+    },
+    {
+      "id": "acl-N19-1423",
+      "filename": "N19-1423.pdf",
+      "url": "https://aclanthology.org/N19-1423.pdf",
+      "sha256": "987545ffb087f1ece898142c403a516baeabeb70ce19089397fac6f7db12c3d4",
+      "bytes": 786279,
+      "kind": "conference",
+      "columns": 2,
+      "source": "ACL Anthology",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+        "authors": [
+          "Jacob Devlin",
+          "Ming-Wei Chang",
+          "Kenton Lee",
+          "Kristina Toutanova"
+        ],
+        "year": 2019,
+        "arxiv_id": null,
+        "doi": "10.18653/v1/N19-1423",
+        "isbn": null
+      },
+      "accept": {
+        "arxiv_id": [
+          "1810.04805"
+        ]
+      }
+    },
+    {
+      "id": "acl-D19-1410",
+      "filename": "D19-1410.pdf",
+      "url": "https://aclanthology.org/D19-1410.pdf",
+      "sha256": "e2703128039850ba7e098bfc6c7d9f3f3e75e6318815c5dd90af71085b1d384e",
+      "bytes": 570263,
+      "kind": "conference",
+      "columns": 2,
+      "source": "ACL Anthology",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks",
+        "authors": [
+          "Nils Reimers",
+          "Iryna Gurevych"
+        ],
+        "year": 2019,
+        "arxiv_id": null,
+        "doi": "10.18653/v1/D19-1410",
+        "isbn": null
+      },
+      "accept": {
+        "arxiv_id": [
+          "1908.10084"
+        ]
+      }
+    },
+    {
+      "id": "acl-2020.emnlp-main.550",
+      "filename": "2020.emnlp-main.550.pdf",
+      "url": "https://aclanthology.org/2020.emnlp-main.550.pdf",
+      "sha256": "2abfc7991519be2b8ce30215905516fdb593218b7bf59e50ece0d8a088a7c4d5",
+      "bytes": 403775,
+      "kind": "conference",
+      "columns": 2,
+      "source": "ACL Anthology",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "Dense Passage Retrieval for Open-Domain Question Answering",
+        "authors": [
+          "Vladimir Karpukhin",
+          "Barlas Oguz",
+          "Sewon Min",
+          "Patrick Lewis",
+          "Ledell Wu",
+          "Sergey Edunov",
+          "Danqi Chen",
+          "Wen-tau Yih"
+        ],
+        "year": 2020,
+        "arxiv_id": null,
+        "doi": "10.18653/v1/2020.emnlp-main.550",
+        "isbn": null
+      },
+      "accept": {
+        "arxiv_id": [
+          "2004.04906"
+        ]
+      }
+    },
+    {
+      "id": "acl-2023.acl-long.99",
+      "filename": "2023.acl-long.99.pdf",
+      "url": "https://aclanthology.org/2023.acl-long.99.pdf",
+      "sha256": "cfc80c2ae284e1a3f36b4cec65122cc06707ac8088f107e43b328906305f609d",
+      "bytes": 609521,
+      "kind": "conference",
+      "columns": 2,
+      "source": "ACL Anthology",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "Precise Zero-Shot Dense Retrieval without Relevance Labels",
+        "authors": [
+          "Luyu Gao",
+          "Xueguang Ma",
+          "Jimmy Lin",
+          "Jamie Callan"
+        ],
+        "year": 2023,
+        "arxiv_id": null,
+        "doi": "10.18653/v1/2023.acl-long.99",
+        "isbn": null
+      },
+      "accept": {
+        "arxiv_id": [
+          "2212.10496"
+        ]
+      },
+      "note": "the conference version of the live check's merged-authors paper"
+    },
+    {
+      "id": "acl-P02-1040",
+      "filename": "P02-1040.pdf",
+      "url": "https://aclanthology.org/P02-1040.pdf",
+      "sha256": "c0ee6aedcb674da26a640578ead33f66eb5bec87daa2656d4f845da37e096997",
+      "bytes": 282048,
+      "kind": "conference",
+      "columns": 2,
+      "source": "ACL Anthology",
+      "licence": "CC BY-NC-SA 3.0",
+      "labels": {
+        "title": "BLEU: a Method for Automatic Evaluation of Machine Translation",
+        "authors": [
+          "Kishore Papineni",
+          "Salim Roukos",
+          "Todd Ward",
+          "Wei-Jing Zhu"
+        ],
+        "year": 2002,
+        "arxiv_id": null,
+        "doi": "10.3115/1073083.1073135",
+        "isbn": null
+      },
+      "note": "Crossref lists the title as just \"BLEU\" and the year as 2001"
+    },
+    {
+      "id": "acl-W04-1013",
+      "filename": "W04-1013.pdf",
+      "url": "https://aclanthology.org/W04-1013.pdf",
+      "sha256": "d8100065f4ed5134fcde1a3e8689be0c05c4624d9580128109c576ed1d8a922e",
+      "bytes": 77520,
+      "kind": "conference",
+      "columns": 2,
+      "source": "ACL Anthology",
+      "licence": "CC BY-NC-SA 3.0",
+      "labels": {
+        "title": "ROUGE: A Package for Automatic Evaluation of Summaries",
+        "authors": [
+          "Chin-Yew Lin"
+        ],
+        "year": 2004,
+        "arxiv_id": null,
+        "doi": null,
+        "isbn": null
+      },
+      "note": "no DOI"
+    },
+    {
+      "id": "acl-D14-1162",
+      "filename": "D14-1162.pdf",
+      "url": "https://aclanthology.org/D14-1162.pdf",
+      "sha256": "6631a1719122a89b3941d851a55ecf38c55971c36b30ae9c0cec617124056adf",
+      "bytes": 2661778,
+      "kind": "conference",
+      "columns": 2,
+      "source": "ACL Anthology",
+      "licence": "CC BY-NC-SA 3.0",
+      "labels": {
+        "title": "GloVe: Global Vectors for Word Representation",
+        "authors": [
+          "Jeffrey Pennington",
+          "Richard Socher",
+          "Christopher D. Manning"
+        ],
+        "year": 2014,
+        "arxiv_id": null,
+        "doi": "10.3115/v1/D14-1162",
+        "isbn": null
+      }
+    },
+    {
+      "id": "acl-2020.acl-main.703",
+      "filename": "2020.acl-main.703.pdf",
+      "url": "https://aclanthology.org/2020.acl-main.703.pdf",
+      "sha256": "3562c723fe7bebb8b362533122b3ca5c065037c8e8d67460654cf3740652bb59",
+      "bytes": 322247,
+      "kind": "conference",
+      "columns": 2,
+      "source": "ACL Anthology",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension",
+        "authors": [
+          "Mike Lewis",
+          "Yinhan Liu",
+          "Naman Goyal",
+          "Marjan Ghazvininejad",
+          "Abdelrahman Mohamed",
+          "Omer Levy",
+          "Veselin Stoyanov",
+          "Luke Zettlemoyer"
+        ],
+        "year": 2020,
+        "arxiv_id": null,
+        "doi": "10.18653/v1/2020.acl-main.703",
+        "isbn": null
+      },
+      "accept": {
+        "arxiv_id": [
+          "1910.13461"
+        ]
+      },
+      "note": "\"Ves Stoyanov\" printed; Crossref has \"Veselin Stoyanov\""
+    },
+    {
+      "id": "plos-pmed.0020124",
+      "filename": "journal.pmed.0020124.pdf",
+      "url": "https://journals.plos.org/plosmedicine/article/file?id=10.1371/journal.pmed.0020124&type=printable",
+      "sha256": "ffc1005680cb620eec4c913437dfabbf311b535cfe16cbaeb2faec1f92afc362",
+      "bytes": 255629,
+      "kind": "journal",
+      "columns": 3,
+      "source": "publisher (open access)",
+      "licence": "CC BY",
+      "labels": {
+        "title": "Why Most Published Research Findings Are False",
+        "authors": [
+          "John P. A. Ioannidis"
+        ],
+        "year": 2005,
+        "arxiv_id": null,
+        "doi": "10.1371/journal.pmed.0020124",
+        "isbn": null
+      },
+      "note": "title set beside the body text, drop-cap opening"
+    },
+    {
+      "id": "plos-pcbi.1003285",
+      "filename": "journal.pcbi.1003285.pdf",
+      "url": "https://journals.plos.org/ploscompbiol/article/file?id=10.1371/journal.pcbi.1003285&type=printable",
+      "sha256": "35648a3880bdd8bf30e8212a3847b7bd35f504ee5ccbd1ad3856d206acd181db",
+      "bytes": 131527,
+      "kind": "journal",
+      "columns": 2,
+      "source": "publisher (open access)",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "Ten Simple Rules for Reproducible Computational Research",
+        "authors": [
+          "Geir Kjetil Sandve",
+          "Anton Nekrutenko",
+          "James Taylor",
+          "Eivind Hovig"
+        ],
+        "year": 2013,
+        "arxiv_id": null,
+        "doi": "10.1371/journal.pcbi.1003285",
+        "isbn": null
+      }
+    },
+    {
+      "id": "plos-pbio.1001745",
+      "filename": "journal.pbio.1001745.pdf",
+      "url": "https://journals.plos.org/plosbiology/article/file?id=10.1371/journal.pbio.1001745&type=printable",
+      "sha256": "8e85cf1b7bc9738f152e16709105b8951cecbe8621b55933d17ecdf63f75ea47",
+      "bytes": 183769,
+      "kind": "journal",
+      "columns": 2,
+      "source": "publisher (open access)",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "Best Practices for Scientific Computing",
+        "authors": [
+          "Greg Wilson",
+          "D. A. Aruliah",
+          "C. Titus Brown",
+          "Neil P. Chue Hong",
+          "Matt Davis",
+          "Richard T. Guy",
+          "Steven H. D. Haddock",
+          "Kathryn D. Huff",
+          "Ian M. Mitchell",
+          "Mark D. Plumbley",
+          "Ben Waugh",
+          "Ethan P. White",
+          "Paul Wilson"
+        ],
+        "year": 2014,
+        "arxiv_id": null,
+        "doi": "10.1371/journal.pbio.1001745",
+        "isbn": null
+      },
+      "note": "13 authors with affiliation marks"
+    },
+    {
+      "id": "plos-pcbi.1005510",
+      "filename": "journal.pcbi.1005510.pdf",
+      "url": "https://journals.plos.org/ploscompbiol/article/file?id=10.1371/journal.pcbi.1005510&type=printable",
+      "sha256": "ed60d4b71c36d650757c7adfe1d52afb5b6b125b7b747f74f79d5ad80e94c017",
+      "bytes": 2061591,
+      "kind": "journal",
+      "columns": 1,
+      "source": "publisher (open access)",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "Good enough practices in scientific computing",
+        "authors": [
+          "Greg Wilson",
+          "Jennifer Bryan",
+          "Karen Cranston",
+          "Justin Kitzes",
+          "Lex Nederbragt",
+          "Tracy K. Teal"
+        ],
+        "year": 2017,
+        "arxiv_id": null,
+        "doi": "10.1371/journal.pcbi.1005510",
+        "isbn": null
+      }
+    },
+    {
+      "id": "sdata201618",
+      "filename": "sdata201618.pdf",
+      "url": "https://www.nature.com/articles/sdata201618.pdf",
+      "sha256": "cdddd9f4808f7e3e1f013139c3915ef4d7cdccb008fa947ef5f72b4c7b6ffde7",
+      "bytes": 254899,
+      "kind": "journal",
+      "columns": 1,
+      "source": "publisher (open access)",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "The FAIR Guiding Principles for scientific data management and stewardship",
+        "authors": [
+          "Mark D. Wilkinson",
+          "Michel Dumontier",
+          "IJsbrand Jan Aalbersberg",
+          "Gabrielle Appleton",
+          "Myles Axton",
+          "Arie Baak",
+          "Niklas Blomberg",
+          "Jan-Willem Boiten",
+          "Luiz Bonino da Silva Santos",
+          "Philip E. Bourne",
+          "Jildau Bouwman",
+          "Anthony J. Brookes",
+          "Tim Clark",
+          "Mercè Crosas",
+          "Ingrid Dillo",
+          "Olivier Dumon",
+          "Scott Edmunds",
+          "Chris T. Evelo",
+          "Richard Finkers",
+          "Alejandra Gonzalez-Beltran",
+          "Alasdair J.G. Gray",
+          "Paul Groth",
+          "Carole Goble",
+          "Jeffrey S. Grethe",
+          "Jaap Heringa",
+          "Peter A.C ’t Hoen",
+          "Rob Hooft",
+          "Tobias Kuhn",
+          "Ruben Kok",
+          "Joost Kok",
+          "Scott J. Lusher",
+          "Maryann E. Martone",
+          "Albert Mons",
+          "Abel L. Packer",
+          "Bengt Persson",
+          "Philippe Rocca-Serra",
+          "Marco Roos",
+          "Rene van Schaik",
+          "Susanna-Assunta Sansone",
+          "Erik Schultes",
+          "Thierry Sengstag",
+          "Ted Slater",
+          "George Strawn",
+          "Morris A. Swertz",
+          "Mark Thompson",
+          "Johan van der Lei",
+          "Erik van Mulligen",
+          "Jan Velterop",
+          "Andra Waagmeester",
+          "Peter Wittenburg",
+          "Katherine Wolstencroft",
+          "Jun Zhao",
+          "Barend Mons"
+        ],
+        "year": 2016,
+        "arxiv_id": null,
+        "doi": "10.1038/sdata.2016.18",
+        "isbn": null
+      },
+      "accept": {
+        "authors": [
+          [
+            "Mark D. Wilkinson"
+          ]
+        ]
+      },
+      "note": "page 1 prints \"Mark D. Wilkinson et al.\"; the other 52 authors are at the end"
+    },
+    {
+      "id": "joss-01686",
+      "filename": "10.21105.joss.01686.pdf",
+      "url": "https://joss.theoj.org/papers/10.21105/joss.01686.pdf",
+      "sha256": "5fa96c8d0902a9bb9cc6c2106918b9db52864015114b6aa385da17476e1f3364",
+      "bytes": 450267,
+      "kind": "journal",
+      "columns": 1,
+      "source": "publisher (open access)",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "Welcome to the Tidyverse",
+        "authors": [
+          "Hadley Wickham",
+          "Mara Averick",
+          "Jennifer Bryan",
+          "Winston Chang",
+          "Lucy D'Agostino McGowan",
+          "Romain François",
+          "Garrett Grolemund",
+          "Alex Hayes",
+          "Lionel Henry",
+          "Jim Hester",
+          "Max Kuhn",
+          "Thomas Pedersen",
+          "Evan Miller",
+          "Stephan Bache",
+          "Kirill Müller",
+          "Jeroen Ooms",
+          "David Robinson",
+          "Dana Seidel",
+          "Vitalie Spinu",
+          "Kohske Takahashi",
+          "Davis Vaughan",
+          "Claus Wilke",
+          "Kara Woo",
+          "Hiroaki Yutani"
+        ],
+        "year": 2019,
+        "arxiv_id": null,
+        "doi": "10.21105/joss.01686",
+        "isbn": null
+      },
+      "note": "24 authors, one or two per line"
+    },
+    {
+      "id": "nist-ai-100-1",
+      "filename": "NIST.AI.100-1.pdf",
+      "url": "https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf",
+      "sha256": "7576edb531d9848825814ee88e28b1795d3a84b435b4b797d3670eafdc4a89f1",
+      "bytes": 1946127,
+      "kind": "report",
+      "columns": 1,
+      "source": "NIST",
+      "licence": "US government work (public domain in the US)",
+      "labels": {
+        "title": "Artificial Intelligence Risk Management Framework (AI RMF 1.0)",
+        "authors": [],
+        "year": 2023,
+        "arxiv_id": null,
+        "doi": "10.6028/NIST.AI.100-1",
+        "isbn": null
+      },
+      "accept": {
+        "authors": [
+          [
+            "Elham Tabassi"
+          ],
+          [
+            "National Institute of Standards and Technology"
+          ]
+        ]
+      },
+      "note": "no person named on the title pages; Crossref credits Elham Tabassi"
+    },
+    {
+      "id": "nist-sp-800-63-3",
+      "filename": "NIST.SP.800-63-3.pdf",
+      "url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-63-3.pdf",
+      "sha256": "915bb812cb705918461e642e84141c6ca2adc2ca0106e1d88f3884c61f07110a",
+      "bytes": 1599268,
+      "kind": "report",
+      "columns": 1,
+      "source": "NIST",
+      "licence": "US government work (public domain in the US)",
+      "labels": {
+        "title": "Digital Identity Guidelines",
+        "authors": [
+          "Paul A. Grassi",
+          "Michael E. Garcia",
+          "James L. Fenton"
+        ],
+        "year": 2017,
+        "arxiv_id": null,
+        "doi": "10.6028/NIST.SP.800-63-3",
+        "isbn": null
+      },
+      "accept": {
+        "title": [
+          "Digital identity guidelines: revision 3"
+        ],
+        "year": [
+          2020
+        ]
+      },
+      "note": "a 2025 withdrawal notice is page 1; the title page is page 2"
+    },
+    {
+      "id": "nist-cswp-29",
+      "filename": "NIST.CSWP.29.pdf",
+      "url": "https://nvlpubs.nist.gov/nistpubs/CSWP/NIST.CSWP.29.pdf",
+      "sha256": "3c31f46fee98cac0c4323453e5109291a213b4de7fef8c058af9bf67f717433c",
+      "bytes": 1518858,
+      "kind": "report",
+      "columns": 1,
+      "source": "NIST",
+      "licence": "US government work (public domain in the US)",
+      "labels": {
+        "title": "The NIST Cybersecurity Framework (CSF) 2.0",
+        "authors": [],
+        "year": 2024,
+        "arxiv_id": null,
+        "doi": "10.6028/NIST.CSWP.29",
+        "isbn": null
+      },
+      "accept": {
+        "authors": [
+          [
+            "National Institute of Standards and Technology"
+          ]
+        ]
+      },
+      "note": "corporate author only"
+    },
+    {
+      "id": "nist-fips-197-upd1",
+      "filename": "NIST.FIPS.197-upd1.pdf",
+      "url": "https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.197-upd1.pdf",
+      "sha256": "62c86eb567f13edb8f71826e985da870b04ef6381634f303cdb16e84d47becd1",
+      "bytes": 1184436,
+      "kind": "report",
+      "columns": 1,
+      "source": "NIST",
+      "licence": "US government work (public domain in the US)",
+      "labels": {
+        "title": "Advanced Encryption Standard (AES)",
+        "authors": [],
+        "year": 2023,
+        "arxiv_id": null,
+        "doi": "10.6028/NIST.FIPS.197-upd1",
+        "isbn": null
+      },
+      "accept": {
+        "year": [
+          2001
+        ],
+        "authors": [
+          [
+            "National Institute of Standards and Technology"
+          ]
+        ]
+      },
+      "note": "\"Published November 26, 2001; Updated May 9, 2023\""
+    },
+    {
+      "id": "naca-report-1135",
+      "filename": "naca-report-1135.pdf",
+      "url": "https://ntrs.nasa.gov/api/citations/19930091059/downloads/19930091059.pdf",
+      "sha256": "1971643025181d1216b0b0a359d2a5a3adf5d254d3e158e19ba880b368b86e53",
+      "bytes": 6771826,
+      "kind": "scanned",
+      "columns": 2,
+      "source": "NASA NTRS",
+      "licence": "US government work (public domain in the US)",
+      "labels": {
+        "title": "Equations, Tables, and Charts for Compressible Flow",
+        "authors": [],
+        "year": 1953,
+        "arxiv_id": null,
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "authors": [
+          [
+            "Ames Research Staff"
+          ]
+        ]
+      },
+      "note": "a 1953 scan with an OCR text layer; no DOI or ISBN; title in capitals"
+    },
+    {
+      "id": "nasa-se-handbook",
+      "filename": "NASA-SP-2016-6105-Rev2.pdf",
+      "url": "https://ntrs.nasa.gov/api/citations/20170001761/downloads/20170001761.pdf",
+      "sha256": "3153ae2e53e29452d5997efafe280a5f05cd21b43a047e988a17e1dd5207a38e",
+      "bytes": 4122125,
+      "kind": "report",
+      "columns": 1,
+      "source": "NASA NTRS",
+      "licence": "US government work (public domain in the US)",
+      "labels": {
+        "title": "NASA Systems Engineering Handbook",
+        "authors": [],
+        "year": 2016,
+        "arxiv_id": null,
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "year": [
+          2017
+        ],
+        "authors": [
+          [
+            "Steven R. Hirshorn",
+            "Linda D. Voss",
+            "Linda K. Bromley"
+          ]
+        ]
+      },
+      "note": "356 pages, no DOI or ISBN; the cover is an image, page 1's text is only a running head"
+    },
+    {
+      "id": "nasa-tm-20260003781",
+      "filename": "NASA-TM-20260003781.pdf",
+      "url": "https://ntrs.nasa.gov/api/citations/20260003781/downloads/NASA-TM-20260003781.pdf",
+      "sha256": "35d117cf2a3255eff1ce104bbeadeee058b05ec49106219b81fcce129e63ad46",
+      "bytes": 473890,
+      "kind": "report",
+      "columns": 1,
+      "source": "NASA NTRS",
+      "licence": "US government work (public domain in the US)",
+      "labels": {
+        "title": "An AI Development Platform Utilizing HITL Verification: From Source Data to Tailored Domain Assistants",
+        "authors": [
+          "Leonard V. Lopes",
+          "Martha C. Brown",
+          "James J. Deucher",
+          "Shane D. Moxley",
+          "Lauren E. Steele",
+          "Gregory L. Mekkes"
+        ],
+        "year": 2026,
+        "arxiv_id": null,
+        "doi": null,
+        "isbn": null
+      },
+      "note": "report with no identifiers (a NASA report number only)"
+    },
+    {
+      "id": "thinkpython2",
+      "filename": "thinkpython2.pdf",
+      "url": "https://greenteapress.com/thinkpython2/thinkpython2.pdf",
+      "sha256": "6033000bac3f9268ad75ee041bf8e5d9a3bc8a33bb156399cbd014918cb59f94",
+      "bytes": 907689,
+      "kind": "book",
+      "columns": 1,
+      "source": "Green Tea Press",
+      "licence": "CC BY-NC 3.0",
+      "labels": {
+        "title": "Think Python: How to Think Like a Computer Scientist",
+        "authors": [
+          "Allen B. Downey"
+        ],
+        "year": 2015,
+        "arxiv_id": null,
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "title": [
+          "Think Python"
+        ],
+        "authors": [
+          [
+            "Allen Downey"
+          ]
+        ]
+      },
+      "note": "no ISBN printed in this edition"
+    },
+    {
+      "id": "thinkstats2",
+      "filename": "thinkstats2.pdf",
+      "url": "https://greenteapress.com/thinkstats2/thinkstats2.pdf",
+      "sha256": "5dbea9094f3606472087e16dc920ae6b87d680f5cff3f3142e6a58a78d9cf567",
+      "bytes": 2088824,
+      "kind": "book",
+      "columns": 1,
+      "source": "Green Tea Press",
+      "licence": "CC BY-NC-SA 4.0",
+      "labels": {
+        "title": "Think Stats: Exploratory Data Analysis in Python",
+        "authors": [
+          "Allen B. Downey"
+        ],
+        "year": 2014,
+        "arxiv_id": null,
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "title": [
+          "Think Stats"
+        ]
+      },
+      "note": "no ISBN printed in this edition"
+    },
+    {
+      "id": "grinstead-snell-probability",
+      "filename": "grinstead-snell-probability.pdf",
+      "url": "https://math.dartmouth.edu/~prob/prob/prob.pdf",
+      "sha256": "763eab9894983ddfd6cd7f84685548d1515a9326a2d9fd015474534460551a5e",
+      "bytes": 2993135,
+      "kind": "book",
+      "columns": 1,
+      "source": "Dartmouth (CHANCE project)",
+      "licence": "GNU Free Documentation License",
+      "labels": {
+        "title": "Introduction to Probability",
+        "authors": [
+          "Charles M. Grinstead",
+          "J. Laurie Snell"
+        ],
+        "year": 2006,
+        "arxiv_id": null,
+        "doi": null,
+        "isbn": null
+      },
+      "accept": {
+        "title": [
+          "Grinstead and Snell's Introduction to Probability"
+        ],
+        "year": [
+          1997,
+          2003
+        ]
+      },
+      "note": "518 pages; the 2006 GFDL version of the 1997 AMS second edition; no ISBN printed"
+    },
+    {
+      "id": "springer-sundnes-2020",
+      "filename": "978-3-030-50356-7.pdf",
+      "url": "https://link.springer.com/content/pdf/10.1007/978-3-030-50356-7.pdf",
+      "sha256": "c78f5452de880370eb76ba88f8501a3c36a0169894351e297e5340f877b1a550",
+      "bytes": 1841222,
+      "kind": "book",
+      "columns": 1,
+      "source": "Springer (open access)",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "Introduction to Scientific Programming with Python",
+        "authors": [
+          "Joakim Sundnes"
+        ],
+        "year": 2020,
+        "arxiv_id": null,
+        "doi": "10.1007/978-3-030-50356-7",
+        "isbn": "9783030503550"
+      },
+      "accept": {
+        "isbn": [
+          "9783030503567"
+        ]
+      },
+      "note": "print and eBook ISBNs on the copyright page; cover is the first page"
+    },
+    {
+      "id": "springer-linge-2020",
+      "filename": "978-3-030-16877-3.pdf",
+      "url": "https://link.springer.com/content/pdf/10.1007/978-3-030-16877-3.pdf",
+      "sha256": "830adc18bae1244dd1340dadd8542b8203ab6cb2c5e273c784b583f0075cbd5c",
+      "bytes": 7420435,
+      "kind": "book",
+      "columns": 1,
+      "source": "Springer (open access)",
+      "licence": "CC BY 4.0",
+      "labels": {
+        "title": "Programming for Computations - Python: A Gentle Introduction to Numerical Simulations with Python 3.6",
+        "authors": [
+          "Svein Linge",
+          "Hans Petter Langtangen"
+        ],
+        "year": 2020,
+        "arxiv_id": null,
+        "doi": "10.1007/978-3-030-16877-3",
+        "isbn": "9783030168766"
+      },
+      "accept": {
+        "title": [
+          "Programming for Computations - Python"
+        ],
+        "isbn": [
+          "9783030168773"
+        ]
+      },
+      "note": "350 pages; series editors listed before the authors' title page"
+    },
+    {
+      "id": "nasa-tm-20260003781-scan",
+      "filename": "scan_0001.pdf",
+      "derive": {
+        "from": "nasa-tm-20260003781",
+        "rasterize_pages": 3,
+        "dpi": 110
+      },
+      "kind": "scanned",
+      "columns": 1,
+      "source": "derived from nasa-tm-20260003781",
+      "licence": "US government work (public domain in the US)",
+      "labels": {
+        "title": "An AI Development Platform Utilizing HITL Verification: From Source Data to Tailored Domain Assistants",
+        "authors": [
+          "Leonard V. Lopes",
+          "Martha C. Brown",
+          "James J. Deucher",
+          "Shane D. Moxley",
+          "Lauren E. Steele",
+          "Gregory L. Mekkes"
+        ],
+        "year": 2026,
+        "arxiv_id": null,
+        "doi": null,
+        "isbn": null
+      },
+      "note": "the first three pages of the NASA report rendered to images, with no text layer (a scan without OCR); named the way a scanner names files"
+    }
+  ]
+}
