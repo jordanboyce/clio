@@ -807,6 +807,31 @@ class Settings(BaseSettings):
     bulk_flush_chunks: int = 256
     bulk_extract_workers: int = 4
 
+    # Parser limits: uploaded files are read by parsers that trust them, so
+    # each limit stops one kind of hostile or broken file from taking the
+    # server down (0 turns a limit off).
+    # One uploaded file, in MB. A request whose declared body is larger is
+    # answered 413 before it is read, so a multi-file request fits under it too.
+    max_upload_file_mb: int = 512
+    # Zip containers (DOCX, PPTX, XLSX, ODF, EPUB) are checked before any
+    # parser opens them: total unpacked size, number of parts, compression
+    # ratio of any part over 1 MB, and XML elements in the formats parsed into
+    # a tree. A 125 KB DOCX used to unpack to minutes and gigabytes. Decks
+    # with large embedded videos may need the size raised.
+    archive_max_uncompressed_mb: int = 200
+    archive_max_members: int = 10000
+    archive_max_compression_ratio: int = 100
+    archive_max_xml_elements: int = 5_000_000
+    # DOCX, PPTX, spreadsheets, ODF, EPUB and PDF text layers are parsed in a
+    # helper process (services/extract_sandbox.py), so a file that hangs,
+    # balloons or crashes a native parser fails on its own and the server
+    # carries on. The helper is stopped after EXTRACT_TIMEOUT_SECONDS for one
+    # file and, on Linux, may use EXTRACT_MEMORY_LIMIT_MB of address space
+    # beyond what it starts with. false parses inside the server process.
+    extract_isolation: bool = True
+    extract_timeout_seconds: int = 300
+    extract_memory_limit_mb: int = 2048
+
     # Git repositories as sources (services/git_source.py). Local checkouts are
     # read with `git ls-files`, so .gitignore is honoured. Remote repositories
     # are shallow-cloned under DATA_DIR/repos. GIT_ALLOWED_HOSTS (comma

@@ -32,8 +32,10 @@ from services.audio_transcriber import AUDIO_EXTENSIONS
 from services.format_readers import (
     read_text_file, detect_encoding, text_pages, subtitle_pages, svg_pages, rtf_pages,
     odt_pages, ods_pages, odp_pages, epub_pages, eml_pages, mbox_pages, ipynb_pages,
-    LOG_LINES_PER_PAGE,
+    LOG_LINES_PER_PAGE, ZIP_CONTAINERS, check_zip_container,
 )
+# Parsers that read hostile files run in a helper process with limits
+from services import extract_sandbox
 
 # Prompt injection detection
 from services.prompt_injection_detector import (
@@ -646,18 +648,26 @@ class DocumentExtractor:
             self._scan_policy(result, file_path)
             return result
 
+        # Zip containers are sized up before any parser sees them (S9: a
+        # 125 KB DOCX unpacked to minutes and gigabytes).
+        if file_ext in ZIP_CONTAINERS:
+            check_zip_container(file_path)
+
         if file_ext == '.pdf':
             result = self._extract_pdf(file_path, force_ocr=force_ocr)
         elif file_ext == '.txt':
             result = ExtractionResult(self._extract_txt(file_path), method="text")
         elif file_ext == '.docx':
-            result = ExtractionResult(self._extract_docx(file_path), method="text")
+            result = ExtractionResult(extract_sandbox.run(
+                "docx", file_path, lambda: self._extract_docx(file_path)), method="text")
         elif file_ext == '.pptx':
-            result = ExtractionResult(self._extract_pptx(file_path), method="text")
+            result = ExtractionResult(extract_sandbox.run(
+                "pptx", file_path, lambda: self._extract_pptx(file_path)), method="text")
         elif file_ext == '.csv':
             result = ExtractionResult(self._extract_csv(file_path), method="text")
         elif file_ext in ('.xlsx', '.xlsm', '.xls'):
-            result = ExtractionResult(self._extract_xlsx(file_path), method="text")
+            result = ExtractionResult(extract_sandbox.run(
+                "excel_pages", file_path, lambda: self._extract_xlsx(file_path)), method="text")
         elif file_ext == '.tsv':
             result = ExtractionResult(self._extract_csv(file_path), method="text")
         elif file_ext == '.md':
@@ -669,6 +679,10 @@ class DocumentExtractor:
                 text_pages(file_path, LOG_LINES_PER_PAGE if file_ext == '.log' else None), method="text")
         elif file_ext in self.SUBTITLE_EXTENSIONS:
             result = ExtractionResult(subtitle_pages(file_path), method="text")
+        elif file_ext in ZIP_CONTAINERS:  # ODF and EPUB
+            result = ExtractionResult(extract_sandbox.run(
+                "document", file_path, lambda: self._extract_document_format(file_path, file_ext)),
+                method="text")
         elif file_ext in self.DOCUMENT_EXTENSIONS:
             result = ExtractionResult(self._extract_document_format(file_path, file_ext), method="text")
         elif file_ext == '.json':
@@ -728,7 +742,8 @@ class DocumentExtractor:
         if force_ocr and self.enable_ocr:
             logger.info(f"Force OCR enabled for {pdf_path.name} — skipping native extraction")
         else:
-            page_texts = self._extract_pdf_native(pdf_path)
+            page_texts = extract_sandbox.run(
+                "pdf_native", pdf_path, lambda: self._extract_pdf_native(pdf_path))
 
         # Check if we need OCR (no text, mostly empty pages, or force_ocr requested)
         if self.enable_ocr:
@@ -1334,42 +1349,51 @@ class DocumentExtractor:
             return [sheet]
 
         if ext in ('.xlsx', '.xlsm', '.xls'):
-            try:
-                excel = pd.ExcelFile(file_path)
-            except ImportError as e:
-                raise ImportError(self._excel_import_hint(file_path, e)) from e
-            except Exception as e:
-                raise Exception(f"Failed to open Excel file: {e}")
-
-            sheets: List[Dict[str, Any]] = []
-            for sheet_name in excel.sheet_names:
-                try:
-                    raw = excel.parse(sheet_name, header=None)
-                except Exception as e:
-                    logger.warning(f"Skipping unreadable sheet '{sheet_name}' in {file_path.name}: {e}")
-                    continue
-                header_idx, doc_metadata = _sniff_dataframe_header(raw)
-                try:
-                    df = excel.parse(sheet_name, header=header_idx)
-                except Exception as e:
-                    logger.warning(f"Skipping unreadable sheet '{sheet_name}' in {file_path.name}: {e}")
-                    continue
-                if df.empty:
-                    continue
-                if header_idx > 0:
-                    logger.info(
-                        f"XLSX {file_path.name} sheet '{sheet_name}': detected header at row "
-                        f"{header_idx}, preamble fields: "
-                        f"{[k for k in doc_metadata if not k.startswith('_')]}"
-                    )
-                sheet = self._dataframe_to_sheet(
-                    df, sheet_name=str(sheet_name), document_metadata=doc_metadata
-                )
-                self._init_sheet_overrides(sheet)
-                sheets.append(sheet)
-            return sheets
+            if ext in ZIP_CONTAINERS:
+                check_zip_container(file_path)
+            return extract_sandbox.run(
+                "excel_sheets", file_path, lambda: self._excel_sheets(file_path))
 
         raise ValueError(f"extract_tabular_sheets: unsupported extension {ext}")
+
+    def _excel_sheets(self, file_path: Path) -> List[Dict[str, Any]]:
+        """Every non-empty sheet of a workbook, in extract_tabular_sheets' shape."""
+        import pandas as pd
+
+        try:
+            excel = pd.ExcelFile(file_path)
+        except ImportError as e:
+            raise ImportError(self._excel_import_hint(file_path, e)) from e
+        except Exception as e:
+            raise Exception(f"Failed to open Excel file: {e}")
+
+        sheets: List[Dict[str, Any]] = []
+        for sheet_name in excel.sheet_names:
+            try:
+                raw = excel.parse(sheet_name, header=None)
+            except Exception as e:
+                logger.warning(f"Skipping unreadable sheet '{sheet_name}' in {file_path.name}: {e}")
+                continue
+            header_idx, doc_metadata = _sniff_dataframe_header(raw)
+            try:
+                df = excel.parse(sheet_name, header=header_idx)
+            except Exception as e:
+                logger.warning(f"Skipping unreadable sheet '{sheet_name}' in {file_path.name}: {e}")
+                continue
+            if df.empty:
+                continue
+            if header_idx > 0:
+                logger.info(
+                    f"XLSX {file_path.name} sheet '{sheet_name}': detected header at row "
+                    f"{header_idx}, preamble fields: "
+                    f"{[k for k in doc_metadata if not k.startswith('_')]}"
+                )
+            sheet = self._dataframe_to_sheet(
+                df, sheet_name=str(sheet_name), document_metadata=doc_metadata
+            )
+            self._init_sheet_overrides(sheet)
+            sheets.append(sheet)
+        return sheets
 
     def _init_sheet_overrides(self, sheet: Dict[str, Any]) -> None:
         """Initialize the role/type override slots the structured store reads.

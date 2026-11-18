@@ -274,7 +274,7 @@ Read the logs first: `docker compose logs clio`, `docker compose logs proxy`.
 | Everyone hits 429 at once | Rate limits see one address for everybody, the same cause as above | The same fix |
 | 421 on `/mcp` or any page | The hostname is not allowed | Set `CLIO_HOSTNAME`, or `ALLOWED_HOSTS` with your own proxy |
 | Claude Desktop or ChatGPT cannot find where to sign in | Set the public address | `MCP_PUBLIC_URL=https://clio.corp.example/mcp` ([details](IDENTITY.md#oauth-for-mcp-clients)) |
-| 413 on upload | Over the proxy's limit, or the collection's | Raise `CLIO_MAX_UPLOAD`, or `COLLECTION_STORAGE_LIMIT_BYTES`. The message names which |
+| 413 on upload | Over the proxy's limit, the per-file limit, or the collection's | Raise `CLIO_MAX_UPLOAD`, `MAX_UPLOAD_FILE_MB` or `COLLECTION_STORAGE_LIMIT_BYTES`. The message names which |
 | Answers arrive all at once, or cut off at about a minute | Another proxy on the way is buffering, or timing out | Turn off response buffering there, and raise its read timeout to 15 minutes |
 | `/readyz` says `database` | Postgres is unreachable, or `app.db` cannot be opened | The log says which |
 | `/readyz` says `storage` | The data directory is not writable by uid 10001 | Use the named volume, or `chown -R 10001:10001` the folder |
