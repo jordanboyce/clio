@@ -170,10 +170,15 @@ the map shows what is worth reading next. A line means one cites the other
 collection lacks.
 
 - **Hover** a dot to light its citations and name its neighbours; everything
-  else fades. **Click** to read its abstract in a card; **double-click** to
-  open the source. Drag dots to rearrange; scroll to zoom. Titles appear as
-  you zoom in.
-- **Local graph** (from the card) shows one source and what is within one,
+  else fades. **Click** it and the side panel says what it is and *why it
+  matters here*, in plain words: how many of your sources cite it, whether it
+  is among the most cited, whether it bridges groups that otherwise cite
+  different work, and, for a work you lack, that it is a likely next read.
+  Below that are its abstract and what it cites and is cited by.
+  **Double-click** to open the source. Drag dots to rearrange; scroll to
+  zoom. Titles appear as you zoom in. On a phone the panel rises from the
+  bottom as a sheet and the selected dot stays in view above it.
+- **Only its links** (from the panel) shows one source and what is within one,
   two or three citations of it — the depth slider in the bar at the top.
 - **Graph settings** (the button at the top right), in four sections:
   - *Filters* — search by title words, an author's surname or a year
@@ -203,11 +208,14 @@ Revere": a few structural measures on who cites whom, who writes with whom and
 which concepts appear together find the *brokers*, the items that link groups
 that would otherwise be apart.
 
-- **Key papers** lists the papers that bridge separate groups. Each one names
-  the groups it links and the citations that show it; click one to find it on
-  the map. Two measures sit beside it, each with its meaning spelled out:
-  *betweenness* (how often it lies on the shortest path between other
-  sources) and *constraint* (how far its links are tied up in one group).
+- **Papers that bridge groups** lists the papers that link groups of sources
+  that otherwise cite different work. Each one names the groups it links and
+  the citations that show it; click one to find it on the map. *Show the
+  links* says in words how much it bridges (the share of shortest citation
+  paths between other works that pass through it, the measure called
+  betweenness) and whether its links reach separate groups or stay inside
+  one (Burt's constraint). The measures' names stay out of the panel; the
+  numbers are in the API and in the line's tooltip.
 - **Key people** does the same for authors, from co-authorship. Before naming
   a person as a broker, read the note on names under the list: author names
   are normalised, and a false merge of two people invents a broker.
@@ -217,8 +225,10 @@ that would otherwise be apart.
   work.
 - When the collection is too small or too fragmented for the measures to mean
   much (under 50 nodes, 50 links or 30 sources, or less than half the nodes
-  connected), the panel says so first. Treat its lists as a starting point
-  then, not a finding.
+  connected), the panel says so first ("Too small to rank: …"), and so does a
+  selected dot's *why it matters*. Treat its lists as a starting point then,
+  not a finding. Dots can be sized by *Links*, *Influence* (PageRank) or
+  *Bridging* (betweenness), and colored by *Group*.
 
 Results are cached until the collection or its analysis changes. The same
 analysis is in the API (`GET /api/research/network`).
@@ -243,17 +253,28 @@ an outbound path.
 
 1. Add PDFs to a collection as usual (or download them from a source's
    references). Select some in the Sources panel to work on just those.
-2. Open **Library** and press **Analyze**. This reads each source's record
+2. Open **Library**. Its first view shows the order of work as four steps,
+   each with how far your sources have got and what it needs: *Analyzed*
+   (no model), *Screened* (a model, one call per source), *Reviewed* (a
+   model) and *Cite & check* (no model). Press **Analyze**. This reads each source's record
    and reference lists in the background. **Read again** re-reads sources
    analyzed by an earlier version.
 3. Type what you are looking for and press **Screen** to sort by relevance,
-   or open a source and screen it under *Screening*.
+   or open a source and screen it under *Screening*. Sources already screened
+   for the same question are skipped (*Screen 4 more sources*); once all are,
+   the button screens them all again.
 4. **Rename to descriptive names** when the file names are unhelpful. Fields:
    `{year}`, `{authors}` (*Okafor et al*, *Hale & Ruiz*), `{first_author}`,
    `{title}`, `{venue}`, `{doi}`. Titles printed in capitals are written in
    title case.
-5. In **Reviews**, choose sources, depth and an optional question, and start
-   now or at a time. Close the tab; the queue will be waiting.
+5. In **Reviews**, press **Prepare reviews**, choose sources, depth and an
+   optional question, and start now or at a time; the form says how many
+   model calls it will make. Close the tab; the queue will be waiting.
+   Reviews list unread first, each with its screening verdict (when it was
+   written for a question) and how many statements were verified. Open one
+   to read it beside the list: its one-line summary, each verified statement
+   with its quote and page, then what could not be verified. *Next unread*
+   moves on.
 6. When writing, open **Cite & check**: pick a style, paste the draft, and
    *Check* it. Fix what is red, look at what is amber, and copy or export the
    reference list. Fill in what a source's citation is *missing* with

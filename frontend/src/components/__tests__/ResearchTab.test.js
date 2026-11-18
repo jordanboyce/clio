@@ -158,3 +158,32 @@ describe('the rename preview is a real modal', () => {
     expect(showModal).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('the order of work (R10)', () => {
+  it('shows the four steps with their counts, and screens only what is not screened yet', async () => {
+    papers = [paper('d1', { analyzed: true, title: 'One', review_count: 1 }), paper('d2', { analyzed: true, title: 'Two' })]
+    const w = await mountTab()
+    http.get.mockImplementation(async (url) => {
+      if (url.startsWith('/api/research/screening')) {
+        return { data: { questions: ['root depth?'], items: [{ document_id: 'd1', verdict: 'relevant', evidence: [] }] } }
+      }
+      if (url.startsWith('/api/research/papers')) return { data: { papers, stats: {}, capabilities: {}, can_write: true } }
+      return { data: { jobs: [] } }
+    })
+    const steps = w.get('[data-testid="library-steps"]')
+    expect(steps.get('[data-testid="step-analyze"]').text()).toMatch(/Analyzed\s*2 of 2/)
+    expect(steps.get('[data-testid="step-review"]').text()).toMatch(/Reviewed\s*1 of 2/)
+    expect(steps.get('[data-testid="step-screen"]').text()).toContain('1 model call per source')
+
+    await w.get('input[aria-label="Question to screen sources against"]').setValue('root depth?')
+    await vi.advanceTimersByTimeAsync(500)
+    await flushPromises()
+    expect(steps.get('[data-testid="step-screen"]').text()).toMatch(/Screened\s*1 of 2/)
+    expect(screenButton(w).text()).toBe('Screen 1 more source')
+
+    await screenButton(w).trigger('click')
+    await flushPromises()
+    const body = http.post.mock.calls.find(([url]) => url.startsWith('/api/research/jobs'))[1]
+    expect(body).toMatchObject({ kind: 'screen', document_ids: ['d2'] })
+  })
+})

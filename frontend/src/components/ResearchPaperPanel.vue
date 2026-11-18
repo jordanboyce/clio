@@ -62,7 +62,7 @@
           <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/55">
             {{ isOpening(paper.provenance?.abstract) ? 'Opening' : 'Abstract' }}
           </h4>
-          <span v-if="paper.abstract" class="text-[11px] text-base-content/45 text-right">{{ abstractLabel(paper.provenance?.abstract) }}</span>
+          <span v-if="paper.abstract" class="text-xs text-base-content/55 text-right">{{ abstractLabel(paper.provenance?.abstract) }}</span>
         </div>
         <template v-if="paper.abstract">
           <p class="text-sm leading-relaxed whitespace-pre-line" :class="abstractOpen || paper.abstract.length <= 700 ? '' : 'line-clamp-[10]'">{{ paper.abstract }}</p>

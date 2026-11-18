@@ -12,9 +12,9 @@
 
     <!-- Key papers -->
     <section v-if="showPapers && citationHasGraph" data-testid="network-key-papers">
-      <h4 class="panel-heading">Key papers</h4>
+      <h4 class="panel-heading">Papers that bridge groups</h4>
       <p v-if="definitions.betweenness" class="caption">{{ definitions.betweenness }}</p>
-      <p v-if="!brokers.length" class="text-xs text-base-content/60">No paper here links separate groups.</p>
+      <p v-if="!brokers.length" class="text-xs text-base-content/65">No paper here links separate groups.</p>
       <ul v-else class="space-y-2">
         <li v-for="b in shownBrokers" :key="b.id" class="min-w-0" data-testid="network-broker">
           <button
@@ -46,26 +46,19 @@
                   <button type="button" class="node-row" :title="edge.label" @click="emit('focus', edge.node)">
                     <span class="min-w-0 flex-1">
                       <span class="block line-clamp-2 wrap-anywhere" :class="asCited(edge.node) ? 'italic text-base-content/70' : ''">{{ edge.label }}</span>
-                      <span v-if="edge.cited_by" class="block text-[11px] text-base-content/55 wrap-anywhere">cites this · {{ edge.cited_by.reason }}</span>
-                      <span v-if="edge.cites" class="block text-[11px] text-base-content/55 wrap-anywhere">cited by this · {{ edge.cites.reason }}</span>
+                      <span v-if="edge.cited_by" class="block text-xs text-base-content/55 wrap-anywhere">cites this · {{ edge.cited_by.reason }}</span>
+                      <span v-if="edge.cites" class="block text-xs text-base-content/55 wrap-anywhere">cited by this · {{ edge.cites.reason }}</span>
                     </span>
                   </button>
                 </li>
               </ul>
-              <p v-if="bridge.count > bridge.edges.length" class="text-[11px] text-base-content/55">
+              <p v-if="bridge.count > bridge.edges.length" class="text-xs text-base-content/55">
                 and {{ bridge.count - bridge.edges.length }} more
               </p>
             </div>
-            <dl class="metrics">
-              <div>
-                <dt>Betweenness <span class="tabular-nums">{{ fmt(b.betweenness) }}</span></dt>
-                <dd>{{ definitions.betweenness }}</dd>
-              </div>
-              <div>
-                <dt>Constraint <span class="tabular-nums">{{ fmt(b.constraint) }}</span></dt>
-                <dd>{{ definitions.constraint }}</dd>
-              </div>
-            </dl>
+            <ul class="metrics" :title="`Betweenness ${fmt(b.betweenness)} · constraint ${fmt(b.constraint)}`" data-testid="network-broker-measures">
+              <li v-for="line in bridgeWords(b)" :key="line">{{ line }}</li>
+            </ul>
           </div>
         </li>
       </ul>
@@ -73,7 +66,7 @@
         Show all {{ brokers.length }}
       </button>
       <p v-if="citation.stats?.betweenness_approximate" class="caption mt-1.5">
-        Betweenness estimated from a sample of {{ citation.stats.betweenness_samples }}.
+        The map is large, so bridging is estimated from a sample of {{ citation.stats.betweenness_samples }} works.
       </p>
     </section>
 
@@ -88,7 +81,7 @@
           Showing the {{ list.network.stats.capped.kept }} most frequent of {{ list.network.stats.capped.kept + list.network.stats.capped.dropped }}
         </p>
         <p v-if="list.network.stats?.betweenness_approximate" class="caption">
-          Betweenness estimated from a sample of {{ list.network.stats.betweenness_samples }}.
+          Bridging is estimated from a sample of {{ list.network.stats.betweenness_samples }}, because the network is large.
         </p>
         <p v-for="w in list.network.warnings || []" :key="w" class="caption wrap-anywhere">{{ w }}</p>
 
@@ -115,7 +108,7 @@
                     </button>
                   </li>
                 </ul>
-                <p v-if="item.source_count > item.sources.length" class="text-[11px] text-base-content/55">
+                <p v-if="item.source_count > item.sources.length" class="text-xs text-base-content/55">
                   and {{ item.source_count - item.sources.length }} more
                 </p>
               </div>
@@ -130,7 +123,7 @@
                     <span v-if="edge.sources?.length" class="text-base-content/55"> — together in {{ edge.sources.map(s => s.title).join('; ') }}</span>
                   </li>
                 </ul>
-                <p v-if="bridge.count > bridge.edges.length" class="text-[11px] text-base-content/55">
+                <p v-if="bridge.count > bridge.edges.length" class="text-xs text-base-content/55">
                   and {{ bridge.count - bridge.edges.length }} more
                 </p>
               </div>
@@ -185,7 +178,7 @@
 <script setup>
 import { computed, reactive } from 'vue'
 import { ChevronRight } from 'lucide-vue-next'
-import { isAsCited } from '../utils/citationGraph.js'
+import { bridgeWords, isAsCited } from '../utils/citationGraph.js'
 
 const props = defineProps({
   citation: { type: Object, default: null },
@@ -238,17 +231,15 @@ const nameCare = computed(() => merges.value.length || ambiguous.value.length ||
 
 <style scoped>
 .wrap-anywhere { overflow-wrap: anywhere; word-break: normal; }
-.panel-heading { margin-bottom: 0.375rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.025em; color: color-mix(in oklch, var(--color-base-content) 55%, transparent); }
+.panel-heading { margin-bottom: 0.375rem; font-size: 0.8125rem; font-weight: 600; line-height: 1.3; color: var(--color-base-content); }
 .node-row { display: flex; width: 100%; min-width: 0; align-items: flex-start; gap: 0.5rem; border-radius: 0.375rem; padding: 0.25rem 0.375rem; margin-inline: -0.375rem; text-align: left; font-size: 0.8125rem; line-height: 1.35; }
 .node-row:hover, .node-row:focus-visible { background: color-mix(in oklch, var(--color-base-content) 7%, transparent); }
-.caption { margin-bottom: 0.375rem; font-size: 0.6875rem; line-height: 1.4; overflow-wrap: anywhere; color: color-mix(in oklch, var(--color-base-content) 55%, transparent); }
-.sentence { font-size: 0.75rem; line-height: 1.4; overflow-wrap: anywhere; color: color-mix(in oklch, var(--color-base-content) 70%, transparent); }
-.reliability { border: 1px solid color-mix(in oklch, var(--color-warning) 45%, transparent); background: color-mix(in oklch, var(--color-warning) 12%, var(--color-base-100)); border-radius: var(--radius-box, 0.5rem); padding: 0.625rem 0.75rem; font-size: 0.75rem; line-height: 1.45; color: var(--color-base-content); }
-.disclosure { display: inline-flex; max-width: 100%; align-items: center; gap: 0.25rem; margin-top: 0.125rem; padding: 0.125rem 0; font-size: 0.6875rem; text-align: left; color: color-mix(in oklch, var(--color-base-content) 65%, transparent); }
+.caption { margin-bottom: 0.375rem; font-size: 0.75rem; line-height: 1.45; overflow-wrap: anywhere; color: color-mix(in oklch, var(--color-base-content) 62%, transparent); }
+.sentence { font-size: 0.75rem; line-height: 1.45; overflow-wrap: anywhere; color: color-mix(in oklch, var(--color-base-content) 72%, transparent); }
+.reliability { border-left: 3px solid var(--color-warning); padding: 0.125rem 0 0.125rem 0.75rem; font-size: 0.8125rem; line-height: 1.5; color: color-mix(in oklch, var(--color-base-content) 85%, transparent); }
+.disclosure { display: inline-flex; max-width: 100%; align-items: center; gap: 0.25rem; margin-top: 0.125rem; padding: 0.125rem 0; font-size: 0.75rem; text-align: left; color: color-mix(in oklch, var(--color-base-content) 65%, transparent); }
 .disclosure:hover, .disclosure:focus-visible { color: var(--color-base-content); text-decoration: underline; }
 .evidence { margin-top: 0.25rem; min-width: 0; border-left: 2px solid var(--color-base-300); padding-left: 0.625rem; display: flex; flex-direction: column; gap: 0.5rem; }
-.bridge-title { font-size: 0.6875rem; font-weight: 600; line-height: 1.35; color: color-mix(in oklch, var(--color-base-content) 75%, transparent); }
-.metrics { display: flex; flex-direction: column; gap: 0.375rem; font-size: 0.6875rem; line-height: 1.4; color: color-mix(in oklch, var(--color-base-content) 60%, transparent); }
-.metrics dt { font-weight: 600; color: color-mix(in oklch, var(--color-base-content) 75%, transparent); }
-.metrics dd { overflow-wrap: anywhere; }
+.bridge-title { font-size: 0.75rem; font-weight: 600; line-height: 1.35; color: color-mix(in oklch, var(--color-base-content) 75%, transparent); }
+.metrics { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; line-height: 1.45; overflow-wrap: anywhere; color: color-mix(in oklch, var(--color-base-content) 68%, transparent); }
 </style>

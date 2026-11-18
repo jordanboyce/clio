@@ -295,6 +295,13 @@ def test_reliability_too_small_names_the_counts():
     note = network.reliability_note(16, 17, 13, 10)
     assert note["level"] == "too_small" and note["reliable"] is False
     assert "16" in note["note"] and "17" in note["note"]
+    assert note["note"].startswith("Too small to rank")
+
+
+def test_reliability_names_what_the_points_are():
+    assert "16 works and 17 links" in network.reliability_note(16, 17, 13, 10, kind="citation")["note"]
+    assert "16 people" in network.reliability_note(16, 17, 13, kind="authors")["note"]
+    assert "16 points" in network.reliability_note(16, 17, 13)["note"]
 
 
 def test_reliability_ok_at_the_minimums():
@@ -321,7 +328,9 @@ def test_reliability_weak_modularity_is_reported():
                                     network.MIN_RELIABLE_NODES, network.MIN_RELIABLE_SOURCES,
                                     network.MIN_MEANINGFUL_MODULARITY - 0.1)
     assert note["level"] == "ok" and note["reliable"] is False
-    assert note["weak_groups"] is True and "modularity" in note["note"]
+    assert note["weak_groups"] is True and "groups are also loose" in note["note"]
+    # Plain words (R12): the measures' names stay out of what people read.
+    assert "modularity" not in note["note"] and "centrality" not in note["note"]
 
 
 def test_reliability_without_sources_skips_the_source_check():

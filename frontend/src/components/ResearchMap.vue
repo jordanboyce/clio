@@ -30,7 +30,7 @@
               @keydown.enter.prevent="nextMatch($event.shiftKey ? -1 : 1)"
               @keydown.esc="settings.search = ''"
             />
-            <span v-if="settings.search.trim()" class="text-[11px] text-base-content/50 tabular-nums shrink-0" aria-live="polite">
+            <span v-if="settings.search.trim()" class="text-xs text-base-content/55 tabular-nums shrink-0" aria-live="polite">
               {{ matchList.length ? `${matchCursor + 1}/${matchList.length}` : 'none' }}
             </span>
           </label>
@@ -101,8 +101,7 @@
                   <option v-if="!questions.length" value="">No screening yet — use Screen in the Library</option>
                   <option v-for="q in questions" :key="q" :value="q">{{ q }}</option>
                 </select>
-                <p class="text-base-content/50">The legend is in the overview panel.</p>
-              </template>
+                              </template>
 
               <template v-else-if="section.id === 'display'">
                 <label class="setting-row"><span>Arrows</span><input v-model="settings.arrows" type="checkbox" class="toggle toggle-xs" /></label>
@@ -134,8 +133,8 @@
           <button class="btn btn-xs btn-square join-item bg-base-100/95" aria-label="Zoom out" @click="zoomBy(1 / 1.4)"><Minus :size="13" /></button>
           <button class="btn btn-xs btn-square join-item bg-base-100/95" aria-label="Zoom to fit" title="Zoom to fit" @click="fit"><Maximize :size="12" /></button>
         </div>
-        <p class="absolute bottom-3 left-3 right-14 z-0 truncate text-[11px] text-base-content/40 pointer-events-none">
-          {{ shown.nodes.length }} nodes · {{ shown.edges.length }} links · click a dot for details, double-click to open
+        <p class="absolute bottom-3 left-3 right-14 z-0 truncate text-xs text-base-content/50 pointer-events-none">
+          {{ shown.nodes.length }} works · {{ shown.edges.length }} links · click a dot to see why it matters, double-click to open it
         </p>
       </div>
 
@@ -148,37 +147,32 @@
       <aside
         class="side-panel flex flex-col border-base-300 bg-base-100 select-text"
         :class="overviewBelow ? 'w-full max-h-[26rem] rounded-box border'
-          : layout.docked ? 'static shrink-0 border-l' : 'absolute inset-y-0 right-0 z-30 border-l shadow-xl'"
-        :style="overviewBelow ? null : { width: layout.docked ? `${layout.widthRem}rem` : `min(100%, ${layout.widthRem}rem)` }"
+          : layout.docked ? 'static shrink-0 border-l'
+            : layout.sheet ? 'absolute inset-x-0 bottom-0 z-30 max-h-[58%] rounded-t-box border-t shadow-[0_-8px_24px_-12px_rgb(0_0_0/0.35)]'
+              : 'absolute inset-y-0 right-0 z-30 border-l shadow-xl'"
+        :style="overviewBelow || layout.sheet ? null : { width: layout.docked ? `${layout.widthRem}rem` : `min(100%, ${layout.widthRem}rem)` }"
         :aria-label="showDetails ? 'Source details' : selected ? 'Selected node' : 'Map overview'"
         data-testid="graph-panel"
       >
+        <span v-if="layout.sheet && !overviewBelow" class="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-base-content/20" aria-hidden="true" />
         <slot v-if="showDetails" name="details" />
 
-        <!-- Selected node -->
+        <!-- Selected node: what it is, why it matters here, what to do with it -->
         <template v-else-if="selected">
-          <header class="flex items-start gap-2 px-4 pt-4 pb-3 border-b border-base-300">
+          <header class="flex items-start gap-2 px-4 pt-3 pb-3 border-b border-base-300/70">
             <div class="min-w-0 flex-1">
-              <p class="text-[11px] uppercase tracking-wide text-base-content/50">{{ kindLabel(selected) }}</p>
-              <h3 class="font-semibold leading-snug text-sm mt-0.5 wrap-anywhere" data-testid="graph-quickview-title">
+              <p class="text-xs text-base-content/60">{{ kindLabel(selected) }}</p>
+              <h3 class="font-semibold leading-snug text-[0.9375rem] mt-0.5 wrap-anywhere" :class="isAsCited(selected) ? 'italic' : ''" data-testid="graph-quickview-title">
                 {{ nodeTitle(selected) }}
               </h3>
-              <p v-if="metaLine(selected)" class="text-xs text-base-content/60 mt-1 wrap-anywhere">{{ metaLine(selected) }}</p>
+              <p v-if="metaLine(selected)" class="text-xs text-base-content/65 mt-1 wrap-anywhere">{{ metaLine(selected) }}</p>
             </div>
-            <button class="btn btn-ghost btn-xs btn-square" aria-label="Clear selection" @click="selectedId = null"><X :size="15" /></button>
+            <button class="btn btn-ghost btn-sm btn-square -mr-1" aria-label="Clear selection" @click="selectedId = null"><X :size="15" /></button>
           </header>
-          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-3 space-y-4 text-sm wrap-anywhere" aria-live="polite" data-testid="graph-quickview">
-            <div class="flex flex-wrap gap-1.5 text-xs">
-              <span class="badge badge-sm badge-ghost tabular-nums">Cited by {{ selectedLinks.citedBy.length }} here</span>
-              <span v-if="selected.type === 'paper'" class="badge badge-sm badge-ghost tabular-nums">Cites {{ selectedLinks.cites.length }} here</span>
-              <span v-if="verdicts[selected.id]" class="badge badge-sm" :class="VERDICTS[verdicts[selected.id].verdict]?.tone">
-                {{ VERDICTS[verdicts[selected.id].verdict]?.label }}
-              </span>
-            </div>
-
+          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-4 space-y-5 text-sm wrap-anywhere" aria-live="polite" data-testid="graph-quickview">
             <div class="flex flex-wrap gap-2">
               <button v-if="selected.type === 'paper' || selected.in_collection" class="btn btn-sm btn-primary" @click="openNode(selected)">
-                <BookOpen :size="14" aria-hidden="true" />Details
+                <BookOpen :size="14" aria-hidden="true" />Open details
               </button>
               <button
                 v-else-if="canDownload && selected.downloadable"
@@ -186,27 +180,41 @@
                 :disabled="downloading"
                 @click="downloadExternal(selected)"
               ><span v-if="downloading" class="loading loading-spinner loading-xs" /><Download v-else :size="14" aria-hidden="true" />Add to collection</button>
-              <button class="btn btn-sm btn-ghost" :title="localOf === selected.id ? 'Back to the whole graph' : 'Show only what this connects to'" @click="localOf = localOf === selected.id ? null : selected.id">
-                <Crosshair :size="14" aria-hidden="true" />{{ localOf === selected.id ? 'Whole graph' : 'Focus' }}
+              <button class="btn btn-sm btn-ghost" :title="localOf === selected.id ? 'Back to the whole map' : 'Show only what this connects to'" @click="localOf = localOf === selected.id ? null : selected.id">
+                <Crosshair :size="14" aria-hidden="true" />{{ localOf === selected.id ? 'Whole map' : 'Only its links' }}
               </button>
             </div>
+
+            <section v-if="role.length || verdicts[selected.id]" data-testid="graph-role">
+              <h4 class="panel-heading">Why it matters here</h4>
+              <ul class="space-y-1.5">
+                <li v-if="verdicts[selected.id]" class="flex flex-wrap items-center gap-2">
+                  <span class="badge badge-sm" :class="VERDICTS[verdicts[selected.id].verdict]?.tone">{{ VERDICTS[verdicts[selected.id].verdict]?.label }}</span>
+                  <span class="text-base-content/70">for “{{ relevanceQuestion }}”</span>
+                </li>
+                <li v-for="line in role" :key="line.key" :class="line.key === 'caveat' ? 'text-xs text-base-content/60' : 'leading-snug'">
+                  {{ line.text }}
+                  <span v-if="line.detail" class="block text-xs text-base-content/65 mt-0.5">{{ line.detail }}</span>
+                </li>
+              </ul>
+            </section>
 
             <section v-if="selected.abstract">
               <h4 class="panel-heading">{{ selected.abstract_source?.kind === 'opening' ? 'Opening' : 'Abstract' }}</h4>
               <p class="leading-relaxed whitespace-pre-line" :class="abstractOpen ? '' : 'line-clamp-6'">{{ selected.abstract }}</p>
-              <button v-if="selected.abstract.length > 420" class="btn btn-ghost btn-xs px-0 mt-1" @click="abstractOpen = !abstractOpen">
+              <button v-if="selected.abstract.length > 420" class="btn btn-ghost btn-xs text-xs px-0 mt-1" @click="abstractOpen = !abstractOpen">
                 {{ abstractOpen ? 'Show less' : 'Show more' }}
               </button>
-              <p class="text-[11px] text-base-content/45 mt-1">{{ abstractLabel(selected.abstract_source) }}</p>
+              <p class="text-xs text-base-content/55 mt-1">{{ abstractLabel(selected.abstract_source) }}</p>
             </section>
             <section v-else-if="selected.as_cited">
-              <h4 class="panel-heading">As cited</h4>
-              <p class="text-xs leading-relaxed text-base-content/75 italic">{{ selected.as_cited }}</p>
+              <h4 class="panel-heading">As your sources cite it</h4>
+              <p class="leading-relaxed text-base-content/75 italic">{{ selected.as_cited }}</p>
             </section>
-            <p v-else class="text-xs text-base-content/50">No abstract found.</p>
+            <p v-else class="text-xs text-base-content/60">No abstract found.</p>
 
             <section v-for="group in linkGroups" :key="group.key">
-              <h4 class="panel-heading">{{ group.title }} <span class="font-normal tabular-nums">({{ group.items.length }})</span></h4>
+              <h4 class="panel-heading">{{ group.title }} <span class="font-normal tabular-nums text-base-content/55">{{ group.items.length }}</span></h4>
               <ul class="space-y-0.5">
                 <li v-for="item in group.items.slice(0, group.limit)" :key="item.node.id">
                   <button class="node-row" :title="nodeTitle(item.node)" @click="focusNode(item.node.id)">
@@ -215,47 +223,63 @@
                   </button>
                 </li>
               </ul>
-              <button v-if="group.items.length > group.limit" class="btn btn-ghost btn-xs px-0" @click="expanded[group.key] = true">
+              <button v-if="group.items.length > group.limit" class="btn btn-ghost btn-xs text-xs px-0" @click="expanded[group.key] = true">
                 Show all {{ group.items.length }}
               </button>
-              <p v-if="!group.items.length" class="text-xs text-base-content/50">{{ group.empty }}</p>
+              <p v-if="!group.items.length" class="text-xs text-base-content/60">{{ group.empty }}</p>
             </section>
           </div>
         </template>
 
         <!-- Map overview: what the map says at a glance -->
         <template v-else>
-          <header class="flex items-start gap-2 px-4 pt-4 pb-3 border-b border-base-300">
+          <header class="flex items-start gap-2 px-4 pt-3 pb-3 border-b border-base-300/70">
             <div class="min-w-0 flex-1">
-              <h3 class="font-semibold text-sm">Map overview</h3>
-              <p class="text-xs text-base-content/60 mt-1">
-                {{ insights.papers }} source{{ insights.papers === 1 ? '' : 's' }} · {{ insights.links }} citation link{{ insights.links === 1 ? '' : 's' }}
-                <span v-if="settings.showCited"> · {{ insights.missingTotal }} cited work{{ insights.missingTotal === 1 ? '' : 's' }} you don't have</span>
+              <h3 class="font-semibold text-[0.9375rem]">Overview</h3>
+              <p class="text-xs text-base-content/65 mt-0.5">
+                {{ insights.papers }} source{{ insights.papers === 1 ? '' : 's' }} · {{ insights.links }} citation link{{ insights.links === 1 ? '' : 's' }}<span v-if="settings.showCited"> · {{ insights.missingTotal }} cited work{{ insights.missingTotal === 1 ? '' : 's' }} you don't have</span>
               </p>
             </div>
-            <button class="btn btn-ghost btn-xs btn-square" aria-label="Hide the overview" title="Hide the overview" @click="setOverview(false)"><PanelRightClose :size="15" /></button>
+            <button class="btn btn-ghost btn-sm btn-square -mr-1" aria-label="Hide the overview" title="Hide the overview" @click="setOverview(false)"><PanelRightClose :size="15" /></button>
           </header>
-          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-3 space-y-5 text-sm wrap-anywhere" data-testid="graph-overview">
-            <div v-if="graph && !insights.links" class="rounded-box bg-base-200/70 p-3 text-xs space-y-2">
+          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-4 space-y-6 text-sm wrap-anywhere" data-testid="graph-overview">
+            <!-- Legend first, in one compact block: what the colours and sizes mean -->
+            <section data-testid="graph-legend">
+              <div class="flex items-center justify-between gap-2">
+                <h4 class="panel-heading mb-0">Color: {{ colorLabel }}</h4>
+                <button class="btn btn-ghost btn-xs text-xs" @click="openSettings('groups')">Change</button>
+              </div>
+              <ul v-if="settings.colorBy === 'community' && communityRows.length" class="legend-row">
+                <li v-for="item in communityRows" :key="item.group">
+                  <span class="legend-dot" :class="`legend-${item.group}`" aria-hidden="true" />{{ item.label }} <span class="tabular-nums text-base-content/55">{{ item.size }}</span>
+                </li>
+              </ul>
+              <ul v-else-if="legend.length" class="legend-row">
+                <li v-for="item in legend" :key="item.group">
+                  <span class="legend-dot" :class="`legend-${item.group}`" aria-hidden="true" />{{ item.label }}
+                </li>
+              </ul>
+              <div v-else-if="settings.colorBy === 'year' && years" class="mt-1.5 space-y-1 text-xs text-base-content/70">
+                <div class="h-2 rounded-full legend-years" aria-hidden="true" />
+                <div class="flex justify-between tabular-nums"><span>{{ years.min }}</span><span>{{ years.max }}</span></div>
+              </div>
+              <p v-else-if="settings.colorBy === 'community'" class="mt-1 text-xs text-base-content/60">Groups are not available for this map.</p>
+              <p v-if="settings.colorBy === 'community' && networks.citation?.definitions?.community" class="mt-1.5 text-xs text-base-content/60">{{ networks.citation.definitions.community }}</p>
+              <p v-if="settings.colorBy === 'relevance' && relevanceQuestion" class="mt-1.5 text-xs text-base-content/60">Screened for “{{ relevanceQuestion }}”</p>
+              <p class="mt-1.5 text-xs text-base-content/60">{{ sizeCaption }} Italic titles are references as printed, not checked titles.</p>
+            </section>
+
+            <div v-if="graph && !insights.links" class="space-y-2 border-l-2 border-base-300 pl-3 text-sm">
               <p>None of these sources cite each other, and no cited work reaches the current threshold.</p>
-              <button v-if="settings.showCited && settings.minCitations > 1" class="btn btn-xs" @click="settings.minCitations = 1">
+              <button v-if="settings.showCited && settings.minCitations > 1" class="btn btn-sm" @click="settings.minCitations = 1">
                 Show works cited by just one source
               </button>
-              <button v-else-if="!settings.showCited" class="btn btn-xs" @click="settings.showCited = true">Show cited works</button>
+              <button v-else-if="!settings.showCited" class="btn btn-sm" @click="settings.showCited = true">Show cited works</button>
             </div>
-
-            <ResearchNetworkPanel
-              v-if="networks.citation"
-              section="papers"
-              :citation="networks.citation"
-              :node-by-id="nodeById"
-              @focus="focusNode"
-              @open="emit('open', $event)"
-            />
 
             <section v-if="insights.missing.length">
               <h4 class="panel-heading">Cited most, not in your collection</h4>
-              <p class="text-xs text-base-content/55 mb-1.5">What your sources lean on that you haven't added — usually the next thing to read.</p>
+              <p class="caption">What your sources lean on that you haven't added: usually the next thing to read.</p>
               <ul class="space-y-0.5">
                 <li v-for="item in insights.missing" :key="item.node.id" class="flex items-start gap-1">
                   <button class="node-row" :title="nodeTitle(item.node)" @click="focusNode(item.node.id)">
@@ -275,7 +299,7 @@
             </section>
 
             <section v-if="insights.hubs.length">
-              <h4 class="panel-heading">Most cited in your collection</h4>
+              <h4 class="panel-heading">Cited most by your sources</h4>
               <ul class="space-y-0.5">
                 <li v-for="item in insights.hubs" :key="item.node.id">
                   <button class="node-row" :title="nodeTitle(item.node)" @click="focusNode(item.node.id)">
@@ -285,6 +309,15 @@
                 </li>
               </ul>
             </section>
+
+            <ResearchNetworkPanel
+              v-if="networks.citation"
+              section="papers"
+              :citation="networks.citation"
+              :node-by-id="nodeById"
+              @focus="focusNode"
+              @open="emit('open', $event)"
+            />
 
             <section v-if="insights.outside.length">
               <h4 class="panel-heading">In the collection, outside the selection</h4>
@@ -313,36 +346,10 @@
               @open="emit('open', $event)"
             />
 
-            <p v-if="insights.orphans" class="text-xs text-base-content/60">
+            <p v-if="insights.orphans" class="text-xs text-base-content/65">
               {{ insights.orphans }} source{{ insights.orphans === 1 ? '' : 's' }} connect{{ insights.orphans === 1 ? 's' : '' }} to nothing here.
               <button class="link link-hover" @click="settings.showOrphans = !settings.showOrphans">{{ settings.showOrphans ? 'Hide' : 'Show' }} {{ insights.orphans === 1 ? 'it' : 'them' }}</button>
             </p>
-
-            <section>
-              <h4 class="panel-heading">Colour</h4>
-              <template v-if="settings.colorBy === 'community' && communityRows.length">
-                <ul class="space-y-1 text-xs text-base-content/70">
-                  <li v-for="item in communityRows" :key="item.group" class="flex items-start gap-2">
-                    <span class="legend-dot mt-1" :class="`legend-${item.group}`" aria-hidden="true" />
-                    <span class="min-w-0 flex-1 wrap-anywhere">{{ item.label }} <span class="tabular-nums text-base-content/50">· {{ item.size }}</span></span>
-                  </li>
-                </ul>
-                <p v-if="networks.citation?.definitions?.community" class="text-xs text-base-content/55 mt-1.5">{{ networks.citation.definitions.community }}</p>
-              </template>
-              <ul v-else-if="legend.length" class="space-y-1 text-xs text-base-content/70">
-                <li v-for="item in legend" :key="item.group" class="flex items-center gap-2">
-                  <span class="legend-dot" :class="`legend-${item.group}`" aria-hidden="true" />{{ item.label }}
-                </li>
-              </ul>
-              <div v-else-if="settings.colorBy === 'year' && years" class="space-y-1 text-xs text-base-content/70">
-                <div class="h-2 rounded-full legend-years" aria-hidden="true" />
-                <div class="flex justify-between tabular-nums"><span>{{ years.min }}</span><span>{{ years.max }}</span></div>
-              </div>
-              <p v-else-if="settings.colorBy === 'community'" class="text-xs text-base-content/55">Groups are not available for this map.</p>
-              <p v-else class="text-xs text-base-content/55">All dots share one colour.</p>
-              <p v-if="settings.colorBy === 'relevance' && relevanceQuestion" class="text-xs text-base-content/55 mt-1">Screened for “{{ relevanceQuestion }}”</p>
-              <p class="text-xs text-base-content/50 mt-2">{{ sizeCaption }} Italic titles are references as printed, not verified titles.</p>
-            </section>
           </div>
         </template>
       </aside>
@@ -363,7 +370,7 @@ import {
 import {
   DEFAULT_SETTINGS, RELEVANCE_LEGEND, SIZE_OPTIONS, SLIDERS, TYPE_LEGEND, communityLegend, connections,
   groupOf, isAsCited, labelAlpha, labelRank, loadSettings, mapInsights, matchesQuery, metricIndex, metricRadius,
-  neighborIds, nodeRadius, panelLayout, placeLabels, saveSettings, shortLabel, visibleGraph, wrapLabel, yearRange,
+  neighborIds, nodeRadius, nodeRole, panelLayout, placeLabels, saveSettings, shortLabel, visibleGraph, wrapLabel, yearRange,
   yearStrength,
 } from '../utils/citationGraph.js'
 import ResearchNetworkPanel from './ResearchNetworkPanel.vue'
@@ -397,7 +404,7 @@ const sections = [
 const open = reactive({ filters: true, groups: true, display: false, forces: false })
 const colorOptions = [
   { id: 'type', label: 'Type' }, { id: 'relevance', label: 'Relevance' }, { id: 'year', label: 'Year' },
-  { id: 'community', label: 'Community' }, { id: 'none', label: 'None' },
+  { id: 'community', label: 'Group' }, { id: 'none', label: 'None' },
 ]
 const sliderLabels = {
   textFade: 'Titles appear when zoomed in to', nodeSize: 'Dot size', linkThickness: 'Line thickness',
@@ -488,7 +495,16 @@ const communityOf = computed(() => Object.fromEntries(
 const communityRows = computed(() => communityLegend(networks.value.citation))
 const sizeDefinition = computed(() => networks.value.citation?.definitions?.[settings.sizeBy] || '')
 const sizeCaption = computed(() => settings.sizeBy === 'citations' || !sizeDefinition.value
-  ? 'Bigger dots have more links.' : `Dot size: ${sizeDefinition.value}`)
+  ? 'Bigger dots have more links.' : `Dot size shows ${sizeDefinition.value.charAt(0).toLowerCase()}${sizeDefinition.value.slice(1)}`)
+const colorLabel = computed(() => colorOptions.find(o => o.id === settings.colorBy)?.label || 'None')
+const reliable = computed(() => networks.value.citation?.reliability?.reliable !== false)
+const role = computed(() => nodeRole(selected.value, {
+  links: selectedLinks.value, shown: shown.value, brokers: networks.value.citation?.brokers || [], reliable: reliable.value,
+}))
+function openSettings(section) {
+  open[section] = true
+  settingsOpen.value = true
+}
 
 // Radius of a dot: links by default, or a network measure when chosen.
 function radiusOf(node) {
@@ -559,9 +575,9 @@ watch(() => props.detailsId, (id) => {
 const selectedLinks = computed(() => selected.value ? connections(selected.value.id, shown.value) : { cites: [], citedBy: [] })
 const linkGroups = computed(() => {
   if (!selected.value) return []
-  const groups = [{ key: 'citedBy', title: 'Cited by, in this map', items: selectedLinks.value.citedBy, empty: 'Nothing drawn here cites it.' }]
+  const groups = [{ key: 'citedBy', title: 'Cited by', items: selectedLinks.value.citedBy, empty: 'Nothing drawn here cites it.' }]
   if (selected.value.type === 'paper') {
-    groups.unshift({ key: 'cites', title: 'Cites, in this map', items: selectedLinks.value.cites,
+    groups.unshift({ key: 'cites', title: 'Cites', items: selectedLinks.value.cites,
       empty: settings.showCited ? 'None of its references are drawn here.' : 'Turn on cited works in Filters to see its references.' })
   }
   return groups.map(g => ({ ...g, limit: expanded[g.key] ? Infinity : 8 }))
@@ -569,7 +585,11 @@ const linkGroups = computed(() => {
 
 const legend = computed(() => {
   if (settings.colorBy === 'relevance') return RELEVANCE_LEGEND
-  if (settings.colorBy === 'type') return TYPE_LEGEND
+  // Only the kinds drawn: no "Books" row on a map without books.
+  if (settings.colorBy === 'type') {
+    const drawn = new Set(shown.value.nodes.map(n => groupOf(n, 'type')))
+    return TYPE_LEGEND.filter(row => drawn.has(row.group))
+  }
   return []
 })
 
@@ -580,7 +600,7 @@ function nodeTitle(node) {
 function kindLabel(node) {
   if (node.type === 'paper') return node.kind === 'book' ? 'Book in your collection' : 'Source in your collection'
   if (node.in_collection) return 'In your collection, outside the selection'
-  return isAsCited(node) ? 'Cited work · reference as printed' : 'Cited work · not in your collection'
+  return isAsCited(node) ? 'Cited work you don\'t have · title as printed in the reference' : 'Cited work you don\'t have'
 }
 function metaLine(node) {
   return [authorsShort(node.authors), node.year, node.venue].filter(Boolean).join(' · ')
@@ -809,6 +829,7 @@ function onNodeClick(node) {
   const double = lastClick.id === node.id && now - lastClick.at < 350
   lastClick = { id: node.id, at: now }
   selectedId.value = node.id
+  if (layout.value.sheet && fg) fg.centerAt(node.x, node.y + sheetShift(fg.zoom()), 300)
   // Double-click opens the source, as in Obsidian. With a source already
   // open beside the map, a single click moves the details along with it.
   if (double || props.detailsId) {
@@ -900,8 +921,16 @@ function focusNode(id) {
   selectedId.value = id
   const node = nodeCache.get(id)
   if (!node || !fg || !Number.isFinite(node.x)) return
-  fg.centerAt(node.x, node.y, 400)
-  if (fg.zoom() < 1.6) fg.zoom(1.8, 400)
+  const zoom = Math.max(fg.zoom(), 1.8)
+  fg.centerAt(node.x, node.y + sheetShift(zoom), 400)
+  if (fg.zoom() < 1.6) fg.zoom(zoom, 400)
+}
+
+// On a phone the panel is a sheet over the lower part of the map: keep the
+// selected dot in the part still showing, not under the sheet.
+function sheetShift(zoom) {
+  if (!layout.value.sheet || !host.value) return 0
+  return (host.value.clientHeight * 0.28) / zoom
 }
 
 function nextMatch(step = 1) {
@@ -932,10 +961,13 @@ async function downloadExternal(node) {
 
 <style scoped>
 .wrap-anywhere { overflow-wrap: anywhere; word-break: normal; }
-.panel-heading { margin-bottom: 0.375rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.025em; color: color-mix(in oklch, var(--color-base-content) 55%, transparent); }
+.panel-heading { margin-bottom: 0.375rem; font-size: 0.8125rem; font-weight: 600; line-height: 1.3; color: var(--color-base-content); }
+.caption { margin-bottom: 0.375rem; font-size: 0.75rem; line-height: 1.45; color: color-mix(in oklch, var(--color-base-content) 62%, transparent); }
+.legend-row { display: flex; flex-wrap: wrap; gap: 0.25rem 0.875rem; margin-top: 0.375rem; font-size: 0.75rem; color: color-mix(in oklch, var(--color-base-content) 75%, transparent); }
+.legend-row li { display: inline-flex; align-items: center; gap: 0.375rem; }
 .node-row { display: flex; width: 100%; min-width: 0; align-items: flex-start; gap: 0.5rem; border-radius: 0.375rem; padding: 0.25rem 0.375rem; margin-inline: -0.375rem; text-align: left; font-size: 0.8125rem; line-height: 1.35; }
 .node-row:hover, .node-row:focus-visible { background: color-mix(in oklch, var(--color-base-content) 7%, transparent); }
-.count-pill { flex-shrink: 0; min-width: 1.5rem; margin-top: 0.05rem; border-radius: 9999px; padding: 0 0.35rem; text-align: center; font-size: 0.6875rem; font-variant-numeric: tabular-nums; background: color-mix(in oklch, var(--color-base-content) 10%, transparent); color: color-mix(in oklch, var(--color-base-content) 75%, transparent); }
+.count-pill { flex-shrink: 0; min-width: 1.5rem; margin-top: 0.05rem; border-radius: 9999px; padding: 0 0.35rem; text-align: center; font-size: 0.75rem; font-variant-numeric: tabular-nums; background: color-mix(in oklch, var(--color-base-content) 10%, transparent); color: color-mix(in oklch, var(--color-base-content) 75%, transparent); }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; cursor: pointer; color: color-mix(in oklch, var(--color-base-content) 80%, transparent); }
 .setting-slider { display: flex; flex-direction: column; gap: 0.3rem; color: color-mix(in oklch, var(--color-base-content) 70%, transparent); }
 .legend-dot { width: 0.6rem; height: 0.6rem; border-radius: 9999px; flex-shrink: 0; }

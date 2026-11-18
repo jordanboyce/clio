@@ -1,14 +1,13 @@
 <template>
   <div class="max-w-6xl mx-auto py-4 space-y-4" data-testid="research-tab">
-    <div class="flex flex-wrap items-end justify-between gap-3">
-      <div>
+    <div class="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+      <div class="min-w-0">
         <h2 class="text-lg font-semibold">Library</h2>
-        <p class="text-sm text-base-content/60">
-          Decide what to read, keep papers and books findable, and follow what they cite. Details come from each
-          source's own text<span v-if="capabilities.registry_lookups"> or the catalogue record for the identifier it prints</span>.
+        <p class="hidden sm:block text-sm text-base-content/65">
+          Decide what to read, and follow what it cites. Details come from each source's own text<span v-if="capabilities.registry_lookups"> or its catalogue record</span>.
         </p>
       </div>
-      <div class="segmented" role="tablist" aria-label="Library view">
+      <div class="segmented max-w-full overflow-x-auto" role="tablist" aria-label="Library view">
         <button
           v-for="v in views"
           :key="v.id"
@@ -18,8 +17,8 @@
           :class="view === v.id ? 'is-on text-base-content' : 'text-base-content/60 hover:text-base-content'"
           @click="view = v.id"
         >
-          <component :is="v.icon" :size="14" aria-hidden="true" />{{ v.label }}
-          <span v-if="v.id === 'reviews' && stats.unread_reviews" class="badge badge-primary badge-xs tabular-nums">{{ stats.unread_reviews }}</span>
+          <component :is="v.icon" :size="14" aria-hidden="true" /><span class="sm:hidden">{{ v.short }}</span><span class="hidden sm:inline">{{ v.label }}</span>
+          <span v-if="v.id === 'reviews' && stats.unread_reviews" class="badge badge-primary badge-sm tabular-nums" :aria-label="`${stats.unread_reviews} unread`">{{ stats.unread_reviews }}</span>
         </button>
       </div>
     </div>
@@ -43,15 +42,27 @@
           </div>
 
           <template v-else>
-            <div v-if="canWrite && unanalyzed.length" class="alert py-2 px-3 text-sm" data-testid="research-analyze-banner">
-              <span>
-                {{ unanalyzed.length }} {{ selectionCount ? 'selected ' : '' }}source{{ unanalyzed.length === 1 ? ' has' : 's have' }}
-                not been read for title, authors, abstract and references yet.
-              </span>
-              <button class="btn btn-xs btn-primary" :disabled="analyzing" @click="analyzeNew()">
-                <span v-if="analyzing" class="loading loading-spinner loading-xs" />Analyze {{ unanalyzed.length }}
-              </button>
-            </div>
+            <!-- The order of work (R10): each step's state, what it needs and costs -->
+            <ol class="library-steps" aria-label="Steps" data-testid="library-steps">
+              <li v-for="(step, i) in steps" :key="step.id" class="library-step" :data-state="step.state" :data-testid="`step-${step.id}`">
+                <span class="step-mark" aria-hidden="true">
+                  <Check v-if="step.state === 'done'" :size="12" :stroke-width="3" /><template v-else>{{ i + 1 }}</template>
+                </span>
+                <span class="min-w-0">
+                  <span class="block text-sm font-medium leading-snug">
+                    <button v-if="step.id === 'review' || step.id === 'cite'" class="link link-hover" @click="view = step.id === 'review' ? 'reviews' : 'write'">{{ step.label }}</button>
+                    <template v-else>{{ step.label }}</template>
+                    <span v-if="step.done !== null" class="ml-1 font-normal text-base-content/65 tabular-nums">{{ step.done }} of {{ step.total }}</span>
+                  </span>
+                  <span class="block text-xs text-base-content/60 leading-snug">{{ step.hint }}</span>
+                  <span v-if="step.id === 'analyze' && step.action" class="mt-1 inline-block" data-testid="research-analyze-banner">
+                    <button class="btn btn-xs btn-primary text-xs" :disabled="analyzing" @click="analyzeNew()">
+                      <span v-if="analyzing" class="loading loading-spinner loading-xs" />{{ step.action }}
+                    </button>
+                  </span>
+                </span>
+              </li>
+            </ol>
 
             <!-- Screen by question -->
             <form class="flex flex-wrap gap-2" @submit.prevent="screen">
@@ -67,10 +78,10 @@
               </datalist>
               <button class="btn btn-sm" :disabled="!canScreen || screening" :title="screenHint">
                 <span v-if="screening" class="loading loading-spinner loading-xs" />
-                Screen {{ screenTargets.length }} {{ selectionCount ? 'selected' : '' }} source{{ screenTargets.length === 1 ? '' : 's' }}
+                {{ screenLabel }}
               </button>
             </form>
-            <p v-if="screenHint && question.trim()" class="text-xs text-base-content/55 -mt-1">{{ screenHint }}</p>
+            <p v-if="screenHint && question.trim()" class="text-xs text-base-content/65 -mt-1">{{ screenHint }}</p>
 
             <div class="flex flex-wrap items-center gap-2 text-xs">
               <input v-model="filter" class="input input-bordered input-xs w-48" placeholder="Filter by title, author, year" aria-label="Filter sources" />
@@ -128,20 +139,22 @@
                     </template>
                     <template v-else>Not analyzed</template>
                     <span v-if="p.analyzed && p.missing?.length" class="text-warning" :title="`A citation of this source lacks: ${missingLabel(p.missing)}. Open it to add.`"> · cite: no {{ missingLabel(p.missing) }}</span>
-                    <span v-if="p.title && p.filename !== p.suggested_filename" class="text-base-content/40"> · {{ p.filename }}</span>
+                    <span v-if="p.title && p.filename !== p.suggested_filename" class="text-base-content/50"> · {{ p.filename }}</span>
                   </span>
                   <span v-if="verdicts[p.document_id]?.evidence?.[0]" class="block text-xs text-base-content/70 mt-1 line-clamp-2">
-                    “{{ verdicts[p.document_id].evidence[0].quote }}” <span class="text-base-content/45">p. {{ verdicts[p.document_id].evidence[0].page }}</span>
+                    “{{ verdicts[p.document_id].evidence[0].quote }}” <span class="text-base-content/55">p. {{ verdicts[p.document_id].evidence[0].page }}</span>
                   </span>
                 </button>
                 <div class="flex flex-col items-end gap-1 shrink-0 text-xs">
                   <span v-if="verdicts[p.document_id]" class="badge badge-sm" :class="VERDICTS[verdicts[p.document_id].verdict]?.tone">
                     {{ VERDICTS[verdicts[p.document_id].verdict]?.label }}
                   </span>
-                  <span class="text-base-content/45 tabular-nums space-x-2">
-                    <span v-if="p.unread_reviews" class="text-primary">● review</span>
-                    <span v-if="p.cited_by" :title="`Cited by ${p.cited_by} of your sources`">↖ {{ p.cited_by }}</span>
-                    <span v-if="p.references" :title="`${p.references} references`">≡ {{ p.references }}</span>
+                  <span class="text-base-content/60 tabular-nums text-right">
+                    <button v-if="p.unread_reviews" class="link link-hover text-primary" @click="view = 'reviews'">Unread review</button>
+                    <span v-if="p.unread_reviews && (p.cited_by || p.references)"> · </span>
+                    <span v-if="p.cited_by" :title="`Cited by ${p.cited_by} of your sources`">cited by {{ p.cited_by }}</span>
+                    <span v-if="p.cited_by && p.references"> · </span>
+                    <span v-if="p.references" :title="`${p.references} references`">{{ p.references }} ref{{ p.references === 1 ? '' : 's' }}</span>
                   </span>
                 </div>
               </li>
@@ -252,14 +265,17 @@
 </template>
 
 <script setup>
-import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
-import { Library, ListChecks, Network, NotebookPen, Quote } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { Check, Library, ListChecks, Network, NotebookPen, Quote } from 'lucide-vue-next'
 import ResearchPaperPanel from './ResearchPaperPanel.vue'
 import ResearchReviews from './ResearchReviews.vue'
 import ResearchWriting from './ResearchWriting.vue'
+import { lazyView } from '../utils/lazyView'
+import { librarySteps } from '../utils/libraryFlow.js'
 
 // The map brings the canvas force graph; load it only when the map is opened.
-const ResearchMap = defineAsyncComponent(() => import('./ResearchMap.vue'))
+// lazyView says what is loading, and offers Try again if the chunk fails (F19).
+const ResearchMap = lazyView(() => import('./ResearchMap.vue'), { name: 'Citation map' })
 import { researchApi, VERDICTS, authorsShort } from '../utils/researchApi.js'
 import { createJobPoller, finishNotice } from '../utils/researchJobs.js'
 import { useModal } from '../composables/useModal'
@@ -272,10 +288,10 @@ import { useSelectionStore } from '../stores/selectionStore'
 
 const views = [
   // The tab itself is the Library; its first view is the list of papers.
-  { id: 'library', label: 'Papers', icon: Library },
-  { id: 'map', label: 'Citation map', icon: Network },
-  { id: 'reviews', label: 'Reviews', icon: NotebookPen },
-  { id: 'write', label: 'Cite & check', icon: Quote },
+  { id: 'library', label: 'Papers', short: 'Papers', icon: Library },
+  { id: 'map', label: 'Citation map', short: 'Map', icon: Network },
+  { id: 'reviews', label: 'Reviews', short: 'Reviews', icon: NotebookPen },
+  { id: 'write', label: 'Cite & check', short: 'Cite', icon: Quote },
 ]
 
 const collectionStore = useCollectionStore()
@@ -309,6 +325,8 @@ const sort = ref('recent')
 const question = ref('')
 const pastQuestions = ref([])
 const verdicts = ref({})
+// The question the verdicts above answer: they lag a typed question by a request.
+const verdictsFor = ref('')
 const analyzing = ref(false)
 const screening = ref(false)
 const renameOpen = ref(false)
@@ -353,6 +371,7 @@ async function loadVerdicts() {
     if (mine !== verdictsSeq) return
     pastQuestions.value = data.questions || []
     verdicts.value = q ? Object.fromEntries((data.items || []).map(i => [i.document_id, i])) : {}
+    verdictsFor.value = q
     if (q && Object.keys(verdicts.value).length) sort.value = 'verdict'
   } catch { /* the reading list is an extra */ }
 }
@@ -410,7 +429,27 @@ const shown = computed(() => {
   return [...list].sort(by[sort.value] || by.recent)
 })
 
-const screenTargets = computed(() => scopeIds.value)
+// Screening skips sources already screened for this question (R10); when
+// every one has been, Screen asks them all again.
+const currentVerdicts = computed(() => (question.value.trim() && verdictsFor.value === question.value.trim() ? verdicts.value : {}))
+const alreadyScreened = computed(() => scopeIds.value.filter(id => currentVerdicts.value[id]))
+const screenTargets = computed(() => {
+  if (!question.value.trim()) return scopeIds.value
+  const fresh = scopeIds.value.filter(id => !currentVerdicts.value[id])
+  return fresh.length ? fresh : scopeIds.value
+})
+const screenLabel = computed(() => {
+  const n = screenTargets.value.length
+  const noun = `source${n === 1 ? '' : 's'}`
+  if (question.value.trim() && alreadyScreened.value.length) {
+    return alreadyScreened.value.length === scopeIds.value.length ? `Screen all ${n} again` : `Screen ${n} more ${noun}`
+  }
+  return `Screen ${n} ${selectionCount.value ? 'selected ' : ''}${noun}`
+})
+const steps = computed(() => librarySteps({
+  papers: scoped.value, question: question.value, screened: Object.keys(currentVerdicts.value),
+  hasModel: Boolean(providerId.value), canWrite: canWrite.value,
+}))
 const canScreen = computed(() => canWrite.value && providerId.value && question.value.trim().length >= 3 && screenTargets.value.length)
 const screenHint = computed(() => {
   if (!providerId.value) return 'Screening needs a model (Settings). Open a source to see where it discusses your question without one.'
@@ -551,3 +590,14 @@ async function renameSelected() {
   }
 }
 </script>
+
+<style scoped>
+/* The four steps read as one line of progress, not as cards: a numbered
+   mark, the step and its count, and what it needs. */
+.library-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem 1rem; padding-block: 0.25rem; }
+@media (min-width: 48rem) { .library-steps { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.library-step { display: flex; align-items: flex-start; gap: 0.5rem; min-width: 0; }
+.step-mark { display: inline-grid; place-items: center; flex-shrink: 0; width: 1.25rem; height: 1.25rem; margin-top: 0.0625rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; border: 1.5px solid color-mix(in oklch, var(--color-base-content) 30%, transparent); color: color-mix(in oklch, var(--color-base-content) 70%, transparent); }
+.library-step[data-state='partial'] .step-mark { border-color: var(--color-primary); color: var(--color-primary); }
+.library-step[data-state='done'] .step-mark { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-primary-content); }
+</style>
