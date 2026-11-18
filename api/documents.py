@@ -120,6 +120,16 @@ def _is_policy_refusal(error: Exception) -> bool:
     return isinstance(error, (BlockedContentError, ContentRejectedError))
 
 
+def _is_unreadable_file(error: Exception) -> bool:
+    """The file itself cannot be read: damaged, not the format its name says,
+    or over a parsing limit. The caller's problem, so never a 500."""
+    from services.extract_sandbox import ExtractionLimitExceeded
+    from services.format_readers import ArchiveLimitError
+    from services.pra.readers.base import PraFormatError
+
+    return isinstance(error, (PraFormatError, ArchiveLimitError, ExtractionLimitExceeded))
+
+
 def _upload_size(file: UploadFile) -> int:
     """Bytes of an upload before it is written anywhere.
 
@@ -242,6 +252,7 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
     failed_docs = []
     policy_refusals = 0
     storage_refusals = 0
+    unreadable_files = 0
     total_pages = 0
     total_chunks = 0
     uploaded_by = get_request_user()
@@ -299,6 +310,9 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
             elif _is_policy_refusal(e):
                 policy_refusals += 1
                 logger.warning(f"Refused {file.filename}: {e}")
+            elif _is_unreadable_file(e):
+                unreadable_files += 1
+                logger.warning(f"Could not read {file.filename}: {e}")
             else:
                 logger.error(f"Failed to index {file.filename}: {e}")
             failed_docs.append({"filename": file.filename, "error": str(e)})
@@ -325,7 +339,7 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
         raise HTTPException(
             status_code=(
                 422
-                if policy_refusals + storage_refusals == len(failed_docs)
+                if policy_refusals + storage_refusals + unreadable_files == len(failed_docs)
                 else status.HTTP_500_INTERNAL_SERVER_ERROR
             ),
             detail=f"All files failed to index. Errors: {error_details}",

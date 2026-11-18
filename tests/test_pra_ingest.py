@@ -184,6 +184,16 @@ def test_mard_sql_alone_is_a_model(env):
 def test_a_damaged_mard_file_fails_with_the_readers_reason(env):
     client, indexer = env
     r = _upload(client, "broken.ftl", b"<#macro page>not a fault tree</#macro>")
-    assert r.status_code != 201
+    # The caller's file is at fault, so it is a 422, never a 500.
+    assert r.status_code == 422, r.text
     assert "broken.ftl does not read as a SAPHIRE MAR-D .FTL file" in r.json()["detail"]
     assert not indexer.vector_store.structured_store.list_tables()
+
+
+def test_a_damaged_file_is_a_422_through_the_extraction_helper_too(env, monkeypatch):
+    """The helper reports errors by class name; a reader's refusal must keep its type."""
+    client, _ = env
+    monkeypatch.setattr(config.settings, "extract_isolation", True)
+    r = _upload(client, "notes.bei", b"Just some notes about the pump\nno header here\n")
+    assert r.status_code == 422, r.text
+    assert "notes.bei does not read as a SAPHIRE MAR-D .BEI file" in r.json()["detail"]

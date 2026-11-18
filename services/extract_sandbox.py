@@ -59,6 +59,18 @@ _STARTUP_TIMEOUT_SECONDS = 60
 _UNAVAILABLE_BACKOFF_SECONDS = 300
 
 
+def _unreadable_file_errors() -> dict:
+    """Exception types that mean "this file cannot be read", by class name.
+
+    The helper reports an error as its class name and message; these are
+    rebuilt as themselves so callers can tell a bad file from a bug.
+    """
+    from services.format_readers import ArchiveLimitError
+    from services.pra.readers.base import PraFormatError
+
+    return {"ArchiveLimitError": ArchiveLimitError, "PraFormatError": PraFormatError}
+
+
 class ExtractionLimitExceeded(ValueError):
     """A file whose parse ran out of time or memory, or crashed its parser."""
 
@@ -213,8 +225,11 @@ def _helper_main(argv: List[str]) -> None:
             if _near_cap(cap):
                 answer({"ok": False, "type": "MemoryError", "error": str(e)})
                 return
-            kind = "ValueError" if isinstance(e, ValueError) else (
-                "ImportError" if isinstance(e, ImportError) else "Exception")
+            if type(e).__name__ in _unreadable_file_errors():
+                kind = type(e).__name__  # rebuilt as itself on the server side
+            else:
+                kind = "ValueError" if isinstance(e, ValueError) else (
+                    "ImportError" if isinstance(e, ImportError) else "Exception")
             answer({"ok": False, "type": kind, "error": str(e)})
 
 
@@ -401,6 +416,11 @@ def run(task: str, path: Path, in_process: Callable[[], T]) -> T:
                 f"was stopped (EXTRACT_MEMORY_LIMIT_MB)."
             )
         keep = True  # an ordinary parse error leaves the helper fine
+        unreadable = _unreadable_file_errors().get(kind)
+        if unreadable is not None:
+            # The file itself is at fault: keep the type, so the upload can say
+            # so (422) instead of reporting a server failure.
+            raise unreadable(error)
         if kind == "ValueError":
             raise ValueError(error)
         if kind == "ImportError":
