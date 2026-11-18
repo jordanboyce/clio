@@ -207,7 +207,11 @@ _SERVER_INSTRUCTIONS = (
     "search_collection for one quick lookup, find_in_documents for exact strings, "
     "and get_document_context to read the surrounding text before quoting. For "
     "counts, sums, filters, or rankings over CSV/XLSX data use list_tables and the "
-    "table tools, never passage search. Cite filename and page from the results "
+    "table tools, never passage search. For PRA models (SAPHIRE or Open-PSA fault "
+    "and event trees) start with pra_models, then pra_fault_tree, pra_cut_sets, "
+    "pra_importance and pra_event; their numbers are a screening estimate from the "
+    "cut sets and the PRA tool's own quantification governs. "
+    "Cite filename and page from the results "
     "and say what the sources do not establish. Responses carry a corpus_version "
     "per collection; if it changes between calls, evidence fetched earlier may be "
     "stale. " + _RESEARCH_INSTRUCTIONS + " " + authored_text.MCP_RULE + " "
@@ -3182,6 +3186,136 @@ def _document_metadata_payload(collection_id: str, doc_info: dict[str, Any]) -> 
             collection_service.get_collection(collection_id), doc_info.get("sensitivity")
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# PRA models — fault trees, event trees, cut sets (services/pra/queries.py,
+# shared with the REST API in api/pra.py)
+# ---------------------------------------------------------------------------
+
+_PRA_MAX_LIMIT = 100
+_PRA_MAX_DEPTH = 6
+
+
+def _pra_document(collection_id: str | None, document_id: str):
+    """(collection id, metadata row, model) for a PRA document the caller may see."""
+    from services.pra import queries as pra_queries
+
+    resolved = _resolve_collection_id(collection_id)
+    doc_info = _visible_document_info(resolved, document_id)
+    if not pra_queries.is_pra_document(doc_info):
+        raise ValueError(f"Document '{document_id}' is not a PRA model. Call pra_models() to list them.")
+    try:
+        model = pra_queries.model_for(indexer_manager.get_indexer(resolved), doc_info)
+    except pra_queries.PraQueryError as e:
+        raise ValueError(str(e)) from e
+    return resolved, doc_info, model
+
+
+def _pra_payload(tool: str, collection_id: str | None, document_id: str, build) -> dict[str, Any]:
+    from services.pra import queries as pra_queries
+
+    resolved, doc_info, model = _pra_document(collection_id, document_id)
+    try:
+        view = build(doc_info, model)
+    except pra_queries.PraQueryError as e:
+        raise ValueError(str(e)) from e
+    return _tool_response({
+        "collection_id": resolved,
+        "document_id": doc_info.get("document_id"),
+        "filename": doc_info.get("filename"),
+        **view,
+        "notice": pra_queries.NOTICE,
+    }, tool)
+
+
+@_threaded_tool(title="PRA models", annotations=_read_only("PRA models"))
+def pra_models(collection_id: str | None = None, document_id: str | None = None) -> dict[str, Any]:
+    """List the PRA models (fault tree / event tree files) in a collection, or summarise one.
+
+    Without document_id: each model's document_id, name, counts and reader warnings.
+    With document_id: its fault trees, event trees, end states and stored cut set lists.
+    """
+    from services.pra import queries as pra_queries
+
+    if document_id:
+        return _pra_payload("pra_models", collection_id, document_id,
+                            pra_queries.model_summary)
+    resolved = _resolve_collection_id(collection_id)
+    indexer = indexer_manager.get_indexer(resolved)
+    docs = _visible_documents(indexer.vector_store.metadata_store.list_documents())
+    return _tool_response({
+        "collection_id": resolved,
+        "models": pra_queries.list_models(indexer, docs),
+        "notice": pra_queries.NOTICE,
+    }, "pra_models")
+
+
+@_threaded_tool(title="PRA fault tree", annotations=_read_only("PRA fault tree"))
+def pra_fault_tree(
+    document_id: str,
+    tree: str,
+    depth: Annotated[int, Field(ge=1, le=_PRA_MAX_DEPTH)] = 3,
+    collection_id: str | None = None,
+) -> dict[str, Any]:
+    """A fault tree's gates and events, nested `depth` gate levels deep.
+
+    Deeper gates carry more=true (call again with that gate as `tree`); another
+    tree's top appears as a transfer. Example: tree="AFW-FT", depth=2.
+    """
+    from services.pra import queries as pra_queries
+
+    return _pra_payload("pra_fault_tree", collection_id, document_id,
+                        lambda _doc, model: pra_queries.fault_tree_view(model, tree, depth))
+
+
+@_threaded_tool(title="PRA cut sets", annotations=_read_only("PRA cut sets"))
+def pra_cut_sets(
+    document_id: str,
+    context: str,
+    limit: Annotated[int, Field(ge=1, le=_PRA_MAX_LIMIT)] = 20,
+    compute: bool = False,
+    collection_id: str | None = None,
+) -> dict[str, Any]:
+    """The cut sets of a fault tree, sequence or end state, most probable first, quantified.
+
+    Each has its probability and share; totals by rare-event sum and MCUB. compute=true
+    generates them for a fault tree or gate when the model stores none (source "computed").
+    """
+    from services.pra import queries as pra_queries
+
+    return _pra_payload("pra_cut_sets", collection_id, document_id,
+                        lambda _doc, model: pra_queries.cut_sets_view(model, context, limit=limit, compute=compute))
+
+
+@_threaded_tool(title="PRA importance", annotations=_read_only("PRA importance"))
+def pra_importance(
+    document_id: str,
+    context: str,
+    limit: Annotated[int, Field(ge=1, le=_PRA_MAX_LIMIT)] = 20,
+    sort: Literal["fv", "raw", "rrw", "birnbaum"] = "fv",
+    compute: bool = False,
+    collection_id: str | None = None,
+) -> dict[str, Any]:
+    """Fussell-Vesely, RAW, RRW and Birnbaum importance of each event in a context's cut sets.
+
+    Same contexts and compute flag as pra_cut_sets; sort picks the measure to rank by.
+    """
+    from services.pra import queries as pra_queries
+
+    return _pra_payload("pra_importance", collection_id, document_id,
+                        lambda _doc, model: pra_queries.importance_view(model, context, limit=limit, sort=sort,
+                                                                  compute=compute))
+
+
+@_threaded_tool(title="PRA event", annotations=_read_only("PRA event"))
+def pra_event(document_id: str, name: str, collection_id: str | None = None) -> dict[str, Any]:
+    """One basic, house or initiating event (or gate): its data, the gates and sequences
+    using it, and how many stored cut sets contain it."""
+    from services.pra import queries as pra_queries
+
+    return _pra_payload("pra_event", collection_id, document_id,
+                        lambda _doc, model: pra_queries.event_view(model, name))
 
 
 # ---------------------------------------------------------------------------
