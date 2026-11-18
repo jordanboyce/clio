@@ -146,6 +146,13 @@ def _check_security_posture() -> None:
             f" (model {settings.ai_model})" if settings.ai_model else "",
         )
 
+    # Which model endpoints a chat request may name. Unset, this follows the
+    # bind (services/ai_service.allowed_base_urls), so the line says what it
+    # decided and why.
+    from services.ai_service import allowed_base_urls_log_line
+
+    logger.info(allowed_base_urls_log_line(settings))
+
     # Inside Docker HOST is always 0.0.0.0; readiness also looks at the
     # published interface (BIND_ADDRESS) so a loopback-only container does
     # not warn about a network it is not on.

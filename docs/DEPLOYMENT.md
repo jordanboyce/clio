@@ -80,6 +80,12 @@ revoke one person without changing the password for all, and it keeps no record
 of who did what. Agents should use [personal MCP tokens](#mcp-clients) rather
 than the shared password.
 
+Once the server is reachable from the network, a chat request can no longer
+point the server's model calls at an address of its own choosing: only
+`AI_BASE_URL` and `OLLAMA_BASE_URL` are called, and the startup log says so.
+List other endpoints people may pick in `AI_ALLOWED_BASE_URLS`, or set it to
+`any` for the old open behaviour. A loopback-only install is unaffected.
+
 Over plain `http://` on a trusted LAN this works, but the password crosses the
 wire in the clear. Prefer shape C, or a private network (shape D), as soon as
 anyone is not sitting in the same room.

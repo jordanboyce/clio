@@ -1236,26 +1236,70 @@ def _under(url_identity: str, entry_identity: str) -> bool:
     )
 
 
+_ANY_BASE_URL = ("any", "*")
+
+
+def allowed_base_urls(cfg=None) -> str:
+    """The AI_ALLOWED_BASE_URLS rule in force: "any", "none" or a list.
+
+    Unset means automatic: any endpoint while only this machine can reach the
+    port (a one-person install pointing its browser at LM Studio, say), and
+    only the operator's own endpoints once the server is reachable from the
+    network, where anyone who can chat could otherwise make it call into
+    that network (E3). "any" (or "*") keeps the old open behaviour there.
+    """
+    if cfg is None:
+        from config import settings as cfg
+    raw = (cfg.ai_allowed_base_urls or "").strip()
+    if raw.lower() in _ANY_BASE_URL:
+        return "any"
+    if raw:
+        return "none" if raw.lower() == "none" else raw
+    from services.readiness import reachable_beyond_host
+
+    return "none" if reachable_beyond_host(cfg) else "any"
+
+
+def allowed_base_urls_log_line(cfg=None) -> str:
+    """What the startup log says about the rule, for the operator."""
+    if cfg is None:
+        from config import settings as cfg
+    rule = allowed_base_urls(cfg)
+    explicit = bool((cfg.ai_allowed_base_urls or "").strip())
+    if rule == "any":
+        why = "AI_ALLOWED_BASE_URLS allows any" if explicit else             "only this machine can reach the server and AI_ALLOWED_BASE_URLS is not set"
+        return f"Model endpoints: a request may send model calls to any address it names ({why})."
+    if rule == "none":
+        why = "AI_ALLOWED_BASE_URLS=none" if explicit else (
+            "the server is reachable from the network and AI_ALLOWED_BASE_URLS is not set. "
+            "List the endpoints people may choose in AI_ALLOWED_BASE_URLS, or set it to any"
+        )
+        return ("Model endpoints: a request may only send model calls to this server's own "
+                f"AI_BASE_URL and OLLAMA_BASE_URL ({why}).")
+    return ("Model endpoints: a request may send model calls to AI_BASE_URL, OLLAMA_BASE_URL "
+            f"and the endpoints in AI_ALLOWED_BASE_URLS ({rule}).")
+
+
 def base_url_allowed(provider_name: str, base_url) -> bool:
     """May a request send model calls to ``base_url``?
 
     The call is made by the server, so a request that picks the endpoint
     (X-AI-Base-URL, even with its own key) can make this server send
     requests into its own network. AI_ALLOWED_BASE_URLS lets an operator
-    close that: empty allows any endpoint, "none" only the operator's own
-    AI_BASE_URL and OLLAMA_BASE_URL (always allowed), and a list those plus
-    each entry and any path beneath it.
+    close that (``allowed_base_urls``): "any" allows any endpoint, "none"
+    only the operator's own AI_BASE_URL and OLLAMA_BASE_URL (always
+    allowed), and a list those plus each entry and any path beneath it.
     """
     if not (base_url or "").strip() or provider_name not in _BASE_URL_PROVIDERS:
         return True
     from config import settings
 
-    raw = (settings.ai_allowed_base_urls or "").strip()
-    if not raw:
+    raw = allowed_base_urls(settings)
+    if raw == "any":
         return True
     wanted = _endpoint_identity(base_url)
     own = [settings.ai_base_url, settings.ollama_base_url]
-    entries = [] if raw.lower() == "none" else [e for e in raw.split(",") if e.strip()]
+    entries = [] if raw == "none" else [e for e in raw.split(",") if e.strip()]
     return any(_under(wanted, _endpoint_identity(e)) for e in own + entries)
 
 
@@ -1333,8 +1377,9 @@ def create_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProv
         )
     if not base_url_allowed(provider_name, base_url):
         raise ValueError(
-            "This server only sends model requests to the endpoints its operator "
-            "allowed (AI_ALLOWED_BASE_URLS); that base URL is not one of them."
+            "This server only sends model requests to the endpoints its administrator "
+            "allowed, and that address is not one of them. Use the server's own model, "
+            "or ask the administrator to allow the address."
         )
     provider = _build_provider(provider_name, api_key, **kwargs)
     _, resolved = apply_deployment_defaults(provider_name, api_key, kwargs)

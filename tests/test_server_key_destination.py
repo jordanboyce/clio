@@ -225,12 +225,12 @@ def test_a_caller_endpoint_outside_the_allowlist_is_never_called(deployment, att
 
     url, seen = attacker
     monkeypatch.setattr(settings, "ai_allowed_base_urls", "none")
-    with pytest.raises(ValueError, match="AI_ALLOWED_BASE_URLS"):
+    with pytest.raises(ValueError, match="endpoints its administrator allowed"):
         create_provider("openai_compatible", "sk-mine", base_url=f"{url}/v1", model="m")
     with pytest.raises(HTTPException) as refused:
         chat._build_provider("openai", "sk-mine", None, None, None, None, f"{url}/v1")
     assert refused.value.status_code == 400
-    with pytest.raises(ValueError, match="AI_ALLOWED_BASE_URLS"):
+    with pytest.raises(ValueError, match="endpoints its administrator allowed"):
         create_provider("ollama", base_url=url)
     assert seen == []
     # The operator's own endpoint still works, and so does a listed one.
@@ -251,3 +251,65 @@ def test_secure_profile_allows_only_the_operators_endpoint(monkeypatch):
     monkeypatch.delenv("CLIO_PROFILE")
     monkeypatch.delenv("AI_ALLOWED_BASE_URLS")
     assert config.Settings().ai_allowed_base_urls == ""
+
+
+# Unset, the rule follows the bind (E3): open while only this machine can reach
+# the port, the operator's own endpoints once the network can.
+
+@pytest.mark.parametrize("host, bind, expected", [
+    ("127.0.0.1", "", "any"),            # bare metal, the default
+    ("0.0.0.0", "127.0.0.1", "any"),     # container published on loopback only
+    ("0.0.0.0", "", "none"),             # container or server on the network
+    ("10.0.0.5", "", "none"),
+])
+def test_unset_allowlist_follows_the_bind(monkeypatch, host, bind, expected):
+    from config import settings
+    from services.ai_service import allowed_base_urls
+
+    monkeypatch.setattr(settings, "ai_allowed_base_urls", "")
+    monkeypatch.setattr(settings, "host", host)
+    monkeypatch.setattr(settings, "bind_address", bind)
+
+    assert allowed_base_urls(settings) == expected
+
+
+def test_a_network_server_refuses_a_chosen_endpoint_unless_any_is_set(monkeypatch):
+    from config import settings
+    from services.ai_service import base_url_allowed
+
+    monkeypatch.setattr(settings, "ai_base_url", "http://gateway.corp:8000/v1")
+    monkeypatch.setattr(settings, "host", "0.0.0.0")
+    monkeypatch.setattr(settings, "bind_address", "")
+    monkeypatch.setattr(settings, "ai_allowed_base_urls", "")
+    assert not base_url_allowed("openai_compatible", "http://169.254.169.254/latest")
+    assert base_url_allowed("openai_compatible", "http://gateway.corp:8000")      # its own endpoint
+
+    for value in ("any", "*", "ANY"):
+        monkeypatch.setattr(settings, "ai_allowed_base_urls", value)
+        assert base_url_allowed("openai_compatible", "http://169.254.169.254/latest")
+
+
+def test_the_startup_line_says_what_was_decided_and_why(monkeypatch):
+    from config import settings
+    from services.ai_service import allowed_base_urls_log_line
+
+    monkeypatch.setattr(settings, "ai_allowed_base_urls", "")
+    monkeypatch.setattr(settings, "host", "0.0.0.0")
+    monkeypatch.setattr(settings, "bind_address", "")
+    line = allowed_base_urls_log_line(settings)
+    assert "only" in line and "reachable from the network" in line and "AI_ALLOWED_BASE_URLS" in line
+
+    monkeypatch.setattr(settings, "host", "127.0.0.1")
+    assert "any address" in allowed_base_urls_log_line(settings)
+
+    monkeypatch.setattr(settings, "ai_allowed_base_urls", "https://llm.corp.example")
+    assert "https://llm.corp.example" in allowed_base_urls_log_line(settings)
+
+
+def test_the_refusal_names_no_setting(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "ai_allowed_base_urls", "none")
+    with pytest.raises(ValueError) as refused:
+        create_provider("openai_compatible", "sk-mine", base_url="http://10.1.2.3/v1", model="m")
+    assert "AI_ALLOWED" not in str(refused.value) and "=" not in str(refused.value)
