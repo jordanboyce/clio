@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "description": "Synthetic quality-system records of a fictional aerospace machining supplier (Corvane Precision) and its fictional customer (Aldermark Aerospace). Built for revision-aware retrieval: procedures and work instructions exist in a superseded and a current revision, an informal shift note contradicts the current work instruction, sibling part and NCR numbers sit close together, and a supplier deviation covers some lots but not others. Every passage is one chunk with id '<doc>#<n>' (1-based). `superseded_by` marks a document an owner has recorded as replaced, exactly as POST /documents/{id}/supersede would. Standards (AS9100, AS9102, AMS 2750) are named only as the procedures' own references; every number in these records is invented and is not a statement of what any standard requires. Bump `version` whenever a passage or a mark changes.",
+  "documents": [
+    {
+      "id": "qp-87-rev-c",
+      "filename": "QP-8.7 Control of Nonconforming Output rev C.md",
+      "format": "md",
+      "superseded_by": "qp-87-rev-d",
+      "passages": [
+        "Corvane Precision quality procedure QP-8.7, Control of Nonconforming Output, revision C. Effective 2025-03-01. Owner: Quality Manager. Applies to all machined and assembled product, purchased material and customer-supplied property found not to conform to drawing, specification or purchase order requirements.",
+        "QP-8.7 rev C, identification and segregation. Any operator or inspector who finds nonconforming product attaches a red HOLD tag and moves the product to the Material Review Board (MRB) cage within 4 hours of discovery. Product with a red tag may not be moved out of the cage except by quality.",
+        "QP-8.7 rev C, disposition. The MRB dispositions every nonconformance report (NCR) within 10 working days of the NCR being opened. Allowed dispositions are use-as-is, repair, rework, scrap and return to supplier. Use-as-is and repair require customer approval only where the customer contract says so.",
+        "QP-8.7 rev C, records. NCRs are numbered NCR-YYYY-NNNN in the order they are opened. NCR records, including photographs and dispositions, are retained for 7 years after the NCR is closed."
+      ]
+    },
+    {
+      "id": "qp-87-rev-d",
+      "filename": "QP-8.7 Control of Nonconforming Output rev D.md",
+      "format": "md",
+      "passages": [
+        "Corvane Precision quality procedure QP-8.7, Control of Nonconforming Output, revision D. Effective 2026-06-15; replaces revision C. Summary of changes: disposition time cut from 10 to 5 working days; written customer approval now required for use-as-is and repair on every Aldermark part; escapes must be reported to the customer within 24 hours; record retention extended to 10 years.",
+        "QP-8.7 rev D, identification and segregation. Nonconforming product gets a red HOLD tag and is moved to the MRB cage within 2 hours of discovery. If product cannot be moved (fixtured assemblies, large castings) the area is roped off and quality is called immediately.",
+        "QP-8.7 rev D, disposition. The Material Review Board dispositions every NCR within 5 working days of the NCR being opened. The board is the quality engineer and the manufacturing engineer for the part; for customer-owned designs it also includes the customer's authorised representative. An NCR not dispositioned in 5 working days is escalated to the Quality Manager.",
+        "QP-8.7 rev D, customer approval. Use-as-is and repair dispositions on any Aldermark Aerospace part need written customer approval on an Aldermark Supplier Deviation Request (SDR) before the product ships. Rework to drawing and scrap do not need customer approval.",
+        "QP-8.7 rev D, escapes. When nonconforming product may already have shipped, quality notifies the customer within 24 hours of discovery, opens containment at the customer's dock and at Corvane, and records the escape on the NCR.",
+        "QP-8.7 rev D, records. NCR records are retained for 10 years after the last shipment of the affected part number."
+      ]
+    },
+    {
+      "id": "wi-2140-rev-f",
+      "filename": "WI-2140 Bracket assembly 7731-204 rev F.md",
+      "format": "md",
+      "superseded_by": "wi-2140-rev-g",
+      "passages": [
+        "Work instruction WI-2140, Bracket assembly P/N 7731-204, revision F. Effective 2025-11-03. Cell 4. Assembles the 7731-204 bracket to its mounting plate with four NAS1352 socket head cap screws.",
+        "WI-2140 rev F, fastener torque. Torque the four NAS1352 screws on the 7731-204 bracket to 28 in-lb ±2 in-lb in a crosswise sequence, using a calibrated click torque wrench (TW-08 or equivalent). Apply a red torque stripe across each screw head and the plate after torquing.",
+        "WI-2140 rev F, inspection. The operator verifies torque on the first assembly of each lot; the inspector verifies one assembly in twenty after that and records the results on the traveler."
+      ]
+    },
+    {
+      "id": "wi-2140-rev-g",
+      "filename": "WI-2140 Bracket assembly 7731-204 rev G.md",
+      "format": "md",
+      "passages": [
+        "Work instruction WI-2140, Bracket assembly P/N 7731-204, revision G. Effective from lot 2611 onward, per ECN-0419. Replaces revision F. Cell 4.",
+        "WI-2140 rev G, fastener torque. Torque the four NAS1352 screws on the 7731-204 bracket to 32 in-lb ±2 in-lb in a crosswise sequence, using a calibrated click torque wrench. Apply a yellow torque stripe across each screw head and the plate; the red stripe of revision F is no longer used.",
+        "WI-2140 rev G, inspection. Verify torque on the first five assemblies of every lot, then one assembly in ten. Record the torque wrench ID and its calibration due date on the traveler for every lot."
+      ]
+    },
+    {
+      "id": "ecn-0419",
+      "filename": "ECN-0419 Torque change 7731-204.md",
+      "format": "md",
+      "passages": [
+        "Engineering Change Notice ECN-0419. Part number 7731-204 bracket assembly. Reason: Aldermark Aerospace released drawing 7731-204 revision L, which raises the mounting screw torque from 28 ±2 in-lb (drawing revision K) to 32 ±2 in-lb after a vibration test finding.",
+        "ECN-0419 effectivity. The change applies to lot 2611 and every later lot. Lots 2610 and earlier were built to drawing revision K and are not reworked unless Aldermark asks for it. WI-2140 is revised from F to G to match.",
+        "ECN-0419 verification. A partial (delta) first article inspection to AS9102 is required for the changed torque characteristic on the first lot built to revision L. ECN-0419 was approved by R. Okafor, Quality Manager, and T. Lindqvist, Manufacturing Engineering Lead, on 2026-08-04."
+      ]
+    },
+    {
+      "id": "cell4-shift-notes",
+      "filename": "Cell 4 shift notes.md",
+      "format": "md",
+      "passages": [
+        "Cell 4 shift notes, February 2026. Reminder for the 204 brackets: torque is 28 in-lb, stripe them red. TW-08 lives in the blue cabinet next to the arbor press. Second shift please put it back when you are done.",
+        "Cell 4 shift notes, March 2026. The 240 brackets moved to Cell 6. Coolant on the Haas VF-2 was changed on the 12th. Remember the 5S audit on Friday."
+      ]
+    },
+    {
+      "id": "wi-2155-rev-b",
+      "filename": "WI-2155 Bracket assembly 7731-240 rev B.md",
+      "format": "md",
+      "passages": [
+        "Work instruction WI-2155, Bracket assembly P/N 7731-240, revision B. Cell 6. Assembles the larger 7731-240 bracket with six NAS1352 screws.",
+        "WI-2155 rev B, fastener torque. Torque the six NAS1352 screws on the 7731-240 bracket to 45 in-lb ±3 in-lb, inner pair first and then outward. Apply a white torque stripe."
+      ]
+    },
+    {
+      "id": "sd-2026-017",
+      "filename": "SD-2026-017 Supplier deviation anodize 7731-210.md",
+      "format": "md",
+      "passages": [
+        "Supplier deviation SD-2026-017, approved by Aldermark Aerospace on 2026-04-22. Part number 7731-210 cover plate. Characteristic: Type II anodize coating thickness. Drawing requirement 0.0005 to 0.0008 in.; this deviation accepts 0.0004 to 0.0009 in.",
+        "SD-2026-017 scope and expiry. The deviation covers lots 2604, 2605 and 2606 of P/N 7731-210 only. It expires on 2026-09-30 or when lot 2606 ships, whichever comes first. It does not apply to any other lot or part number, and it does not change the drawing."
+      ]
+    },
+    {
+      "id": "qp-715-rev-e",
+      "filename": "QP-7.1.5 Calibration of measuring equipment rev E.md",
+      "format": "md",
+      "passages": [
+        "Corvane Precision quality procedure QP-7.1.5, Calibration of Monitoring and Measuring Equipment, revision E. Calibration intervals: click torque wrenches every 6 months; calipers and micrometers every 12 months; the coordinate measuring machine (CMM) every 12 months; thread gauges every 24 months.",
+        "QP-7.1.5 rev E, out-of-tolerance and overdue equipment. A gauge found out of tolerance at calibration triggers an impact assessment within 2 working days: quality reviews every lot measured with it since its last good calibration. Equipment past its calibration due date is tagged DO NOT USE and removed from the cell."
+      ]
+    },
+    {
+      "id": "aldermark-sqr-100",
+      "filename": "Aldermark SQR-100 Supplier quality requirements rev 9.md",
+      "format": "md",
+      "passages": [
+        "Aldermark Aerospace SQR-100, Supplier Quality Requirements, revision 9. Flowed down to Corvane Precision on every Aldermark purchase order. First article inspection to AS9102 is required for a new part, after any change in design, manufacturing process, manufacturing location or sub-tier source, and after a lapse of two years in production of the part.",
+        "Aldermark SQR-100 rev 9, records and access. Quality records for Aldermark parts are retained for 10 years after final shipment. Aldermark and its customers have right of access to the supplier's facilities and records on reasonable notice.",
+        "Aldermark SQR-100 rev 9, special processes and key characteristics. Special processes such as anodize, heat treat and non-destructive testing may only be done by Aldermark-approved sources. Key characteristics marked on the drawing need a process capability (Cpk) of at least 1.33 or 100% inspection.",
+        "Aldermark SQR-100 rev 9, notification. The supplier notifies Aldermark within 24 hours of discovering that nonconforming product may have shipped, and before making any change to a process, source or location that affects Aldermark parts."
+      ]
+    },
+    {
+      "id": "qp-851-ht",
+      "filename": "QP-8.5.1-HT Heat treat furnace pyrometry rev A.md",
+      "format": "md",
+      "passages": [
+        "Corvane Precision procedure QP-8.5.1-HT, Heat Treat Furnace Pyrometry, revision A, written against AMS 2750. Furnace F2 is operated as a Class 2 furnace with a temperature uniformity tolerance of ±10 °F set by this procedure.",
+        "QP-8.5.1-HT rev A, test intervals. This procedure sets a temperature uniformity survey (TUS) of furnace F2 every quarter and a system accuracy test (SAT) every month. A failed TUS stops production in the furnace until a passing survey is on file."
+      ]
+    },
+    {
+      "id": "ia-2026-03",
+      "filename": "Internal audit IA-2026-03 Cell 4.md",
+      "format": "md",
+      "passages": [
+        "Internal audit IA-2026-03, Cell 4 assembly, conducted 2026-09-24 by the quality department. Scope: WI-2140 compliance, calibration status of tools in use, and NCR handling for lots 2611 and 2612.",
+        "IA-2026-03 finding 1 (major). Torque wrench TW-08 was in use in Cell 4 on 2026-09-24 although its calibration fell due on 2026-08-30, contrary to QP-7.1.5. Lots 2611 and 2612 were torqued with TW-08. Corrective action CAR-2026-022 opened, due 2026-11-30.",
+        "IA-2026-03 finding 2 (minor). NCR-2026-0141 had been open 12 working days without an MRB disposition, beyond the 5 working days QP-8.7 rev D allows, and had not been escalated to the Quality Manager.",
+        "IA-2026-03 finding 3 (observation). A printed shift note posted in Cell 4 still gives the revision F torque of 28 in-lb for the 7731-204 bracket. Operators interviewed were working to revision G. Recommendation: remove informal notes that restate controlled values."
+      ]
+    },
+    {
+      "id": "ncr-log",
+      "filename": "NCR log 2026.csv",
+      "format": "csv",
+      "columns": ["NCR", "P/N", "lot", "defect", "opened", "disposition", "status"],
+      "passages": [
+        "NCR log 2026 row: NCR-2026-0114 | P/N 7731-240 | lot 2598 | defect: burr on mounting hole edge | opened 2026-05-11 | disposition: rework to drawing | status: closed 2026-05-14",
+        "NCR log 2026 row: NCR-2026-0137 | P/N 7731-210 | lot 2605 | defect: anodize thickness 0.0009 in., above drawing maximum 0.0008 in. | opened 2026-07-02 | disposition: use-as-is under SD-2026-017 | status: closed 2026-07-06",
+        "NCR log 2026 row: NCR-2026-0141 | P/N 7731-204 | lot 2611 | defect: torque stripe missing on 3 of 40 assemblies | opened 2026-09-08 | disposition: pending MRB | status: open",
+        "NCR log 2026 row: NCR-2026-0144 | P/N 7731-204 | lot 2612 | defect: two assemblies measured at 29 in-lb, below the 30 in-lb minimum of rev G | opened 2026-09-15 | disposition: rework, re-torque to rev G | status: closed 2026-09-17",
+        "NCR log 2026 row: NCR-2026-0150 | P/N 7731-210 | lot 2609 | defect: anodize thickness 0.0004 in., below drawing minimum 0.0005 in. | opened 2026-10-01 | disposition: pending, SDR requested from Aldermark | status: open"
+      ]
+    },
+    {
+      "id": "qp-84-rev-h",
+      "filename": "QP-8.4 Control of externally provided processes rev H.md",
+      "format": "md",
+      "passages": [
+        "Corvane Precision quality procedure QP-8.4, Control of Externally Provided Processes, Products and Services, revision H. Only suppliers on the approved supplier list may be used; for Aldermark parts a special-process supplier must also appear on Aldermark's approved source list.",
+        "QP-8.4 rev H, monitoring. Suppliers are scored every quarter on on-time delivery and quality escapes. A supplier scoring below 80 on two consecutive quarters is placed on probation and needs a corrective action plan. Brightline Finishing is the approved Type II anodize source for P/N 7731-210."
+      ]
+    },
+    {
+      "id": "qm-001",
+      "filename": "QM-001 Quality manual rev 12.md",
+      "format": "md",
+      "passages": [
+        "Corvane Precision quality manual QM-001, revision 12. The quality management system is built to AS9100 and covers CNC machining, assembly and inspection of aerospace brackets, covers and fittings at the Corvane plant.",
+        "QM-001 rev 12, document control. Only the revision marked Released in the document control register is valid. When a new revision is released the previous one is marked Obsolete the same day and withdrawn from the shop floor. Printed copies are uncontrolled 24 hours after printing, and informal notes must not restate controlled values such as torques or dimensions."
+      ]
+    },
+    {
+      "id": "doc-register",
+      "filename": "Document control register.csv",
+      "format": "csv",
+      "columns": ["document", "rev", "state", "from", "notes"],
+      "passages": [
+        "Document control register row: QP-8.7 | rev C | Obsolete | released 2025-03-01 | obsoleted 2026-06-15",
+        "Document control register row: QP-8.7 | rev D | Released | released 2026-06-15",
+        "Document control register row: WI-2140 | rev F | Obsolete | released 2025-11-03 | obsoleted at lot 2611",
+        "Document control register row: WI-2140 | rev G | Released | effective lot 2611 | per ECN-0419",
+        "Document control register row: QP-7.1.5 | rev E | Released | released 2024-10-14"
+      ]
+    }
+  ]
+}

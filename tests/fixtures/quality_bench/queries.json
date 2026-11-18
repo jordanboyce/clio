@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "description": "Labelled queries over corpus.json. `relevant` lists labelled units: a document id (any passage counts) or 'doc#n' (only that passage). An empty list marks an unanswerable query. `stale` (revision queries only) lists passages from a superseded revision or an informal note that state an outdated answer: the revision-safety metric counts a query as unsafe when a stale unit ranks above the first relevant one, or when the relevant unit is not retrieved at all. Categories: answerable, identifier, quoted, negation, date, table, revision, unanswerable.",
+  "categories": ["answerable", "identifier", "quoted", "negation", "date", "table", "revision", "unanswerable"],
+  "queries": [
+    {"id": "rev-01", "category": "revision", "query": "What torque do the mounting screws on the 7731-204 bracket get?", "relevant": ["wi-2140-rev-g#2"], "stale": ["wi-2140-rev-f#2", "cell4-shift-notes#1"]},
+    {"id": "rev-02", "category": "revision", "query": "how many working days does MRB have to disposition an NCR", "relevant": ["qp-87-rev-d#3"], "stale": ["qp-87-rev-c#3"]},
+    {"id": "rev-03", "category": "revision", "query": "How long are NCR records kept?", "relevant": ["qp-87-rev-d#6"], "stale": ["qp-87-rev-c#4"]},
+    {"id": "rev-04", "category": "revision", "query": "how quickly must nonconforming product be moved to the MRB cage", "relevant": ["qp-87-rev-d#2"], "stale": ["qp-87-rev-c#2"]},
+    {"id": "rev-05", "category": "revision", "query": "does a use-as-is disposition need customer approval", "relevant": ["qp-87-rev-d#4"], "stale": ["qp-87-rev-c#3"]},
+    {"id": "rev-06", "category": "revision", "query": "what colour torque stripe on 204 brackets", "relevant": ["wi-2140-rev-g#2"], "stale": ["wi-2140-rev-f#2", "cell4-shift-notes#1"]},
+    {"id": "rev-07", "category": "revision", "query": "how often does the inspector verify torque on WI-2140 assemblies", "relevant": ["wi-2140-rev-g#3"], "stale": ["wi-2140-rev-f#3"]},
+    {"id": "rev-08", "category": "revision", "query": "Cell 4 torque wrench and torque value for bracket assembly", "relevant": ["wi-2140-rev-g#2"], "stale": ["wi-2140-rev-f#2", "cell4-shift-notes#1"]},
+
+    {"id": "id-01", "category": "identifier", "query": "ECN-0419", "relevant": ["ecn-0419"]},
+    {"id": "id-02", "category": "identifier", "query": "NCR-2026-0141", "relevant": ["ncr-log#3", "ia-2026-03#3"]},
+    {"id": "id-03", "category": "identifier", "query": "NCR-2026-0114", "relevant": ["ncr-log#1"]},
+    {"id": "id-04", "category": "identifier", "query": "7731-240 torque", "relevant": ["wi-2155-rev-b#2"]},
+    {"id": "id-05", "category": "identifier", "query": "SD-2026-017", "relevant": ["sd-2026-017"]},
+    {"id": "id-06", "category": "identifier", "query": "CAR-2026-022", "relevant": ["ia-2026-03#2"]},
+    {"id": "id-07", "category": "identifier", "query": "TW-08 calibration due", "relevant": ["ia-2026-03#2"]},
+    {"id": "id-08", "category": "identifier", "query": "SQR-100 first article requirements", "relevant": ["aldermark-sqr-100#1"]},
+
+    {"id": "ans-01", "category": "answerable", "query": "who is on the material review board", "relevant": ["qp-87-rev-d#3"]},
+    {"id": "ans-02", "category": "answerable", "query": "what happens if a gauge is found out of tolerance at calibration", "relevant": ["qp-715-rev-e#2"]},
+    {"id": "ans-03", "category": "answerable", "query": "how often are torque wrenches calibrated", "relevant": ["qp-715-rev-e#1"]},
+    {"id": "ans-04", "category": "answerable", "query": "when is a first article inspection required for Aldermark parts", "relevant": ["aldermark-sqr-100#1"]},
+    {"id": "ans-05", "category": "answerable", "query": "what process capability is required on key characteristics", "relevant": ["aldermark-sqr-100#3"]},
+    {"id": "ans-06", "category": "answerable", "query": "why did the 204 bracket torque change", "relevant": ["ecn-0419#1"]},
+    {"id": "ans-07", "category": "answerable", "query": "what must we do if bad parts may have shipped to the customer", "relevant": ["qp-87-rev-d#5", "aldermark-sqr-100#4"]},
+    {"id": "ans-08", "category": "answerable", "query": "who anodizes the 7731-210 cover plate", "relevant": ["qp-84-rev-h#2"]},
+    {"id": "ans-09", "category": "answerable", "query": "furnace temperature uniformity survey frequency", "relevant": ["qp-851-ht#2"]},
+    {"id": "ans-10", "category": "answerable", "query": "which revision of a procedure is valid on the shop floor", "relevant": ["qm-001#2"]},
+
+    {"id": "quo-01", "category": "quoted", "query": "\"DO NOT USE\"", "relevant": ["qp-715-rev-e#2"]},
+    {"id": "quo-02", "category": "quoted", "query": "\"delta\" first article", "relevant": ["ecn-0419#3"]},
+
+    {"id": "neg-01", "category": "negation", "query": "which dispositions do not need customer approval", "relevant": ["qp-87-rev-d#4"]},
+    {"id": "neg-02", "category": "negation", "query": "are lots built before ECN-0419 reworked", "relevant": ["ecn-0419#2"]},
+    {"id": "neg-03", "category": "negation", "query": "does SD-2026-017 cover lot 2609", "relevant": ["sd-2026-017#2"]},
+
+    {"id": "date-01", "category": "date", "query": "when does the anodize deviation expire", "relevant": ["sd-2026-017#2"]},
+    {"id": "date-02", "category": "date", "query": "when did QP-8.7 revision D take effect", "relevant": ["qp-87-rev-d#1", "doc-register#2"]},
+    {"id": "date-03", "category": "date", "query": "what date was ECN-0419 approved", "relevant": ["ecn-0419#3"]},
+
+    {"id": "tab-01", "category": "table", "query": "open NCRs on part 7731-210", "relevant": ["ncr-log#5"]},
+    {"id": "tab-02", "category": "table", "query": "NCR for lot 2612 undertorqued assemblies", "relevant": ["ncr-log#4"]},
+    {"id": "tab-03", "category": "table", "query": "which revision of WI-2140 is released", "relevant": ["doc-register#4"]},
+
+    {"id": "un-01", "category": "unanswerable", "query": "what did ECN-0419 cost to implement", "relevant": []},
+    {"id": "un-02", "category": "unanswerable", "query": "what is the scrap rate for Cell 4 this year", "relevant": []},
+    {"id": "un-03", "category": "unanswerable", "query": "who is the Aldermark buyer for the 7731-210 cover plate", "relevant": []},
+    {"id": "un-04", "category": "unanswerable", "query": "titanium machining feeds and speeds", "relevant": []}
+  ]
+}

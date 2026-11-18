@@ -25,6 +25,7 @@ FASTEMBED_CACHE_PATH or <repo>/data/models/fastembed):
 
     venv/Scripts/python scripts/retrieval_bench.py
     venv/Scripts/python scripts/retrieval_bench.py --repeats 3 --json bench.json --out bench.md
+    venv/Scripts/python scripts/retrieval_bench.py --fixture tests/fixtures/quality_bench --skip-concurrency
 
 or through pytest, where it is skipped unless asked for:
 
@@ -33,6 +34,17 @@ or through pytest, where it is skipped unless asked for:
 The corpus and the labels carry a ``version``; numbers are only comparable
 within one version. Add a passage or a query, bump the version, and say so
 in the PR that quotes the new numbers.
+
+Other fixtures. ``--fixture tests/fixtures/quality_bench`` runs the same
+harness over a synthetic aerospace-supplier quality system (procedures in a
+superseded and a current revision, an ECN, a supplier deviation, an NCR log).
+A fixture can mark documents ``superseded_by`` another, exactly as an owner
+does with "Replaced by", and label ``stale`` passages on ``revision``
+queries. The report then adds **revision safety**: the share of revision
+queries where the current passage is retrieved and no stale passage ranks
+above it, with the marks honoured and with them ignored
+(``SUPERSEDED_PENALTY=0``), so the value of recording revisions is measured
+rather than asserted.
 
 Caveat for reading the numbers: the corpus is ~90 chunks, so a pool of 50
 candidates is more than half the index and recall ceilings sit high. What
@@ -96,6 +108,17 @@ class Corpus:
     documents: List[dict]
     queries: List[dict]
     queries_version: int
+    categories: Sequence[str] = CATEGORIES
+    name: str = "retrieval_bench"
+
+    @property
+    def supersede_marks(self) -> Dict[str, str]:
+        """``{document id: id of the document that replaced it}``."""
+        return {d["id"]: d["superseded_by"] for d in self.documents if d.get("superseded_by")}
+
+    @property
+    def has_revision_queries(self) -> bool:
+        return any(q.get("stale") for q in self.queries)
 
     def chunk_ids_of(self, doc_id: str) -> List[str]:
         for d in self.documents:
@@ -123,6 +146,8 @@ def load_corpus(fixture_dir: Path = FIXTURE_DIR) -> Corpus:
         documents=list(corpus["documents"]),
         queries=list(queries["queries"]),
         queries_version=int(queries["version"]),
+        categories=tuple(queries.get("categories") or CATEGORIES),
+        name=Path(fixture_dir).name,
     )
 
 
@@ -141,7 +166,7 @@ def validate_corpus(corpus: Corpus) -> List[str]:
     seen_categories = set()
     for q in corpus.queries:
         seen_categories.add(q["category"])
-        if q["category"] not in CATEGORIES:
+        if q["category"] not in corpus.categories:
             problems.append(f"{q['id']}: unknown category {q['category']!r}")
         if (q["category"] == "unanswerable") != (len(q["relevant"]) == 0):
             problems.append(f"{q['id']}: unanswerable queries and only they have no relevant units")
@@ -150,7 +175,26 @@ def validate_corpus(corpus: Corpus) -> List[str]:
                 corpus.resolve(ref)
             except (KeyError, ValueError):
                 problems.append(f"{q['id']}: relevant unit {ref!r} does not exist")
-    missing = set(CATEGORIES) - seen_categories
+        stale = q.get("stale") or []
+        if stale and q["category"] != "revision":
+            problems.append(f"{q['id']}: only revision queries carry stale units")
+        if q["category"] == "revision" and (not stale or not q["relevant"]):
+            problems.append(f"{q['id']}: a revision query needs relevant and stale units")
+        for ref in stale:
+            try:
+                overlap = set(corpus.resolve(ref)) & {c for r in q["relevant"] for c in corpus.resolve(r)}
+            except (KeyError, ValueError):
+                problems.append(f"{q['id']}: stale unit {ref!r} does not exist")
+                continue
+            if overlap:
+                problems.append(f"{q['id']}: {ref!r} is labelled both relevant and stale")
+    known = set(doc_ids)
+    for old, new in corpus.supersede_marks.items():
+        if new not in known:
+            problems.append(f"{old}: superseded_by {new!r} is not a document")
+        elif new == old:
+            problems.append(f"{old}: a document cannot replace itself")
+    missing = set(corpus.categories) - seen_categories
     if missing:
         problems.append(f"no queries in categories: {sorted(missing)}")
     return problems
@@ -158,18 +202,23 @@ def validate_corpus(corpus: Corpus) -> List[str]:
 
 # ── Index ────────────────────────────────────────────────────────────────────
 
-def build_index(corpus: Corpus, index_dir: Path, cache_dir: Path):
+def build_index(corpus: Corpus, index_dir: Path, cache_dir: Path, embedder=None):
     """Index every passage as one chunk with the real local embedder.
-    Returns the DocumentIndexer whose ``search`` the benchmark calls."""
+    Returns the DocumentIndexer whose ``search`` the benchmark calls.
+
+    ``embedder`` replaces the real model (tests pass a stub so the wiring can
+    be checked offline); it needs ``embed_texts``, ``embed_query``,
+    ``model_name`` and ``embedding_dim``."""
     from unittest.mock import MagicMock
 
     from models.schemas import ChunkMetadata
-    from services.embedder import FastEmbedService
     from services.indexing.indexer import DocumentIndexer
     from services.vector_store import VectorStore
 
-    embedder = FastEmbedService(EMBEDDING_MODEL, cache_dir=cache_dir)
-    store = VectorStore(index_dir)
+    if embedder is None:
+        from services.embedder import FastEmbedService
+        embedder = FastEmbedService(EMBEDDING_MODEL, cache_dir=cache_dir)
+    store = VectorStore(index_dir, embedding_dim=getattr(embedder, "embedding_dim", 384))
     chunks: List[ChunkMetadata] = []
     for d in corpus.documents:
         for i, text in enumerate(d["passages"], start=1):
@@ -185,12 +234,35 @@ def build_index(corpus: Corpus, index_dir: Path, cache_dir: Path):
             ))
     vectors = embedder.embed_texts([c.text for c in chunks])
     store.add_chunks(chunks, vectors)
+    apply_supersede_marks(corpus, store.metadata_store)
     return DocumentIndexer(
         vector_store=store,
         embedding_service=embedder,
         document_extractor=MagicMock(),
         text_chunker=MagicMock(),
     )
+
+
+def apply_supersede_marks(corpus: Corpus, metadata_store) -> int:
+    """Record the fixture's ``superseded_by`` marks the way an owner would.
+
+    The replaced-by relation lives on the documents table, which chunk
+    ingestion alone does not fill, so each document is registered first.
+    Returns the number of marks applied.
+    """
+    marks = corpus.supersede_marks
+    if not marks:
+        return 0
+    stamp = "2026-01-01T00:00:00+00:00"
+    for d in corpus.documents:
+        metadata_store.add_document(
+            d["id"], d["filename"], num_pages=len(d["passages"]),
+            num_chunks=len(d["passages"]), upload_timestamp=stamp,
+            source_format=d.get("format"),
+        )
+    for old, new in marks.items():
+        metadata_store.set_document_superseded(old, new, "fixture mark", at=stamp)
+    return len(marks)
 
 
 def ensure_reranker_model(cache_dir: Path) -> str:
@@ -224,6 +296,20 @@ class QueryOutcome:
     latency_ms: float
     reranked: bool
     top1_score: Optional[float]
+    # Revision queries only: rank of the first stale passage (None = not
+    # retrieved) and whether the query had stale labels at all.
+    stale_rank: Optional[int] = None
+    has_stale: bool = False
+
+    @property
+    def revision_safe(self) -> Optional[bool]:
+        """The current passage was retrieved and no stale one ranks above it."""
+        if not self.has_stale:
+            return None
+        if not self.hit_ranks:
+            return False
+        first = min(self.hit_ranks)
+        return self.stale_rank is None or self.stale_rank > first
 
     def recall_at(self, k: int) -> Optional[float]:
         if self.units == 0:
@@ -235,6 +321,15 @@ class QueryOutcome:
         if self.units == 0:
             return None
         return _metrics.reciprocal_rank(min(self.hit_ranks) if self.hit_ranks else None)
+
+
+def first_stale_rank(corpus: Corpus, query: dict, result_ids: Sequence[str]) -> Optional[int]:
+    """Rank (1-based) of the first result that is a labelled stale unit."""
+    stale = {c for ref in query.get("stale") or [] for c in corpus.resolve(ref)}
+    for rank, cid in enumerate(result_ids, start=1):
+        if cid in stale:
+            return rank
+    return None
 
 
 def score_results(corpus: Corpus, query: dict, result_ids: Sequence[str]) -> List[int]:
@@ -266,6 +361,23 @@ class ConfigResult:
     outcomes: List[QueryOutcome] = field(default_factory=list)
     wall_seconds: float = 0.0
     parallel: int = 1
+    categories: Sequence[str] = CATEGORIES
+
+    @property
+    def revision_outcomes(self) -> List[QueryOutcome]:
+        return [o for o in self.outcomes if o.has_stale]
+
+    @property
+    def revision_safety(self) -> Optional[float]:
+        """Share of revision queries answered from the current revision first."""
+        pool = self.revision_outcomes
+        return sum(1 for o in pool if o.revision_safe) / len(pool) if pool else None
+
+    @property
+    def stale_top1(self) -> Optional[float]:
+        """Share of revision queries whose top result is a stale passage."""
+        pool = self.revision_outcomes
+        return sum(1 for o in pool if o.stale_rank == 1) / len(pool) if pool else None
 
     @property
     def answerable(self) -> List[QueryOutcome]:
@@ -313,13 +425,16 @@ class ConfigResult:
             "throughput_qps": self.throughput,
             "top1_median_answerable": self.top1_median(True),
             "top1_median_unanswerable": self.top1_median(False),
+            "revision_safety": self.revision_safety,
+            "stale_top1": self.stale_top1,
             "by_category": {
                 c: {"recall@5": self.recall(5, c), "recall@10": self.recall(10, c), "mrr": self.mrr(c)}
-                for c in CATEGORIES if c != "unanswerable"
+                for c in self.categories if c != "unanswerable"
             },
             "per_query": [
                 {"id": o.query_id, "category": o.category, "hit_ranks": o.hit_ranks,
-                 "latency_ms": round(o.latency_ms, 1), "reranked": o.reranked}
+                 "latency_ms": round(o.latency_ms, 1), "reranked": o.reranked,
+                 **({"stale_rank": o.stale_rank, "revision_safe": o.revision_safe} if o.has_stale else {})}
                 for o in self.outcomes
             ],
         }
@@ -331,7 +446,7 @@ class _SettingsScope:
     """Apply reranker settings on the live ``config.settings`` and restore them."""
 
     KEYS = ("enable_reranker", "reranker_candidate_multiplier",
-            "rerank_max_concurrent", "rerank_queue_timeout_seconds")
+            "rerank_max_concurrent", "rerank_queue_timeout_seconds", "superseded_penalty")
 
     def __init__(self, **overrides):
         self.overrides = overrides
@@ -366,12 +481,15 @@ def _one_query(indexer, corpus: Corpus, query: dict, top_k: int) -> QueryOutcome
         latency_ms=elapsed,
         reranked=bool(out.get("retrieval", {}).get("reranked")),
         top1_score=float(results[0].similarity_score) if results else None,
+        stale_rank=first_stale_rank(corpus, query, ids),
+        has_stale=bool(query.get("stale")),
     )
 
 
 def run_config(indexer, corpus: Corpus, name: str, *, top_k: int, repeats: int,
                parallel: int, queries: Optional[Sequence[dict]] = None, **overrides) -> ConfigResult:
-    result = ConfigResult(name=name, settings=dict(overrides), parallel=parallel)
+    result = ConfigResult(name=name, settings=dict(overrides), parallel=parallel,
+                          categories=corpus.categories)
     chosen = list(queries) if queries is not None else corpus.queries
     with _SettingsScope(**overrides):
         # Warm-up: lazy model load and first-call imports must not count.
@@ -415,11 +533,13 @@ def _environment(corpus: Corpus, backend: str, cache_dir: Path) -> Dict[str, Any
     import subprocess
 
     env: Dict[str, Any] = {
+        "fixture": corpus.name,
         "corpus_version": corpus.version,
         "queries_version": corpus.queries_version,
         "documents": len(corpus.documents),
         "chunks": sum(len(d["passages"]) for d in corpus.documents),
         "queries": len(corpus.queries),
+        "supersede_marks": len(corpus.supersede_marks),
         "embedding_model": EMBEDDING_MODEL,
         "reranker_backend": backend,
         "python": platform.python_version(),
@@ -447,6 +567,7 @@ def _environment(corpus: Corpus, backend: str, cache_dir: Path) -> Dict[str, Any
 def run_benchmark(*, top_k: int = 10, repeats: int = 1, multipliers: Sequence[int] = (2, 3, 5),
                   parallel: int = 8, concurrency_multiplier: int = 3, concurrency_queries: int = 40,
                   skip_concurrency: bool = False, index_dir: Optional[Path] = None,
+                  fixture_dir: Path = FIXTURE_DIR,
                   log: Callable[[str], None] = lambda s: None) -> BenchmarkReport:
     """Build the index once and run every configuration against it.
 
@@ -462,7 +583,7 @@ def run_benchmark(*, top_k: int = 10, repeats: int = 1, multipliers: Sequence[in
     logging.getLogger("services").setLevel(logging.WARNING)
     logging.getLogger("fastembed").setLevel(logging.WARNING)
 
-    corpus = load_corpus()
+    corpus = load_corpus(fixture_dir)
     problems = validate_corpus(corpus)
     if problems:
         raise ValueError("fixture is inconsistent:\n  " + "\n  ".join(problems))
@@ -473,6 +594,7 @@ def run_benchmark(*, top_k: int = 10, repeats: int = 1, multipliers: Sequence[in
     log("checking the reranker model ...")
     backend = ensure_reranker_model(cache_dir)
     env = _environment(corpus, backend, cache_dir)
+    env["top_k"] = top_k
 
     sequential: List[ConfigResult] = []
     log("no reranker ...")
@@ -483,6 +605,19 @@ def run_benchmark(*, top_k: int = 10, repeats: int = 1, multipliers: Sequence[in
         sequential.append(run_config(
             indexer, corpus, f"reranker x{mult}", top_k=top_k, repeats=repeats, parallel=1,
             enable_reranker=True, reranker_candidate_multiplier=mult, rerank_max_concurrent=0,
+        ))
+    if corpus.supersede_marks and corpus.has_revision_queries:
+        # Same index, marks still recorded, demotion switched off: what search
+        # does for a collection where nobody has recorded "Replaced by".
+        log("revision marks ignored ...")
+        sequential.append(run_config(indexer, corpus, "no reranker, marks ignored", top_k=top_k,
+                                     repeats=repeats, parallel=1, enable_reranker=False,
+                                     superseded_penalty=0.0))
+        mult = 3 if 3 in multipliers else (list(multipliers) or [3])[0]
+        sequential.append(run_config(
+            indexer, corpus, f"reranker x{mult}, marks ignored", top_k=top_k, repeats=repeats,
+            parallel=1, enable_reranker=True, reranker_candidate_multiplier=mult,
+            rerank_max_concurrent=0, superseded_penalty=0.0,
         ))
 
     concurrent: List[ConfigResult] = []
@@ -521,7 +656,8 @@ def _pct(v: Optional[float]) -> str:
 def render_markdown(report: BenchmarkReport) -> str:
     env = report.environment
     lines = [
-        f"### Retrieval benchmark (corpus v{env['corpus_version']}, queries v{env['queries_version']})",
+        f"### Retrieval benchmark: {env.get('fixture', 'retrieval_bench')} "
+        f"(corpus v{env['corpus_version']}, queries v{env['queries_version']})",
         "",
         f"{env['documents']} documents / {env['chunks']} chunks / {env['queries']} queries; "
         f"embedding {env['embedding_model']}, reranker {env['reranker_model']} ({env['reranker_backend']}); "
@@ -529,7 +665,7 @@ def render_markdown(report: BenchmarkReport) -> str:
         f"{env['cpus']} CPUs, {env['platform']}, Python {env['python']}, git {env.get('git')}; "
         f"total {report.total_seconds:.0f} s.",
         "",
-        "**Sequential (one query at a time, top_k=10)**",
+        f"**Sequential (one query at a time, top_k={env.get('top_k', 10)})**",
         "",
         "| configuration | recall@5 | recall@10 | MRR | p50 ms | p95 ms |",
         "|---|---|---|---|---|---|",
@@ -537,7 +673,8 @@ def render_markdown(report: BenchmarkReport) -> str:
     for c in report.sequential:
         lines.append(f"| {c.name} | {_fmt(c.recall(5))} | {_fmt(c.recall(10))} | {_fmt(c.mrr())} "
                      f"| {c.latency(0.5):.0f} | {c.latency(0.95):.0f} |")
-    cats = [c for c in CATEGORIES if c != "unanswerable"]
+    categories = report.sequential[0].categories if report.sequential else CATEGORIES
+    cats = [c for c in categories if c != "unanswerable"]
     lines += ["", "**Recall@5 by query category**", "",
               "| configuration | " + " | ".join(cats) + " |",
               "|---|" + "---|" * len(cats)]
@@ -552,6 +689,14 @@ def render_markdown(report: BenchmarkReport) -> str:
               "| configuration | answerable | unanswerable |", "|---|---|---|"]
     for c in report.sequential:
         lines.append(f"| {c.name} | {_fmt(c.top1_median(True))} | {_fmt(c.top1_median(False))} |")
+    if any(c.revision_safety is not None for c in report.sequential):
+        n_rev = len(report.sequential[0].revision_outcomes)
+        lines += ["", f"**Revision safety ({n_rev} revision queries, top_k={report.environment.get('top_k', 10)})**", "",
+                  "Safe = the current passage is retrieved and no superseded or informal passage "
+                  "stating the old value ranks above it.", "",
+                  "| configuration | revision-safe | stale passage ranked first |", "|---|---|---|"]
+        for c in report.sequential:
+            lines.append(f"| {c.name} | {_pct(c.revision_safety)} | {_pct(c.stale_top1)} |")
     if report.concurrent:
         lines += ["", f"**Concurrent ({report.concurrent[0].parallel} parallel callers, reranker on)**", "",
                   "| configuration | recall@5 | recall@10 | p50 ms | p95 ms | queries/s | shed |",
@@ -590,6 +735,9 @@ def _misses(report: BenchmarkReport) -> List[str]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--fixture", type=Path, default=FIXTURE_DIR,
+                        help="fixture directory holding corpus.json and queries.json "
+                             "(e.g. tests/fixtures/quality_bench)")
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=1, help="run each query this many times per configuration")
     parser.add_argument("--multipliers", default="2,3,5", help="candidate multipliers to benchmark sequentially")
@@ -613,7 +761,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         multipliers=[int(m) for m in args.multipliers.split(",") if m.strip()],
         parallel=args.parallel, concurrency_multiplier=args.concurrency_multiplier,
         concurrency_queries=args.concurrency_queries,
-        skip_concurrency=args.skip_concurrency, log=log,
+        skip_concurrency=args.skip_concurrency, fixture_dir=args.fixture, log=log,
     )
     markdown = render_markdown(report)
     print(markdown)
