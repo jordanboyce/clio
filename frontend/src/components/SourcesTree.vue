@@ -130,6 +130,7 @@ import {
   Globe, Lock, MoreHorizontal, Replace, ShieldAlert, StickyNote, Trash2,
 } from 'lucide-vue-next'
 import { describeFile } from '../utils/fileTypes'
+import { isPraDoc } from '../utils/praFormat'
 import { injectionBadge, policyBadge, showLabel } from '../utils/governance'
 import ClassificationBadge from './ClassificationBadge.vue'
 import { folderDocIds, folderSelection, visibleRows } from '../utils/sourceTree.js'
@@ -155,7 +156,7 @@ const rows = computed(() => visibleRows(props.tree, props.collapsed))
 const focusIndex = ref(0)
 watch(rows, (r) => { if (focusIndex.value >= r.length) focusIndex.value = Math.max(0, r.length - 1) })
 
-const fileInfo = (doc) => describeFile(doc?.filename, { isWeb: doc?.source_type === 'url', isNote: doc?.source_type === 'text' })
+const fileInfo = (doc) => describeFile(doc?.filename, { isWeb: doc?.source_type === 'url', isNote: doc?.source_type === 'text', isPra: isPraDoc(doc) })
 const iconTone = (doc) => (fileInfo(doc).tile.split(' ').find(c => c.startsWith('text-')) || 'text-base-content/60')
 const folderState = (node) => folderSelection(node, selected.value)
 const isBeingDeleted = (row) =>

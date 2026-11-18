@@ -293,11 +293,28 @@ def fault_tree_view(model: PraModel, tree: str, depth: int = 3,
     }
 
 
+def stored_cut_sets(model: PraModel, context: str, event_tree: Optional[str] = None):
+    """The stored list for ``context``. Sequence names repeat across event
+    trees (SAPHIRE numbers each tree's sequences 01, 02, ...), so with
+    ``event_tree`` only that tree's sequence list matches; without it, the
+    first list of that name, as before."""
+    if event_tree is None:
+        return model.cut_sets_for(context)
+    for c in model.cut_sets:
+        if c.context == context and c.kind == "sequence" and c.event_tree == event_tree:
+            return c
+    return None
+
+
 def event_tree_view(model: PraModel, name: str) -> Dict[str, Any]:
     et = model.event_trees.get(name)
     if et is None:
         raise PraNotFound(f"No event tree named '{name}' in this model")
     ie = model.initiating_events.get(et.initiating_event or "")
+    # A sequence's stored list is the one filed under this event tree; a list
+    # with no event tree (an older reader) still counts, as the name alone did.
+    with_lists = {c.context for c in model.cut_sets
+                  if c.kind == "sequence" and c.event_tree in (et.name, None)}
     return {
         "name": et.name,
         "description": et.description,
@@ -309,9 +326,9 @@ def event_tree_view(model: PraModel, name: str) -> Dict[str, Any]:
             for fe in et.functional_events
         ],
         "sequences": [
-            {"name": s.name, "end_state": s.end_state, "description": s.description,
+            {"name": s.name, "end_state": s.end_state, "transfer": s.transfer, "description": s.description,
              "path": [{"functional_event": p.functional_event, "state": p.state} for p in s.path],
-             "logic": s.logic, "frequency": s.frequency, "has_cut_sets": model.cut_sets_for(s.name) is not None}
+             "logic": s.logic, "frequency": s.frequency, "has_cut_sets": s.name in with_lists}
             for s in et.sequences
         ],
     }
@@ -370,7 +387,7 @@ def event_view(model: PraModel, name: str) -> Dict[str, Any]:
         n = sum(1 for cs in c.cut_sets if any(analysis.split_name(e)[0] == bare for e in cs))
         if n:
             total += n
-            contexts.append({"context": c.context, "kind": c.kind, "cut_sets": n})
+            contexts.append({"context": c.context, "kind": c.kind, "event_tree": c.event_tree, "cut_sets": n})
     contexts.sort(key=lambda c: -c["cut_sets"])
     out.update(
         used_in_gates=used[:EVENT_USAGE_LIMIT],
@@ -432,12 +449,21 @@ def _generate(model: PraModel, context: str, truncation: float, max_order: Optio
 
 
 def _cut_set_source(model: PraModel, context: str, compute: bool, truncation: float,
-                    max_order: Optional[int], success_terms: str) -> Tuple[List[List[str]], Dict[str, Any], List[str]]:
-    stored = model.cut_sets_for(context)
+                    max_order: Optional[int], success_terms: str,
+                    event_tree: Optional[str] = None) -> Tuple[List[List[str]], Dict[str, Any], List[str]]:
+    stored = stored_cut_sets(model, context, event_tree)
     if stored is not None:
         meta = {"source": stored.source, "kind": stored.kind, "event_tree": stored.event_tree,
                 "truncation": stored.truncation}
         return stored.cut_sets, meta, []
+    if event_tree is not None:
+        et = model.event_trees.get(event_tree)
+        if et is None:
+            raise PraNotFound(f"No event tree named '{event_tree}' in this model")
+        if not any(s.name == context for s in et.sequences):
+            raise PraNotFound(f"Event tree '{event_tree}' has no sequence named '{context}'")
+        raise PraNotFound(f"The model stores no cut sets for sequence '{context}' of event tree '{event_tree}', "
+                          "and Clio generates cut sets for fault trees and gates only")
     kind = _known_context(model, context)
     if kind is None:
         raise PraNotFound(f"No fault tree, gate, sequence or end state named '{context}' in this model")
@@ -494,10 +520,12 @@ def _event_details(model: PraModel, names: Iterable[str]) -> Dict[str, Dict[str,
 
 def cut_sets_view(model: PraModel, context: str, *, limit: int = 50, compute: bool = False,
                   truncation: float = analysis.DEFAULT_TRUNCATION, max_order: Optional[int] = None,
-                  success_terms: str = analysis.SUCCESS_TERMS_DROP) -> Dict[str, Any]:
+                  success_terms: str = analysis.SUCCESS_TERMS_DROP,
+                  event_tree: Optional[str] = None) -> Dict[str, Any]:
     if limit < 1:
         raise PraInvalid("limit must be at least 1")
-    cut_sets, meta, warnings = _cut_set_source(model, context, compute, truncation, max_order, success_terms)
+    cut_sets, meta, warnings = _cut_set_source(model, context, compute, truncation, max_order, success_terms,
+                                               event_tree)
     q = analysis.quantify_cut_sets(model, cut_sets)
     rows = []
     for rank, cs in enumerate(q.cut_sets[:limit], start=1):
@@ -533,12 +561,14 @@ IMPORTANCE_SORTS = tuple(analysis.IMPORTANCE_SORT_KEYS)
 def importance_view(model: PraModel, context: str, *, limit: int = 50, sort: str = "fv",
                     compute: bool = False, truncation: float = analysis.DEFAULT_TRUNCATION,
                     max_order: Optional[int] = None,
-                    success_terms: str = analysis.SUCCESS_TERMS_DROP) -> Dict[str, Any]:
+                    success_terms: str = analysis.SUCCESS_TERMS_DROP,
+                    event_tree: Optional[str] = None) -> Dict[str, Any]:
     if sort not in analysis.IMPORTANCE_SORT_KEYS:
         raise PraInvalid(f"sort must be one of {', '.join(IMPORTANCE_SORTS)}")
     if limit < 1:
         raise PraInvalid("limit must be at least 1")
-    cut_sets, meta, warnings = _cut_set_source(model, context, compute, truncation, max_order, success_terms)
+    cut_sets, meta, warnings = _cut_set_source(model, context, compute, truncation, max_order, success_terms,
+                                               event_tree)
     result = analysis.importance(model, cut_sets)
     rows = analysis.sort_importance(result.rows, sort)
     details = _event_details(model, (r.event for r in rows[:limit]))

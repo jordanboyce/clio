@@ -908,6 +908,16 @@
             >
               <Eye :size="12" />
             </button>
+            <button
+              v-else-if="isPraDoc(doc)"
+              class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content"
+              @click="openModel(doc)"
+              title="Open the model: fault trees, event trees, cut sets"
+              :aria-label="`Open the model ${doc.filename}`"
+              data-testid="open-pra-model"
+            >
+              <Eye :size="12" />
+            </button>
             <a
               v-else
               :href="isLinkDoc(doc) ? doc.source_path : `/documents/${doc.document_id}/pdf?collection_id=${collectionStore.currentCollectionId}`"
@@ -1297,6 +1307,7 @@ import { useLayoutStore } from '../stores/layoutStore'
 import { useStatsStore } from '../stores/statsStore'
 import { formatBytes, describeStorage } from '../utils/format'
 import { describeFile, FAMILIES, isTabularFile } from '../utils/fileTypes'
+import { isPraDoc } from '../utils/praFormat'
 import { useCustomFileTypesStore } from '../stores/customFileTypesStore'
 
 // Registered custom types: loaded once, shared with the app shell.
@@ -2283,8 +2294,14 @@ const selectMany = (ids, select) => {
   for (const id of ids) select ? current.add(id) : current.delete(id)
   selectedDocuments.value = [...current]
 }
+// A PRA model opens in its viewer (fault trees, event trees, cut sets), not
+// as the file it came from.
+const openModel = (doc) => {
+  ui.openPra({ documentId: doc.document_id, collectionId: collectionStore.currentCollectionId, filename: doc.filename })
+}
 const openOriginal = (doc) => {
   if (isNoteDoc(doc)) return openNote(doc)
+  if (isPraDoc(doc)) return openModel(doc)
   const url = isLinkDoc(doc)
     ? doc.source_path
     : `/documents/${doc.document_id}/pdf?collection_id=${encodeURIComponent(collectionStore.currentCollectionId)}`
@@ -2543,7 +2560,7 @@ function nudgeChunkBoost(chunk, delta) {
 
 // What each source is, for the tile and the type chips. The family
 // boundaries are the server's (services/file_kinds.py); this only draws.
-const fileInfo = (doc) => describeFile(doc?.filename, { isWeb: isLinkDoc(doc), isNote: isNoteDoc(doc) })
+const fileInfo = (doc) => describeFile(doc?.filename, { isWeb: isLinkDoc(doc), isNote: isNoteDoc(doc), isPra: isPraDoc(doc) })
 
 // What the extractor calls a "page" is only a page for PDFs: a Markdown or
 // text file is split at headings, a deck by slide, a spreadsheet by row

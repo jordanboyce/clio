@@ -37,6 +37,9 @@ _Truncation = Query(analysis.DEFAULT_TRUNCATION, ge=0.0, le=1.0,
 _MaxOrder = Query(None, ge=1, le=50, description="compute=true only: largest cut set order to generate")
 _SuccessTerms = Query(analysis.SUCCESS_TERMS_DROP,
                       description="compute=true only: delete success terms '/X' (drop) or keep them")
+_EventTree = Query(None, min_length=1,
+                   description="For a sequence: the event tree whose sequence it is (sequence names repeat "
+                               "across event trees)")
 
 
 def _http(e: queries.PraQueryError) -> HTTPException:
@@ -127,7 +130,8 @@ def get_event(document_id: str, name: str, collection_id: str = "default"):
 def get_cut_sets(document_id: str, context: str, collection_id: str = "default",
                  limit: int = Query(50, ge=1, le=MAX_LIMIT), compute: bool = False,
                  truncation: float = _Truncation, max_order: Optional[int] = _MaxOrder,
-                 success_terms: Literal["drop", "keep"] = _SuccessTerms):
+                 success_terms: Literal["drop", "keep"] = _SuccessTerms,
+                 event_tree: Optional[str] = _EventTree):
     """The stored cut sets of a fault tree, sequence or end state, most
     probable first, each with its probability and share of the total, plus
     the rare-event and MCUB totals. With ``compute=true`` and no stored list,
@@ -135,7 +139,7 @@ def get_cut_sets(document_id: str, context: str, collection_id: str = "default",
     doc_info, model = _document(collection_id, document_id)
     try:
         view = queries.cut_sets_view(model, context, limit=limit, compute=compute, truncation=truncation,
-                                     max_order=max_order, success_terms=success_terms)
+                                     max_order=max_order, success_terms=success_terms, event_tree=event_tree)
     except queries.PraQueryError as e:
         raise _http(e)
     return {**_head(collection_id, doc_info), **view}
@@ -146,13 +150,15 @@ def get_importance(document_id: str, context: str, collection_id: str = "default
                    limit: int = Query(50, ge=1, le=MAX_LIMIT),
                    sort: Literal["fv", "raw", "rrw", "birnbaum"] = "fv", compute: bool = False,
                    truncation: float = _Truncation, max_order: Optional[int] = _MaxOrder,
-                   success_terms: Literal["drop", "keep"] = _SuccessTerms):
+                   success_terms: Literal["drop", "keep"] = _SuccessTerms,
+                   event_tree: Optional[str] = _EventTree):
     """Fussell-Vesely, RAW, RRW and Birnbaum for every event in the context's
     cut sets, evaluated on the minimal cut set upper bound."""
     doc_info, model = _document(collection_id, document_id)
     try:
         view = queries.importance_view(model, context, limit=limit, sort=sort, compute=compute,
-                                       truncation=truncation, max_order=max_order, success_terms=success_terms)
+                                       truncation=truncation, max_order=max_order, success_terms=success_terms,
+                                       event_tree=event_tree)
     except queries.PraQueryError as e:
         raise _http(e)
     return {**_head(collection_id, doc_info), **view}

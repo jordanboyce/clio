@@ -18,7 +18,8 @@
         <p v-else class="mt-3 text-sm leading-7 whitespace-pre-wrap break-words max-w-prose" :class="{ 'quoted-passage': result.instruction_text }" :data-quoted="result.instruction_text ? 'true' : null" v-html="highlightSnippet(result.text_snippet || 'No passage preview available.', query)"></p>
         <FigureStrip :source="result" />
         <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3">
-          <a v-if="href" :href="href" target="_blank" rel="noopener noreferrer" class="link link-primary inline-flex items-center gap-1.5 min-h-11 text-sm font-medium" :aria-label="`Open ${result.filename} in a new tab`">{{ result.source_format === 'pdf' && result.page_number ? `Open page ${result.page_number}` : 'Open source' }}<ExternalLink :size="14" /></a>
+          <a v-if="praTarget" :href="praHref(praTarget)" class="link link-primary inline-flex items-center gap-1.5 min-h-11 text-sm font-medium" data-testid="open-pra-model" :aria-label="`Open the model ${result.filename}`" @click="openModel">Open the model</a>
+          <a v-else-if="href" :href="href" target="_blank" rel="noopener noreferrer" class="link link-primary inline-flex items-center gap-1.5 min-h-11 text-sm font-medium" :aria-label="`Open ${result.filename} in a new tab`">{{ result.source_format === 'pdf' && result.page_number ? `Open page ${result.page_number}` : 'Open source' }}<ExternalLink :size="14" /></a>
           <details class="text-sm text-base-content/75">
             <summary class="cursor-pointer py-3">Match details</summary>
             <dl class="flex flex-wrap gap-x-4 gap-y-2 pb-2 text-xs">
@@ -39,6 +40,8 @@ import { computed } from 'vue'
 import { ExternalLink } from 'lucide-vue-next'
 import { labelBadgeClass, showLabel } from '../utils/governance'
 import { sourceHref } from '../utils/answerEvidence'
+import { isPlainClick, praHref, praTargetFor } from '../utils/praFormat'
+import { useUiStore } from '../stores/uiStore'
 import { highlightSnippet } from '../utils/searchPresentation'
 import SupersedeNote from './SupersedeNote.vue'
 import InstructionTextNote from './InstructionTextNote.vue'
@@ -46,6 +49,14 @@ import PagePreview from './PagePreview.vue'
 import FigureStrip from './FigureStrip.vue'
 const props = defineProps({ result: { type: Object, required: true }, index: { type: Number, required: true }, query: { type: String, default: '' } })
 const href = computed(() => sourceHref(props.result))
+// A PRA model opens in its viewer, at the tree the passage is from.
+const praTarget = computed(() => praTargetFor(props.result))
+function openModel(event) {
+  if (!isPlainClick(event)) return
+  event.preventDefault()
+  // The store is asked for on click: these lists also render where no app is mounted.
+  useUiStore().openPra(praTarget.value)
+}
 // Text pasted into the collection is stored as "<title>.html"; show the title.
 const displayName = computed(() => {
   const name = props.result.filename || 'Untitled source'
