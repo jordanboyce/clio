@@ -611,14 +611,25 @@ def _label_from_members(groups: Sequence[Sequence[Hashable]], U: nx.Graph, label
 
 # ── reliability ─────────────────────────────────────────────────────────
 
+# What the points of each graph are, for the note: "16 works and 17 links".
+_NOUNS = {"citation": ("work", "works"), "authors": ("person", "people"), "entities": ("concept", "concepts"),
+          "membership": ("member", "members")}
+
+
 def reliability_note(nodes: int, edges: int, largest_component: int, sources: Optional[int] = None,
-                     modularity: Optional[float] = None) -> dict:
+                     modularity: Optional[float] = None, kind: Optional[str] = None) -> dict:
     """Whether the graph is big enough to read, in words. ``sources`` is the
-    number of papers behind it, when there are any."""
+    number of papers behind it, when there are any; ``kind`` names what the
+    points are ("works", "people"), and plain "points" without it.
+
+    The words avoid the measures' names (centrality, modularity): they say
+    what the numbers mean for reading the panel. The thresholds and the
+    modularity itself stay in ``thresholds`` and the stats."""
     thresholds = {"min_nodes": MIN_RELIABLE_NODES, "min_edges": MIN_RELIABLE_EDGES,
                   "min_sources": MIN_RELIABLE_SOURCES, "min_largest_component_share": MIN_LARGEST_COMPONENT_SHARE,
                   "min_meaningful_modularity": MIN_MEANINGFUL_MODULARITY}
-    size = f"{nodes} node{'' if nodes == 1 else 's'} and {edges} link{'' if edges == 1 else 's'}"
+    one, many = _NOUNS.get(kind or "", ("point", "points"))
+    size = f"{nodes} {one if nodes == 1 else many} and {edges} link{'' if edges == 1 else 's'}"
     if sources is not None:
         size += f" from {sources} source{'' if sources == 1 else 's'}"
     if not nodes or not edges:
@@ -627,62 +638,60 @@ def reliability_note(nodes: int, edges: int, largest_component: int, sources: Op
     elif (nodes < MIN_RELIABLE_NODES or edges < MIN_RELIABLE_EDGES
           or (sources is not None and sources < MIN_RELIABLE_SOURCES)):
         level, note = "too_small", (
-            f"{size[0].upper()}{size[1:]} is too small for centrality to mean much: one added or removed link "
-            "can reorder the top. Read these as a description of these links, not a ranking of what matters.")
+            f"Too small to rank: {size}. One added or removed link can reorder the top, so read these as a "
+            "description of these links, not a ranking of what matters.")
     elif largest_component / nodes < MIN_LARGEST_COMPONENT_SHARE:
         level, note = "fragmented", (
-            f"Only {largest_component} of {nodes} nodes are in the largest connected part, so scores mostly "
-            "compare separate islands. Compare nodes within one group rather than across groups.")
+            f"Only {largest_component} of {nodes} {many} are connected to each other; the rest form separate "
+            "islands. Compare within one group rather than across groups.")
     else:
         level, note = "ok", (
-            f"{size[0].upper()}{size[1:]} is enough for a rough structural reading. It still describes links "
-            "in the metadata, not the quality of the work.")
+            f"{size[0].upper()}{size[1:]} is enough for a rough reading. It still describes links "
+            "in the records, not the quality of the work.")
     weak_groups = bool(edges) and modularity is not None and modularity < MIN_MEANINGFUL_MODULARITY
     if weak_groups:
-        note += (f" The groups are also weak (modularity {modularity:.2f}, below {MIN_MEANINGFUL_MODULARITY}), "
-                 "so treat \"connects\" as tentative.")
+        note += (" The groups are also loose: their members link outside the group almost as often as inside "
+                 "it, so treat \"bridges two groups\" as tentative.")
     return {"level": level, "reliable": level == "ok" and not weak_groups, "weak_groups": weak_groups,
             "note": note, "thresholds": thresholds}
 
 
 # ── the analysis ────────────────────────────────────────────────────────
 
+# Shown beside the lists and the dot-size choice, so they say what a high
+# value means for a reader, not how it is computed (the method is in
+# docs/RESEARCH.md). Keys are the measures' names, which the API keeps.
 DEFINITIONS = {
     "citation": {
-        "pagerank": "Importance passed along citations: a work scores high when it is cited by works that are "
-                    "themselves cited. Influence flows from the citing paper to the cited one.",
-        "betweenness": "How often this work lies on the shortest chain of citations between two others, in either "
-                       "direction, as a share of all such chains.",
+        "pagerank": "Influence: high for a work cited by works that are themselves much cited.",
+        "betweenness": "Bridging: high for a work that sits on many of the citation paths between other works, "
+                       "often because it links groups that otherwise cite different things.",
     },
     "authors": {
-        "pagerank": "Importance passed along co-authorship: high when your co-authors are themselves well connected, "
-                    "weighted by papers shared.",
-        "betweenness": "How often this author lies on the shortest chain of co-authors between two others, as a "
-                       "share of all such chains.",
+        "pagerank": "Influence: high for a person whose co-authors are themselves well connected.",
+        "betweenness": "Bridging: high for a person whose co-authorships connect people who otherwise never "
+                       "write together.",
     },
     "entities": {
-        "pagerank": "Importance passed along co-mentions: high when a concept appears with concepts that are "
-                    "themselves widely co-mentioned, weighted by documents shared.",
-        "betweenness": "How often this concept lies on the shortest chain of co-mentions between two others, as a "
-                       "share of all such chains.",
+        "pagerank": "Influence: high for a concept that appears with concepts that are themselves widely mentioned.",
+        "betweenness": "Bridging: high for a concept that is mentioned alongside concepts that otherwise never "
+                       "appear together.",
     },
     "membership": {
-        "pagerank": "Importance passed along shared groups, weighted by how many groups two members share.",
-        "betweenness": "How often this member lies on the shortest chain of shared groups between two others, as a "
-                       "share of all such chains.",
+        "pagerank": "Influence: high for a member who shares groups with well-connected members.",
+        "betweenness": "Bridging: high for a member who connects members that share no group.",
     },
 }
 _SHARED_DEFINITIONS = {
-    "eigenvector": "High when this node's neighbours are themselves well connected, computed separately for each "
-                   "connected part and scaled by the part's share of the graph. Ignores citation direction.",
-    "constraint": "Burt's constraint: high when a node's ties all lead to neighbours tied to each other, low when "
-                  "they reach separate groups. Lower means more of a broker. Blank for a node with no ties.",
-    "effective_size": "Burt's effective size: how many of a node's ties are not redundant with its other ties. "
-                      "Blank for a node with no ties.",
-    "community": "A group found by Louvain, tied more within itself than to the rest. Named after its most "
-                 "distinctive terms by counting, not by a model.",
-    "modularity": "How much more the groups are tied within themselves than chance would give. Roughly 0.3 and "
-                  "up suggests real group structure, and small graphs can score high by chance.",
+    "eigenvector": "Well connected: high when this point's neighbours are themselves well connected.",
+    "constraint": "Low when this point's links reach separate groups, high when they all stay inside one tight "
+                  "group. Blank for a point with no links.",
+    "effective_size": "How many of this point's links reach someone its other links do not. Blank for a point "
+                      "with no links.",
+    "community": "A group: points that link to each other more than to the rest, named after the words they share "
+                 "most (counted, not written by a model).",
+    "modularity": "How distinct the groups are. Below about 0.3 they are loose, and a small map can look grouped "
+                  "by chance.",
 }
 
 
@@ -884,7 +893,7 @@ def analyze(G: nx.Graph, kind: str = "membership", seed: int = SEED,
 
     return {
         "graph": kind, "stats": stats,
-        "reliability": reliability_note(n, m, largest, sources, modularity),
+        "reliability": reliability_note(n, m, largest, sources, modularity, kind),
         "definitions": {**DEFINITIONS.get(kind, DEFINITIONS["membership"]), **_SHARED_DEFINITIONS},
         "nodes": rows, "communities": community_rows, "brokers": brokers, "key_nodes": key_nodes,
         "merges": G.graph.get("merges") or [], "ambiguous": G.graph.get("ambiguous") or [],

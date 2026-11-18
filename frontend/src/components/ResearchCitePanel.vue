@@ -30,7 +30,7 @@
           <button tabindex="0" class="btn btn-xs btn-ghost"><Download :size="12" />Export</button>
           <ul tabindex="0" class="dropdown-content menu menu-sm bg-base-100 rounded-box border border-base-300 shadow z-10 w-56 p-1">
             <li v-for="f in EXPORT_FORMATS" :key="f.id">
-              <button @click="exportAs(f.id)">{{ f.label }}<span class="text-[11px] text-base-content/50">{{ f.hint }}</span></button>
+              <button @click="exportAs(f.id)">{{ f.label }}<span class="text-xs text-base-content/60">{{ f.hint }}</span></button>
             </li>
           </ul>
         </div>
@@ -57,11 +57,11 @@
           <span class="label-text text-xs flex items-center gap-2">
             {{ f.label }}
             <span v-if="userSet(f.id)" class="badge badge-xs badge-ghost">corrected</span>
-            <button v-if="userSet(f.id)" type="button" class="link link-hover text-[11px] text-base-content/55" @click="revert(f.id)">use what was read</button>
+            <button v-if="userSet(f.id)" type="button" class="link link-hover text-xs text-base-content/60" @click="revert(f.id)">use what was read</button>
           </span>
           <textarea v-if="f.multi" v-model="draft[f.id]" rows="3" class="textarea textarea-bordered textarea-xs leading-snug" :placeholder="f.placeholder" />
           <input v-else v-model="draft[f.id]" class="input input-bordered input-xs" :inputmode="f.numeric ? 'numeric' : undefined" :placeholder="f.placeholder" />
-          <span v-if="f.hint" class="text-[11px] text-base-content/50 mt-0.5">{{ f.hint }}</span>
+          <span v-if="f.hint" class="text-xs text-base-content/60 mt-0.5">{{ f.hint }}</span>
         </label>
       </template>
       <p v-if="saveError" class="text-xs text-error" role="alert">{{ saveError }}</p>

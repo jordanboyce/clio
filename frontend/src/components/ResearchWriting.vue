@@ -172,7 +172,7 @@
             <button tabindex="0" class="btn btn-xs" :disabled="!bib?.bibliography?.length"><Download :size="12" />Export</button>
             <ul tabindex="0" class="dropdown-content menu menu-sm bg-base-100 rounded-box border border-base-300 shadow z-10 w-56 p-1">
               <li v-for="f in EXPORT_FORMATS" :key="f.id">
-                <button @click="exportAs(f.id)">{{ f.label }}<span class="text-[11px] text-base-content/50">{{ f.hint }}</span></button>
+                <button @click="exportAs(f.id)">{{ f.label }}<span class="text-xs text-base-content/60">{{ f.hint }}</span></button>
               </li>
             </ul>
           </div>

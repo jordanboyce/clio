@@ -45,10 +45,13 @@ export const SLIDERS = {
   localDepth: { min: 1, max: 3, step: 1 },
 }
 
+// The ids are the network measures' names (and the saved setting); the labels
+// say what each means to a reader (ROADMAP R12): influence is PageRank,
+// bridging is betweenness.
 export const SIZE_OPTIONS = [
-  { id: 'citations', label: 'Citations' },
-  { id: 'pagerank', label: 'PageRank' },
-  { id: 'betweenness', label: 'Betweenness' },
+  { id: 'citations', label: 'Links' },
+  { id: 'pagerank', label: 'Influence' },
+  { id: 'betweenness', label: 'Bridging' },
 ]
 const SIZE_IDS = SIZE_OPTIONS.map(o => o.id)
 
@@ -61,10 +64,14 @@ export const COMMUNITY_SLOTS = 8
 // by itself only where docking it still leaves most of the map to the graph.
 export const PANEL_DOCK_WIDTH = 768
 export const OVERVIEW_AUTO_WIDTH = 1024
+// Below this (a phone) a panel over the graph rises from the bottom as a
+// sheet, leaving the top of the map, where the selected dot is, in view.
+export const PANEL_SHEET_WIDTH = 640
 export function panelLayout(width) {
   const w = Number(width) || 0
   return {
     docked: w >= PANEL_DOCK_WIDTH,
+    sheet: w < PANEL_SHEET_WIDTH,
     autoOverview: w >= OVERVIEW_AUTO_WIDTH,
     widthRem: w >= OVERVIEW_AUTO_WIDTH ? 23 : 20,
   }
@@ -392,4 +399,81 @@ export function mapInsights(shown, limit = 5) {
     missingTotal: nodes.filter(n => n.type === 'external' && !n.in_collection).length,
     orphans: papers.filter(n => !linked.has(n.id)).length,
   }
+}
+
+// ── plain language (ROADMAP R12) ────────────────────────────────────────
+
+const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`
+
+/**
+ * Why the selected dot matters, in sentences built only from what the map
+ * shows: who cites it here, whether it is among the most cited, whether it
+ * bridges groups (the server's broker sentence), and whether you have it.
+ *
+ * links: connections(id, shown) · shown: visibleGraph(...) · brokers: the
+ * citation network's brokers · reliable: false when the map is too small to rank.
+ */
+export function nodeRole(node, { links = { cites: [], citedBy: [] }, shown = null, brokers = [], reliable = true } = {}) {
+  if (!node) return []
+  const out = []
+  const citedBy = links.citedBy?.length || 0
+  const cites = links.cites?.length || 0
+  const external = node.type === 'external' && !node.in_collection
+
+  if (external) {
+    out.push({ key: 'missing', text: citedBy >= 2
+      ? `${plural(citedBy, 'of your sources cites', 'of your sources cite')} it, and it is not in your collection: a likely next read.`
+      : 'Cited by one of your sources; not in your collection.' })
+  } else if (citedBy) {
+    out.push({ key: 'cited', text: `Cited by ${plural(citedBy, 'of your sources', 'of your sources')}.` })
+  }
+
+  // Among the most cited in this map: in the top three, cited at least twice.
+  if (shown && citedBy >= 2) {
+    const inDegree = {}
+    for (const e of shown.edges || []) inDegree[e.target] = (inDegree[e.target] || 0) + 1
+    const higher = new Set(Object.values(inDegree).filter(n => n > citedBy)).size
+    if (higher === 0) out.push({ key: 'top', text: 'The most cited work in this map.' })
+    else if (higher < 3) out.push({ key: 'top', text: 'One of the most cited works in this map.' })
+  }
+
+  const broker = brokers.find(b => b.id === node.id)
+  if (broker) {
+    out.push({ key: 'bridge', text: `Bridges ${groupCount(broker)} groups that otherwise cite different work.`, detail: broker.sentence })
+  }
+
+  if (node.type === 'paper' && !citedBy && !cites) {
+    out.push({ key: 'alone', text: 'Cites nothing drawn here and nothing here cites it.' })
+  } else if (node.type === 'paper' && !citedBy) {
+    out.push({ key: 'uncited', text: `Cites ${plural(cites, 'work')} drawn here; none of your sources cites it.` })
+  }
+
+  if (!reliable && out.some(s => s.key === 'top' || s.key === 'bridge')) {
+    out.push({ key: 'caveat', text: 'The map is small: read this as a description of these links, not a ranking.' })
+  }
+  return out
+}
+
+function groupCount(broker) {
+  const n = broker.connects?.length || broker.bridges?.length || 2
+  return ['', 'one', 'two', 'three', 'four', 'five'][n] || String(n)
+}
+
+/** A broker's measures in words: betweenness and constraint, for the disclosure. */
+export function bridgeWords(broker) {
+  const out = []
+  const b = Number(broker?.betweenness)
+  if (Number.isFinite(b) && b > 0) {
+    const pct = Math.round(b * 100)
+    out.push(pct >= 1
+      ? `On ${pct}% of the shortest citation paths between other works in this map.`
+      : 'On a few of the shortest citation paths between other works in this map.')
+  }
+  const c = broker?.constraint
+  if (c !== null && c !== undefined && Number.isFinite(Number(c))) {
+    if (c <= 0.3) out.push('Its links reach several separate groups.')
+    else if (c <= 0.6) out.push('Its links reach a few groups.')
+    else out.push('Its links mostly stay inside one tight group.')
+  }
+  return out
 }

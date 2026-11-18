@@ -85,7 +85,7 @@ describe('ResearchNetworkPanel', () => {
     expect(w.text()).toContain(definitions.betweenness)
   })
 
-  it('expands the links with direction words, reasons and definitions, and focuses a neighbour', async () => {
+  it('expands the links with direction words, reasons and plain measures, and focuses a neighbour', async () => {
     const w = mountPanel()
     expect(w.find('[data-testid="network-broker-links"]').exists()).toBe(false)
     const toggle = w.get('button[aria-expanded]')
@@ -95,8 +95,11 @@ describe('ResearchNetworkPanel', () => {
     const links = w.get('[data-testid="network-broker-links"]')
     expect(links.text()).toContain('cited by this · same arXiv id')
     expect(links.text()).toContain('cites this · title printed in the reference')
-    expect(links.text()).toContain(definitions.betweenness)
-    expect(links.text()).toContain(definitions.constraint)
+    // The measures in words (R12), not their names: 0.35 betweenness, 0.17 constraint.
+    const measures = links.get('[data-testid="network-broker-measures"]')
+    expect(measures.text()).toContain('On 35% of the shortest citation paths between other works')
+    expect(measures.text()).toContain('Its links reach several separate groups.')
+    expect(measures.text()).not.toMatch(/betweenness|constraint/i)
     const edge = links.findAll('button.node-row').find(b => b.attributes('title') === 'REALM')
     await edge.trigger('click')
     expect(w.emitted('focus').at(-1)).toEqual(['p2'])

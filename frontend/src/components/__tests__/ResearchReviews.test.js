@@ -67,13 +67,14 @@ describe('deleting reviews', () => {
   it('keeps the unread count right when an unread review goes', async () => {
     http.delete.mockResolvedValue({ data: { deleted: 1 } })
     const w = await mountReviews([review(1), review(2)])
-    expect(w.text()).toContain('2 unread')
+    const unreadTab = () => w.get('[data-testid="reviews-unread-only"]').text().replace(/\s+/g, ' ')
+    expect(unreadTab()).toBe('Unread2')
 
     await w.get('[aria-label="Delete the review of Paper 1"]').trigger('click')
     await w.findAll('button').find(b => b.text() === 'Delete permanently').trigger('click')
     await flushPromises()
 
-    expect(w.text()).toContain('1 unread')
+    expect(unreadTab()).toBe('Unread1')
   })
 
   it('deletes them all at once, says that verdicts go too, and tells the page', async () => {
@@ -96,7 +97,7 @@ describe('deleting reviews', () => {
   it('offers no delete-all over a filtered list, where "all" would mean more than it shows', async () => {
     const w = await mountReviews([review(1)])
 
-    await w.get('input[type="checkbox"]').setValue(true)
+    await w.get('[data-testid="reviews-unread-only"]').trigger('click')
     await flushPromises()
 
     expect(w.find('[data-testid="delete-all-reviews"]').exists()).toBe(false)
@@ -185,5 +186,76 @@ describe('tidying the background work list', () => {
     expect(rows(w)).toHaveLength(1)
     expect(w.find('[data-testid="clear-finished-jobs"]').exists()).toBe(false)
     expect(w.find('[aria-label="Remove Brief reviews from this list"]').exists()).toBe(false)
+  })
+})
+
+describe('reading a review', () => {
+  const statement = (point, page = 2) => ({ point, quote: `${point} (quoted)`, page, passage: 'p1', match: 1 })
+  const full = (id, over = {}) => review(id, {
+    sections: [
+      { key: 'tldr', title: 'In one line', items: [statement('Roots matter.', 1)] },
+      { key: 'findings', title: 'What it finds', items: [statement('Survival rose 31%.'), statement('Growth did not change.')] },
+      { key: 'limitations', title: 'Limitations the authors state', items: [] },
+    ],
+    rejected: 2,
+    ...over,
+  })
+
+  it('lists unread first and says at a glance what was verified', async () => {
+    const w = await mountReviews([full(1, { read_at: '2026-11-03T11:00:00Z' }), full(2), review(3)])
+    const rows = w.findAll('[data-testid="review-row"]')
+    expect(rows.map(r => r.text().split('\n')[0])).toEqual([
+      expect.stringContaining('Paper 2'), expect.stringContaining('Paper 3'), expect.stringContaining('Paper 1'),
+    ])
+    expect(rows[0].text()).toContain('3 statements verified · 2 left out')
+    expect(rows[1].text()).toContain('Nothing could be verified')
+  })
+
+  it('opens one review in the reader, marks it read, and offers the next unread', async () => {
+    http.post.mockResolvedValue({ data: {} })
+    const w = await mountReviews([full(1), full(2)])
+    expect(w.find('[data-testid="review-reader"]').exists()).toBe(false)
+    expect(w.get('[data-testid="review-reader-empty"]').text()).toContain('Start with')
+
+    await w.findAll('[data-testid="review-row"]')[0].get('button').trigger('click')
+    await flushPromises()
+
+    const reader = w.get('[data-testid="review-reader"]')
+    expect(reader.get('h3').text()).toBe('Paper 1')
+    expect(http.post).toHaveBeenCalledWith(expect.stringContaining('/api/research/reviews/1/read?'), { read: true })
+    expect(w.get('[data-testid="reviews-unread-only"]').text()).toBe('Unread1')
+    await w.get('[data-testid="next-unread"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="review-reader"] h3').text()).toBe('Paper 2')
+    expect(w.find('[data-testid="next-unread"]').exists()).toBe(false)
+  })
+
+  it('opens the form to prepare reviews when there are none yet, and says what a model is needed for', async () => {
+    const w = await mountReviews([])
+    expect(w.find('[data-testid="prepare-reviews"]').exists()).toBe(true)
+    expect(w.get('[data-testid="reviews-empty"]').text()).toContain('Reviews need a model')
+  })
+
+  it('keeps the form folded away when there are reviews to read', async () => {
+    const w = await mountReviews([full(1)])
+    expect(w.find('[data-testid="prepare-reviews"]').exists()).toBe(false)
+    await w.get('[data-testid="prepare-reviews-toggle"]').trigger('click')
+    expect(w.find('[data-testid="prepare-reviews"]').exists()).toBe(true)
+  })
+
+  it('says the reviews could not be loaded, and tries again', async () => {
+    http.get.mockRejectedValueOnce({ message: 'Server unavailable' })
+    http.get.mockImplementation(async (url) => (url.startsWith('/api/research/reviews')
+      ? { data: { reviews: [full(1)], unread: 1 } } : { data: { jobs: [] } }))
+    wrapper = mount(ResearchReviews, {
+      props: { collectionId: 'lab', papers: [], selectedIds: [], providerId: null, canWrite: true },
+      global: { stubs: { ResearchBrief: true } },
+    })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="reviews-error"]').text()).toContain('Server unavailable')
+
+    await wrapper.get('[data-testid="reviews-error"] button').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="review-row"]')).toHaveLength(1)
   })
 })

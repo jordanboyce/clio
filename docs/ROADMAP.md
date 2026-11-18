@@ -246,11 +246,15 @@ Progress, errors and Stop currently live only under Reviews. Analyze and Screen 
 **R10 — Show the order. (M)**
 The first visit should read as four steps with their state: *Analyzed 10/10 → Screened for "…" 6/10 → Reviewed 3/10 → Cite & check*. Each step says what it needs ("needs a model" where true, shown before you type) and what it will cost (number of model calls). Screening skips sources already screened for the same question.
 
+*Shipped 2026-11-18 (frontend only).* The Papers view opens on the four steps with counts over the selection, what each needs and costs; Screen skips sources already screened for the question and says so (*Screen 4 more sources*); Prepare reviews prices a run (*up to 16 model calls*). Reviews became a list (unread first, verdict and verified count per row) beside a reader. The cost is counted, not metered: R8b's job strip is still to do.
+
 **R11 — The missing end product: a cited synthesis. (L)**
 Add "Write up" on a selection: a literature summary built only from statements the reviews have already verified, each carrying its quote and page, exported with the reference list. It lands in Reports. This is the natural finish for the tab, and it reuses checks that already exist.
 
 **R12 — Plain-language map. (S)**
 Replace "betweenness", "constraint" and "modularity" with what they mean ("bridges two groups", "cited by many of your sources"). Keep the honest "too small to rank" warning; it is good.
+
+*Shipped 2026-11-18, with F19.* The server's reliability note and definitions are plain words ("Too small to rank: 16 works and 32 links…", "the groups are also loose"); the API keys are unchanged. A selected dot says *why it matters here*; broker measures read as sentences; dot sizes are *Links*, *Influence*, *Bridging*; colour *Group*. The map loads through `lazyView`.
 
 **R13 — Library over MCP. (M)**
 Agents can format and check citations but cannot list papers, read reviews or verdicts, or start screening. Add `list_papers`, `get_paper` (record, review, screening verdicts) and `screen_papers` in the `library` tool profile (M4).
