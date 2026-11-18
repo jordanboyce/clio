@@ -6,6 +6,13 @@ import threading
 from pathlib import Path
 
 from services.artifact_store import mark_sources_withheld
+from services.schema_versions import (
+    METADATA_SCHEMA_VERSION,
+    NewerSchemaError,
+    is_newer,
+    newer_message,
+    snapshot_before_migrating,
+)
 from services.sqlite_utils import sqlite_connect
 from typing import List, Optional, Dict, Any, Set, Tuple
 import json
@@ -13,8 +20,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Current schema version - increment when making breaking changes
-SCHEMA_VERSION = "3.9"
+# Current schema version - increment when making breaking changes, in
+# services/schema_versions.py (scripts/backup.py reads it from there).
+SCHEMA_VERSION = METADATA_SCHEMA_VERSION
 
 # v3.3 governance columns on the documents table, in migration order.
 _GOVERNANCE_DOC_COLUMNS = [
@@ -232,7 +240,13 @@ class MetadataStore:
 
             if current_version == SCHEMA_VERSION:
                 return  # Already up to date
+            # A newer Clio wrote this. There is no migration down, and
+            # stamping it with our version would hide that from the next start.
+            if is_newer(current_version, SCHEMA_VERSION):
+                raise NewerSchemaError(newer_message(
+                    "The collection database", self.db_path, current_version, SCHEMA_VERSION))
 
+            self._snapshot_before_migrating(current_version)
             logger.info(f"Migrating schema from {current_version} to {SCHEMA_VERSION}")
 
             # Migration from 1.0/2.0 to 3.0
@@ -293,6 +307,20 @@ class MetadataStore:
             conn.commit()
 
             logger.info(f"Schema migration to {SCHEMA_VERSION} completed")
+
+    def _snapshot_before_migrating(self, current_version: str) -> None:
+        """A copy in DATA_DIR/backups/pre-upgrade before the migration runs."""
+        from config import settings
+
+        folder = self.db_path.parent
+        collection = folder.parent.name if folder.name == "indexes" else folder.name
+        label = f"{collection}-{self.db_path.stem}"
+        copy = snapshot_before_migrating(self.db_path, Path(settings.data_dir) / "backups", label,
+                                         current_version, SCHEMA_VERSION)
+        if copy:
+            logger.info(f"Copied {self.db_path} to {copy} before migrating it")
+        else:
+            logger.warning(f"Could not copy {self.db_path} before migrating it; migrating anyway")
 
     def _migrate_to_v3(self, conn: sqlite3.Connection):
         """Migrate from v1.0/v2.0 to v3.0 schema."""

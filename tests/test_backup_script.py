@@ -108,3 +108,68 @@ def test_not_a_clio_backup_is_refused(tmp_path):
         t.addfile(ti, io.BytesIO(b""))
     with pytest.raises(SystemExit):
         backup.verify(p)
+
+
+
+# ── Versions, the key, and a live vector index (E6) ─────────────────────────
+
+def _collection(data, schema="3.9"):
+    idx = data / "collections" / "c1" / "indexes"
+    idx.mkdir(parents=True)
+    (idx / "faiss.index").write_bytes(b"FAISS" + b"1" * 64)
+    with sqlite3.connect(idx / "metadata.db") as conn:
+        conn.execute("CREATE TABLE schema_info (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute("INSERT INTO schema_info VALUES ('version', ?)", (schema,))
+    (data / "secret.key").write_bytes(b"k" * 44)
+    return idx
+
+
+def test_the_manifest_records_versions_and_the_key(data, tmp_path):
+    _collection(data)
+    manifest = backup.backup(data, tmp_path / "b.tar.gz")
+
+    assert manifest["app_version"]
+    assert manifest["schemas"] == {"app.db": "0", "collections/c1/indexes/metadata.db": "3.9"}
+    assert manifest["secret_key"] == "included" and "secret.key" in manifest["files"]
+
+
+def test_the_key_can_be_left_out(data, tmp_path):
+    _collection(data)
+    manifest = backup.backup(data, tmp_path / "b.tar.gz", include_key=False)
+
+    assert manifest["secret_key"] == "left out"
+    assert "secret.key" not in manifest["files"] and "secret.key" in manifest["excluded"]
+    assert backup.verify(tmp_path / "b.tar.gz")[1] == []
+
+
+def test_a_backup_from_a_newer_clio_is_not_restored(data, tmp_path):
+    _collection(data, schema="9.0")
+    out = tmp_path / "b.tar.gz"
+    backup.backup(data, out)
+
+    with pytest.raises(SystemExit) as refused:
+        backup.restore(out, tmp_path / "restored", force=False)
+
+    assert "schema 9.0" in str(refused.value) and "reads up to 3.9" in str(refused.value)
+    assert not (tmp_path / "restored").exists()
+
+
+def test_an_index_replaced_during_the_backup_still_verifies(data, tmp_path, monkeypatch):
+    """The index is read once into staging; the server replacing the file
+    afterwards (write, then rename) cannot make the archive disagree with its
+    manifest. Before, the live file was hashed and then read again."""
+    idx = _collection(data)
+    real_sha256 = backup._sha256
+    saves = []
+
+    def hash_then_the_server_saves(path):
+        digest = real_sha256(path)
+        saves.append(1)  # every save writes a different index
+        (idx / "faiss.index").write_bytes(b"FAISS" + b"2" * (80 + len(saves)))
+        return digest
+
+    monkeypatch.setattr(backup, "_sha256", hash_then_the_server_saves)
+    out = tmp_path / "b.tar.gz"
+    backup.backup(data, out)
+
+    assert backup.verify(out)[1] == []

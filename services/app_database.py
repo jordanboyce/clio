@@ -20,6 +20,12 @@ from config import settings
 from services.db_backend import DatabaseBackend
 from services.sqlite_utils import sqlite_connect
 from services import provenance
+from services.schema_versions import (
+    APP_DB_SCHEMA_VERSION,
+    NewerSchemaError,
+    newer_message,
+    snapshot_before_migrating,
+)
 # Re-exported: both backends (and tests) import these from here.
 from services.db_helpers import _get_document_count_from_metadata, _get_storage_bytes_from_metadata  # noqa: F401
 
@@ -56,9 +62,48 @@ class SQLiteBackend(DatabaseBackend):
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
+    def _app_schema_version(self) -> Optional[int]:
+        """The version stamped in app.db; 0 for one made before versions were
+        stamped; None when there is no database yet."""
+        if not self.db_path.is_file() or self.db_path.stat().st_size == 0:
+            return None
+        with sqlite_connect(self.db_path) as conn:
+            try:
+                row = conn.execute("SELECT value FROM schema_info WHERE key = 'version'").fetchone()
+            except sqlite3.OperationalError:
+                return 0
+        try:
+            return int(row[0]) if row else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def _check_app_schema(self) -> None:
+        """Refuse a newer app.db; copy an older one aside before migrating it."""
+        found = self._app_schema_version()
+        if found is None or found == APP_DB_SCHEMA_VERSION:
+            return
+        if found > APP_DB_SCHEMA_VERSION:
+            raise NewerSchemaError(newer_message(
+                "The application database", self.db_path, found, APP_DB_SCHEMA_VERSION))
+        copy = snapshot_before_migrating(self.db_path, Path(settings.data_dir) / "backups", "app",
+                                         found, APP_DB_SCHEMA_VERSION)
+        if copy:
+            logger.info(f"Copied {self.db_path} to {copy} before migrating it")
+        else:
+            logger.warning(f"Could not copy {self.db_path} before migrating it; migrating anyway")
+
     def _init_db(self):
         """Initialize database schema."""
+        self._check_app_schema()
         with sqlite_connect(self.db_path) as conn:
+            # The version of this schema (services/schema_versions.py), stamped
+            # once every table and column below exists.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_info (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS config (
                     key TEXT PRIMARY KEY,
@@ -555,6 +600,10 @@ class SQLiteBackend(DatabaseBackend):
                     ("default", "Default User", timestamp, timestamp)
                 )
 
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
+                (str(APP_DB_SCHEMA_VERSION),),
+            )
             conn.commit()
             logger.info(f"Application database initialized at {self.db_path}")
 

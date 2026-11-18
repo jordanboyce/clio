@@ -187,6 +187,24 @@ def _check_security_posture() -> None:
         )
 
 
+def _refuse_newer_databases() -> None:
+    """Stop before anything opens a collection a newer Clio wrote.
+
+    app.db is checked when it is opened, at import (services/app_database.py);
+    collection databases open lazily, so a newer one would otherwise surface
+    as a failing search later. Read-only: nothing is migrated or stamped here.
+    """
+    from services.collection_service import collection_service
+    from services.schema_versions import METADATA_SCHEMA_VERSION, NewerSchemaError, is_newer, \
+        newer_message, read_version
+
+    for db_path in sorted(collection_service.base_dir.glob("*/indexes/metadata.db")):
+        found = read_version(db_path)
+        if found and is_newer(found, METADATA_SCHEMA_VERSION):
+            raise NewerSchemaError(newer_message(
+                "The collection database", db_path, found, METADATA_SCHEMA_VERSION))
+
+
 def _log_renamed_settings() -> None:
     """Name each pre-R9 setting still in use, so an operator renames it
     before the old spelling is dropped. The value itself is honoured."""
@@ -225,6 +243,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager - initialize and cleanup services."""
     async with mcp_server_lifespan():
         logger.info("Initializing Clio API...")
+        _refuse_newer_databases()
         _log_renamed_settings()
         _size_worker_pools()
 

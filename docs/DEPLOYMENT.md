@@ -996,21 +996,42 @@ manifest into the archive, and refuses to restore anything that fails
 verification:
 
 ```bash
-docker compose stop                       # needed for a restorable backup
 docker run --rm -v clio_clio-data:/app/data -v "$PWD:/out" clio:local     python scripts/backup.py backup --data /app/data --out /out/clio-$(date +%F).tar.gz
-docker compose start
 
 python scripts/backup.py verify clio-2026-10-27.tar.gz     # hashes + integrity_check
 python scripts/backup.py restore clio-2026-10-27.tar.gz --data ./data-restored
 ```
 
-Stop the server first when the backup must be restorable: vector indexes are
-plain files and one being saved at that instant can be captured half-written.
-The databases are always consistent; the tool says this on every run. The
-archive is written `0600` because it holds your documents; encrypt it before
-it leaves the host. Run a restore drill (restore to a scratch directory,
-start a second instance on it, search) before you need it, and after each
-upgrade.
+The server can keep running. Each vector index is read once into a staging
+copy before the databases beside it are snapshotted; the server replaces an
+index file whole, so the copy is always complete, and at worst it lags its
+database by the last few writes. A restored collection then embeds those
+passages again the first time it opens (this needs the embedding model) and
+drops vectors whose passages were deleted. The archive is written `0600`
+because it holds your documents; encrypt it before it leaves the host. Run a
+restore drill (restore to a scratch directory, start a second instance on it,
+search) before you need it, and after each upgrade.
+
+The manifest records the Clio version that made the backup and the schema
+version of each database. `restore` refuses a backup whose databases are newer
+than the running copy of Clio reads, and names both versions. `--no-key`
+leaves `secret.key` out of the archive (see Stored credentials below): keep
+the key apart from the backup when the archive leaves the machine.
+
+### Upgrades
+
+Each database carries a schema version: every collection's `metadata.db`, and
+`app.db` from this release on. On start:
+
+- A database written by a **newer** Clio stops the server with a line naming
+  the database and both versions; nothing is changed. Start the newer version
+  again, or restore a backup taken with this one. (Before this release an older
+  image re-stamped such a database and carried on.)
+- An **older** database is copied into `DATA_DIR/backups/pre-upgrade/` with
+  SQLite's online backup, then migrated. The copies are not removed
+  automatically; delete them once the upgraded server has run for a while.
+  With `DB_BACKEND=postgresql` only the collection databases are versioned, so
+  `pg_dump` before an upgrade.
 
 The shipped `docker-compose.yml` bind-mounts `./data`; on Windows hosts, or
 wherever SQLite misbehaves on a bind mount, use a named volume and take the
@@ -1025,7 +1046,7 @@ Nothing needs setting up, but where the key lives decides what this protects:
 
 | | Key | Protects against |
 |---|---|---|
-| **Default** | Generated at `DATA_DIR/secret.key` on first use | A database that leaves on its own: a Postgres dump or replica, a copied `app.db`. **Not** a stolen data directory or a `scripts/backup.py` archive, which hold the key too; that is what lets a restore work with nothing else to carry |
+| **Default** | Generated at `DATA_DIR/secret.key` on first use | A database that leaves on its own: a Postgres dump or replica, a copied `app.db`. **Not** a stolen data directory or a `scripts/backup.py` archive, which hold the key too (unless the backup was made with `--no-key`); that is what lets a restore work with nothing else to carry |
 | **Your own** | `SECRET_ENCRYPTION_KEY` (16+ characters; use `openssl rand -base64 32`), from your secret manager or the service's environment | Everything above, including the data directory and its backups. Restoring then also needs this key |
 
 Changing or losing the key does not stop the app. Stored credentials read as not
