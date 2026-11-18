@@ -110,7 +110,9 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
             type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=raw,value=${{ matrix.moving }},suffix=,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+          # The moving tag (:latest, :slim, :bge, :bge-slim) is added only after
+          # the smoke test below passes, so a broken build never reaches the
+          # tag a quick start pulls.
 
       - id: build
         uses: docker/build-push-action@v6
@@ -139,6 +141,29 @@ jobs:
             type=gha,scope=${{ matrix.variant }}
             type=gha,scope=${{ matrix.cache_base }}
           cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+
+      # Run the image the way a locked-down site does (non-root, read-only,
+      # no capabilities, no network) and check its baked embedding model,
+      # document and PRA ingest through the parsing helpers, and semantic
+      # search. A failure stops here: nothing is signed and the moving tag
+      # stays on the previous release.
+      - name: Smoke-test the image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EMBEDDING_MODEL: ${{ matrix.embedding_model }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}@${DIGEST}"
+          docker pull --platform linux/amd64 "$image"
+          scripts/smoke_image.sh "$image" "$EMBEDDING_MODEL"
+
+      - name: Move the ${{ matrix.moving }} tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          MOVING: ${{ matrix.moving }}
+        run: |
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx imagetools create --tag "$repo:$MOVING" "$repo@$DIGEST"
 
       - uses: sigstore/cosign-installer@v3
 
