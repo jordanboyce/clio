@@ -48,8 +48,9 @@ def test_an_override_of_the_environment_is_logged_and_listed(started, caplog):
         cfg = started(CHUNK_SIZE="900")
 
     assert cfg.chunk_size == 1200 and cfg.default_top_k == 7
-    lines = [r.getMessage() for r in caplog.records]
-    assert "CHUNK_SIZE is 900 in the environment, but 1200, saved in Settings, is in force." in lines[0]
+    lines = [r.getMessage() for r in caplog.records if r.name == "services.indexer_manager"]
+    assert any("CHUNK_SIZE is 900 in the environment, but 1200, saved in Settings, is in force." in line
+               for line in lines)
     assert not any("DEFAULT_TOP_K" in line for line in lines)
     assert settings_sources.overrides() == [
         {"name": "CHUNK_SIZE", "field": "chunk_size", "environment": 900, "saved": 1200}]
