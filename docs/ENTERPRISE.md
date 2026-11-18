@@ -272,7 +272,7 @@ Read the logs first: `docker compose logs clio`, `docker compose logs proxy`.
 | Search says the model is not available (503) | The search model is not on disk, or `EMBEDDING_MODEL` was changed | Use the image's default model. Search still works by keyword ([what each one costs](AIRGAP.md#when-a-model-or-provider-is-out-of-reach)) |
 | `check_deployment.sh`: no HSTS header | Clio does not trust the proxy's forwarding headers | With your own proxy, set `FORWARDED_ALLOW_IPS` to its address. The bundled proxy sets this for you |
 | Everyone hits 429 at once | Rate limits see one address for everybody, the same cause as above | The same fix |
-| 421 on `/mcp` | The hostname is not allowed | Set `CLIO_HOSTNAME`, or `MCP_ALLOWED_HOSTS` with your own proxy |
+| 421 on `/mcp` or any page | The hostname is not allowed | Set `CLIO_HOSTNAME`, or `ALLOWED_HOSTS` with your own proxy |
 | Claude Desktop or ChatGPT cannot find where to sign in | Set the public address | `MCP_PUBLIC_URL=https://clio.corp.example/mcp` ([details](IDENTITY.md#oauth-for-mcp-clients)) |
 | 413 on upload | Over the proxy's limit, or the collection's | Raise `CLIO_MAX_UPLOAD`, or `COLLECTION_STORAGE_LIMIT_BYTES`. The message names which |
 | Answers arrive all at once, or cut off at about a minute | Another proxy on the way is buffering, or timing out | Turn off response buffering there, and raise its read timeout to 15 minutes |
@@ -292,7 +292,7 @@ and have your proxy:
   answers can take minutes between bytes;
 - allow request bodies up to your largest upload.
 
-On Clio, set `FORWARDED_ALLOW_IPS` to that proxy's address, `MCP_ALLOWED_HOSTS` to the
+On Clio, set `FORWARDED_ALLOW_IPS` to that proxy's address, `ALLOWED_HOSTS` to the
 hostname, and `BIND_ADDRESS` to anything but loopback, so the secure profile judges the
 exposure that is really there. `check_deployment.sh` works the same against it.
 

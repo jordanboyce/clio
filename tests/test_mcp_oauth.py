@@ -65,7 +65,7 @@ def oidc_mcp(identity_settings, fake_idp):
     identity_settings.mcp_oauth_audience = ""
     identity_settings.mcp_oauth_jwks_url = ""
     identity_settings.mcp_oauth_scope = ""
-    identity_settings.mcp_allowed_hosts = ""
+    identity_settings.allowed_hosts = ""
     # A password keeps the gate closed for anonymous callers without needing
     # private collections (and their database) in these tests.
     identity_settings.auth_password = "hunter2"
@@ -161,11 +161,11 @@ def test_resource_url_is_derived_from_the_request_only_when_unconfigured(app, oi
     assert "https://clio.agency.test/mcp" not in verifier.audiences
 
 
-def test_resource_url_falls_back_to_mcp_allowed_hosts(oidc_mcp):
+def test_resource_url_falls_back_to_allowed_hosts(oidc_mcp):
     oidc_mcp.mcp_public_url = ""
-    oidc_mcp.mcp_allowed_hosts = "clio.internal, other.internal"
+    oidc_mcp.allowed_hosts = "clio.internal, other.internal"
     assert identity_service.mcp_public_url() == "https://clio.internal/mcp"
-    oidc_mcp.mcp_allowed_hosts = "localhost:8473"
+    oidc_mcp.allowed_hosts = "localhost:8473"
     assert identity_service.mcp_public_url() == "http://localhost:8473/mcp"
 
 

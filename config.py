@@ -32,6 +32,8 @@ RENAMED_SETTINGS = {
     "DEEP_SEARCH_QUEUE_TIMEOUT_SECONDS": "RESEARCH_QUEUE_TIMEOUT_SECONDS",
     "LIBRARY_MAX_CONCURRENT_JOBS": "RESEARCH_MAX_CONCURRENT_JOBS",
     "LIBRARY_MAX_JOB_DOCUMENTS": "RESEARCH_MAX_JOB_DOCUMENTS",
+    # Not R9: the Host allowlist used to guard /mcp only (2026-11-18).
+    "ALLOWED_HOSTS": "MCP_ALLOWED_HOSTS",
 }
 
 
@@ -58,6 +60,11 @@ DEFAULT_CONTENT_SECURITY_POLICY = (
     "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
     "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
 )
+
+
+# The shortest AUTH_PASSWORD the app accepts without a warning (and, under the
+# secure profile, at all). scripts/setup.py enforces the same number.
+MIN_AUTH_PASSWORD_LENGTH = 12
 
 
 # Default hybrid-search balance (semantic vs keyword). Shared by the vector
@@ -338,6 +345,18 @@ class Settings(BaseSettings):
     # requests are allowed only for explicitly listed origins, never for "*".
     cors_allow_origins: str = ""
 
+    # Host names the app answers to, comma-separated (e.g. "clio.example.com";
+    # a port is ignored). A request naming any other Host is refused with 421,
+    # which stops a web page from reaching the app through DNS rebinding.
+    # localhost, 127.0.0.1 and [::1] are always allowed. Empty (the default):
+    # a loopback install answers to those names only; one reachable from the
+    # network (HOST=0.0.0.0 with no loopback BIND_ADDRESS) answers to any name,
+    # and the readiness report warns until the names are listed. The same list
+    # guards /mcp. MCP_ALLOWED_HOSTS is its earlier name and is still read.
+    allowed_hosts: str = Field(
+        "", validation_alias=AliasChoices("ALLOWED_HOSTS", "MCP_ALLOWED_HOSTS")
+    )
+
     # HTTPS / TLS. If both files exist, uvicorn serves HTTPS on `port`.
     # Leave empty to run plain HTTP (default). Paths are relative to the
     # project root unless absolute. Use `certs/generate-cert.sh` to create
@@ -523,6 +542,15 @@ class Settings(BaseSettings):
     # question). Set a per-token budget only for abuse protection on a shared
     # deployment; it is keyed on the personal token, not the IP.
     rate_limit_mcp_per_minute: int = 0
+    # Failed sign-ins (a wrong password, MCP token, app key or identity
+    # assertion) one client address may make within the window before every
+    # credentialed request from it is answered 429 until the oldest failure
+    # ages out. Checked before authentication, so it holds while the limits
+    # above are off. Keyed on the address uvicorn reports: behind a reverse
+    # proxy set FORWARDED_ALLOW_IPS, or one guesser locks everyone out.
+    # 0 disables it.
+    auth_failure_limit: int = 10
+    auth_failure_window_seconds: int = 60
 
     # Worker threads for everything the event loop hands off: sync endpoints
     # (chat turns, uploads), every MCP tool, document reads and table queries.
@@ -655,13 +683,6 @@ class Settings(BaseSettings):
     # than the search log. 0 = keep forever.
     audit_retention_days: int = 365
 
-    # Extra Host header values the embedded /mcp endpoint accepts, comma-
-    # separated (e.g. "clio.example.com"). The MCP SDK ships DNS-rebinding
-    # protection that only trusts localhost Hosts by default; when the app is
-    # served through a tunnel or reverse proxy under a public hostname, list
-    # that hostname here. Localhost stays allowed either way.
-    mcp_allowed_hosts: str = ""
-
     # ── OAuth 2.1 on /mcp (docs/IDENTITY.md "OAuth for MCP clients") ─────
     # Connector-style MCP clients (Claude Desktop, claude.ai, ChatGPT, and
     # Claude Code without a pasted token) discover an authorization server
@@ -680,7 +701,7 @@ class Settings(BaseSettings):
     # MCP_PUBLIC_URL is the canonical URL clients reach the endpoint at,
     # e.g. https://clio.agency.gov/mcp. It is the RFC 9728 `resource`,
     # and a token whose audience is exactly that URL is accepted on /mcp
-    # (RFC 8707 resource indicators). Empty = derived from MCP_ALLOWED_HOSTS,
+    # (RFC 8707 resource indicators). Empty = derived from ALLOWED_HOSTS,
     # else from the request; set it explicitly for anything but localhost.
     mcp_public_url: str = ""
     mcp_oauth_issuer: str = ""        # empty = OIDC_ISSUER when IDENTITY_PROVIDER=oidc

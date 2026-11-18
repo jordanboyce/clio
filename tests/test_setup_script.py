@@ -145,3 +145,31 @@ class _NotATty:
 
     def readline(self):
         return ""
+
+
+def test_main_refuses_a_short_password_and_leaves_the_file_alone(tmp_path, capsys):
+    template = tmp_path / ".env.example"
+    template.write_text(TEMPLATE, encoding="utf-8")
+    env = tmp_path / ".env"
+
+    assert setup.main(["--password", "hunter2", "--env", str(env), "--template", str(template)]) == 2
+    assert not env.exists()
+    assert "at least 12 characters" in capsys.readouterr().err
+    assert setup.main(["--password", "a-long-enough-pw", "--env", str(env), "--template", str(template)]) == 0
+    assert setup.get_key(env.read_text(encoding="utf-8"), "AUTH_PASSWORD") == "a-long-enough-pw"
+
+
+def test_typed_password_is_asked_again_until_long_enough(monkeypatch, capsys):
+    answers = iter(["2"])
+    typed = iter(["short", "a-long-enough-pw"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr(setup.getpass, "getpass", lambda _prompt: next(typed))
+
+    assert setup.ask_choice(False, TEMPLATE) == ("a-long-enough-pw", False)
+    assert "at least 12 characters" in capsys.readouterr().out
+
+
+def test_minimum_matches_the_server():
+    import config
+
+    assert setup.MIN_PASSWORD_LENGTH == config.MIN_AUTH_PASSWORD_LENGTH

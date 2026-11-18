@@ -179,12 +179,12 @@ def _transport_security() -> TransportSecuritySettings:
 
     Without an explicit setting the MCP SDK trusts only localhost Host headers,
     which breaks the endpoint behind a tunnel/reverse proxy (the original
-    public Host is forwarded). MCP_ALLOWED_HOSTS extends the allowlist while
+    public Host is forwarded). ALLOWED_HOSTS extends the allowlist while
     keeping the protection itself enabled.
     """
     hosts = ["127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*", "[::1]", "[::1]:*"]
     origins = ["http://127.0.0.1", "http://127.0.0.1:*", "http://localhost", "http://localhost:*"]
-    for host in settings.mcp_allowed_hosts.split(","):
+    for host in settings.allowed_hosts.split(","):
         host = host.strip()
         if host:
             hosts += [host, f"{host}:*"]

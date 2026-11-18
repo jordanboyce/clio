@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from config import CLOUD_AI_PROVIDERS, settings
+from config import CLOUD_AI_PROVIDERS, MIN_AUTH_PASSWORD_LENGTH, settings
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +128,10 @@ def _posture_checks() -> List[Dict[str, Any]]:
     gate = auth_gate()
     if gate:
         out.append(_check("auth", "posture", "Access control", PASS, f"Requests need a credential ({gate})."))
+        if settings.auth_password and len(settings.auth_password) < MIN_AUTH_PASSWORD_LENGTH:
+            out.append(_check("password", "posture", "Password strength", _secure_or(FAIL),
+                              f"AUTH_PASSWORD is shorter than {MIN_AUTH_PASSWORD_LENGTH} characters.",
+                              "Set a longer one: python scripts/setup.py --password generates one."))
     elif _reachable_beyond_host():
         problem, fix = _no_gate_problem()
         out.append(_check("auth", "posture", "Access control", _secure_or(FAIL), problem, fix))
@@ -144,13 +148,36 @@ def _posture_checks() -> List[Dict[str, Any]]:
                           "Only listed origins" if settings.cors_allow_origins.strip() else "No cross-origin access."))
 
     if _reachable_beyond_host() and not (settings.ssl_certfile and settings.ssl_keyfile):
-        out.append(_check("tls", "posture", "Transport encryption", WARN,
-                          "Not serving TLS itself. Fine behind a TLS-terminating proxy; otherwise traffic and the "
-                          "password cross the network in clear text.",
+        if settings.auth_password:
+            # The shared password rides on every request, so this is the case
+            # that matters most. Still a warning: a proxy in front is invisible here.
+            detail = ("Not serving TLS itself, and AUTH_PASSWORD is sent with every request. Unless a "
+                      "TLS-terminating proxy is in front, the password and every document cross the "
+                      "network in clear text.")
+        else:
+            detail = ("Not serving TLS itself. Fine behind a TLS-terminating proxy; otherwise traffic "
+                      "crosses the network in clear text.")
+        out.append(_check("tls", "posture", "Transport encryption", WARN, detail,
                           "Set SSL_CERTFILE/SSL_KEYFILE, or terminate TLS at a reverse proxy."))
     else:
         out.append(_check("tls", "posture", "Transport encryption", PASS,
                           "TLS configured." if settings.ssl_certfile else "Loopback only; no network exposure."))
+
+    from middleware.boundary import allowed_hostnames
+
+    names = allowed_hostnames(settings)
+    if names is None and _reachable_beyond_host():
+        out.append(_check("hosts", "posture", "Host names", WARN,
+                          "Reachable from the network and answering to any Host name, so a web page "
+                          "can reach it through DNS rebinding.",
+                          "Set ALLOWED_HOSTS to the names people use to reach it."))
+    elif names is None:
+        out.append(_check("hosts", "posture", "Host names", PASS,
+                          "Loopback only, with a credential required; any Host name a proxy in front "
+                          "forwards is accepted. ALLOWED_HOSTS narrows that."))
+    else:
+        out.append(_check("hosts", "posture", "Host names", PASS,
+                          "Answers only to: " + ", ".join(sorted(names)) + "."))
 
     out.append(_check(
         "audit", "posture", "Agent access audit",

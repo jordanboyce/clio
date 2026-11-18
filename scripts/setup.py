@@ -41,6 +41,9 @@ BACKUP_PATH = os.path.join(ROOT, ".env.bak")
 LOOPBACK = "127.0.0.1"
 ALL_INTERFACES = "0.0.0.0"
 _LOOPBACK_VALUES = {"", "127.0.0.1", "::1", "localhost"}
+# The shortest password this script writes; the same number as
+# config.MIN_AUTH_PASSWORD_LENGTH, below which the server warns at startup.
+MIN_PASSWORD_LENGTH = 12
 
 # The keys this script owns. Everything else in .env is left exactly as it is.
 #   HOST          what `python main.py` listens on
@@ -203,13 +206,16 @@ def ask_choice(existed: bool, current: str) -> "tuple[Optional[str], bool]":
     print()
     print("Browsers will prompt for this password (any username); API and MCP")
     print("clients send it as `Authorization: Bearer <password>`.")
-    try:
-        typed = getpass.getpass("Password (leave blank to generate one): ").strip()
-    except EOFError:
-        typed = ""
-    if typed:
-        return typed, False
-    return secrets.token_urlsafe(24), True
+    while True:
+        try:
+            typed = getpass.getpass("Password (leave blank to generate one): ").strip()
+        except EOFError:
+            typed = ""
+        if not typed:
+            return secrets.token_urlsafe(24), True
+        if len(typed) >= MIN_PASSWORD_LENGTH:
+            return typed, False
+        print(f"Use at least {MIN_PASSWORD_LENGTH} characters, or leave it blank to generate one.")
 
 
 def main(argv=None) -> int:
@@ -240,6 +246,10 @@ def main(argv=None) -> int:
     if args.open:
         password = ""
     elif args.password is not None:
+        if args.password and len(args.password) < MIN_PASSWORD_LENGTH:
+            print(f"error: the password must be at least {MIN_PASSWORD_LENGTH} characters; "
+                  "omit it to generate one", file=sys.stderr)
+            return 2
         password = args.password or secrets.token_urlsafe(24)
         generated = not args.password
     elif sys.stdin.isatty() and sys.stdout.isatty():

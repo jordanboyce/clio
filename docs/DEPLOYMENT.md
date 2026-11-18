@@ -38,7 +38,9 @@ configuration it cannot enforce.
 | `HOST` | `127.0.0.1` | Which interfaces accept connections. Docker sets `0.0.0.0` inside the container; there the published port is the boundary. |
 | `BIND_ADDRESS` | `127.0.0.1` | Host interface published by Docker Compose. Set `0.0.0.0` to accept connections from other machines. |
 | `AUTH_PASSWORD` | empty | A shared secret required on every request except the probes (`/livez`, `/readyz`, and `/health`, which then says no more than its status). Browsers prompt for it natively (HTTP Basic, any username); API and MCP clients send `Authorization: Bearer <password>`. It does not open [`/api/v1`](APP_API.md), which takes a registered app's credential. |
-| `CORS_ALLOW_ORIGINS` | empty | Which *other* web origins may read responses in a browser. Empty is correct unless a separate web app calls the API. |
+| `CORS_ALLOW_ORIGINS` | empty | Which *other* web origins may read responses in a browser. Empty is correct unless a separate web app calls the API. A browser write (POST, PUT, PATCH, DELETE) from a page on another site is refused with 403 unless its origin is listed here; clients that are not browsers are unaffected. |
+| `ALLOWED_HOSTS` | empty | The host names the app answers to (formerly `MCP_ALLOWED_HOSTS`, still read); any other `Host` header gets 421. Loopback names are always allowed. Empty: a loopback install with no password answers to loopback names only, anything else to any name. List the name people use whenever the app is reachable from the network. |
+| `AUTH_FAILURE_LIMIT` / `AUTH_FAILURE_WINDOW_SECONDS` | `10` / `60` | Failed sign-ins one client address may make per window before its credentialed requests get 429 with `Retry-After`. `0` turns it off. |
 | `PRIVATE_COLLECTIONS` | `false` | Per-person collections. Only for organisations that already run sign-in; requires `IDENTITY_PROVIDER`. See [IDENTITY.md](IDENTITY.md). |
 
 The legacy `ENABLE_MULTI_USER` flag always refuses to start; see
@@ -140,6 +142,14 @@ FORWARDED_ALLOW_IPS=172.18.0.0/16      # the Docker network, or the proxy's IP
 
 Do not set it to `*` unless the proxy is genuinely the only thing that can
 open a connection to Clio: any peer in that list can claim to be any client.
+The failed sign-in limit counts by this address too, so without it one
+person guessing passwords locks everyone out for a minute.
+
+Also list the public name, so Clio refuses requests that name any other host:
+
+```bash
+ALLOWED_HOSTS=clio.example.org
+```
 
 **4. Verify the bypass is closed.** From another machine, try the app
 directly, not through the proxy:
@@ -1219,7 +1229,16 @@ from before the project was called Clio may hold the name `asymptote` instead
 volumes are kept either way.
 
 The data directory is untouched by an upgrade, and schema changes are
-applied at start. Take a backup first if the data matters. Downgrading to an
+applied at start.
+
+From 2026-11-18 a loopback install with no password answers only to
+`localhost`, `127.0.0.1` and `[::1]`. If yours is reached through a proxy or
+tunnel under another name and pages now answer 421, list that name in
+`ALLOWED_HOSTS` (the log names the refused host). `MCP_ALLOWED_HOSTS` still
+works and is read as `ALLOWED_HOSTS`, which now applies to every page, not
+only `/mcp`: if you set it, list every name people use, an IP address
+included. An `AUTH_PASSWORD` shorter than 12 characters is now a startup
+warning, and a refusal under `CLIO_PROFILE=secure`. Take a backup first if the data matters. Downgrading to an
 older version is not supported once a newer one has migrated the data.
 
 ## Checklist before you hand out the URL
@@ -1234,6 +1253,9 @@ Only needed if anyone other than you can reach the app.
       `http://`), with `FORWARDED_ALLOW_IPS` limited to the proxy
 - [ ] `CORS_ALLOW_ORIGINS` empty, or an explicit origin list — never `*` on a
       deployment others can reach
+- [ ] `ALLOWED_HOSTS` names the host people reach it under, and
+      `AUTH_PASSWORD` is at least 12 characters (`scripts/preflight.py`
+      reports both)
 - [ ] Everyone who can reach it is cleared to see **every document** in every
       collection (or you run with an identity provider and
       `PRIVATE_COLLECTIONS=true`, and the team tier holds nothing sensitive)
