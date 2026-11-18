@@ -613,6 +613,10 @@ async def whoami(request: Request):
     return {
         "authenticated_via": via,
         "identity": identity,
+        # Where "Sign out and clear this browser" goes once it has cleared
+        # this browser's copy of the person's state (an authenticating
+        # proxy's sign-out page); empty = just clear and reload.
+        "sign_out_url": settings.sign_out_url if identity else "",
     }
 
 

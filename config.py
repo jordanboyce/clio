@@ -595,6 +595,13 @@ class Settings(BaseSettings):
     metrics_enabled: bool = False
     metrics_token: str = ""
 
+    # Where "Sign out and clear this browser" sends a signed-in person after it
+    # clears what this browser kept for them: the sign-out page of the
+    # identity provider or the authenticating proxy (oauth2-proxy:
+    # /oauth2/sign_out). Empty: clear and reload only. Clio itself holds no
+    # browser session to end (docs/IDENTITY.md).
+    sign_out_url: str = ""
+
     # "json" writes one JSON object per log line, for a log shipper or SIEM.
     log_format: Literal["text", "json"] = "text"
     # The least severe line the app writes: DEBUG, INFO, WARNING, ERROR or
