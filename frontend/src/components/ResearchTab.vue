@@ -46,6 +46,19 @@
       </li>
     </ul>
 
+    <!-- A6: said once, here, rather than only in each source's provenance. -->
+    <div
+      v-if="stats.catalogue_unreachable && capabilities.registry_lookups"
+      class="notice notice-warning flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+      role="status"
+      data-testid="catalogues-unreachable"
+    >
+      <span class="flex-1 min-w-0">Catalogues could not be reached, so details come from each source's own text.</span>
+      <button v-if="canWrite" class="btn btn-xs" :disabled="retrying || analyzing" @click="retryCatalogues">
+        <span v-if="retrying" class="loading loading-spinner loading-xs" />Try again
+      </button>
+    </div>
+
     <!-- The app-wide source selection (the Sources panel's checkboxes) scopes everything here. -->
     <div v-if="selectionCount" class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-box bg-base-200/70 px-3 py-2 text-sm" data-testid="research-scope">
       <ListChecks :size="15" class="shrink-0 text-base-content/60" aria-hidden="true" />
@@ -410,14 +423,20 @@ const poller = createJobPoller(async (cid) => {
 const ANALYZE_WORDS = { noun: 'Analysis', past: 'analyzed', failed: 'could not be read' }
 const SCREEN_WORDS = { noun: 'Screening', past: 'screened', failed: 'could not be screened' }
 const REVIEW_WORDS = { noun: 'Reviews', past: 'reviewed', failed: 'could not be reviewed' }
+const RESOLVE_WORDS = { noun: 'The search for open copies', past: 'looked up', failed: 'could not be looked up' }
 // The job kinds as stored (assess and brief predate R9's names).
-const KIND = { analyze: 'analyze', assess: 'screen', screen: 'screen', brief: 'review', review: 'review' }
+const KIND = { analyze: 'analyze', assess: 'screen', screen: 'screen', brief: 'review', review: 'review', resolve: 'resolve' }
+const retrying = ref(false)
 const watched = new Set()
 
 function jobLabel(job) {
   const kind = KIND[job.kind]
   if (job.status === 'queued' && job.params?.not_before) return 'Reviews scheduled'
-  if (kind === 'analyze') return job.params?.parts > 1 ? `Analyzing (part ${job.params.part} of ${job.params.parts})` : 'Analyzing'
+  if (kind === 'analyze') {
+    if (job.params?.parts > 1) return `Analyzing (part ${job.params.part} of ${job.params.parts})`
+    return job.params?.automatic ? 'Analyzing new sources' : 'Analyzing'
+  }
+  if (kind === 'resolve') return job.params?.filename ? `Finding open copies for ${job.params.filename}` : 'Finding open copies'
   if (kind === 'screen') return job.params?.question ? `Screening for “${job.params.question}”` : 'Screening'
   if (kind === 'review') return job.params?.depth === 'thorough' ? 'Preparing thorough reviews' : 'Preparing reviews'
   return 'Working'
@@ -442,8 +461,8 @@ function follow(ids, kind) {
       stopping.value = new Set(stopping.value)
       if (kind === 'analyze') { analyzing.value = false; loadPapers(); refreshKey.value++ }
       if (kind === 'screen') { screening.value = false; loadVerdicts() }
-      if (kind === 'review') { loadPapers(); refreshKey.value++ }
-      reportFinish(list, { analyze: ANALYZE_WORDS, screen: SCREEN_WORDS, review: REVIEW_WORDS }[kind], extra)
+      if (kind === 'review' || kind === 'resolve') { loadPapers(); refreshKey.value++ }
+      reportFinish(list, { analyze: ANALYZE_WORDS, screen: SCREEN_WORDS, review: REVIEW_WORDS, resolve: RESOLVE_WORDS }[kind], extra)
     },
   })
 }
@@ -456,11 +475,28 @@ async function attachRunningJobs() {
     const list = (await researchApi.jobs(cid)).jobs || []
     if (cid !== collectionId.value) return
     jobs.value = list
-    for (const kind of ['analyze', 'screen', 'review']) {
+    for (const kind of ['analyze', 'screen', 'review', 'resolve']) {
       const ids = list.filter(j => isActive(j) && KIND[j.kind] === kind).map(j => j.job_id)
       if (ids.length) follow(ids, kind)
     }
   } catch { /* the strip is an extra; the buttons still work */ }
+}
+
+async function retryCatalogues() {
+  retrying.value = true
+  try {
+    const out = await researchApi.retryLookups(collectionId.value)
+    if (out.job) {
+      jobs.value = [...jobs.value.filter(j => j.job_id !== out.job.job_id), out.job]
+      follow([out.job.job_id], 'analyze')
+    } else {
+      loadPapers()
+    }
+  } catch (err) {
+    ui.toastError(err, 'Could not ask the catalogues again')
+  } finally {
+    retrying.value = false
+  }
 }
 
 async function stopJob(job) {
@@ -533,8 +569,12 @@ watch(question, () => {
 })
 
 // New sources finished indexing (e.g. downloaded references): refresh.
+// A4: new papers are analysed on their own after indexing; the strip
+// picks that job up here, and the records arrive without a click.
 watch(() => jobsStore.dataRefreshTick, () => {
-  if (jobsStore.dataRefreshCollectionId === collectionId.value) loadPapers()
+  if (jobsStore.dataRefreshCollectionId !== collectionId.value) return
+  loadPapers()
+  attachRunningJobs()
 })
 
 onBeforeUnmount(() => {

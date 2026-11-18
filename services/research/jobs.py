@@ -34,7 +34,8 @@ from services.research.store import ResearchStore, now_iso
 
 logger = logging.getLogger(__name__)
 
-KINDS = ("analyze", "assess", "brief")
+# "resolve" (R7): one entry per reference, looked up in the catalogues.
+KINDS = ("analyze", "assess", "brief", "resolve")
 ACTIVE = ("queued", "running")
 FINISHED = ("done", "done_with_errors", "failed", "cancelled")
 MAX_DELAY_HOURS = 48
@@ -216,6 +217,13 @@ def start_job(
     live.thread = thread
     thread.start()
     return job
+
+
+def is_cancelled(job_id: str) -> bool:
+    """Whether Stop was pressed on a job that is still running."""
+    with _live_lock:
+        live = _live.get(job_id)
+    return bool(live and live.cancel.is_set())
 
 
 def cancel_job(store: ResearchStore, job_id: str) -> bool:

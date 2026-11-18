@@ -799,7 +799,8 @@ def client(indexer, monkeypatch):
 
 def test_api_library_flow(client):
     listed = client.get("/api/research/papers?collection_id=c1").json()
-    assert listed["stats"] == {"papers": 3, "analyzed": 0, "needs_checking": 0, "renameable": 0,
+    assert listed["stats"] == {"papers": 3, "analyzed": 0, "needs_checking": 0, "catalogue_unreachable": 0,
+                              "renameable": 0,
                               "unread_reviews": 0, "unread_briefs": 0}
     assert listed["can_write"] is True and listed["capabilities"]["registry_lookups"] is False
 

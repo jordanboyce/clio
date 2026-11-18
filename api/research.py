@@ -213,6 +213,8 @@ def _paper_summary(doc: dict, paper: Optional[dict], counts: dict) -> dict:
     paper = paper or {}
     did = doc["document_id"]
     doubtful = library.needs_checking(paper)
+    unreachable = any(str(n).startswith("The catalogue could not be reached")
+                      for n in (paper.get("analysis_notes") or []))
     suggested = naming.suggest_filename(paper, doc.get("filename") or "") if paper else None
     return {
         "document_id": did,
@@ -245,6 +247,8 @@ def _paper_summary(doc: dict, paper: Optional[dict], counts: dict) -> dict:
         # A3: a descriptive name is offered by default only when the title
         # and authors it is built from are known to be right.
         "rename_ready": bool(suggested) and not ({"title", "authors"} & set(doubtful)),
+        # A6: its record was read while the catalogues could not be reached.
+        "catalogue_unreachable": unreachable,
         "original_filename": paper.get("original_filename"),
         "renamed_at": paper.get("renamed_at"),
         "references": counts.get("references", {}).get(did, 0),
@@ -274,7 +278,9 @@ def _counts(store) -> dict:
 
 def _capabilities() -> dict:
     from services.link_fetcher import link_indexing_available
-    return {"registry_lookups": lookup.lookup_available(), "link_download": link_indexing_available()}
+    return {"registry_lookups": lookup.lookup_available(), "link_download": link_indexing_available(),
+            # A6: catalogues resting after a failure (host names only).
+            "catalogues_unreachable": lookup.unreachable_hosts() if lookup.lookup_available() else []}
 
 
 # ── library ─────────────────────────────────────────────────────────────
@@ -293,6 +299,7 @@ def list_papers(collection_id: str = "default") -> dict:
             "papers": len(items),
             "analyzed": sum(1 for p in items if p["analyzed"]),
             "needs_checking": sum(1 for p in items if p["needs_checking"]),
+            "catalogue_unreachable": sum(1 for p in items if p["catalogue_unreachable"]),
             "renameable": sum(1 for p in items if p["suggested_filename"]
                               and p["suggested_filename"] != p["filename"]),
             "unread_reviews": sum(p["unread_reviews"] for p in items),
@@ -474,6 +481,77 @@ def _chosen_references(store, body_document_id: Optional[str], reference_ids: Op
     if not include_links:
         refs = [r for r in refs if r["kind"] == "reference"]
     return refs
+
+
+def _waiting_for_catalogue(store, docs: List[dict]) -> List[dict]:
+    papers = store.get_papers([d["document_id"] for d in docs])
+    return [d for d in docs if any(str(n).startswith("The catalogue could not be reached")
+                                   for n in ((papers.get(d["document_id"]) or {}).get("analysis_notes") or []))]
+
+
+@router.post("/api/research/lookups/retry", tags=["research"], status_code=status.HTTP_202_ACCEPTED,
+             summary="Ask the catalogues again for sources read while they could not be reached")
+def retry_lookups(response: Response, collection_id: str = "default") -> dict:
+    """A6: clears the rest every unanswered catalogue was given (R6) and
+    analyses again the sources whose record says the catalogue could not be
+    reached. 200 with ``job: null`` when there are none."""
+    indexer = _indexer(collection_id)
+    _require_write(collection_id)
+    lookup.reset_hosts()
+    store = library.research_store(indexer)
+    stale = _waiting_for_catalogue(store, _papers(indexer))
+    if not stale:
+        response.status_code = status.HTTP_200_OK
+        return {"job": None, "message": "No source is waiting for a catalogue."}
+    started = jobs_service.start_job(
+        collection_id=collection_id, store=store, kind="analyze", documents=stale[:jobs_service.max_documents()],
+        work=lambda d, _job_id: library.analyze_document(collection_id, indexer, d["document_id"],
+                                                         use_registry=True, store=store),
+        finish=lambda: library.match_library(store, _papers(indexer)),
+        params={"use_registry": True, "retry": True}, created_by=get_request_user(),
+    )
+    return {"job": started}
+
+
+@router.post("/api/research/papers/{document_id}/find-copies", tags=["research"],
+             status_code=status.HTTP_202_ACCEPTED,
+             summary="Look for open copies of a paper's references, as a background job")
+def find_open_copies(document_id: str, response: Response, collection_id: str = "default") -> dict:
+    """R7: one job entry per reference, so the Library's job strip counts
+    them and Stop takes effect between two lookups. A reference whose
+    catalogue could not be asked counts as failed (nothing is recorded for
+    it). 200 with ``job: null`` when nothing is left to look up."""
+    indexer = _indexer(collection_id)
+    _require_write(collection_id)
+    doc = _paper_doc(indexer, document_id)
+    if not lookup.lookup_available():
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Catalogue lookups are off on this server.")
+    if data_controls.holds_local_only(collection_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="This collection holds data marked local only, so its references are not "
+                                   "sent to outside catalogues.")
+    store = library.research_store(indexer)
+    refs = [r for r in store.list_references(document_id) if r["kind"] == "reference"
+            and r.get("status") not in ("in_library", "queued") and r.get("resolved_kind") != "pdf"]
+    if not refs:
+        response.status_code = status.HTTP_200_OK
+        return {"job": None, "message": "Every reference already has an open copy, or is in the library."}
+    refs = refs[:jobs_service.max_documents()]
+    entries = [{"document_id": document_id, "filename": f"reference {r['ordinal']}", "reference": r}
+               for r in refs]
+
+    def work(entry: dict, _job_id: str) -> None:
+        (result,) = library.resolve_references(store, [entry["reference"]])
+        if result.get("lookup_failed"):
+            raise lookup.Unreachable(result["lookup_failed"])
+
+    started = jobs_service.start_job(
+        collection_id=collection_id, store=store, kind="resolve", documents=entries, work=work,
+        finish=lambda: library.match_library(store, _papers(indexer)),
+        params={"document_id": document_id, "filename": doc.get("filename")}, created_by=get_request_user(),
+    )
+    return {"job": started}
 
 
 @router.post("/api/research/references/resolve", tags=["research"],

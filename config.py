@@ -942,6 +942,11 @@ class Settings(BaseSettings):
     library_max_concurrent_jobs: int = Field(
         1, validation_alias=AliasChoices("LIBRARY_MAX_CONCURRENT_JOBS", "RESEARCH_MAX_CONCURRENT_JOBS")
     )
+    # Read each new paper's record (title, authors, references) as soon as
+    # it is indexed, as a Library job of its own after the index job (no
+    # model involved). LIBRARY_AUTO_ANALYZE=false leaves it to the Analyze
+    # button, for a deployment that ingests thousands of PDFs at once.
+    library_auto_analyze: bool = True
 
     # Audio transcription (meeting recordings via local Whisper)
     # The full image includes the "base" model. Any other model is read from

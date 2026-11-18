@@ -1911,6 +1911,13 @@ class UploadService:
             if results["documents_processed"] > 0:
                 indexer.save_index()
 
+            # A4: the new papers' records are read next, as a Library job of
+            # their own, queued before this job reads as complete so the
+            # Library finds it when it refreshes. Nothing it does can change
+            # how this job ends.
+            from services.research import auto as library_auto
+            library_auto.analyze_after_index(collection_id, results["document_ids"], created_by=uploaded_by)
+
             app_db.update_upload_job(
                 job_id,
                 status="completed",

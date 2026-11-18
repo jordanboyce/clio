@@ -55,6 +55,10 @@ export const researchApi = {
     return http.post(`/api/research/jobs?${q(cid)}`, { ...body, provider }, { headers }).then(r => r.data)
   },
   jobs: (cid) => http.get(`/api/research/jobs?${q(cid)}`).then(r => r.data),
+  // A6: clear the catalogues' rest and read again what was read without them.
+  retryLookups: (cid) => http.post(`/api/research/lookups/retry?${q(cid)}`).then(r => r.data),
+  // R7: "Find open copies" runs as a job, one entry per reference.
+  findCopies: (cid, id) => http.post(`/api/research/papers/${encodeURIComponent(id)}/find-copies?${q(cid)}`).then(r => r.data),
   cancelJob: (cid, jobId) => http.post(`/api/research/jobs/${jobId}/cancel?${q(cid)}`).then(r => r.data),
   // Finished jobs only, and only their place in the list: what they wrote stays.
   removeJob: (cid, jobId) => http.delete(`/api/research/jobs/${jobId}?${q(cid)}`).then(r => r.data),

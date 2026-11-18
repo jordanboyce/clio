@@ -33,7 +33,7 @@ export function librarySteps({ papers = [], question = '', screened = [], hasMod
   return [
     {
       id: 'analyze', label: 'Analyzed', done: analyzed, total, state: stateOf(analyzed, total),
-      hint: toAnalyze ? 'Reads title, authors and references · no model' : 'No model needed',
+      hint: toAnalyze ? 'Reads each record · no model' : 'No model needed',
       action: canWrite && toAnalyze ? `Analyze ${toAnalyze}` : '',
     },
     {
@@ -51,7 +51,7 @@ export function librarySteps({ papers = [], question = '', screened = [], hasMod
     },
     {
       id: 'cite', label: 'Cite & check', done: null, total, state: 'todo',
-      hint: 'Citations and draft checks · no model',
+      hint: 'No model needed',
     },
   ]
 }

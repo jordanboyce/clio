@@ -299,3 +299,45 @@ describe('one job strip for the Library (A5)', () => {
   })
 })
 
+
+describe('catalogues that could not be reached are said once, with Try again (A6)', () => {
+  it('shows one notice and starts the retry job', async () => {
+    papers = [paper('d1', { analyzed: true, title: 'One', catalogue_unreachable: true })]
+    http.get.mockImplementation(async (url) => {
+      if (url.startsWith('/api/research/papers')) {
+        return { data: { papers, stats: { catalogue_unreachable: 1 }, capabilities: { registry_lookups: true }, can_write: true } }
+      }
+      if (url.startsWith('/api/research/jobs')) return { data: { jobs: Object.values(serverJobs) } }
+      return { data: { items: [], questions: [] } }
+    })
+    http.post.mockImplementation(async (url) => {
+      if (url.startsWith('/api/research/lookups/retry')) {
+        serverJobs.r1 = job('r1', 'analyze', 'running', { params: { retry: true } })
+        return { data: { job: serverJobs.r1 } }
+      }
+      return { data: {} }
+    })
+    wrapper = mount(ResearchTab, {
+      global: { stubs: { ResearchPaperPanel: true, ResearchReviews: true, ResearchWriting: true, ResearchMap: true } },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    const notice = wrapper.get('[data-testid="catalogues-unreachable"]')
+    expect(notice.text()).toContain('Catalogues could not be reached')
+    await notice.get('button').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="library-job-strip"]').text()).toContain('Analyzing')
+  })
+
+  it('picks up an analysis started by an upload (A4)', async () => {
+    const w = await mountTab()
+    expect(w.find('[data-testid="library-job-strip"]').exists()).toBe(false)
+    serverJobs.auto = job('auto', 'analyze', 'running', { params: { automatic: true }, total: 7, done: 2 })
+    const { useBackgroundJobsStore } = await import('../../stores/backgroundJobsStore')
+    const store = useBackgroundJobsStore()
+    // An index job in this collection finished: the tab looks for new work.
+    store.$patch({ dataRefreshCollectionId: 'default', dataRefreshTick: store.dataRefreshTick + 1 })
+    await flushPromises()
+    expect(w.get('[data-testid="library-job-strip"]').text()).toContain('Analyzing new sources')
+  })
+})

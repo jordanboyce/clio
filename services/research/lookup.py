@@ -83,10 +83,80 @@ def _cached(key: str, fetch) -> Optional[dict]:
 def clear_cache() -> None:
     with _cache_lock:
         _cache.clear()
+    reset_hosts()
 
 
 def _host(url: str) -> str:
     return url.split("://", 1)[-1].split("/", 1)[0]
+
+
+# ── reachability (roadmap R6) ───────────────────────────────────────────
+#
+# A catalogue that does not answer is given a rest: once one request to a
+# host times out or cannot connect, the host is not asked again for
+# HOST_REST_SECONDS, so a site that blocks the catalogues pays the timeout
+# once per host rather than once per source. A 429 rests the host for as
+# long as its Retry-After asks (capped). The Library reads
+# ``unreachable_hosts()`` to say so once, and "Try again" clears the rest.
+
+HOST_REST_SECONDS = 300.0
+MAX_RETRY_AFTER_SECONDS = 3600.0
+# A host that drops packets fails at the connect step; give it less time
+# than a slow answer gets.
+CONNECT_TIMEOUT_SECONDS = 5.0
+_rest: Dict[str, dict] = {}
+_rest_lock = threading.Lock()
+
+
+def _monotonic() -> float:
+    import time
+    return time.monotonic()
+
+
+def _retry_after_seconds(value: Optional[str]) -> Optional[float]:
+    """Retry-After as seconds: a number, or an HTTP date."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        from email.utils import parsedate_to_datetime
+        from datetime import datetime, timezone
+        when = parsedate_to_datetime(value)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+    except (TypeError, ValueError):
+        return None
+
+
+def _rest_host(host: str, reason: str, seconds: float = HOST_REST_SECONDS) -> None:
+    with _rest_lock:
+        _rest[host] = {"until": _monotonic() + min(seconds, MAX_RETRY_AFTER_SECONDS), "reason": reason}
+
+
+def _check_host(host: str) -> None:
+    with _rest_lock:
+        entry = _rest.get(host)
+        if entry and entry["until"] <= _monotonic():
+            _rest.pop(host, None)
+            entry = None
+    if entry:
+        raise Unreachable(f"{host} was not asked: {entry['reason']} a moment ago")
+
+
+def unreachable_hosts() -> List[str]:
+    """Catalogue hosts resting after a failure, for the Library's notice."""
+    now = _monotonic()
+    with _rest_lock:
+        return sorted(h for h, e in _rest.items() if e["until"] > now)
+
+
+def reset_hosts() -> None:
+    """"Try again": ask every catalogue on the next lookup."""
+    with _rest_lock:
+        _rest.clear()
 
 
 def _get(url: str, params: Optional[dict] = None) -> Optional[httpx.Response]:
@@ -98,22 +168,30 @@ def _get(url: str, params: Optional[dict] = None) -> Optional[httpx.Response]:
         params.setdefault("mailto", email)
     timeout = float(getattr(config.settings, "research_lookup_timeout_seconds", 15.0) or 15.0)
     host = _host(url)
+    _check_host(host)
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=True, transport=_transport,
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(timeout, CONNECT_TIMEOUT_SECONDS)),
+                          follow_redirects=True, transport=_transport,
                           headers={"User-Agent": _user_agent()}) as client:
             response = client.get(url, params=params or None)
     except httpx.TimeoutException as exc:
         logger.info("Registry lookup timed out for %s: %s", url, exc)
+        _rest_host(host, "it did not answer")
         raise Unreachable(f"{host} did not answer within {timeout:g} seconds") from exc
     except httpx.HTTPError as exc:
         logger.info("Registry lookup failed for %s: %s", url, exc)
+        _rest_host(host, "it could not be reached")
         raise Unreachable(f"{host} could not be reached ({exc.__class__.__name__})") from exc
     if response.status_code in (404, 410):
         return None
     if response.status_code != 200:
         logger.info("Registry lookup %s answered %s", url, response.status_code)
         if response.status_code == 429:
+            wait = _retry_after_seconds(response.headers.get("Retry-After"))
+            _rest_host(host, "it was turning requests away (429)", wait if wait is not None else HOST_REST_SECONDS)
             raise Unreachable(f"{host} is turning requests away for now (429, too many requests)")
+        if response.status_code >= 500:
+            _rest_host(host, f"it answered with an error ({response.status_code})")
         raise Unreachable(f"{host} answered with an error ({response.status_code})")
     return response
 

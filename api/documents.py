@@ -325,6 +325,9 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
                      detail={"files": [f.filename for f in files][:50],
                              "document_ids": indexed_docs[:50],
                              "indexed": len(indexed_docs), "failed": len(failed_docs)})
+        # A4: read the new papers' records in the background (no model).
+        from services.research import auto as library_auto
+        library_auto.analyze_after_index(collection_id, indexed_docs, created_by=uploaded_by)
 
     # Build response message
     if failed_docs and not indexed_docs:

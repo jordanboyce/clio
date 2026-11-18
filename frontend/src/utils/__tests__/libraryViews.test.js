@@ -16,7 +16,7 @@ describe('the Library steps (R10)', () => {
     // Only screened sources in scope count; the rest are what Screen will cost.
     expect(steps[1]).toMatchObject({ label: 'Screened', done: 1, state: 'partial', hint: '2 model calls for the rest' })
     expect(steps[2]).toMatchObject({ done: 1, state: 'partial' })
-    expect(steps[3].hint).toContain('no model')
+    expect(steps[3].hint).toBe('No model needed')
   })
 
   it('says a model is needed before anyone types, and offers no action to readers', () => {

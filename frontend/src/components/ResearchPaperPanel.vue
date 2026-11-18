@@ -469,17 +469,36 @@ async function prepare(depth) {
   }
 }
 
+// R7: a background job, one entry per reference, shown in the Library's
+// job strip with Stop; this panel reloads when it ends.
+let resolveTimer = null
+onBeforeUnmount(() => clearTimeout(resolveTimer))
+
 async function resolveAll() {
   busy.resolve = true
+  const documentId = props.documentId
   try {
-    const out = await researchApi.resolve(props.collectionId, { document_id: props.documentId })
-    // A catalogue that could not be asked is not "no open copy": say so.
-    if (out?.lookup_failed) ui.notify(out.message, 'warning', { duration: 8000 })
-    await load()
+    const out = await researchApi.findCopies(props.collectionId, documentId)
+    if (!out.job) {
+      busy.resolve = false
+      if (out.message) ui.notify(out.message, 'info')
+      return load()
+    }
+    emit('changed')
+    const poll = async () => {
+      try {
+        const job = (await researchApi.jobs(props.collectionId)).jobs.find(j => j.job_id === out.job.job_id)
+        if (isActive(job)) { resolveTimer = setTimeout(poll, 2000); return }
+        busy.resolve = false
+        if (props.documentId === documentId) await load()
+      } catch {
+        busy.resolve = false
+      }
+    }
+    resolveTimer = setTimeout(poll, 1500)
   } catch (err) {
-    ui.toastError(err, 'Lookup failed')
-  } finally {
     busy.resolve = false
+    ui.toastError(err, 'Could not start the lookup')
   }
 }
 

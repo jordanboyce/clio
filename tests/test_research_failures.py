@@ -184,9 +184,40 @@ def test_a_catalogue_failure_is_raised_and_never_cached(catalogue, kind):
         lookup.by_doi(DOI)
     asked = catalogue["calls"]
     assert asked == 2                                    # OpenAlex, then Crossref
-    # Once the catalogue is back, the record is found: the failure was not remembered.
+    # The host is rested (R6) rather than asked again at once ...
+    assert set(lookup.unreachable_hosts()) == {"api.openalex.org", "api.crossref.org"}
+    # ... and once it is back and someone presses "Try again", the record is
+    # found: the failure itself was not remembered.
+    lookup.reset_hosts()
     catalogue["answer"] = lambda request: httpx.Response(200, json=_openalex_work("Root hydraulics", DOI))
     assert lookup.by_doi(DOI)["title"] == "Root hydraulics"
+
+
+def test_a_host_that_did_not_answer_is_not_asked_again_for_a_while(catalogue):
+    """R6: a blocked catalogue costs one timeout per host, not one per source."""
+    catalogue["answer"] = _timeout
+    with pytest.raises(lookup.Unreachable):
+        lookup.by_doi(DOI)
+    asked = catalogue["calls"]
+    for _ in range(5):
+        with pytest.raises(lookup.Unreachable, match="was not asked"):
+            lookup.by_doi("10.5555/another." + str(_))
+    assert catalogue["calls"] == asked
+
+
+def test_retry_after_sets_how_long_a_host_rests(catalogue, monkeypatch):
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(lookup, "_monotonic", lambda: clock["now"])
+    catalogue["answer"] = lambda request: httpx.Response(429, headers={"Retry-After": "30"})
+    with pytest.raises(lookup.Unreachable, match="429"):
+        lookup.by_doi(DOI)
+    assert "api.openalex.org" in lookup.unreachable_hosts()
+    clock["now"] += 31
+    assert "api.openalex.org" not in lookup.unreachable_hosts()
+
+
+def test_a_dropped_connection_waits_less_than_a_slow_answer():
+    assert lookup.CONNECT_TIMEOUT_SECONDS <= 5
 
 
 def test_a_real_not_found_is_cached(catalogue):

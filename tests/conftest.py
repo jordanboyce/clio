@@ -58,6 +58,11 @@ os.environ["TRUST_NO_ONE"] = "true"
 # own tests (tests/test_pra_switch.py) turn it off.
 os.environ["ENABLE_PRA"] = "true"
 
+# New papers are analysed in the background after indexing (A4); left on,
+# every upload test would start a Library job thread that outlives it. The
+# feature's own tests (tests/test_library_auto_analyze.py) turn it on.
+os.environ["LIBRARY_AUTO_ANALYZE"] = "false"
+
 
 import pytest  # noqa: E402
 
@@ -122,6 +127,17 @@ def _model_listings_are_not_shared_between_tests():
     model_catalog.clear_cache()
     yield
     model_catalog.clear_cache()
+
+
+@pytest.fixture(autouse=True)
+def _catalogue_rests_are_not_shared_between_tests():
+    """A catalogue that timed out is rested process-wide (roadmap R6); one
+    test's blocked host must not be skipped in the next test."""
+    from services.research import lookup
+
+    lookup.reset_hosts()
+    yield
+    lookup.reset_hosts()
 
 
 @pytest.fixture(autouse=True)
