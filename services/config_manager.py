@@ -409,6 +409,9 @@ class ConfigManager:
             # Update runtime settings if no restart required
             if key not in restart_fields:
                 try:
+                    from services import settings_sources
+
+                    settings_sources.note_save(key, getattr(settings, key, None), value, settings)
                     setattr(settings, key, value)
                     if key in ocr_fields:
                         ocr_settings_changed = True

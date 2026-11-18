@@ -931,6 +931,16 @@ server with a line naming each setting and its range, instead of failing at
 first use. The ranges are `SETTING_RANGES` in `config.py`; a save in Settings is
 checked against the same table.
 
+About sixty settings can also be changed in the app (Settings, Admin). A value
+saved there is kept in the app database and applied over the environment at
+every start, which is how a container recreated without its env file keeps its
+choices. When it differs from what the environment sets, the start log says so
+for each one ("CHUNK_SIZE is 900 in the environment, but 1200, saved in
+Settings, is in force"), and Settings → System → *Set by environment* lists
+every setting the environment set, marking the ones Settings overrides
+(admins only; credentials show only as set). A saved number outside its range
+is ignored at start, with a warning naming it.
+
 Metrics carry no identities, queries or document names, and routes are labelled
 by template (`/api/collections/{collection_id}/stats`), never by the raw path.
 The ones that tell you a deployment is reaching its limit:

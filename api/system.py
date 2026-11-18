@@ -42,6 +42,24 @@ def _health_embedding() -> dict:
 
 
 @router.get(
+    "/api/system/settings-sources",
+    summary="Settings set by the environment",
+    tags=["system"],
+)
+async def settings_sources_report():
+    """Every setting the environment (or the env file) set, read-only, and
+    each one a value saved in Settings overrides (roadmap U10). Admin only:
+    values can be internal addresses or paths; credentials show only as set."""
+    require_admin("view where settings come from")
+    from services import settings_sources
+
+    return {
+        "environment": settings_sources.from_environment(settings),
+        "overridden": settings_sources.overrides(),
+    }
+
+
+@router.get(
     "/api/system/readiness",
     summary="Is this deployment ready to run where it is going?",
     tags=["system"],

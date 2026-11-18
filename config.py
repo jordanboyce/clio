@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 from typing import Literal, Optional
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Cloud providers that authenticate with a simple API key, passed per-request
@@ -1123,8 +1123,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # What the environment (or the env file) set, before any profile default
+    # is filled in: services/settings_sources.py lists it in Settings and
+    # warns when a value saved there overrides one of these (E4, roadmap U10).
+    _from_environment: frozenset = PrivateAttr(default_factory=frozenset)
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._from_environment = frozenset(self.model_fields_set)
         if self.clio_profile == "secure":
             for name, value in SECURE_PROFILE_DEFAULTS.items():
                 if name not in self.model_fields_set:
