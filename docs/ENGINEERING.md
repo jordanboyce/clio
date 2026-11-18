@@ -54,8 +54,8 @@ was found and deliberately left for later.
   deadline, no `randomblob`/`zeroblob`, a 1 MB cap on any value it builds
   (`SQLITE_LIMIT_LENGTH`) and an 8 MB cap on the rows it returns.
 - **Hostile files are parsed with limits.** Zip containers are sized up
-  before a parser opens them (`check_zip_container`); Office, ODF, EPUB and
-  PDF text parsing runs in a helper process with a deadline and a memory cap
+  before a parser opens them (`check_zip_container`); Office, ODF, EPUB,
+  PDF text and PRA model parsing runs in a helper process with a deadline and a memory cap
   (`services/extract_sandbox.py`); a document upload over
   `MAX_UPLOAD_FILE_MB` is refused before its body is read.
 - **A server-side fetch connects to the address it checked.** Link fetching

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic MEF report (report layer) for flight_hydraulics.xml. -->
+<report>
+  <information>
+    <software name="synthetic" version="1"/>
+  </information>
+  <results>
+    <sum-of-products name="LOSS-HYD" basic-events="4" products="3">
+      <product order="2">
+        <basic-event name="EDP-A-FTR"/>
+        <basic-event name="EDP-B-FTR"/>
+      </product>
+      <product order="2">
+        <basic-event name="EDP-A-FTR"/>
+        <basic-event name="RES-B-LEAK"/>
+      </product>
+      <product order="3">
+        <basic-event name="RES-A-LEAK"/>
+        <basic-event name="ACMP-1-FTS"/>
+        <not><basic-event name="ACMP-2-FTS"/></not>
+      </product>
+    </sum-of-products>
+  </results>
+</report>

@@ -990,7 +990,7 @@ class UploadService:
         """
         import os
         import fnmatch
-        from services.document_extractor import is_supported_filename
+        from services.document_extractor import is_supported_file
 
         excludes = (exclude_patterns or []) + UploadService.DEFAULT_REPO_EXCLUDES
         extensions = {e.lower() for e in (file_extensions or [])}
@@ -1034,7 +1034,7 @@ class UploadService:
                 return None
             if extensions:
                 return True  # the caller asked for these by name
-            if not is_supported_filename(fp.name):
+            if not is_supported_file(fp):
                 skipped_unsupported += 1
                 return False
             try:

@@ -822,6 +822,12 @@ class Settings(BaseSettings):
     archive_max_members: int = 10000
     archive_max_compression_ratio: int = 100
     archive_max_xml_elements: int = 5_000_000
+    # PRA models (Open-PSA MEF, SAPHIRE MAR-D; docs/PRA.md): the most one
+    # model may hold, as file size in MB (a zip export: its files unpacked,
+    # together) and as elements (XML elements of an MEF file, lines of the
+    # MAR-D files). G-PWR, a full generic PWR model, is 22 MB and 311k lines.
+    pra_max_file_mb: int = 64
+    pra_max_elements: int = 2_000_000
     # DOCX, PPTX, spreadsheets, ODF, EPUB and PDF text layers are parsed in a
     # helper process (services/extract_sandbox.py), so a file that hangs,
     # balloons or crashes a native parser fails on its own and the server

@@ -5,7 +5,7 @@
 import { shallowRef } from 'vue'
 import {
   FileText, FileCode, Table2, Braces, Image, Mic, Globe, Terminal, Database,
-  FileJson, Settings2, FileType, Hash, Layers, StickyNote,
+  FileJson, Settings2, FileType, Hash, Layers, StickyNote, Network,
 } from 'lucide-vue-next'
 
 // Types an administrator registered (Settings → Custom file types), keyed by
@@ -66,6 +66,13 @@ const DOCS = {
 const DATA = {
   csv: ['csv', Table2], tsv: ['tsv', Table2], xlsx: ['xlsx', Table2], xlsm: ['xlsm', Table2], xls: ['xls', Table2], ods: ['ods', Table2],
   json: ['json', FileJson], jsonl: ['jsonl', FileJson],
+  // PRA models (docs/PRA.md): SAPHIRE MAR-D files, Open-PSA MEF, and a zip
+  // export of either (the only zip Clio indexes). A MAR-D .sql or an MEF .xml
+  // keeps its code label, as the server files families by suffix.
+  ftl: ['pra', Network], bei: ['pra', Network], bed: ['pra', Network], ftd: ['pra', Network],
+  gtd: ['pra', Network], etl: ['pra', Network], etd: ['pra', Network], esd: ['pra', Network],
+  sqc: ['pra', Network], ftc: ['pra', Network], esc: ['pra', Network],
+  opsa: ['pra', Network], mef: ['pra', Network], 'opsa-mef': ['pra', Network], zip: ['pra', Network],
 }
 const MEDIA = {
   png: ['png', Image], jpg: ['jpg', Image], jpeg: ['jpg', Image], gif: ['gif', Image], webp: ['webp', Image], bmp: ['bmp', Image], tif: ['tiff', Image], tiff: ['tiff', Image],

@@ -15,7 +15,9 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import config
-from services.document_extractor import is_supported_filename, unsupported_reason
+from services.document_extractor import (
+    is_supported_file, is_supported_upload, unsupported_reason,
+)
 from services import pii_detector
 from services.prompt_injection_detector import apply_suppressions
 from services.custom_file_types import registry as custom_types
@@ -230,7 +232,7 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Every uploaded file must have a filename",
             )
-        if not is_supported_filename(file.filename):
+        if not is_supported_upload(file.filename, file.file):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"File {file.filename} has unsupported type. {_unsupported_message(file.filename)}",
@@ -397,7 +399,7 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
         if not file.filename:
             failed.append({"filename": "", "error": "missing filename"})
             continue
-        if not is_supported_filename(file.filename):
+        if not is_supported_upload(file.filename, file.file):
             failed.append({"filename": file.filename, "error": _unsupported_message(file.filename)})
             continue
         try:
@@ -1281,7 +1283,7 @@ def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobRespons
         if not path.is_file():
             skipped.append({"filename": path.name or file_path, "error": "not a file"})
             continue
-        if not is_supported_filename(path.name):
+        if not is_supported_file(path):
             skipped.append({
                 "filename": path.name,
                 "error": _unsupported_message(path.name),

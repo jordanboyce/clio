@@ -1,7 +1,7 @@
 """Generic document text extraction service supporting multiple file formats."""
 
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any, Union
+from typing import TYPE_CHECKING, Dict, List, Tuple, Optional, Any, Union
 import logging
 import re
 
@@ -36,6 +36,11 @@ from services.format_readers import (
 )
 # Parsers that read hostile files run in a helper process with limits
 from services import extract_sandbox
+# PRA models (Open-PSA MEF, SAPHIRE MAR-D): docs/PRA.md
+from services.pra import readers as pra_readers
+
+if TYPE_CHECKING:
+    from services.pra.model import PraModel
 
 # Prompt injection detection
 from services.prompt_injection_detector import (
@@ -330,10 +335,12 @@ class DocumentExtractor:
     HTML_EXTENSIONS = {'.html', '.htm', '.xhtml', '.xht'}
     # Containers and markup read with the standard library alone.
     DOCUMENT_EXTENSIONS = {'.rtf', '.odt', '.ods', '.odp', '.epub', '.eml', '.mbox', '.ipynb', '.svg'}
+    # PRA model files known by name; .xml, .sql and .zip are PRA only by content.
+    PRA_EXTENSIONS = pra_readers.NAMED_EXTENSIONS
     SUPPORTED_EXTENSIONS = (
         {'.pdf', '.txt', '.docx', '.csv', '.tsv', '.xlsx', '.xlsm', '.xls', '.md', '.json', '.jsonl', '.pptx'}
         | HTML_EXTENSIONS | TEXT_LIKE_EXTENSIONS | SUBTITLE_EXTENSIONS | DOCUMENT_EXTENSIONS
-        | SUPPORTED_CODE_EXTENSIONS | AUDIO_EXTENSIONS | IMAGE_EXTENSIONS
+        | SUPPORTED_CODE_EXTENSIONS | AUDIO_EXTENSIONS | IMAGE_EXTENSIONS | PRA_EXTENSIONS
     )
     TABULAR_EXTENSIONS = {'.csv', '.tsv', '.xlsx', '.xlsm', '.xls'}
     AUDIO_EXTENSIONS = AUDIO_EXTENSIONS
@@ -607,13 +614,17 @@ class DocumentExtractor:
         """
         file_ext = file_path.suffix.lower()
 
-        if not is_supported_filename(file_path.name):
+        if not is_supported_file(file_path):
             raise ValueError(
                 f"Unsupported file type: {file_ext or file_path.name}. "
                 f"{unsupported_reason(file_path.name)}"
             )
 
         logger.info(f"Extracting text from {file_ext or file_path.name} file: {file_path.name}")
+
+        # A PRA model before code: a MAR-D .sql or an MEF .xml is not code.
+        if is_pra_document(file_path):
+            return self.extract_pra(file_path)[1]
 
         # Code files (by suffix or well-known basename such as CMakeLists.txt)
         # are skipped for injection scanning (high false-positive rate).
@@ -624,7 +635,9 @@ class DocumentExtractor:
         # through the normal indexing pipeline as a single-"page" document.
         # A transcript is text like any other for the policy scan.
         custom_profile = None
-        if file_ext not in self.SUPPORTED_EXTENSIONS:
+        # A PRA extension that is not a PRA model here may be a type an admin
+        # registered before Clio read PRA models (a genomics .bed, say).
+        if file_ext not in self.SUPPORTED_EXTENSIONS or file_ext in self.PRA_EXTENSIONS:
             from services.custom_file_types import registry as custom_types
             custom_profile = custom_types.lookup(file_path.name)
         if custom_profile is not None:
@@ -696,6 +709,25 @@ class DocumentExtractor:
         self._scan_policy(result, file_path)
 
         return result
+
+    def read_pra_model(self, file_path: Path) -> "PraModel":
+        """The PRA model in a file (or a zip export), parsed in the extraction helper.
+
+        The readers are pure Python with size and element caps
+        (PRA_MAX_FILE_MB, PRA_MAX_ELEMENTS); the helper adds the deadline and
+        memory cap every other hostile-file parser gets.
+        """
+        return extract_sandbox.run("pra", file_path, lambda: pra_readers.read_pra_file(file_path))
+
+    def extract_pra(self, file_path: Path) -> Tuple["PraModel", ExtractionResult]:
+        """A PRA model and its searchable pages (services/pra/text.py), scanned like any text."""
+        from services.pra.text import render_pages
+
+        model = self.read_pra_model(file_path)
+        result = ExtractionResult(render_pages(model), method="text")
+        result.injection_warnings = self._scan_injection(result, file_path)
+        self._scan_policy(result, file_path)
+        return model, result
 
     def _scan_injection(self, result: ExtractionResult, file_path: Path) -> Dict[int, InjectionScanResult]:
         """Per-page injection scan, honouring INJECTION_SCAN_ACTION=off."""
@@ -1864,6 +1896,7 @@ class DocumentExtractor:
 
 SUPPORTED_TYPES_SUMMARY = (
     "PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx, .xlsm, .xls), CSV/TSV, "
+    "PRA models (Open-PSA MEF .xml, SAPHIRE MAR-D exports such as .ftl/.bei/.etl, or a .zip of one), "
     "OpenDocument (.odt, .ods, .odp), EPUB, RTF, email (.eml, .mbox), Jupyter notebooks, "
     "HTML/XHTML/SVG, Markdown, JSON/JSONL, plain text and text markup "
     "(.txt, .rst, .adoc, .org, .tex, .bib, .log), subtitles (.srt, .vtt), "
@@ -1917,3 +1950,38 @@ def is_supported_filename(name: Union[str, Path]) -> bool:
     from services.custom_file_types import registry as custom_types
     return custom_types.lookup(path.name) is not None
 
+
+def is_pra_document(path: Union[str, Path]) -> bool:
+    """Whether a file goes to the PRA reader: a MAR-D/MEF name, or content that says so.
+
+    A file with a PRA-only extension (.ftl, .bei, .opsa, ...) does, so a
+    damaged one is refused with the reader's reason, unless it is not a model
+    and an administrator registered that extension as a custom type earlier;
+    .xml, .sql and .zip do only when their content is a PRA model, and are
+    otherwise what they were.
+    """
+    path = Path(str(path))
+    ext = path.suffix.lower()
+    if ext in pra_readers.NAMED_EXTENSIONS:
+        if pra_readers.is_pra_file(path):
+            return True
+        from services.custom_file_types import registry as custom_types
+        return custom_types.lookup(path.name) is None
+    return ext in pra_readers.SNIFFED_EXTENSIONS and pra_readers.is_pra_file(path)
+
+
+def is_supported_file(path: Union[str, Path]) -> bool:
+    """``is_supported_filename``, plus the files only their content makes readable
+    (a .zip that is a PRA export). Use it where the file is on disk."""
+    path = Path(str(path))
+    if is_supported_filename(path.name):
+        return True
+    return path.suffix.lower() in pra_readers.SNIFFED_EXTENSIONS and pra_readers.is_pra_file(path)
+
+
+def is_supported_upload(filename: str, fileobj) -> bool:
+    """``is_supported_file`` for an upload still in its request body (left at its start)."""
+    if is_supported_filename(filename):
+        return True
+    ext = Path(str(filename)).suffix.lower()
+    return ext in pra_readers.SNIFFED_EXTENSIONS and pra_readers.is_pra_upload(filename, fileobj)

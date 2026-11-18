@@ -363,13 +363,13 @@ def scan_folder(request: ScanFolderRequest):  # sync: filesystem walk runs in th
     ]
 
     # Determine which extensions to look for
-    from services.document_extractor import is_supported_filename
+    from services.document_extractor import is_supported_file
     extensions_filter = set(e.lower() for e in request.file_extensions) if request.file_extensions else None
 
     def wanted(path: Path) -> bool:
         if extensions_filter is not None:
             return path.suffix.lower() in extensions_filter
-        return is_supported_filename(path.name)
+        return is_supported_file(path)
 
     files_found = []
 

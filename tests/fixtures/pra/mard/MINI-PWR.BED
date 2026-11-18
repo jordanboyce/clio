@@ -1,0 +1,16 @@
+*Saphire 8.2.12
+MINI-PWR                                        =
+* Name                  , Descriptions                                    , Project
+AFW-MDP-A-FS                                    , "AFW MOTOR-DRIVEN PUMP A FAILS TO START, ON DEMAND", MINI-PWR
+AFW-MDP-B-FS                                    , "AFW MOTOR-DRIVEN PUMP B FAILS TO START, ON DEMAND", MINI-PWR
+AFW-MDP-A-FR                                    , AFW MOTOR-DRIVEN PUMP A FAILS TO RUN, MINI-PWR
+AFW-MDP-B-FR                                    , AFW MOTOR-DRIVEN PUMP B FAILS TO RUN, MINI-PWR
+AFW-CCF-FS                                      , CCF OF AFW MOTOR-DRIVEN PUMPS TO START, MINI-PWR
+AFW-CST-EMPTY                                   , Réservoir CST vide (condensate storage tank empty), MINI-PWR
+AFW-XV-1                                        , AFW SUCTION VALVE 1 TRANSFERS CLOSED, MINI-PWR
+AFW-XV-2                                        , AFW SUCTION VALVE 2 TRANSFERS CLOSED, MINI-PWR
+AFW-XV-3                                        , AFW SUCTION VALVE 3 TRANSFERS CLOSED, MINI-PWR
+HPI-MDP-FS                                      , HPI PUMP FAILS TO START, MINI-PWR
+HPI-MOV-CC                                      , HPI INJECTION VALVE FAILS TO OPEN, MINI-PWR
+HE-CROSSTIE                                     , AFW TRAIN CROSS-TIE IS OPEN, MINI-PWR
+IE-TRANS                                        , GENERAL TRANSIENT, MINI-PWR

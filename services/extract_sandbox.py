@@ -1,10 +1,11 @@
 """Document parsers in a helper process, with a deadline and a memory cap.
 
-python-docx, python-pptx, openpyxl (through pandas), the ODF/EPUB readers and
-pdfium/pdfplumber run on files that anyone with upload rights chooses. Inside
-the server a pathological file held an extraction thread for minutes, took
-gigabytes, or (a native bug) could take the whole process down. Here each of
-those parses runs in a helper process, one file at a time:
+python-docx, python-pptx, openpyxl (through pandas), the ODF/EPUB readers,
+pdfium/pdfplumber and the PRA model readers run on files that anyone with
+upload rights chooses. Inside the server a pathological file held an
+extraction thread for minutes, took gigabytes, or (a native bug) could take
+the whole process down. Here each of those parses runs in a helper process,
+one file at a time:
 
 * the server waits at most ``EXTRACT_TIMEOUT_SECONDS`` for the answer, then
   kills the helper;
@@ -85,6 +86,10 @@ def _run_task(extractor, task: str, path: Path) -> Any:
         return _pages(extractor._extract_document_format(path, path.suffix.lower()))
     if task == "pdf_native":
         return _pages(extractor._extract_pdf_native(path))
+    if task == "pra":
+        from services.pra.readers import read_pra_file
+
+        return read_pra_file(path).to_dict()
     raise ValueError(f"Unknown extraction task: {task}")
 
 
@@ -95,6 +100,10 @@ _PAGE_TASKS = {"docx", "pptx", "excel_pages", "document", "pdf_native"}
 def _decode(task: str, result: Any) -> Any:
     if task in _PAGE_TASKS:
         return {int(k): v for k, v in result.items()}
+    if task == "pra":
+        from services.pra.model import PraModel
+
+        return PraModel.from_dict(result)
     return result
 
 

@@ -1,0 +1,5 @@
+MINI-PWR                                        =
+*  Name                 , Description,        SubTree, Alternate, Project
+AFW                                             , AUXILIARY FEEDWATER FAILS                , , , MINI-PWR
+AFW-SUPPLY                                      , AFW WATER SUPPLY FAILS                , S , , MINI-PWR
+HPI                                             , HIGH PRESSURE INJECTION FAILS                , , , MINI-PWR

@@ -1,0 +1,35 @@
+﻿MINI-PWR, TRANS, IE-TRANS =
+^WINVER2.1
+^PHASES 1 4 1 1  //# phases defined, max count sequences, view phase, initial phase idx
+CD 16155777 Core Damage
+^TOPTYPES
+IE, FT, FT, FT
+^TOPS
+RPS, AFW,
+HPI
+^LOGIC 1                  // initial phase, following are offset
+ +1.0 +2.0  3.0
+      -2.0 +3.0
+           -3.0
+ -1.0  2.0  3.0
+^SEQUENCES 0                          // offset from initial phase
+N, Sequence Name, Y, End State, Y, Frequency, N, Comments,
+Y, ,Y, OK,Y, ,Y, ,,
+Y, ,Y, OK,Y, ,Y, ,,
+Y, ,Y, CD,Y, ,Y, AFW AND HPI LOST,,
+Y, ,Y, ATWS,Y, ,Y, ,T,
+^ENDSEQUENCES      //Now postprocess end names
+^TOPDESC
+"GENERAL TRANSIENT"
+!
+"REACTOR TRIP"
+!
+"AUXILIARY FEEDWATER"
+!
+"HIGH PRESSURE "
+"INJECTION"
+!
+^NODESUBS
+^TEXT
+^PARMS
+^EOS

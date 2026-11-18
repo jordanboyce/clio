@@ -17,7 +17,7 @@ from models.schemas import (
     AIUsageDetail,
     SearchMode,
 )
-from services.document_extractor import DocumentExtractor
+from services.document_extractor import DocumentExtractor, is_pra_document
 from services.chunker import TextChunker
 from services.embedder import (
     EmbeddingDimensionMismatch, EmbeddingService, EmbeddingUnavailable, ensure_embedding_ready,
@@ -151,6 +151,22 @@ def _without_outside_help(method):
             return method(self, *args, **kwargs)
 
     return wrapper
+
+
+def delete_pra_models(index_dir: Path, document_ids: List[str]) -> None:
+    """Remove the stored PRA model (services/pra/store.py) of each document that has one."""
+    from services.pra import store as pra_store
+
+    for document_id in document_ids:
+        try:
+            pra_store.delete_model(index_dir, document_id)
+        except ValueError:
+            pass  # not a document id the store could have written
+
+
+def pra_source_format(model) -> str:
+    """The documents row's source_format for a PRA model: "pra-mef" or "pra-mard"."""
+    return {"open-psa-mef": "pra-mef", "saphire-mard": "pra-mard"}.get(model.source_format, "pra")
 
 
 class DocumentIndexer:
@@ -395,6 +411,16 @@ class DocumentIndexer:
         # Determine source format from file extension
         source_format = document_path.suffix.lower().lstrip(".")
 
+        # A PRA model (MEF, MAR-D, or a zip of either) gets both text and tables.
+        # Checked before code: a MAR-D .sql or an MEF .xml is not code.
+        if is_pra_document(document_path):
+            return self._index_pra_document(
+                document_path, filename, document_id,
+                progress_callback=progress_callback,
+                collection_id=collection_id,
+                uploaded_by=uploaded_by, content_hash=content_hash,
+            )
+
         # Handle CSV/XLSX with row-level + structured indexing.
         # Both formats are normalized to the same "sheet of rows" shape and get
         # both a semantic row index (for free-text search) and a typed SQL
@@ -568,6 +594,10 @@ class DocumentIndexer:
         # Tabular documents are indexed structured-only; there is nothing to
         # batch, so the caller should fall back to the single-file path.
         if source_format in ("csv", "tsv", "xlsx", "xlsm", "xls") and settings.csv_row_level_indexing:
+            return None
+        # PRA models write tables and a model file beside their chunks: the
+        # single-file path does all three together.
+        if is_pra_document(document_path):
             return None
 
         content_hash, document_id = self._admit(document_path, filename, collection_id, uploaded_by)
@@ -866,6 +896,111 @@ class DocumentIndexer:
             f"{total_rows} rows across {len(sheets)} sheet(s) (structured-only)"
         )
         return metadata
+
+    def _index_pra_document(
+        self,
+        document_path: Path,
+        filename: str,
+        document_id: str,
+        progress_callback: Optional[ProgressCallback] = None,
+        collection_id: str | None = None,
+        uploaded_by: str | None = None,
+        content_hash: str | None = None,
+    ) -> DocumentMetadata:
+        """Index a PRA model: citable text pages, SQL tables, and the parsed model.
+
+        The text (services/pra/text.py) goes through the usual chunk/embed path;
+        the tables (services/pra/tables.py) are the structured store's, one per
+        sheet name; the model is saved beside the index (services/pra/store.py)
+        so the PRA tools never parse the source again. Everything that can fail
+        (parsing, the policy, the embedding model) does so before anything is
+        written; a failed write leaves no tables or model of a new document.
+        """
+        from services.pra import store as pra_store
+        from services.pra.tables import model_sheets
+
+        def report(phase: str, progress: int, detail: str = None,
+                   chunks_done: int = 0, chunks_total: int = 0):
+            if progress_callback:
+                try:
+                    progress_callback(phase, progress, detail, chunks_done, chunks_total)
+                except Exception as e:
+                    logger.warning(f"Progress callback error: {e}")
+
+        report("extracting", 0, f"Reading the PRA model in {filename}")
+        model, extraction = self.document_extractor.extract_pra(document_path)
+        source_format = pra_source_format(model)
+        page_texts = extraction.page_texts
+        injection_warnings = {
+            str(page): scan.to_dict()
+            for page, scan in extraction.injection_warnings.items()
+            if scan.is_flagged
+        } or None
+        counts = model.counts()
+        report("extracting", 100, f"Read {counts['fault_trees']} fault trees, {counts['gates']} gates, "
+                                  f"{counts['basic_events']} basic events, {counts['event_trees']} event trees")
+
+        policy_status, policy_flags, suggested_sensitivity = self._apply_policy(
+            extraction.policy_warnings, page_texts,
+            filename=filename, document_id=document_id,
+            collection_id=collection_id, uploaded_by=uploaded_by,
+        )
+
+        chunks = self.text_chunker.chunk_document(
+            page_texts=page_texts, document_id=document_id, filename=filename,
+            source_format=source_format, extraction_method="text",
+        )
+        num_chunks = len(chunks)
+        report("embedding", 0, f"Generating embeddings for {num_chunks} chunks", 0, num_chunks)
+
+        def _embed_progress(done: int, total: int):
+            report("embedding", min(100, int(done / total * 100)),
+                   f"Embedded {done}/{total} chunks", done, total)
+
+        embeddings = self._embed([c.text for c in chunks],
+                                 progress_callback=_embed_progress if progress_callback else None)
+        report("embedding", 100,
+               f"Embedded {num_chunks} chunks" if embeddings is not None
+               else "No embedding model available: indexing for keyword search",
+               num_chunks, num_chunks)
+
+        report("saving", 0, f"Saving {num_chunks} chunks and the model's tables")
+        metadata_store = self.vector_store.metadata_store
+        structured = self.vector_store.structured_store
+        existed = metadata_store.get_document_info(document_id) is not None
+        try:
+            for sheet in model_sheets(model):
+                structured.create_table(
+                    document_id=document_id, filename=filename, columns=sheet["columns"],
+                    rows=sheet["rows"], sheet_name=sheet["sheet_name"],
+                    role_overrides=sheet["role_overrides"], type_overrides=sheet["type_overrides"],
+                )
+            pra_store.save_model(self.vector_store.index_dir, document_id, model)
+            self.vector_store.add_chunks(chunks, embeddings)
+        except Exception:
+            if not existed:
+                structured.delete_document(document_id)
+                pra_store.delete_model(self.vector_store.index_dir, document_id)
+            raise
+
+        indexed_at = utcnow().isoformat()
+        common = dict(
+            document_id=document_id, filename=filename, source_format=source_format,
+            extraction_method="text", embedding_model=self.embedding_service.model_name,
+            chunk_size=self.text_chunker.chunk_size, chunk_overlap=self.text_chunker.chunk_overlap,
+            injection_warnings=injection_warnings, uploaded_by=uploaded_by, content_hash=content_hash,
+            sensitivity=suggested_sensitivity, policy_status=policy_status, policy_flags=policy_flags,
+            file_size=self._file_size(document_path),
+        )
+        metadata_store.add_document(num_pages=len(page_texts), num_chunks=num_chunks,
+                                    upload_timestamp=indexed_at, **common)
+        report("saving", 100, f"Saved {num_chunks} chunks")
+        logger.info(
+            f"Indexed PRA model {filename} ({source_format}): {counts}, {len(model.warnings)} warnings, "
+            f"{num_chunks} chunks"
+        )
+        return DocumentMetadata(total_pages=len(page_texts), total_chunks=num_chunks,
+                                indexed_at=indexed_at, **common)
 
     def _index_code_file(
         self,
@@ -1463,6 +1598,7 @@ class DocumentIndexer:
         logger.info(f"Deleting document: {document_id}")
         num_deleted = self.vector_store.delete_document(document_id)
         figures.delete_figures(self.vector_store.metadata_store, self.figures_dir, document_id)
+        delete_pra_models(self.vector_store.index_dir, [document_id])
         logger.info(f"Deleted {num_deleted} chunks")
         return num_deleted
 
@@ -1470,6 +1606,7 @@ class DocumentIndexer:
         """Delete many documents at once. Returns chunks deleted; does not save."""
         num_deleted = self.vector_store.delete_documents(document_ids)
         figures.delete_figure_files(self.figures_dir, document_ids)
+        delete_pra_models(self.vector_store.index_dir, document_ids)
         return num_deleted
 
     def save_index(self):

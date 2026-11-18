@@ -84,6 +84,9 @@ class Sequence:
     logic: List[str] = field(default_factory=list)  # tops in the sequence, "/X" = success of X
     frequency: Optional[float] = None
     description: str = ""
+    # The event tree this sequence continues in, when it ends in a transfer
+    # rather than an end state (SAPHIRE's transfer flag, MEF's <event-tree> link).
+    transfer: Optional[str] = None
 
 
 @dataclass
@@ -93,6 +96,8 @@ class EventTree:
     description: str = ""
     functional_events: List[str] = field(default_factory=list)   # in column order
     sequences: List[Sequence] = field(default_factory=list)
+    # What each functional event (top event) means, as the event tree labels it.
+    functional_event_descriptions: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

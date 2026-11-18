@@ -31,7 +31,7 @@ be forgotten. That is the job here too. The record remembers.
 [On-prem](docs/ONPREM.md) · [Behind a corporate firewall](docs/ENTERPRISE.md) · [App API](docs/APP_API.md) ·
 [Search on a static website](docs/STATIC_SEARCH.md) ·
 [Roadmap](docs/ROADMAP.md) · [The name](docs/BRAND.md) ·
-[Supplier quality pilot](docs/QUALITY_PILOT.md) · [Provenance](docs/PROVENANCE.md) · [Engineering conventions](docs/ENGINEERING.md)
+[Supplier quality pilot](docs/QUALITY_PILOT.md) · [Provenance](docs/PROVENANCE.md) · [PRA models](docs/PRA.md) · [Engineering conventions](docs/ENGINEERING.md)
 
 ---
 
@@ -336,6 +336,7 @@ goes through the app's access checks.
 | **Deep search a multi-part question** | Ask, MCP | Ask's **Deep search** depth and the MCP tool `deep_search` run focused subqueries, report coverage gaps and weak evidence, and span collections. [Guide](docs/AGENTIC_RESEARCH.md). |
 | **Get a finished answer in one agent call** | MCP | `ask_documents` returns the grounded, cited answer the in-app chat would give, when the deployment runs a model of its own (`AI_PROVIDER`). For agents whose own model is small or busy, or automations that just need the answer. |
 | **Query spreadsheets, not just prose** | Ask, Find, MCP | CSV/XLSX become typed tables; counts, sums, filters, and rankings run as SQL, never as guessed passage search. Find returns the rows that contain every word you search for (a customer, an invoice number, a SKU), with no model needed. |
+| **Search and query PRA models** | Add sources, Ask, Find, MCP | Open-PSA MEF files and SAPHIRE MAR-D exports (CAFTA through its SAPHIRE conversion) become one source each: every fault tree, gate, event tree and sequence as citable text, and basic events, gates, sequences and cut sets as SQL tables. [Guide](docs/PRA.md). |
 | **Triage, organize and review papers and books** | Library | Screens sources against your question with verdicts backed by verified quotes, renames downloads to *year – authors – title*, downloads what a source cites, maps citations between your sources, and prepares reviews overnight; works on the sources you select. Metadata comes from the source or a catalogue (OpenAlex, Crossref, arXiv, Open Library), never a model. [Guide](docs/RESEARCH.md). |
 | **Turn a collection into a document** | Reports | Source-grounded briefings, summaries, and reports with citations to review before sharing. |
 | **Teach it your house style or domain** | Saved instructions | Expertise packs add instructions and terminology per collection, versioned alongside the corpus. |
@@ -937,7 +938,8 @@ model you host.
 
 **Which file types does it read?**
 PDF, Word (DOCX), PowerPoint (PPTX), Markdown, text, HTML, JSON/JSONL,
-CSV/XLSX (as queryable tables), sixty-plus programming and configuration
+CSV/XLSX (as queryable tables), PRA models (Open-PSA MEF and SAPHIRE MAR-D
+exports, or a zip of one; [details](docs/PRA.md)), sixty-plus programming and configuration
 languages, audio and video recordings (the speech is transcribed; what appears
 on screen is not read), and images (described by a vision model). Scanned PDFs are read with OCR when it is enabled, and Settings → Custom file
 types teaches it a format of your own.

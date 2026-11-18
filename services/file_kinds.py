@@ -20,6 +20,14 @@ DOC_EXTENSIONS = {
     ".rst", ".adoc", ".asciidoc", ".org", ".tex", ".bib", ".log", ".text", ".srt", ".vtt",
 }
 DATA_EXTENSIONS = {".csv", ".tsv", ".xlsx", ".xlsm", ".xls", ".ods", ".json", ".jsonl"}
+# PRA models (docs/PRA.md). A .zip is indexable only as a PRA export, so it is
+# data too; a MAR-D .sql and an MEF .xml keep their suffix's family (code),
+# because families are decided by suffix.
+PRA_EXTENSIONS = {
+    ".ftl", ".bei", ".bed", ".ftd", ".gtd", ".etl", ".etd", ".esd", ".sqc", ".ftc", ".esc",
+    ".opsa", ".mef", ".opsa-mef", ".zip",
+}
+DATA_EXTENSIONS |= PRA_EXTENSIONS
 # Notebooks are code with prose around it; the sidebar draws them as code.
 NOTEBOOK_EXTENSIONS = {".ipynb"}
 

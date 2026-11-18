@@ -11,3 +11,6 @@ docker/entrypoint.sh text eol=lf
 # part of every value.
 .env*.example text eol=lf
 scripts/bundle_files.txt text eol=lf
+
+# Synthetic SAPHIRE MAR-D test files: CRLF, a BOM and Latin-1 on purpose.
+tests/fixtures/pra/mard/* -text

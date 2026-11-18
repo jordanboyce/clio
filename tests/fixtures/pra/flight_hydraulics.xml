@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic Open-PSA MEF test model for Clio: flight-control hydraulic power
+     of a two-engine transport aircraft, and the thrust-loss event tree that
+     uses it. The numbers are illustrative, not data. -->
+<opsa-mef name="FlightHydraulics">
+  <label>Flight-control hydraulic power of a two-engine transport (synthetic test model)</label>
+  <define-fault-tree name="LossOfHydraulics">
+    <label>Loss of all hydraulic power to the flight controls</label>
+    <define-gate name="LOSS-HYD">
+      <label>Both hydraulic systems lose pressure</label>
+      <and>
+        <gate name="SYS-A-FAILS"/>
+        <gate name="SYS-B-FAILS"/>
+      </and>
+    </define-gate>
+    <define-gate name="SYS-A-FAILS">
+      <label>Hydraulic system A loses pressure</label>
+      <or>
+        <basic-event name="EDP-A-FTR"/>
+        <basic-event name="RES-A-LEAK"/>
+        <and>
+          <gate name="ENGINE-1-OUT"/>
+          <not><house-event name="RAT-ARMED"/></not>
+        </and>
+      </or>
+    </define-gate>
+    <define-gate name="SYS-B-FAILS">
+      <label>Hydraulic system B loses pressure</label>
+      <or>
+        <basic-event name="EDP-B-FTR"/>
+        <basic-event name="RES-B-LEAK"/>
+        <atleast min="2">
+          <basic-event name="ACMP-1-FTS"/>
+          <basic-event name="ACMP-2-FTS"/>
+          <basic-event name="ACMP-3-FTS"/>
+        </atleast>
+      </or>
+    </define-gate>
+    <define-gate name="ENGINE-1-OUT">
+      <label>Engine 1 stops driving its pump</label>
+      <or>
+        <basic-event name="ENG-1-FLAMEOUT"/>
+        <basic-event name="FUEL-PUMP-1-FTR"/>
+      </or>
+    </define-gate>
+    <define-house-event name="RAT-ARMED">
+      <label>Ram air turbine fitted and armed</label>
+      <constant value="true"/>
+    </define-house-event>
+  </define-fault-tree>
+  <define-fault-tree name="RestartFails">
+    <label>Crew cannot restart an engine</label>
+    <define-gate name="NO-RESTART">
+      <label>No engine restarts in flight</label>
+      <or>
+        <basic-event name="CREW-RESTART-FAILS"/>
+        <imply>
+          <basic-event name="APU-UNAVAILABLE"/>
+          <basic-event name="WINDMILL-START-FAILS"/>
+        </imply>
+      </or>
+    </define-gate>
+  </define-fault-tree>
+  <model-data>
+    <define-parameter name="LAMBDA-EDP" unit="hours-1">
+      <float value="2.0e-5"/>
+    </define-parameter>
+    <define-parameter name="FLIGHT-TIME" unit="hours">
+      <float value="10"/>
+    </define-parameter>
+    <define-basic-event name="EDP-A-FTR">
+      <label>Engine-driven pump A fails to run</label>
+      <exponential>
+        <parameter name="LAMBDA-EDP"/>
+        <parameter name="FLIGHT-TIME"/>
+      </exponential>
+    </define-basic-event>
+    <define-basic-event name="EDP-B-FTR">
+      <label>Engine-driven pump B fails to run</label>
+      <exponential>
+        <parameter name="LAMBDA-EDP"/>
+        <parameter name="FLIGHT-TIME"/>
+      </exponential>
+    </define-basic-event>
+    <define-basic-event name="RES-A-LEAK">
+      <label>Reservoir A leaks</label>
+      <float value="1.0e-6"/>
+    </define-basic-event>
+    <define-basic-event name="RES-B-LEAK">
+      <label>Reservoir B leaks</label>
+      <mul><float value="2"/><float value="5.0e-7"/></mul>
+    </define-basic-event>
+    <define-basic-event name="ACMP-1-FTS">
+      <label>AC motor pump 1 fails to start</label>
+      <lognormal-deviate><float value="3.0e-4"/><float value="3"/><float value="0.95"/></lognormal-deviate>
+    </define-basic-event>
+    <define-basic-event name="ACMP-2-FTS">
+      <label>AC motor pump 2 fails to start</label>
+      <lognormal-deviate><float value="3.0e-4"/><float value="3"/><float value="0.95"/></lognormal-deviate>
+    </define-basic-event>
+    <define-basic-event name="ACMP-3-FTS">
+      <label>AC motor pump 3 fails to start</label>
+      <lognormal-deviate><float value="3.0e-4"/><float value="3"/><float value="0.95"/></lognormal-deviate>
+    </define-basic-event>
+    <define-basic-event name="ENG-1-FLAMEOUT">
+      <label>Engine 1 flames out</label>
+      <exponential><float value="1.0e-5"/><system-mission-time/></exponential>
+    </define-basic-event>
+    <define-basic-event name="FUEL-PUMP-1-FTR">
+      <label>Engine 1 fuel pump fails to run</label>
+      <periodic-test>
+        <float value="1.0e-4"/><float value="720"/><float value="100"/><system-mission-time/>
+      </periodic-test>
+    </define-basic-event>
+    <define-basic-event name="CREW-RESTART-FAILS">
+      <label>Crew fails to restart an engine</label>
+      <float value="1.0e-2"/>
+    </define-basic-event>
+    <define-basic-event name="APU-UNAVAILABLE">
+      <label>APU not available for an assisted start</label>
+      <float value="0.05"/>
+    </define-basic-event>
+    <define-basic-event name="WINDMILL-START-FAILS">
+      <label>Windmill restart fails</label>
+      <float value="0.2"/>
+    </define-basic-event>
+  </model-data>
+  <define-CCF-group name="BRAKE-ACCUMULATORS" model="beta-factor">
+    <members>
+      <basic-event name="BRAKE-ACC-1"/>
+      <basic-event name="BRAKE-ACC-2"/>
+    </members>
+    <distribution><float value="1.0e-4"/></distribution>
+    <factor><float value="0.1"/></factor>
+  </define-CCF-group>
+  <define-initiating-event name="DUAL-ENGINE-ROLLBACK" event-tree="ThrustLoss">
+    <label>Both engines roll back in cruise</label>
+  </define-initiating-event>
+  <define-event-tree name="ThrustLoss">
+    <label>Thrust loss in cruise</label>
+    <define-functional-event name="RESTART">
+      <label>Crew restarts an engine</label>
+    </define-functional-event>
+    <define-functional-event name="HYDRAULICS">
+      <label>Hydraulic power for the flight controls</label>
+    </define-functional-event>
+    <define-sequence name="SAFE-FLIGHT"><label>Flight continues to destination</label></define-sequence>
+    <define-sequence name="FORCED-LANDING"><label>Forced landing</label></define-sequence>
+    <define-sequence name="LOSS-OF-CONTROL"><label>Loss of aircraft control</label></define-sequence>
+    <initial-state>
+      <fork functional-event="RESTART">
+        <path state="success">
+          <collect-formula><not><gate name="NO-RESTART"/></not></collect-formula>
+          <sequence name="SAFE-FLIGHT"/>
+        </path>
+        <path state="failure">
+          <collect-formula><gate name="NO-RESTART"/></collect-formula>
+          <fork functional-event="HYDRAULICS">
+            <path state="success">
+              <collect-formula><not><gate name="LOSS-HYD"/></not></collect-formula>
+              <sequence name="FORCED-LANDING"/>
+            </path>
+            <path state="failure">
+              <collect-formula><gate name="LOSS-HYD"/></collect-formula>
+              <sequence name="LOSS-OF-CONTROL"/>
+            </path>
+          </fork>
+        </path>
+      </fork>
+    </initial-state>
+  </define-event-tree>
+</opsa-mef>

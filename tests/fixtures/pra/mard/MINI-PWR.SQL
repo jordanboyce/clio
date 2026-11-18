@@ -1,0 +1,3 @@
+MINI-PWR, TRANS, 03=
+/RPS AFW HPI .
+^EOS

@@ -35,6 +35,14 @@ describe('document and data families for the broader formats', () => {
     expect(isTabularFile('a.ods')).toBe(false)
   })
 
+  it('files PRA models under data, but not as spreadsheets', () => {
+    for (const name of ['G-PWR.FTL', 'g-pwr.bei', 'model.opsa', 'export.zip']) {
+      expect(describeFile(name), name).toMatchObject({ family: 'data', label: 'pra' })
+    }
+    expect(isTabularFile('export.zip')).toBe(false)
+    expect(describeFile('schema.sql').family).toBe('code')
+  })
+
   it('draws notebooks as code', () => {
     expect(describeFile('analysis.ipynb').family).toBe('code')
   })
