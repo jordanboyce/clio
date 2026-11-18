@@ -107,8 +107,10 @@ def _failed_sign_ins_are_not_shared_between_tests():
     """Every TestClient call comes from one address; one test's wrong
     passwords must not spend the next test's failed sign-in budget."""
     from middleware.auth_failures import failed_auth_limiter
+    from middleware.request_context import reset_addresses
 
     failed_auth_limiter.reset()
+    reset_addresses()
     yield
     failed_auth_limiter.reset()
 

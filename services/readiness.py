@@ -189,6 +189,26 @@ def _posture_checks() -> List[Dict[str, Any]]:
     return out
 
 
+def _proxy_address_check() -> List[Dict[str, Any]]:
+    """Every request from one private address: a proxy uvicorn does not trust."""
+    import os
+
+    from middleware.request_context import single_private_source
+
+    source = single_private_source()
+    if not source or not reachable_beyond_host() or not auth_gate():
+        return []
+    trusted = os.environ.get("FORWARDED_ALLOW_IPS", "")
+    return [_check(
+        "proxy_address", "posture", "Client addresses", WARN,
+        f"Every request so far came from {source}, which looks like a reverse proxy. Failed sign-ins "
+        "are counted per address, so one person guessing a password locks everyone out"
+        + (f" (FORWARDED_ALLOW_IPS is {trusted!r}, which does not cover it)." if trusted else "."),
+        f"Set FORWARDED_ALLOW_IPS={source} (the proxy's address) so the client's own address from "
+        "X-Forwarded-For is used, and have the proxy set that header. docker-compose.proxy.yml does both.",
+    )]
+
+
 def secure_profile_errors() -> List[str]:
     """Fatal problems under ``CLIO_PROFILE=secure`` (empty for any other profile).
 
@@ -479,6 +499,7 @@ def run_checks(probe: bool = False) -> Dict[str, Any]:
     checks: List[Dict[str, Any]] = []
     builders = [
         ("posture", _posture_checks),
+        ("proxy_address", _proxy_address_check),
         ("embedding", lambda: [_embedding_check()]),
         ("reranker", lambda: [_reranker_check()]),
         ("capabilities", _capability_checks),

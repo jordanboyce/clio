@@ -718,7 +718,12 @@ Jobs across a restart. An index job (upload, folder, repository or link) keeps o
 
 Identity for the limits is the verified identity when there is one, else the
 client IP — which behind a reverse proxy is the address uvicorn reports, so
-set `FORWARDED_ALLOW_IPS` to the proxy (see shape **C**). A
+set `FORWARDED_ALLOW_IPS` to the proxy (see shape **C**). Failed sign-ins
+are counted the same way, so without it one person guessing a password
+locks out everyone behind the proxy. The readiness report
+(`/api/system/readiness`) warns when every request so far (at least 50) has
+come from one private address on a server reachable from the network, and
+names the `FORWARDED_ALLOW_IPS` value to set. A
 **429 response** means "you, specifically, are over a limit — wait the
 `Retry-After` seconds," not that the server is down; the UI says so. With
 `ADMIN_EMAILS` set, the Admin tab shows per-person spend, live process
