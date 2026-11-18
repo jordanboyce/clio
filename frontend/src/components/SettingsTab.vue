@@ -99,7 +99,7 @@
 
           <!-- Interface (advanced) -->
           <div v-if="advanced" class="pt-6 border-t border-base-300/60">
-            <p class="text-[10px] uppercase tracking-[0.18em] font-semibold text-base-content/35 mb-4">Advanced</p>
+            <p class="text-xs uppercase tracking-[0.14em] font-semibold text-base-content/50 mb-4">Advanced</p>
             <div class="flex items-start justify-between gap-8">
               <div class="min-w-0">
                 <div class="text-sm font-medium">Chat tab</div>
@@ -168,354 +168,188 @@
         <section v-show="activeSection === 'providers'" aria-labelledby="settings-providers">
           <h2 id="settings-providers" class="sr-only">AI Providers</h2>
 
-          <p v-if="!systemInfo.offline_mode" class="text-[13px] text-base-content/55 leading-relaxed max-w-[60ch] mb-5">
-            Connect the AI you trust — a cloud key, a local model, or your own OpenAI-compatible
-            endpoint. Keys live in your browser; on connect they're also stored on your self-hosted
-            server so background features can use them.
+          <p v-if="!systemInfo.offline_mode" class="text-sm text-base-content/60 leading-relaxed max-w-[60ch] mb-6">
+            The model that writes answers in Ask, Find and Reports. Keys stay in this browser and,
+            once connected, on your own server so background work can use them.
           </p>
-          <p v-else class="text-[13px] text-base-content/55 leading-relaxed max-w-[60ch] mb-5">
-            <ShieldCheck :size="13" class="inline -mt-0.5 mr-1 text-success" aria-hidden="true" />This
-            deployment runs air-gapped — cloud AI providers are disabled. Connect a local Ollama
-            instance or a self-hosted OpenAI-compatible server on your network.
+          <p v-else class="text-sm text-base-content/60 leading-relaxed max-w-[60ch] mb-6">
+            <ShieldCheck :size="14" class="inline -mt-0.5 mr-1" aria-hidden="true" />This
+            deployment runs air-gapped, so only models on your own network are offered: Ollama, or
+            a self-hosted OpenAI-compatible server.
           </p>
 
           <!-- Empty state: nothing connected yet -->
-          <div v-if="providerStore.serverLoaded && !hasAnyProvider" class="rounded-xl border border-dashed border-base-300 px-4 py-3 space-y-1 mb-4">
-            <template v-if="!systemInfo.offline_mode">
-              <p class="text-sm font-medium">Nothing connected yet — three quick ways to start:</p>
-              <ul class="text-xs text-base-content/60 list-disc list-inside space-y-0.5">
-                <li>Paste a cloud API key (Anthropic, OpenAI, …) into a provider below and hit Connect.</li>
-                <li>Run <a href="https://ollama.com" target="_blank" rel="noopener" class="link link-primary">Ollama</a> locally, then open the Ollama row.</li>
-                <li>Connect LM Studio, vLLM, or any OpenAI-compatible server via "Add your own endpoint" below.</li>
-              </ul>
-            </template>
-            <template v-else>
-              <p class="text-sm font-medium">Nothing connected yet — two ways to start:</p>
-              <ul class="text-xs text-base-content/60 list-disc list-inside space-y-0.5">
-                <li>Run Ollama on this machine or your network, then open the Ollama row.</li>
-                <li>Connect LM Studio, vLLM, or any OpenAI-compatible server via "Add your own endpoint" below.</li>
-              </ul>
-            </template>
-          </div>
+          <p v-if="providerStore.serverLoaded && !hasAnyProvider" class="text-sm text-base-content/70 leading-relaxed max-w-[60ch] mb-6" data-testid="providers-empty">
+            Nothing is connected yet. Search works without a model; connect one below to get written answers.
+          </p>
 
-          <!-- Provider table -->
-          <div class="rounded-xl border border-base-300 bg-base-100 divide-y divide-base-300 overflow-hidden">
+          <!-- Providers, grouped by where the text goes -->
+          <div class="space-y-8">
+            <section v-for="group in providerGroups" :key="group.id" :aria-labelledby="`provider-group-${group.id}`" :data-testid="`provider-group-${group.id}`">
+              <h3 :id="`provider-group-${group.id}`" class="text-sm font-semibold">{{ group.title }}</h3>
+              <p class="text-xs text-base-content/60 mt-1 mb-3 max-w-[60ch] leading-relaxed">{{ group.note }}</p>
 
-            <!-- Deployment provider: configured on the server (AI_PROVIDER),
-                 shared by everyone, not editable from a browser. -->
-            <div v-if="deploymentDefault.configured" class="px-4 py-3">
-              <div class="flex items-center gap-3">
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <span class="font-medium text-sm">{{ deploymentDefault.label }}</span>
-                    <span class="badge badge-ghost badge-xs">this server</span>
-                  </div>
-                  <div class="text-xs text-base-content/50 mt-0.5 truncate">
-                    {{ deploymentDefault.model || 'server-chosen model' }}
-                    <template v-if="deploymentDefault.base_url"> · {{ deploymentDefault.base_url }}</template>
-                  </div>
-                </div>
-                <div class="flex items-center gap-2 flex-shrink-0">
-                  <span v-if="deploymentIsDefault" class="badge badge-primary badge-xs">Default</span>
-                  <button
-                    v-else
-                    class="btn btn-ghost btn-xs"
-                    @click="setDefaultProvider(deploymentDefault.provider)"
-                  >Use as default</button>
-                  <span class="badge badge-success badge-xs">Connected</span>
-                </div>
-              </div>
-              <p class="text-xs text-base-content/45 mt-2 max-w-[60ch]">
-                Configured on this server by whoever runs it — no key or URL to enter here, and
-                your questions go to that endpoint. Add your own provider below only if you want
-                to use a different one.
-              </p>
-            </div>
-
-            <!-- Built-in provider rows -->
-            <div v-for="def in visibleProviderDefs" :key="def.id">
-              <div
-                class="flex items-center gap-3 px-4 py-3 cursor-pointer select-none hover:bg-base-200/50 transition-colors"
-                @click="toggleExpand(def.id)"
-                role="button"
-                :aria-expanded="expandedProvider === def.id"
-              >
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <span class="font-medium text-sm">{{ def.name }}</span>
-                    <span v-if="def.type === 'local'" class="badge badge-info badge-xs badge-outline">local</span>
-                  </div>
-                  <div v-if="getProviderModelLabel(def.id)" class="text-xs text-base-content/50 mt-0.5 truncate">{{ getProviderModelLabel(def.id) }}</div>
-                </div>
-                <div class="flex items-center gap-2 flex-shrink-0">
-                  <span v-if="activeProviderId === def.id" class="badge badge-primary badge-xs">Default</span>
-                  <span v-if="isServerProvider(def.id) && !hasLocalKey(def.id)" class="badge badge-success badge-xs">Team key</span>
-                  <span v-else-if="isProviderConfigured(def.id)" class="badge badge-success badge-xs">Connected</span>
-                  <span v-else class="text-base-content/35 text-xs hidden sm:block">Not connected</span>
-                  <ChevronDown
-                    :size="14"
-                    class="text-base-content/35 transition-transform"
-                    :class="{ 'rotate-180': expandedProvider === def.id }"
-                    aria-hidden="true"
-                  />
-                </div>
-              </div>
-
-              <div v-if="expandedProvider === def.id" class="border-t border-base-300 bg-base-200/30 px-4 py-4 space-y-3">
-
-                <!-- Ollama config -->
-                <template v-if="def.id === 'ollama'">
-                  <div class="form-control">
-                    <label class="label p-0 pb-1" for="ollama-base-url">
-                      <span class="label-text font-medium">Base URL</span>
-                    </label>
-                    <input
-                      id="ollama-base-url"
-                      v-model="editBuffer.baseUrl"
-                      type="url"
-                      placeholder="http://localhost:11434"
-                      class="input input-bordered input-sm w-full"
-                    />
-                    <p class="text-xs text-base-content/50 mt-1">Change this to connect to a remote Ollama instance.</p>
-                  </div>
-
-                  <div v-if="ollamaCheckStatus === 'checking'" class="flex items-center gap-2 text-sm text-base-content/60">
-                    <span class="loading loading-spinner loading-xs"></span> Detecting models…
-                  </div>
-                  <div v-else-if="ollamaCheckStatus === 'available'" class="space-y-2">
-                    <div class="alert alert-success py-2 text-sm">
-                      Ollama running · {{ modelsFor('ollama').length }} model(s) available
+              <ul class="rounded-box border border-base-300 bg-base-100 divide-y divide-base-300 overflow-hidden">
+                <li v-for="row in group.rows" :key="row.key" :data-testid="`provider-row-${row.key}`">
+                  <!-- Deployment provider: configured on the server, shared by everyone. -->
+                  <div v-if="row.kind === 'deployment'" class="px-4 py-3">
+                    <div class="flex items-start gap-3">
+                      <div class="flex-1 min-w-0">
+                        <div class="font-medium text-sm">{{ row.name }}</div>
+                        <div class="text-xs text-base-content/60 mt-0.5 truncate">
+                          {{ deploymentDefault.model || 'Model chosen by the server' }}<template v-if="deploymentDefault.base_url"> · {{ deploymentDefault.base_url }}</template>
+                        </div>
+                      </div>
+                      <div class="flex items-center gap-3 flex-shrink-0 text-xs">
+                        <span v-if="deploymentIsDefault" class="font-medium text-base-content">Default</span>
+                        <button v-else class="btn btn-ghost btn-sm" @click="setDefaultProvider(deploymentDefault.provider)">Use as default</button>
+                        <span class="inline-flex items-center gap-1 text-base-content/70"><Check :size="13" aria-hidden="true" />Set by this server</span>
+                      </div>
                     </div>
-                    <div class="form-control">
-                      <label class="label p-0 pb-1" for="ollama-model">
-                        <span class="label-text font-medium">Model</span>
-                        <button
-                          class="label-text-alt btn btn-xs btn-ghost"
-                          @click="detectOllama"
-                          aria-label="Refresh Ollama model list"
-                        >Refresh</button>
-                      </label>
-                      <select
-                        id="ollama-model"
-                        class="select select-bordered select-sm w-full"
-                        :value="editBuffer.model"
-                        @change="onModelSelect('ollama', $event.target.value)"
-                      >
-                        <option v-for="m in modelsFor('ollama')" :key="m.id" :value="m.id">{{ m.display }}</option>
-                      </select>
-                    </div>
+                    <p class="text-xs text-base-content/60 mt-2 max-w-[60ch] leading-relaxed">
+                      Whoever runs this server set it up for everyone; there is nothing to enter here.
+                    </p>
                   </div>
-                  <div v-else-if="ollamaCheckStatus === 'unavailable'" class="alert alert-warning py-2 text-sm">
-                    Ollama not detected at <code class="font-mono">{{ editBuffer.baseUrl || 'http://localhost:11434' }}</code>.
-                    <a href="https://ollama.com" target="_blank" class="link link-primary ml-1">Install Ollama</a>
-                  </div>
-                  <p v-if="ollamaError && ollamaCheckStatus === 'unavailable'" class="text-error text-sm">{{ ollamaError }}</p>
 
-                  <div class="flex gap-2">
+                  <template v-else>
                     <button
-                      class="btn btn-sm btn-primary"
-                      @click="connectOllama"
-                      :disabled="savingProvider === 'ollama' || ollamaCheckStatus === 'checking'"
+                      type="button"
+                      class="w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-base-200/50 transition-colors"
+                      :aria-expanded="expandedProvider === row.id"
+                      @click="toggleExpand(row.id)"
                     >
-                      <span v-if="savingProvider === 'ollama'" class="loading loading-spinner loading-xs"></span>
-                      Connect
+                      <span class="flex-1 min-w-0">
+                        <span class="block font-medium text-sm">{{ row.name }}</span>
+                        <span class="block text-xs text-base-content/60 mt-0.5 line-clamp-2 break-words">{{ rowDetail(row) }}</span>
+                      </span>
+                      <span class="flex items-center gap-3 flex-shrink-0 text-xs pt-0.5">
+                        <span v-if="activeProviderId === row.id" class="font-medium text-base-content">Default</span>
+                        <span v-if="row.kind === 'builtin' && isServerProvider(row.id) && !hasLocalKey(row.id)" class="inline-flex items-center gap-1 text-base-content/70"><Check :size="13" aria-hidden="true" />Team key</span>
+                        <span v-else-if="row.connected" class="inline-flex items-center gap-1 text-base-content/70"><Check :size="13" aria-hidden="true" />Connected</span>
+                        <span v-else class="text-base-content/50">Not connected</span>
+                        <ChevronDown :size="14" class="text-base-content/40 transition-transform" :class="{ 'rotate-180': expandedProvider === row.id }" aria-hidden="true" />
+                      </span>
                     </button>
-                    <button
-                      v-if="isProviderConfigured('ollama') && activeProviderId !== 'ollama'"
-                      class="btn btn-sm btn-outline btn-primary"
-                      @click="setDefaultProvider('ollama')"
-                      title="Make Ollama the app-wide default provider"
-                    >Use as default</button>
-                    <span v-else-if="isProviderConfigured('ollama')" class="text-xs text-base-content/50 self-center">App-wide default</span>
-                    <button
-                      v-if="isProviderConfigured('ollama')"
-                      class="btn btn-sm btn-ghost text-error"
-                      @click="removeProvider('ollama')"
-                    >Remove</button>
-                  </div>
-                </template>
 
-                <!-- Cloud provider config -->
-                <template v-else>
-                  <p v-if="isServerProvider(def.id)" class="text-xs text-base-content/50">
-                    This server already has a team key for {{ def.name }}. Add your own key only if you want to override it.
-                  </p>
-                  <div class="form-control">
-                    <label class="label p-0 pb-1" :for="`provider-apikey-${def.id}`">
-                      <span class="label-text font-medium">API Key</span>
-                      <a v-if="def.keyLink" :href="def.keyLink" target="_blank" rel="noopener" class="label-text-alt link link-primary text-xs">Get a key ↗</a>
-                    </label>
-                    <div class="join w-full">
-                      <input
-                        :id="`provider-apikey-${def.id}`"
-                        v-model="editBuffer.apiKey"
-                        :type="showEditKey ? 'text' : 'password'"
-                        :placeholder="def.keyPlaceholder || 'API key…'"
-                        class="input input-bordered input-sm join-item flex-1"
-                        @input="editBuffer.keyDirty = true; editBuffer.keyStatus = ''; editBuffer.keyError = ''"
-                      />
-                      <button
-                        class="btn btn-sm join-item"
-                        @click="showEditKey = !showEditKey"
-                        :aria-label="showEditKey ? 'Hide API key' : 'Show API key'"
-                      >
-                        {{ showEditKey ? 'Hide' : 'Show' }}
-                      </button>
+                    <div v-if="expandedProvider === row.id" class="border-t border-base-300 bg-base-200/30 px-4 py-4 space-y-4">
+
+                      <!-- Ollama -->
+                      <template v-if="row.id === 'ollama'">
+                        <div class="form-control">
+                          <label class="label p-0 pb-1" for="ollama-base-url"><span class="label-text text-sm font-medium">Address</span></label>
+                          <input id="ollama-base-url" v-model="editBuffer.baseUrl" type="url" placeholder="http://localhost:11434" class="input input-bordered input-sm w-full" />
+                          <p class="text-xs text-base-content/60 mt-1">Change it to use Ollama on another machine.</p>
+                        </div>
+
+                        <p v-if="ollamaCheckStatus === 'checking'" class="flex items-center gap-2 text-sm text-base-content/70" role="status">
+                          <span class="loading loading-spinner loading-xs" aria-hidden="true"></span> Looking for Ollama…
+                        </p>
+                        <AnswerModelSelect
+                          v-else-if="ollamaCheckStatus === 'available'"
+                          select-id="ollama-model"
+                          :models="modelsFor('ollama')"
+                          :model-value="editBuffer.model"
+                          :allow-default="false"
+                          :allow-custom="false"
+                          @select="onModelSelect('ollama', $event)"
+                          @refresh="detectOllama"
+                        />
+                        <p v-else-if="ollamaCheckStatus === 'unavailable'" class="notice notice-warning text-sm" role="alert">
+                          <AlertTriangle :size="14" class="text-warning" aria-hidden="true" />
+                          <span>Ollama did not answer at <code class="font-mono">{{ editBuffer.baseUrl || 'http://localhost:11434' }}</code>. <a href="https://ollama.com" target="_blank" rel="noopener" class="link">Install Ollama</a><template v-if="ollamaError"> · {{ ollamaError }}</template></span>
+                        </p>
+
+                        <div class="flex items-center gap-2 flex-wrap">
+                          <button class="btn btn-sm btn-primary" :disabled="savingProvider === 'ollama' || ollamaCheckStatus === 'checking'" @click="connectOllama">
+                            <span v-if="savingProvider === 'ollama'" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+                            Connect
+                          </button>
+                          <button v-if="isProviderConfigured('ollama') && activeProviderId !== 'ollama'" class="btn btn-sm btn-ghost" @click="setDefaultProvider('ollama')">Use as default</button>
+                          <button v-if="isProviderConfigured('ollama')" class="btn btn-sm btn-ghost text-error ml-auto" @click="removeProvider('ollama')">Remove</button>
+                        </div>
+                      </template>
+
+                      <!-- A company's service: key + model -->
+                      <template v-else-if="row.kind === 'builtin'">
+                        <p v-if="isServerProvider(row.id)" class="text-xs text-base-content/60">
+                          This server already has a team key for {{ row.name }}. Add your own only to use a different one.
+                        </p>
+                        <div class="form-control">
+                          <label class="label p-0 pb-1" :for="`provider-apikey-${row.id}`">
+                            <span class="label-text text-sm font-medium">API key</span>
+                            <a v-if="row.def.keyLink" :href="row.def.keyLink" target="_blank" rel="noopener" class="label-text-alt link text-xs">Get a key</a>
+                          </label>
+                          <div class="join w-full">
+                            <input
+                              :id="`provider-apikey-${row.id}`"
+                              v-model="editBuffer.apiKey"
+                              :type="showEditKey ? 'text' : 'password'"
+                              :placeholder="row.def.keyPlaceholder || 'API key…'"
+                              autocomplete="off"
+                              class="input input-bordered input-sm join-item flex-1 min-w-0"
+                              @input="editBuffer.keyDirty = true; editBuffer.keyStatus = ''; editBuffer.keyError = ''"
+                            />
+                            <button class="btn btn-sm join-item" :aria-label="showEditKey ? 'Hide API key' : 'Show API key'" @click="showEditKey = !showEditKey">{{ showEditKey ? 'Hide' : 'Show' }}</button>
+                          </div>
+                        </div>
+                        <AnswerModelSelect
+                          :select-id="`provider-model-${row.id}`"
+                          :models="modelsFor(row.id)"
+                          v-model="editBuffer.model"
+                          :custom-mode="!!editBuffer.customModelMode"
+                          :loading="!!modelState[row.id]?.loading"
+                          :error="modelState[row.id]?.error || ''"
+                          @select="onModelSelect(row.id, $event)"
+                          @commit="saveModelIfConfigured(row.id)"
+                          @refresh="loadModels(row.id, { force: true })"
+                        />
+                        <div class="flex items-center gap-2 flex-wrap">
+                          <button class="btn btn-sm btn-primary" :disabled="connectingProvider === row.id || !editBuffer.apiKey?.trim()" @click="connectProvider(row.id)">
+                            <span v-if="connectingProvider === row.id" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+                            {{ connectingProvider === row.id ? 'Checking…' : 'Connect' }}
+                          </button>
+                          <button v-if="isProviderConfigured(row.id) && activeProviderId !== row.id" class="btn btn-sm btn-ghost" @click="setDefaultProvider(row.id)">Use as default</button>
+                          <span v-if="editBuffer.keyStatus === 'valid'" class="inline-flex items-center gap-1 text-sm" role="status"><Check :size="14" class="text-success" aria-hidden="true" />Connected</span>
+                          <span v-if="editBuffer.keyError" class="text-error text-sm" role="alert">{{ editBuffer.keyError }}</span>
+                          <button v-if="isProviderConfigured(row.id) && !editBuffer.keyDirty" class="btn btn-sm btn-ghost text-error ml-auto" @click="removeProvider(row.id)">Remove</button>
+                        </div>
+                      </template>
+
+                      <!-- Your own OpenAI-compatible endpoint -->
+                      <template v-else>
+                        <p class="text-xs text-base-content/60 break-all">Endpoint <code class="font-mono">{{ row.cp.baseUrl }}</code></p>
+                        <AnswerModelSelect
+                          :select-id="`custom-model-${row.id}`"
+                          :models="modelsFor(row.id)"
+                          v-model="editBuffer.model"
+                          :custom-mode="!!editBuffer.customModelMode"
+                          :loading="!!modelState[row.id]?.loading"
+                          :error="modelState[row.id]?.error || ''"
+                          default-label="Use the endpoint’s default"
+                          @select="onModelSelect(row.id, $event)"
+                          @commit="saveModelIfConfigured(row.id)"
+                          @refresh="loadModels(row.id, { force: true })"
+                        />
+                        <div class="flex items-center gap-2 flex-wrap">
+                          <button v-if="activeProviderId !== row.id" class="btn btn-sm btn-ghost" @click="setDefaultProvider(row.id)">Use as default</button>
+                          <button class="btn btn-sm btn-ghost text-error ml-auto" @click="removeProvider(row.id)">Remove</button>
+                        </div>
+                      </template>
                     </div>
-                  </div>
-
-                  <div class="form-control">
-                    <label class="label p-0 pb-1" :for="`provider-model-${def.id}`">
-                      <span class="label-text font-medium">Model</span>
-                      <button
-                        class="label-text-alt btn btn-xs btn-ghost"
-                        @click="loadModels(def.id, { force: true })"
-                        :disabled="modelState[def.id]?.loading"
-                        aria-label="Refresh model list"
-                      >{{ modelState[def.id]?.loading ? '…' : 'Refresh' }}</button>
-                    </label>
-                    <p class="text-xs text-base-content/50 mb-1">Leave on provider defaults, pick a model, or type any model id.</p>
-                    <select
-                      :id="`provider-model-${def.id}`"
-                      class="select select-bordered select-sm w-full"
-                      :value="modelSelectValue()"
-                      @change="onModelSelect(def.id, $event.target.value)"
-                    >
-                      <option value="">Use provider defaults</option>
-                      <optgroup v-if="recommendedModels(def.id).length" label="Recommended">
-                        <option v-for="m in recommendedModels(def.id)" :key="m.id" :value="m.id">{{ m.display }}</option>
-                      </optgroup>
-                      <optgroup v-if="otherModels(def.id).length" label="All models">
-                        <option v-for="m in otherModels(def.id)" :key="m.id" :value="m.id">{{ m.display }}</option>
-                      </optgroup>
-                      <option value="__custom__">Custom model id…</option>
-                    </select>
-                    <input
-                      v-if="editBuffer.customModelMode"
-                      v-model="editBuffer.model"
-                      type="text"
-                      placeholder="exact model id"
-                      class="input input-bordered input-sm w-full mt-2"
-                      @change="saveModelIfConfigured(def.id)"
-                    />
-                    <p v-if="modelState[def.id]?.error" class="text-error text-sm mt-1">{{ modelState[def.id].error }}</p>
-                  </div>
-
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <button
-                      class="btn btn-sm btn-primary"
-                      @click="connectProvider(def.id)"
-                      :disabled="connectingProvider === def.id || !editBuffer.apiKey?.trim()"
-                    >
-                      <span v-if="connectingProvider === def.id" class="loading loading-spinner loading-xs"></span>
-                      {{ connectingProvider === def.id ? '' : 'Connect' }}
-                    </button>
-                    <button
-                      v-if="isProviderConfigured(def.id) && activeProviderId !== def.id"
-                      class="btn btn-sm btn-outline btn-primary"
-                      @click="setDefaultProvider(def.id)"
-                      :title="`Make ${def.name} the app-wide default provider`"
-                    >Use as default</button>
-                    <span v-else-if="isProviderConfigured(def.id)" class="text-xs text-base-content/50">App-wide default</span>
-                    <button
-                      v-if="isProviderConfigured(def.id) && !editBuffer.keyDirty"
-                      class="btn btn-sm btn-ghost text-error"
-                      @click="removeProvider(def.id)"
-                    >Remove</button>
-                    <span v-if="editBuffer.keyStatus === 'valid'" class="text-success text-sm font-semibold">✓ Connected</span>
-                    <span v-if="editBuffer.keyError" class="text-error text-sm">{{ editBuffer.keyError }}</span>
-                  </div>
-                </template>
-              </div>
-            </div>
-
-            <!-- Custom endpoint rows (added via "Add your own endpoint") -->
-            <div v-for="cp in customProvidersConfig" :key="cp.id">
-              <div
-                class="flex items-center gap-3 px-4 py-3 cursor-pointer select-none hover:bg-base-200/50 transition-colors"
-                @click="toggleExpand(cp.id)"
-                role="button"
-                :aria-expanded="expandedProvider === cp.id"
-              >
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <span class="font-medium text-sm">{{ cp.name }}</span>
-                    <span class="badge badge-neutral badge-xs badge-outline">custom</span>
-                  </div>
-                  <div class="text-xs text-base-content/50 mt-0.5 truncate">{{ cp.baseUrl }}</div>
-                </div>
-                <div class="flex items-center gap-2 flex-shrink-0">
-                  <span v-if="activeProviderId === cp.id" class="badge badge-primary badge-xs">Default</span>
-                  <span class="badge badge-success badge-xs">Connected</span>
-                  <ChevronDown
-                    :size="14"
-                    class="text-base-content/35 transition-transform"
-                    :class="{ 'rotate-180': expandedProvider === cp.id }"
-                    aria-hidden="true"
-                  />
-                </div>
-              </div>
-
-              <div v-if="expandedProvider === cp.id" class="border-t border-base-300 bg-base-200/30 px-4 py-4 space-y-3">
-                <p class="text-xs text-base-content/50">
-                  Endpoint <code class="font-mono">{{ cp.baseUrl }}</code>
-                </p>
-                <div class="form-control">
-                  <label class="label p-0 pb-1" :for="`custom-model-${cp.id}`">
-                    <span class="label-text font-medium">Model</span>
-                    <button
-                      class="label-text-alt btn btn-xs btn-ghost"
-                      @click="loadModels(cp.id, { force: true })"
-                      :disabled="modelState[cp.id]?.loading"
-                      aria-label="Refresh model list"
-                    >{{ modelState[cp.id]?.loading ? '…' : 'Refresh' }}</button>
-                  </label>
-                  <select
-                    :id="`custom-model-${cp.id}`"
-                    class="select select-bordered select-sm w-full"
-                    :value="modelSelectValue()"
-                    @change="onModelSelect(cp.id, $event.target.value)"
-                  >
-                    <option value="">Use endpoint default</option>
-                    <optgroup v-if="recommendedModels(cp.id).length" label="Recommended">
-                      <option v-for="m in recommendedModels(cp.id)" :key="m.id" :value="m.id">{{ m.display }}</option>
-                    </optgroup>
-                    <optgroup v-if="otherModels(cp.id).length" label="All models">
-                      <option v-for="m in otherModels(cp.id)" :key="m.id" :value="m.id">{{ m.display }}</option>
-                    </optgroup>
-                    <option value="__custom__">Custom model id…</option>
-                  </select>
-                  <input
-                    v-if="editBuffer.customModelMode"
-                    v-model="editBuffer.model"
-                    type="text"
-                    placeholder="exact model id"
-                    class="input input-bordered input-sm w-full mt-2"
-                    @change="saveModelIfConfigured(cp.id)"
-                  />
-                  <p v-if="modelState[cp.id]?.error" class="text-error text-sm mt-1">{{ modelState[cp.id].error }}</p>
-                </div>
-                <div class="flex gap-2">
-                  <button
-                    v-if="activeProviderId !== cp.id"
-                    class="btn btn-sm btn-outline btn-primary"
-                    @click="setDefaultProvider(cp.id)"
-                    :title="`Make ${cp.name} the app-wide default provider`"
-                  >Use as default</button>
-                  <span v-else class="text-xs text-base-content/50 self-center">App-wide default</span>
-                  <button class="btn btn-sm btn-ghost text-error" @click="removeProvider(cp.id)">Remove</button>
-                </div>
-              </div>
-            </div>
+                  </template>
+                </li>
+              </ul>
+            </section>
           </div>
 
           <!-- Add your own endpoint -->
-          <div v-if="showAddEndpoint" class="rounded-xl border border-base-300 bg-base-100 px-4 py-4 space-y-3 mt-3">
-            <p class="text-sm font-medium">Add your own endpoint</p>
+          <div v-if="showAddEndpoint" class="rounded-box border border-base-300 bg-base-100 px-4 py-4 space-y-3 mt-4">
+            <p class="text-sm font-medium">Your own endpoint</p>
+            <p class="text-xs text-base-content/60 max-w-[60ch] leading-relaxed">Any server that speaks the OpenAI API. One on your network joins that group; a hosted one is listed with the hosted providers.</p>
             <div class="form-control">
               <label class="label p-0 pb-1" for="endpoint-preset">
                 <span class="label-text font-medium">Preset</span>
-                <a v-if="selectedPreset?.keyLink" :href="selectedPreset.keyLink" target="_blank" rel="noopener" class="label-text-alt link link-primary text-xs">Get a key ↗</a>
+                <a v-if="selectedPreset?.keyLink" :href="selectedPreset.keyLink" target="_blank" rel="noopener" class="label-text-alt link text-xs">Get a key</a>
               </label>
               <select id="endpoint-preset" v-model="newEndpoint.presetId" class="select select-bordered select-sm w-full max-w-xs" @change="onPresetChange">
                 <option v-for="p in availableEndpointPresets" :key="p.id" :value="p.id">{{ p.name }}</option>
@@ -528,7 +362,7 @@
               </div>
               <div class="form-control">
                 <label class="label p-0 pb-1" for="endpoint-apikey">
-                  <span class="label-text font-medium">API Key <span v-if="!selectedPreset?.needsKey" class="font-normal opacity-50">(optional)</span></span>
+                  <span class="label-text font-medium">API key <span v-if="!selectedPreset?.needsKey" class="font-normal text-base-content/60">(optional)</span></span>
                 </label>
                 <input id="endpoint-apikey" v-model="newEndpoint.apiKey" type="password" placeholder="none or your key" class="input input-bordered input-sm w-full" />
               </div>
@@ -536,9 +370,9 @@
             <div class="form-control">
               <label class="label p-0 pb-1" for="endpoint-baseurl"><span class="label-text font-medium">Base URL</span></label>
               <input id="endpoint-baseurl" v-model="newEndpoint.baseUrl" type="url" placeholder="http://localhost:8000/v1" class="input input-bordered input-sm w-full" />
-              <p class="text-xs text-base-content/50 mt-1">Any OpenAI-compatible endpoint works (vLLM, LM Studio, LiteLLM, Groq, OpenRouter…).</p>
+              <p class="text-xs text-base-content/60 mt-1">The part of the address before <code>/chat/completions</code>.</p>
             </div>
-            <p v-if="addEndpointError" class="text-error text-sm">{{ addEndpointError }}</p>
+            <p v-if="addEndpointError" class="text-error text-sm" role="alert">{{ addEndpointError }}</p>
             <div class="flex gap-2">
               <button
                 class="btn btn-sm btn-primary"
@@ -546,18 +380,18 @@
                 :disabled="addingEndpoint || !newEndpoint.baseUrl?.trim() || !newEndpoint.name?.trim()"
               >
                 <span v-if="addingEndpoint" class="loading loading-spinner loading-xs"></span>
-                {{ addingEndpoint ? 'Testing…' : 'Test & Add' }}
+                {{ addingEndpoint ? 'Testing…' : 'Test and add' }}
               </button>
               <button class="btn btn-sm btn-ghost" @click="showAddEndpoint = false">Cancel</button>
             </div>
           </div>
-          <button v-else class="btn btn-ghost btn-sm gap-1 mt-3" @click="showAddEndpoint = true">
-            + Add your own endpoint
+          <button v-else class="btn btn-ghost btn-sm gap-1.5 mt-4" @click="showAddEndpoint = true">
+            <Plus :size="14" aria-hidden="true" /> Connect your own endpoint
           </button>
 
           <!-- Ollama context window (advanced) -->
           <div v-if="advanced" class="mt-8 pt-6 border-t border-base-300/60">
-            <p class="text-[10px] uppercase tracking-[0.18em] font-semibold text-base-content/35 mb-4">Advanced</p>
+            <p class="text-xs uppercase tracking-[0.14em] font-semibold text-base-content/50 mb-4">Advanced</p>
             <div class="flex items-start justify-between gap-8">
               <div class="min-w-0">
                 <div class="text-sm font-medium">Ollama context window</div>
@@ -657,98 +491,103 @@
             </button>
           </div>
 
-          <!-- Embedding -->
-          <div class="py-6 border-t border-base-300/50">
-            <div class="text-sm font-medium">Embedding</div>
-            <p class="text-xs text-base-content/55 mt-1 leading-relaxed max-w-[56ch]">
-              Search works by turning your documents into vectors. Choose where that work runs.
-              Hosted options with a free tier are much faster than the built-in model on a small server.
+          <!-- Search model (the embedding model) -->
+          <div class="py-6 border-t border-base-300/50" data-testid="search-index-settings">
+            <div class="text-sm font-medium">Search model</div>
+            <p class="text-xs text-base-content/60 mt-1 leading-relaxed max-w-[60ch]">
+              The embedding model turns every source into vectors so search finds passages by meaning.
+              It applies to the whole server, and changing it means re-indexing.
+            </p>
+            <p v-if="embeddingInUse" class="text-xs text-base-content/70 mt-2" data-testid="embedding-in-use">
+              In use: <span class="font-medium text-base-content">{{ embeddingInUse }}</span>
             </p>
 
-            <div v-if="embeddingCatalogError" class="alert alert-warning py-2 text-xs mt-3" role="alert">
-              {{ embeddingCatalogError }}
+            <div v-if="embeddingCatalogError" class="notice notice-warning text-xs mt-3" role="alert">
+              <AlertTriangle :size="14" class="text-warning" aria-hidden="true" />
+              <span>{{ embeddingCatalogError }}</span>
             </div>
 
-            <div class="mt-3 grid gap-2" role="radiogroup" aria-label="Embedding provider">
-              <label
-                v-for="p in embeddingProviderOptions"
-                :key="p.id"
-                class="flex items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors"
-                :class="[
-                  embeddingProvider === p.id ? 'border-primary bg-primary/5' : 'border-base-300/60 hover:border-base-content/25',
-                  p.blocked_offline ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
-                ]"
-              >
-                <input
-                  type="radio"
-                  class="radio radio-primary radio-sm mt-0.5 flex-shrink-0"
-                  :value="p.id"
-                  v-model="embeddingProvider"
-                  :disabled="p.blocked_offline"
-                  @change="onEmbeddingProviderChange"
-                />
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <span class="text-sm font-medium">{{ p.label }}</span>
-                    <span class="badge badge-sm" :class="embeddingCostBadgeClass(p.cost)">{{ p.cost_label }}</span>
-                    <span v-if="p.blocked_offline" class="text-[11px] text-warning">Not allowed in offline mode</span>
-                    <span v-else-if="p.needs_key && p.key_configured" class="text-[11px] text-success">Key on file</span>
-                    <span v-else-if="p.needs_key" class="text-[11px] text-base-content/50">Needs a key</span>
-                  </div>
-                  <p class="text-xs text-base-content/55 mt-0.5 leading-relaxed">{{ p.blurb }}</p>
+            <div class="mt-5 space-y-5">
+              <fieldset v-for="group in embeddingGroups" :key="group.id" :data-testid="`embedding-group-${group.id}`">
+                <legend class="text-sm font-semibold">{{ group.title }}</legend>
+                <p class="text-xs text-base-content/60 mt-0.5 mb-2 max-w-[60ch]">{{ group.note }}</p>
+                <div class="rounded-box border border-base-300 bg-base-100 divide-y divide-base-300 overflow-hidden" role="radiogroup" :aria-label="group.title">
+                  <label
+                    v-for="p in group.providers"
+                    :key="p.id"
+                    class="flex items-start gap-3 px-3 py-2.5 transition-colors"
+                    :class="[
+                      embeddingProvider === p.id ? 'bg-base-200/70' : 'hover:bg-base-200/40',
+                      p.blocked_offline ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
+                    ]"
+                  >
+                    <input
+                      type="radio"
+                      class="radio radio-primary radio-sm mt-0.5 flex-shrink-0"
+                      :value="p.id"
+                      v-model="embeddingProvider"
+                      :disabled="p.blocked_offline"
+                      @change="onEmbeddingProviderChange"
+                    />
+                    <span class="min-w-0 flex-1">
+                      <span class="flex items-baseline gap-x-2 gap-y-0.5 flex-wrap">
+                        <span class="text-sm font-medium">{{ p.label }}</span>
+                        <span class="text-xs text-base-content/60">{{ p.cost_label }}</span>
+                        <span v-if="p.id === loadedEmbeddingProvider" class="text-xs font-medium">In use</span>
+                        <span v-if="p.blocked_offline" class="text-xs text-base-content/60">Not allowed offline</span>
+                        <span v-else-if="p.needs_key && p.key_configured" class="text-xs text-base-content/60">Key on file</span>
+                        <span v-else-if="p.needs_key" class="text-xs text-base-content/60">Needs a key</span>
+                      </span>
+                      <span v-if="embeddingProvider === p.id" class="block text-xs text-base-content/70 mt-1 leading-relaxed">{{ p.blurb }}</span>
+                    </span>
+                  </label>
                 </div>
-              </label>
+              </fieldset>
             </div>
 
             <!-- Details for the chosen provider -->
-            <div v-if="selectedEmbeddingProvider" class="mt-4 space-y-3 max-w-md">
-              <p class="text-xs text-base-content/50">{{ selectedEmbeddingProvider.privacy }}</p>
+            <div v-if="selectedEmbeddingProvider" class="mt-5 space-y-4 max-w-lg">
 
-              <!-- Ollama: base URL + detect -->
+              <!-- Ollama: address + detect -->
               <div v-if="embeddingProvider === 'ollama'" class="form-control">
-                <label class="label p-0 pb-1" for="embedding-ollama-url"><span class="label-text text-xs font-medium">Ollama address</span></label>
+                <label class="label p-0 pb-1" for="embedding-ollama-url"><span class="label-text text-sm font-medium">Ollama address</span></label>
                 <div class="flex gap-2 items-start">
-                  <input
-                    id="embedding-ollama-url"
-                    v-model="ollamaBaseUrl"
-                    type="url"
-                    placeholder="http://localhost:11434"
-                    class="input input-bordered input-sm w-full"
-                    @change="embeddingTestResult = null"
-                  />
-                  <button class="btn btn-sm btn-ghost flex-shrink-0" @click="detectEmbeddingOllama" :disabled="embeddingOllamaStatus === 'checking'">
-                    <span v-if="embeddingOllamaStatus === 'checking'" class="loading loading-spinner loading-xs"></span>
+                  <input id="embedding-ollama-url" v-model="ollamaBaseUrl" type="url" placeholder="http://localhost:11434" class="input input-bordered input-sm w-full" @change="embeddingTestResult = null" />
+                  <button class="btn btn-sm btn-ghost flex-shrink-0" :disabled="embeddingOllamaStatus === 'checking'" @click="detectEmbeddingOllama">
+                    <span v-if="embeddingOllamaStatus === 'checking'" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
                     <span v-else>Detect</span>
                   </button>
                 </div>
-                <p v-if="embeddingOllamaStatus === 'error'" class="text-xs text-warning mt-1">
-                  Ollama not reachable at <code>{{ ollamaBaseUrl }}</code>. Check that it is running.
+                <p v-if="embeddingOllamaStatus === 'error'" class="text-xs text-base-content/70 mt-1" role="alert">
+                  Ollama did not answer at <code>{{ ollamaBaseUrl }}</code>. Check that it is running.
                   <span v-if="ollamaBaseUrl.includes('localhost') || ollamaBaseUrl.includes('127.0.0.1')">
-                    Running in Docker? Use <code>http://host.docker.internal:11434</code> instead.
+                    In Docker, use <code>http://host.docker.internal:11434</code> instead.
                   </span>
                 </p>
-                <p v-else-if="embeddingOllamaStatus === 'ok' && !embeddingOllamaModels.length" class="text-xs text-warning mt-1">
+                <p v-else-if="embeddingOllamaStatus === 'ok' && !embeddingOllamaModels.length" class="text-xs text-base-content/70 mt-1" role="status">
                   Ollama is running but has no embedding model.<template v-if="embeddingOllamaSuggested"> Run <code>ollama pull {{ embeddingOllamaSuggested }}</code> there first.</template>
                 </p>
               </div>
 
-              <!-- Custom endpoint: base URL -->
+              <!-- Custom endpoint: address, then ask it what it serves -->
               <div v-if="embeddingProvider === 'openai_compatible'" class="form-control">
-                <label class="label p-0 pb-1" for="embedding-base-url"><span class="label-text text-xs font-medium">Endpoint address</span></label>
-                <input
-                  id="embedding-base-url"
-                  v-model="embeddingBaseUrl"
-                  type="url"
-                  placeholder="https://api.example.com/v1"
-                  class="input input-bordered input-sm w-full"
-                  @change="embeddingTestResult = null"
-                />
-                <p class="text-xs text-base-content/50 mt-1">The part of the address before <code>/embeddings</code>.</p>
+                <label class="label p-0 pb-1" for="embedding-base-url"><span class="label-text text-sm font-medium">Endpoint address</span></label>
+                <div class="flex gap-2 items-start">
+                  <input id="embedding-base-url" v-model="embeddingBaseUrl" type="url" placeholder="https://api.example.com/v1" class="input input-bordered input-sm w-full" @change="embeddingTestResult = null; customEmbeddingList = null" />
+                  <button class="btn btn-sm btn-ghost flex-shrink-0" :disabled="!embeddingBaseUrl.trim() || customEmbeddingListing" @click="listCustomEmbeddingModels">
+                    <span v-if="customEmbeddingListing" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+                    <span v-else>List models</span>
+                  </button>
+                </div>
+                <p class="text-xs text-base-content/60 mt-1">
+                  The part of the address before <code>/embeddings</code>.
+                  <template v-if="customEmbeddingList?.message"> {{ customEmbeddingList.message }}</template>
+                </p>
               </div>
 
               <!-- Model -->
               <div class="form-control">
-                <label class="label p-0 pb-1" for="embedding-model"><span class="label-text text-xs font-medium">Model</span></label>
+                <label class="label p-0 pb-1" for="embedding-model"><span class="label-text text-sm font-medium">Model</span></label>
                 <select
                   v-if="embeddingModelChoices.length"
                   id="embedding-model"
@@ -756,38 +595,49 @@
                   class="select select-bordered select-sm w-full"
                   @change="embeddingTestResult = null"
                 >
-                  <option v-for="m in embeddingModelChoices" :key="m.id" :value="m.id">{{ m.label }}</option>
-                  <option value="__other__">Other model…</option>
+                  <option v-for="m in embeddingModelChoices" :key="m.id" :value="m.id">{{ m.label }}{{ m.recommended ? ' · recommended' : '' }}</option>
+                  <option value="__other__">Another model…</option>
                 </select>
                 <input
                   v-if="embeddingModelChoice === '__other__' || !embeddingModelChoices.length"
                   :id="embeddingModelChoices.length ? 'embedding-model-custom' : 'embedding-model'"
                   v-model="embeddingCustomModel"
                   type="text"
-                  :placeholder="embeddingProvider === 'local' ? 'e.g. all-mpnet-base-v2' : 'model name as the provider spells it'"
+                  :placeholder="embeddingProvider === 'local' ? 'a sentence-transformers model name' : 'model name as the provider spells it'"
                   class="input input-bordered input-sm w-full mt-2"
                   :aria-label="embeddingModelChoices.length ? 'Custom model name' : 'Model'"
                   @input="embeddingTestResult = null"
                 />
-                <p class="text-xs text-base-content/50 mt-1">
-                  <template v-if="embeddingProvider === 'local'">
-                    Any <a href="https://www.sbert.net/docs/pretrained_models.html" target="_blank" rel="noopener" class="link link-primary">sentence-transformers</a> model; it downloads on first use.
-                  </template>
-                  <template v-else-if="embeddingProvider === 'ollama'">
-                    Must already be pulled on that Ollama server.
-                  </template>
-                  <template v-else-if="selectedEmbeddingModelInfo?.dimensions">
-                    {{ selectedEmbeddingModelInfo.dimensions }}-number vectors<span v-if="selectedEmbeddingModelInfo.language"> · {{ selectedEmbeddingModelInfo.language }}</span>.
-                  </template>
+                <p v-if="embeddingFacts.length" class="text-xs text-base-content/70 mt-1.5" data-testid="embedding-model-facts">{{ embeddingFacts.join(' · ') }}</p>
+                <p v-else-if="embeddingProvider === 'local'" class="text-xs text-base-content/60 mt-1.5">
+                  Any <a href="https://www.sbert.net/docs/pretrained_models.html" target="_blank" rel="noopener" class="link">sentence-transformers</a> model; it downloads on first use.
                 </p>
+                <p v-else-if="embeddingProvider === 'ollama'" class="text-xs text-base-content/60 mt-1.5">Must already be pulled on that Ollama server.</p>
               </div>
+
+              <!-- Passages longer than the model reads -->
+              <div v-if="embeddingChunkFit && !embeddingChunkFit.fits" class="notice notice-warning text-xs" role="alert" data-testid="embedding-chunk-warning">
+                <AlertTriangle :size="14" class="text-warning" aria-hidden="true" />
+                <span>
+                  Passages in {{ collectionStore.currentCollection?.name || 'this collection' }} are about
+                  {{ embeddingChunkFit.passageTokens.toLocaleString() }} tokens ({{ Number(chunkSize).toLocaleString() }} characters),
+                  but this model reads only the first {{ embeddingChunkFit.maxInputTokens.toLocaleString() }} of each, so the rest is
+                  not searched by meaning. Choose a model that reads more, or lower the chunk size<template v-if="advanced"> under Chunking below</template>.
+                </span>
+              </div>
+
+              <!-- What a switch costs, from real counts -->
+              <p v-if="embeddingSwitchPending && embeddingSwitchSentence" class="notice text-xs leading-relaxed" role="status" data-testid="embedding-switch-cost">
+                <RefreshCw :size="14" class="text-base-content/60" aria-hidden="true" />
+                <span>{{ embeddingSwitchSentence }}</span>
+              </p>
 
               <!-- API key -->
               <div v-if="selectedEmbeddingProvider.needs_key || embeddingProvider === 'openai_compatible'" class="form-control">
                 <label class="label p-0 pb-1" for="embedding-api-key">
-                  <span class="label-text text-xs font-medium">
+                  <span class="label-text text-sm font-medium">
                     API key
-                    <span v-if="!selectedEmbeddingProvider.needs_key || embeddingKeyOnFile" class="font-normal text-base-content/50">(optional)</span>
+                    <span v-if="!selectedEmbeddingProvider.needs_key || embeddingKeyOnFile" class="font-normal text-base-content/60">(optional)</span>
                   </span>
                 </label>
                 <input
@@ -799,64 +649,61 @@
                   autocomplete="off"
                   @input="embeddingTestResult = null"
                 />
-                <p class="text-xs text-base-content/50 mt-1">
+                <p class="text-xs text-base-content/60 mt-1">
                   <template v-if="embeddingApiKeyClear">
                     The saved key will be removed when you save.
                     <button class="link" @click="embeddingApiKeyClear = false">Keep it</button>
                   </template>
                   <template v-else-if="selectedEmbeddingProvider.key_source === 'provider_card'">
                     Using the {{ selectedEmbeddingProvider.label }} key saved under
-                    <button class="link link-primary" @click="activeSection = 'providers'">AI Providers</button>.
-                    Enter a key here only to use a different one for embeddings.
+                    <button class="link" @click="activeSection = 'providers'">AI Providers</button>.
+                    Enter a key here only to use a different one for search.
                   </template>
                   <template v-else-if="selectedEmbeddingProvider.key_source === 'embedding'">
-                    A key is saved for embeddings. Leave blank to keep it, or
+                    A key is saved for search. Leave blank to keep it, or
                     <button class="link" @click="embeddingApiKeyClear = true">remove it</button>.
                   </template>
                   <template v-else-if="selectedEmbeddingProvider.key_link">
                     Get a key at
-                    <a :href="selectedEmbeddingProvider.key_link" target="_blank" rel="noopener" class="link link-primary">{{ embeddingKeyHost(selectedEmbeddingProvider.key_link) }}</a>.
+                    <a :href="selectedEmbeddingProvider.key_link" target="_blank" rel="noopener" class="link">{{ embeddingKeyHost(selectedEmbeddingProvider.key_link) }}</a>.
                     <template v-if="selectedEmbeddingProvider.pricing_link">
                       Limits and prices: <a :href="selectedEmbeddingProvider.pricing_link" target="_blank" rel="noopener" class="link">pricing page</a>.
                     </template>
                   </template>
                   <template v-else>
-                    Leave blank if the endpoint does not require one.
+                    Leave blank if the endpoint does not need one.
                   </template>
                 </p>
               </div>
 
               <!-- Test + Save -->
-              <div class="flex items-center gap-3 flex-wrap pt-1">
-                <button class="btn btn-sm btn-outline" @click="testEmbeddingSettings" :disabled="embeddingTesting || embeddingSaving">
-                  <span v-if="embeddingTesting" class="loading loading-spinner loading-xs"></span>
-                  {{ embeddingTesting ? 'Testing…' : 'Test connection' }}
+              <div class="flex items-center gap-3 flex-wrap">
+                <button class="btn btn-sm btn-outline" :disabled="embeddingTesting || embeddingSaving" @click="testEmbeddingSettings">
+                  <span v-if="embeddingTesting" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+                  {{ embeddingTesting ? 'Embedding a test passage…' : 'Test' }}
                 </button>
-                <button class="btn btn-sm btn-primary" @click="saveEmbeddingSettings" :disabled="embeddingSaving || embeddingTesting">
-                  <span v-if="embeddingSaving" class="loading loading-spinner loading-xs"></span>
-                  {{ embeddingSaving ? 'Saving…' : 'Save' }}
+                <button class="btn btn-sm btn-primary" :disabled="embeddingSaving || embeddingTesting" @click="saveEmbeddingSettings">
+                  <span v-if="embeddingSaving" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+                  {{ embeddingSaving ? 'Saving…' : (embeddingSwitchPending ? 'Switch model' : 'Save') }}
                 </button>
-                <span v-if="embeddingSettingsSaved && !embeddingNeedsReindex" class="text-success text-sm" role="status">Saved</span>
+                <span v-if="embeddingSettingsSaved && !embeddingNeedsReindex" class="inline-flex items-center gap-1 text-sm" role="status"><Check :size="14" class="text-success" aria-hidden="true" />Saved</span>
               </div>
-              <p v-if="embeddingTestResult && embeddingTestResult.ok" class="text-xs text-success" role="status">
-                Works — {{ embeddingTestResult.model }} returned {{ embeddingTestResult.dimensions }}-number vectors in {{ embeddingTestResult.seconds }}s.
+              <p v-if="embeddingTestResult && embeddingTestResult.ok" class="flex items-start gap-1.5 text-xs" role="status" data-testid="embedding-test-ok">
+                <Check :size="14" class="text-success flex-shrink-0" aria-hidden="true" />
+                <span>Embedded a test passage with {{ embeddingTestResult.model }}: {{ Number(embeddingTestResult.dimensions).toLocaleString() }} dimensions, {{ embeddingTestResult.seconds }} s.</span>
               </p>
-              <p v-else-if="embeddingTestResult" class="text-xs text-error" role="alert">
-                {{ embeddingTestResult.error }}
-              </p>
+              <p v-else-if="embeddingTestResult" class="text-xs text-error" role="alert">{{ embeddingTestResult.error }}</p>
               <p v-if="embeddingSaveError" class="text-xs text-error" role="alert">{{ embeddingSaveError }}</p>
-              <div v-if="embeddingSettingsSaved && embeddingNeedsReindex" class="alert py-2 text-xs" role="status">
-                <span>
-                  Saved. Each collection keeps searching with its current index until you re-index it
-                  (the Re-index button above). New uploads to a collection use whatever its index was built with.
-                </span>
-              </div>
+              <p v-if="embeddingSettingsSaved && embeddingNeedsReindex" class="notice text-xs" role="status">
+                <Check :size="14" class="text-success" aria-hidden="true" />
+                <span>Saved. Each collection keeps searching with its current index until you re-index it with Re-index, above.</span>
+              </p>
             </div>
           </div>
 
           <!-- Advanced indexing -->
           <div v-if="advanced" class="pt-6 border-t border-base-300/60 space-y-8">
-            <p class="text-[10px] uppercase tracking-[0.18em] font-semibold text-base-content/35">Advanced</p>
+            <p class="text-xs uppercase tracking-[0.14em] font-semibold text-base-content/50">Advanced</p>
 
             <!-- OCR engine -->
             <div>
@@ -931,8 +778,12 @@
                     @change="saveChunkSettings"
                     aria-label="Chunk size (characters)"
                   />
-                  <p class="text-xs text-base-content/50 mt-1">
+                  <p class="text-xs text-base-content/60 mt-1">
                     Smaller = more precise matches. Larger = more context per chunk.
+                  </p>
+                  <p v-if="savedModelChunkFit && !savedModelChunkFit.fits" class="text-xs text-base-content/80 mt-1 flex items-start gap-1.5" role="alert" data-testid="chunk-too-long">
+                    <AlertTriangle :size="13" class="text-warning flex-shrink-0 mt-0.5" aria-hidden="true" />
+                    <span>About {{ savedModelChunkFit.passageTokens.toLocaleString() }} tokens: longer than the {{ savedModelChunkFit.maxInputTokens.toLocaleString() }} the search model reads, so the end of each passage is not searched by meaning.</span>
                   </p>
                 </div>
                 <div class="form-control">
@@ -1177,7 +1028,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import http from '../utils/http'
 import { researchApi } from '../utils/researchApi.js'
-import { ChevronDown, Check, ShieldCheck, ShieldAlert } from 'lucide-vue-next'
+import { ChevronDown, Check, Plus, RefreshCw, ShieldCheck, ShieldAlert, AlertTriangle } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useLayoutStore } from '../stores/layoutStore'
@@ -1186,6 +1037,8 @@ import { useProviderStore } from '../stores/providerStore'
 import CustomFileTypes from './CustomFileTypes.vue'
 import FeatureSettings from './FeatureSettings.vue'
 import CoverageReportPanel from './CoverageReportPanel.vue'
+import AnswerModelSelect from './AnswerModelSelect.vue'
+import { chunkFit, embeddingModelFacts, switchCostSentence } from '../utils/embeddingChoice.js'
 import {
   PROVIDER_DEFS,
   CUSTOM_ENDPOINT_PRESETS,
@@ -1205,6 +1058,9 @@ import {
   getActiveProvider,
   setActiveProviderLS,
   notifyProviderChange,
+  isPrivateUrl,
+  modelsForJob,
+  providerLocation,
 } from '../utils/aiProviders.js'
 
 const emit = defineEmits(['data-cleared', 'stats-updated', 'switch-tab', 'chat-tab-toggled', 'clone-collection'])
@@ -1332,11 +1188,126 @@ const selectedEmbeddingProvider = computed(() =>
   embeddingCatalog.value.find((p) => p.id === embeddingProvider.value) || null
 )
 
+// The two groups the provider list is split into, by where source text goes.
+const EMBEDDING_GROUPS = [
+  { id: 'network', title: 'On this server or your network', note: 'Source text stays on machines you run.' },
+  { id: 'hosted', title: 'Hosted', note: 'The text of every source, and every search, is sent to the company that runs the model.' },
+]
+const embeddingGroups = computed(() =>
+  EMBEDDING_GROUPS
+    .map(g => ({ ...g, providers: embeddingProviderOptions.value.filter(p => (p.hosted ? 'hosted' : 'network') === g.id) }))
+    .filter(g => g.providers.length)
+)
+
+// What an installed Ollama model holds: the catalogue's facts for the same
+// model when it has them, and the context length Ollama itself reports as
+// the most it reads per input.
+const ollamaEmbeddingChoice = (m) => {
+  const known = (selectedEmbeddingProvider.value?.models || []).find(c => c.id === m.name.replace(/:latest$/, ''))
+  return {
+    ...(known || {}),
+    id: m.name,
+    label: known ? `${m.name} — ${known.label.replace(/^[^—]*—\s*/, '')}` : m.name,
+    max_input_tokens: m.record?.context_tokens || known?.max_input_tokens || null,
+    dimensions: m.record?.embedding_dimensions || known?.dimensions || null,
+  }
+}
+
 const embeddingModelChoices = computed(() => {
   if (embeddingProvider.value === 'ollama' && embeddingOllamaModels.value.length) {
-    return embeddingOllamaModels.value.map((m) => ({ id: m.name, label: m.name }))
+    return embeddingOllamaModels.value.map(ollamaEmbeddingChoice)
+  }
+  if (embeddingProvider.value === 'openai_compatible' && customEmbeddingList.value?.models?.length) {
+    return customEmbeddingList.value.models
   }
   return selectedEmbeddingProvider.value?.models || []
+})
+
+// ── The custom endpoint: ask it what it serves ──
+// Its /models list goes through the same capability records as chat
+// (POST /api/ai/models); embedding models come first, models of unknown kind
+// after them, and chat or speech models are left out.
+const customEmbeddingList = ref(null)      // { models, message } | null
+const customEmbeddingListing = ref(false)
+const listCustomEmbeddingModels = async () => {
+  customEmbeddingListing.value = true
+  const current = effectiveEmbeddingModel.value
+  try {
+    const { models, error, listed } = await fetchProviderModels('openai_compatible', {
+      baseUrl: embeddingBaseUrl.value.trim(),
+      apiKey: embeddingApiKey.value.trim() || undefined,
+      force: true,
+    })
+    if (!listed) {
+      customEmbeddingList.value = {
+        models: [],
+        message: `It did not list its models${error ? ` (${error})` : ''}. Type the model name below${embeddingApiKey.value.trim() ? '' : ', or enter its key first'}.`,
+      }
+      return
+    }
+    const g = modelsForJob(models, 'embedding')
+    const embedding = [...g.recommended, ...g.fits].map(m => ({
+      id: m.id, label: m.id, dimensions: m.embedding_dimensions, max_input_tokens: m.max_input_tokens,
+    }))
+    const unknown = g.unknown.map(m => ({ id: m.id, label: `${m.id} (not known to embed)` }))
+    customEmbeddingList.value = {
+      models: [...embedding, ...unknown],
+      message: embedding.length
+        ? `It lists ${embedding.length} embedding ${embedding.length === 1 ? 'model' : 'models'}. Test one to read its dimensions.`
+        : `It lists no model known to embed${unknown.length ? '; pick one of the others and test it' : ''}.`,
+    }
+  } finally {
+    customEmbeddingListing.value = false
+    setEmbeddingModelFromValue(current)
+  }
+}
+
+// ── Before a switch: what it costs, and whether passages fit ──
+// The saved model for the saved provider, to tell a pending switch from a
+// re-save of the same choice.
+const savedEmbeddingModel = computed(() => {
+  if (loadedEmbeddingProvider.value === 'local') return embeddingModel.value
+  const p = embeddingCatalog.value.find(c => c.id === loadedEmbeddingProvider.value)
+  return remoteEmbeddingModel.value || p?.default_model || ''
+})
+const embeddingSwitchPending = computed(() =>
+  embeddingProvider.value !== loadedEmbeddingProvider.value
+  || (!!effectiveEmbeddingModel.value && effectiveEmbeddingModel.value !== savedEmbeddingModel.value)
+)
+const embeddingInUse = computed(() => {
+  const p = embeddingCatalog.value.find(c => c.id === loadedEmbeddingProvider.value)
+  if (!p) return ''
+  return [p.label, savedEmbeddingModel.value].filter(Boolean).join(' · ')
+})
+
+// Real counts from the server (admin-only; null when not allowed or offline).
+const embeddingSwitchCost = ref(null)
+const loadEmbeddingSwitchCost = async () => {
+  try {
+    const { data } = await http.get('/api/embedding/switch-cost')
+    embeddingSwitchCost.value = data
+  } catch {
+    embeddingSwitchCost.value = null
+  }
+}
+const embeddingSwitchSentence = computed(() => {
+  const p = selectedEmbeddingProvider.value
+  const kind = p?.id === 'local' ? 'local' : (p?.kind === 'ollama' ? 'ollama' : 'hosted')
+  return switchCostSentence(embeddingSwitchCost.value, { kind, dimensions: selectedEmbeddingModelInfo.value?.dimensions })
+})
+
+const embeddingFacts = computed(() =>
+  embeddingModelFacts(selectedEmbeddingModelInfo.value, selectedEmbeddingProvider.value)
+)
+// The same check for the model in use, shown beside the chunk size.
+const savedModelChunkFit = computed(() => {
+  const p = embeddingCatalog.value.find(c => c.id === loadedEmbeddingProvider.value)
+  const limit = (p?.models || []).find(m => m.id === savedEmbeddingModel.value)?.max_input_tokens
+  return limit ? chunkFit(chunkSize.value, limit) : null
+})
+const embeddingChunkFit = computed(() => {
+  const limit = selectedEmbeddingModelInfo.value?.max_input_tokens
+  return limit ? chunkFit(chunkSize.value, limit) : null
 })
 
 const selectedEmbeddingModelInfo = computed(() =>
@@ -1365,13 +1336,6 @@ const embeddingKeyPlaceholder = computed(() => {
   if (embeddingKeyOnFile.value) return 'blank = keep the saved key'
   return p.needs_key ? 'paste your key' : 'blank if not required'
 })
-
-const embeddingCostBadgeClass = (cost) => ({
-  free: 'badge-success badge-outline',
-  free_tier: 'badge-success',
-  paid: 'badge-warning badge-outline',
-  self_hosted: 'badge-ghost',
-}[cost] || 'badge-ghost')
 
 const embeddingKeyHost = (url) => {
   try { return new URL(url).host } catch { return url }
@@ -1521,7 +1485,7 @@ const loadEmbeddingSettings = async (data) => {
   embeddingApiKeyClear.value = false
   embeddingApiKeySet.value = Boolean(data.embedding_api_key_set)
   embeddingTestResult.value = null
-  await loadEmbeddingCatalog()
+  await Promise.all([loadEmbeddingCatalog(), loadEmbeddingSwitchCost()])
   if (!embeddingModel.value) embeddingModel.value = localEmbeddingDefault()
   if (embeddingProvider.value === 'local') {
     setEmbeddingModelFromValue(embeddingModel.value)
@@ -1621,7 +1585,7 @@ const detectEmbeddingOllama = async () => {
   if (listed) {
     embeddingOllamaModels.value = models
       .filter((m) => m.kinds?.includes('embedding'))
-      .map((m) => ({ name: m.id }))
+      .map((m) => ({ name: m.id, record: m }))
     embeddingOllamaStatus.value = 'ok'
   } else {
     embeddingOllamaStatus.value = 'error'
@@ -1950,19 +1914,73 @@ const isProviderConfigured = (id) => {
   return !!cfg?.apiKey || isServerProvider(id)
 }
 
-const getProviderModelLabel = (id) => {
-  const cfg = getProviderConfig(id)
-  return cfg?.model || ''
+// ── The provider list, grouped by where the text goes ──
+// "On your network" first: for a regulated team that is the question that
+// decides everything else. Within a group the deployment's own provider
+// leads, then whatever is connected, then the rest in catalogue order.
+const PROVIDER_GROUPS = [
+  {
+    id: 'network',
+    title: 'On your network',
+    note: 'Questions and the passages they draw on stay on machines you or your organisation run.',
+  },
+  {
+    id: 'hosted',
+    title: 'Hosted',
+    note: 'Questions and the passages they draw on are sent to the company that runs the model.',
+  },
+]
+
+const providerGroups = computed(() => {
+  configVersion.value // reactivity hook
+  serverProviderIds.value // reactivity hook: team keys count as connected
+  const rows = []
+  if (deploymentDefault.value.configured) {
+    rows.push({
+      kind: 'deployment', key: 'deployment', id: deploymentDefault.value.provider,
+      name: deploymentDefault.value.label, connected: true, rank: 0,
+      location: providerLocation(deploymentDefault.value.provider),
+    })
+  }
+  visibleProviderDefs.value.forEach((def, i) => {
+    const connected = isProviderConfigured(def.id)
+    rows.push({
+      kind: 'builtin', key: def.id, id: def.id, name: def.name, def, connected,
+      rank: (connected ? 1 : 3) + i / 100, location: def.type === 'local' ? 'network' : 'hosted',
+    })
+  })
+  for (const cp of customProvidersConfig.value) {
+    rows.push({
+      kind: 'custom', key: cp.id, id: cp.id, name: cp.name, cp, connected: true,
+      rank: 2, location: isPrivateUrl(cp.baseUrl) ? 'network' : 'hosted',
+    })
+  }
+  return PROVIDER_GROUPS
+    .map(g => ({ ...g, rows: rows.filter(r => r.location === g.id).sort((a, b) => a.rank - b.rank) }))
+    .filter(g => g.rows.length)
+})
+
+// The second line of a row: the model in use once connected, else what the
+// provider is.
+const rowDetail = (row) => {
+  const model = getProviderConfig(row.id)?.model || ''
+  if (row.kind === 'custom') return model ? `${model} · ${row.cp.baseUrl}` : row.cp.baseUrl
+  if (row.connected) return model || 'Provider’s default model'
+  return row.def?.description || ''
 }
 
 // ── Live model lists ──
 // Everything, recommendations included, comes from fetchProviderModels
 // (backend POST /api/ai/models); the server answers from its own table when
-// the provider cannot be asked.
+// the provider cannot be asked. Each picker keeps only the models that can
+// do its job (modelsForJob), so an embedding or speech model is never
+// offered for answers.
 
 const modelsFor = (id) => modelState.value[id]?.models || []
-const recommendedModels = (id) => modelsFor(id).filter(m => m.recommended)
-const otherModels = (id) => modelsFor(id).filter(m => !m.recommended)
+const firstChatModel = (models) => {
+  const g = modelsForJob(models, 'answers')
+  return (g.recommended[0] || g.fits[0] || g.unknown[0] || null)?.id || ''
+}
 
 const loadModels = async (id, { force = false } = {}) => {
   modelState.value = { ...modelState.value, [id]: { ...(modelState.value[id] || {}), loading: true } }
@@ -1973,9 +1991,6 @@ const loadModels = async (id, { force = false } = {}) => {
     editBuffer.value.customModelMode = true
   }
 }
-
-const modelSelectValue = () =>
-  editBuffer.value.customModelMode ? '__custom__' : (editBuffer.value.model || '')
 
 const onModelSelect = (id, value) => {
   if (value === '__custom__') {
@@ -2079,12 +2094,13 @@ const detectOllama = async () => {
     ollamaCheckStatus.value = 'available'
     modelState.value = { ...modelState.value, ollama: { loading: false, models, error: null } }
     // Pre-select the stored model if still present, else the server's
-    // default (an installed chat model), else the first detected one
+    // default (an installed chat model), else the first chat model: the
+    // first one listed may be an embedding model, which cannot answer.
     const stored = getProviderConfig('ollama')?.model
     if (stored && models.some(m => m.id === stored)) {
       editBuffer.value.model = stored
     } else if (!models.some(m => m.id === editBuffer.value.model)) {
-      editBuffer.value.model = defaults?.model || models[0].id
+      editBuffer.value.model = defaults?.model || firstChatModel(models)
     }
     return true
   }
@@ -2133,8 +2149,9 @@ const testAndAddEndpoint = async () => {
 
   const { models } = await fetchProviderModels(id, { force: true })
   modelState.value = { ...modelState.value, [id]: { loading: false, models, error: null } }
-  if (models.length > 0) {
-    upsertProviderConfig(id, { model: models[0].id })
+  const first = firstChatModel(models)
+  if (first) {
+    upsertProviderConfig(id, { model: first })
     bumpConfig()
   }
 

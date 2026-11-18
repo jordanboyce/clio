@@ -25,10 +25,10 @@
             <div class="flex items-center gap-2">
               <Feather :size="14" class="text-primary shrink-0" aria-hidden="true" />
               <span class="flex-1 min-w-0 truncate font-medium">{{ getProviderDisplayName(providerId) }}<span v-if="modelName" class="font-normal text-base-content/60"> · {{ modelName }}</span></span>
-              <span class="text-xs text-base-content/75">{{ isLocalProvider(providerId) ? 'Local' : 'Cloud' }}</span>
+              <span class="text-xs text-base-content/75">{{ isLocalProvider(providerId) ? 'On your network' : 'Hosted' }}</span>
             </div>
             <p class="text-base-content/75 mt-1.5">Find uses the AI model chosen in the top bar. Change it there and Ask and Reports follow.</p>
-            <p v-if="(synthesize || rerank) && !isLocalProvider(providerId)" class="text-base-content/75 mt-1.5">This cloud provider receives your query and the matching passages.</p>
+            <p v-if="(synthesize || rerank) && !isLocalProvider(providerId)" class="text-base-content/75 mt-1.5">This hosted provider receives your query and the matching passages.</p>
           </div>
         </fieldset>
 

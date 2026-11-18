@@ -10,8 +10,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # via the X-AI-Key header or stored server-side as a team key via
 # /api/agent/config. AWS Bedrock is intentionally absent: it uses the AWS
 # SigV4 credential chain (configured server-side), not a header key.
-CLOUD_AI_PROVIDERS = ("anthropic", "openai", "grok", "google", "github", "openrouter", "ollama_cloud", "openai_compatible")
+CLOUD_AI_PROVIDERS = ("anthropic", "openai", "grok", "google", "openrouter", "ollama_cloud", "openai_compatible")
 ALL_AI_PROVIDERS = CLOUD_AI_PROVIDERS + ("ollama",)
+
+# Providers that no longer exist. A saved config naming one gets this
+# sentence instead of a call to an endpoint that is gone.
+RETIRED_AI_PROVIDERS = {
+    "github": "GitHub Models was retired on 2026-07-30. Choose another provider under Settings, AI Providers.",
+}
 
 # What CLIO_PROFILE=secure turns on. Each is only a *default*: a value the
 # operator sets explicitly (environment or .env) always wins, so a site can

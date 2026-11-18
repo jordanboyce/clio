@@ -231,7 +231,7 @@
 
       <!-- Quiet footer: more providers + skip -->
       <div v-if="stage === 'provider'" class="text-center text-xs text-base-content/55 mt-6 leading-relaxed">
-        <p v-if="!offline">More providers (Gemini, Grok, OpenRouter, GitHub, Ollama Cloud) are available in Settings.</p>
+        <p v-if="!offline">More providers (Gemini, Grok, OpenRouter, Ollama Cloud) are available in Settings.</p>
         <p v-else>This deployment runs air-gapped, so only local and self-hosted models are offered.</p>
         <!-- Skipping is a real path, not a footnote: search, citations and
              MCP all work without a model, so it gets a visible button. -->
@@ -262,7 +262,15 @@ import {
   testProviderConnection,
   fetchProviderModels,
   isRemoteDeployment,
+  modelsForJob,
 } from '../utils/aiProviders.js'
+
+// Models that can write answers, recommended first; those of unknown kind
+// stay offered after them (a custom endpoint rarely says what it serves).
+const chatModels = (list) => {
+  const g = modelsForJob(list, 'answers')
+  return [...g.recommended, ...g.fits, ...g.unknown]
+}
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -436,11 +444,14 @@ const detectOllama = async () => {
   busy.value = true
   error.value = ''
   const url = baseUrl.value.trim() || 'http://localhost:11434'
-  const { models: found } = await fetchProviderModels('ollama', { baseUrl: url })
+  const { models: found, defaults } = await fetchProviderModels('ollama', { baseUrl: url })
   busy.value = false
   if (found.length) {
-    models.value = found
-    model.value = found[0].id
+    // Only models that can answer: Ollama also lists its embedding models,
+    // and the first one listed is often one of those.
+    models.value = chatModels(found)
+    model.value = defaults?.model || models.value[0]?.id || ''
+    if (!models.value.length) error.value = 'Ollama is running but has no model that can answer questions. Pull one there first.'
   } else {
     error.value = "Ollama isn't reachable — is it running?"
   }
@@ -473,10 +484,10 @@ const testCustom = async () => {
     busy.value = false
     return
   }
-  const { models: found } = await fetchProviderModels(id, { apiKey: key, baseUrl: url })
+  const { models: found, defaults } = await fetchProviderModels(id, { apiKey: key, baseUrl: url })
   customId.value = id
-  models.value = found
-  model.value = found[0]?.id || ''
+  models.value = chatModels(found)
+  model.value = defaults?.model || models.value[0]?.id || ''
   busy.value = false
 }
 

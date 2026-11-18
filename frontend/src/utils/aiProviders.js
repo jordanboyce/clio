@@ -10,12 +10,26 @@
 // and which ones are recommended all come from the server
 // (fetchProviderModels -> POST /api/ai/models, built from
 // services/model_catalog.py), so a new model generation is a server change.
+//
+// `type` says where a provider's models run: 'local' is a machine the user
+// or their organisation runs, 'cloud' is a company's service. `description`
+// is the one plain line the provider list shows under the name.
 export const PROVIDER_DEFS = [
+  {
+    id: 'ollama',
+    name: 'Ollama',
+    type: 'local',
+    badge: 'local',
+    description: 'Open models you run yourself, on this machine or a server on your network.',
+    hasBaseUrl: true,
+    defaultBaseUrl: 'http://localhost:11434',
+  },
   {
     id: 'anthropic',
     name: 'Anthropic',
     type: 'cloud',
     badge: 'cloud',
+    description: 'Claude models, run by Anthropic.',
     keyPlaceholder: 'sk-ant-...',
     keyLink: 'https://console.anthropic.com/settings/keys',
   },
@@ -24,58 +38,52 @@ export const PROVIDER_DEFS = [
     name: 'OpenAI',
     type: 'cloud',
     badge: 'cloud',
+    description: 'GPT models, run by OpenAI.',
     keyPlaceholder: 'sk-...',
     keyLink: 'https://platform.openai.com/api-keys',
-  },
-  {
-    id: 'grok',
-    name: 'Grok (xAI)',
-    type: 'cloud',
-    badge: 'cloud',
-    keyPlaceholder: 'xai-...',
-    keyLink: 'https://console.x.ai/',
   },
   {
     id: 'google',
     name: 'Google Gemini',
     type: 'cloud',
     badge: 'cloud',
+    description: 'Gemini models, run by Google. AI Studio keys include a free allowance.',
     keyPlaceholder: 'AIza...',
     keyLink: 'https://aistudio.google.com/app/apikey',
   },
   {
-    id: 'github',
-    name: 'GitHub Models',
+    id: 'grok',
+    name: 'Grok (xAI)',
     type: 'cloud',
     badge: 'cloud',
-    keyPlaceholder: 'github_pat_... or ghp_...',
-    keyLink: 'https://github.com/settings/tokens?type=beta',
+    description: 'Grok models, run by xAI.',
+    keyPlaceholder: 'xai-...',
+    keyLink: 'https://console.x.ai/',
   },
   {
     id: 'openrouter',
     name: 'OpenRouter',
     type: 'cloud',
     badge: 'cloud',
+    description: 'Many companies’ models through one key; your text goes on to the one you pick.',
     keyPlaceholder: 'sk-or-...',
     keyLink: 'https://openrouter.ai/keys',
-  },
-  {
-    id: 'ollama',
-    name: 'Ollama',
-    type: 'local',
-    badge: 'local',
-    hasBaseUrl: true,
-    defaultBaseUrl: 'http://localhost:11434',
   },
   {
     id: 'ollama_cloud',
     name: 'Ollama Cloud',
     type: 'cloud',
     badge: 'cloud',
+    description: 'Large open models, run by Ollama on its own servers.',
     keyPlaceholder: 'your Ollama API key',
     keyLink: 'https://ollama.com/settings/keys',
   },
 ]
+
+// Providers that no longer exist (GitHub Models, retired 2026-07-30). A
+// browser that saved one keeps working: migrateLegacySettings() drops the
+// saved config, and nothing resolves to it in the meantime.
+export const RETIRED_PROVIDER_IDS = ['github']
 
 // Popular OpenAI-compatible endpoints offered as presets when adding a
 // custom endpoint. `baseUrl: null` means the user supplies it.
@@ -523,11 +531,133 @@ export function isRemoteDeployment() {
   return !(h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1')
 }
 
-/** Whether a provider is local/private (not cloud). */
-export function isLocalProvider(providerId) {
+/**
+ * Whether a URL points inside this network: localhost, a one-label name
+ * ("ollama", "gpu-box"), or a loopback, private or link-local address.
+ * Any dotted name counts as outside, matching the server's rule
+ * (services/data_controls.host_is_internal) so the UI never calls a public
+ * endpoint private.
+ */
+export function isPrivateUrl(url) {
+  let host = ''
+  try {
+    const raw = String(url || '').trim()
+    if (!raw) return false
+    host = new URL(raw.includes('://') ? raw : `http://${raw}`).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  host = host.replace(/^\[|\]$/g, '').replace(/\.$/, '')
+  if (!host) return false
+  if (host === 'localhost' || host.endsWith('.localhost')) return true
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254)
+  }
+  if (host.includes(':')) {
+    // IPv6: loopback, unique-local (fc00::/7) and link-local (fe80::/10).
+    return host === '::1' || /^f[cd][0-9a-f]{0,2}:/.test(host) || /^fe[89ab][0-9a-f]?:/.test(host)
+  }
+  return !host.includes('.')
+}
+
+/**
+ * Where a provider's models run, as the provider list groups them:
+ * 'network' (this machine or one the user's organisation runs, so text
+ * stays inside) or 'hosted' (a company's service). The deployment's own
+ * provider follows what the server says about its endpoint; a custom
+ * endpoint follows its URL, so LM Studio on localhost is 'network' and Groq
+ * is 'hosted'.
+ */
+export function providerLocation(providerId) {
+  if (isDeploymentProvider(providerId) && typeof _deploymentDefault.external === 'boolean') {
+    return _deploymentDefault.external ? 'hosted' : 'network'
+  }
   const cfg = getProviderConfig(providerId)
-  if (cfg?.isCustom) return false // custom could be remote
-  return PROVIDER_DEFS.find(d => d.id === providerId)?.type === 'local'
+  if (cfg?.isCustom) return isPrivateUrl(cfg.baseUrl) ? 'network' : 'hosted'
+  const def = PROVIDER_DEFS.find(d => d.id === providerId)
+  if (def) return def.type === 'local' ? 'network' : 'hosted'
+  if (providerId === 'openai_compatible' && isDeploymentProvider(providerId)) {
+    return isPrivateUrl(_deploymentDefault.base_url) ? 'network' : 'hosted'
+  }
+  return 'hosted'
+}
+
+/** Whether a provider's models run on this network (see providerLocation). */
+export function isLocalProvider(providerId) {
+  return providerLocation(providerId) === 'network'
+}
+
+// ── Models for a job ───────────────────────────────────────────────────────
+//
+// Each picker shows the models that can do its job, using the capability
+// record the server sends (services/model_catalog.py), never a model name:
+//   answers    chat models
+//   tools      chat models that call tools (deep search, agent mode)
+//   vision     chat models that read images (scanned pages, figures)
+//   embedding  embedding models (the search index)
+// Models whose kind is not known are offered separately rather than hidden,
+// so a new model is never unreachable; models for other jobs are counted,
+// not listed.
+
+const JOB_KIND = { answers: 'chat', tools: 'chat', vision: 'chat', embedding: 'embedding' }
+
+/**
+ * Split a model list for one job. Returns
+ *   { recommended, fits, unknown, unable, otherJobs }
+ * where `fits` are the rest of the models that do the job, `unknown` have
+ * no known kind, `unable` are of the right kind but lack the ability the
+ * job needs (a chat model that "cannot use tools"), and `otherJobs` counts
+ * the remainder by kind ({ embedding: 2, speech: 1 }).
+ */
+export function modelsForJob(models, job = 'answers') {
+  const kind = JOB_KIND[job] || 'chat'
+  const out = { recommended: [], fits: [], unknown: [], unable: [], otherJobs: {} }
+  for (const m of models || []) {
+    const kinds = m.kinds || []
+    if (!kinds.length) { out.unknown.push(m); continue }
+    if (!kinds.includes(kind)) {
+      for (const k of kinds) out.otherJobs[k] = (out.otherJobs[k] || 0) + 1
+      continue
+    }
+    if ((job === 'tools' && m.tools === false) || (job === 'vision' && m.vision === false)) {
+      out.unable.push(m)
+      continue
+    }
+    if (job === 'vision' && m.vision !== true) { out.unknown.push(m); continue }
+    if (m.recommended) out.recommended.push(m)
+    else out.fits.push(m)
+  }
+  return out
+}
+
+const KIND_NAMES = {
+  chat: 'chat', embedding: 'embedding', image: 'image', speech: 'speech', transcription: 'transcription',
+  moderation: 'moderation', rerank: 'reranking', video: 'video', realtime: 'realtime', other: 'other',
+}
+
+/** "2 embedding, 1 speech" for the models a picker leaves out. */
+export function describeOtherJobs(otherJobs) {
+  return Object.entries(otherJobs || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, n]) => `${n} ${KIND_NAMES[k] || k}`)
+    .join(', ')
+}
+
+/**
+ * What a chat model can do, in words, for the line under a picker:
+ * ["Uses tools", "Reads images", "200,000-token context"]. Abilities nobody
+ * reported are left out rather than guessed.
+ */
+export function modelAbilities(record) {
+  if (!record) return []
+  const out = []
+  if (record.tools === true) out.push('Uses tools')
+  else if (record.tools === false) out.push('Cannot use tools')
+  if (record.vision === true) out.push('Reads images')
+  if (record.context_tokens) out.push(`${Number(record.context_tokens).toLocaleString()}-token context`)
+  return out
 }
 
 /**
@@ -563,22 +693,24 @@ export function migrateLegacySettings() {
     changed = true
   }
 
-  if (changed) saveProvidersConfig(configs)
+  // A retired provider's saved key reaches nothing; drop it so it is not
+  // offered anywhere, and let the chain pick the next configured provider.
+  const kept = configs.filter(c => !RETIRED_PROVIDER_IDS.includes(c.id))
+  if (kept.length !== configs.length) changed = true
 
-  // Legacy 'chat_provider' (Chat's private pre-unification choice) folds into
-  // the resolution chain: it becomes the global default when none was ever
-  // set, a chat-specific override when it disagrees with the global, and
-  // disappears entirely when it matches (chat then follows global).
+  if (changed) saveProvidersConfig(kept)
+  if (RETIRED_PROVIDER_IDS.includes(getActiveProvider())) {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...getAISettings(), provider: '' }))
+  }
+
+  // Legacy 'chat_provider' (Chat's private pre-unification choice) becomes
+  // the global default when none was ever set. Per-surface overrides are
+  // retired (retireSurfaceOverrides), so one that disagrees is dropped.
   const legacyChat = localStorage.getItem('chat_provider')
   if (legacyChat !== null) {
     localStorage.removeItem('chat_provider')
-    if (legacyChat) {
-      const active = getActiveProvider()
-      if (!active) {
-        setActiveProviderLS(legacyChat)
-      } else if (legacyChat !== active && !getProviderOverride('chat')) {
-        setProviderOverride('chat', legacyChat)
-      }
+    if (legacyChat && !getActiveProvider() && !RETIRED_PROVIDER_IDS.includes(legacyChat)) {
+      setActiveProviderLS(legacyChat)
     }
   }
 }

@@ -36,7 +36,7 @@
             <span class="flex-1 truncate">
               {{ displayName(providerId) }}<span v-if="modelName" class="text-base-content/55"> · {{ modelName }}</span>
             </span>
-            <span class="badge badge-xs badge-outline">{{ isLocalProvider(providerId) ? 'local' : 'cloud' }}</span>
+            <span class="text-xs text-base-content/60 flex-shrink-0">{{ isLocalProvider(providerId) ? 'your network' : 'hosted' }}</span>
           </div>
           <p class="text-xs text-base-content/50 px-1">Change it from the model picker in the top bar. It applies to Ask, Find and Reports.</p>
         </div>

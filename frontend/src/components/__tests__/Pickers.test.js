@@ -1,11 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
-vi.mock('axios', () => ({ default: { get: vi.fn(() => Promise.resolve({ data: {} })) } }))
+const rec = (id, kinds, extra = {}) => ({ id, label: id, kinds, recommended: false, roles: [], ...extra })
+const RECORDS = [
+  rec('chat-best', ['chat'], { label: 'Chat Best', recommended: true, roles: ['quality'], tools: true, vision: true, context_tokens: 200000 }),
+  rec('chat-small', ['chat']),
+  rec('embed-1', ['embedding']),
+  rec('voice-1', ['speech']),
+]
+vi.mock('axios', () => ({ default: {
+  get: vi.fn(() => Promise.resolve({ data: {} })),
+  post: vi.fn(() => Promise.resolve({ data: { records: RECORDS, defaults: {}, listed: true, error: null } })),
+} }))
 vi.mock('../../utils/http', () => ({ default: { get: vi.fn(() => Promise.resolve({ data: { models: [] } })) } }))
 
 import ModelPicker from '../ModelPicker.vue'
+import AnswerModelSelect from '../AnswerModelSelect.vue'
 import CollectionPicker from '../CollectionPicker.vue'
 import { getProviderConfig, setActiveProviderLS, upsertProviderConfig } from '../../utils/aiProviders'
 import { useProviderStore } from '../../stores/providerStore'
@@ -56,6 +67,30 @@ describe('ModelPicker', () => {
     await select.setValue('')
     expect(getProviderConfig('anthropic').model).toBe('')
     expect(wrapper.get('label').text()).not.toContain('claude-x')
+  })
+})
+
+describe('ModelPicker offers models that can answer', () => {
+  it('lists chat models only, once opened by mouse or keyboard, and says what the chosen one can do', async () => {
+    upsertProviderConfig('anthropic', { apiKey: 'sk-ant-test', model: 'chat-best' })
+    setActiveProviderLS('anthropic')
+    const wrapper = mount(ModelPicker)
+    await wrapper.get('label').trigger('focus')
+    await flushPromises()
+
+    const values = wrapper.findAll('#model-picker-model option').map(o => o.element.value)
+    expect(values).toEqual(['', 'chat-best', 'chat-small'])
+    expect(wrapper.get('[data-testid="model-badges"]').text()).toBe('Uses tools · Reads images · 200,000-token context')
+  })
+})
+
+describe('AnswerModelSelect (Settings, per provider)', () => {
+  it('counts the models it leaves out and keeps a saved model the provider no longer lists', () => {
+    const models = RECORDS.map(r => ({ ...r, display: r.label }))
+    const wrapper = mount(AnswerModelSelect, { props: { selectId: 's', models, modelValue: 'retired-model' } })
+    expect(wrapper.findAll('option').map(o => o.element.value))
+      .toEqual(['', 'retired-model', 'chat-best', 'chat-small', '__custom__'])
+    expect(wrapper.get('[data-testid="model-other-jobs"]').text()).toContain('1 embedding, 1 speech')
   })
 })
 

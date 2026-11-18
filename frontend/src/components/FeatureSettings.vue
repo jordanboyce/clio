@@ -243,7 +243,6 @@ const HOSTED_AI = [
   { id: 'openai', label: 'OpenAI' },
   { id: 'google', label: 'Google Gemini' },
   { id: 'grok', label: 'Grok (xAI)' },
-  { id: 'github', label: 'GitHub Models' },
   { id: 'openrouter', label: 'OpenRouter' },
   { id: 'ollama_cloud', label: 'Ollama Cloud' },
 ]

@@ -176,22 +176,6 @@ CATALOG: dict = {
             _p(r"embed", kinds=["embedding"]),
         ],
     },
-    "github": {
-        # GitHub Models was retired on 2026-07-30; the provider stays until it
-        # is removed, so these are the names it last served.
-        "id_pattern": r"^[a-z0-9-]+/[A-Za-z0-9.:-]+$",
-        "default_model": "openai/gpt-4o",
-        "fast_model": "openai/gpt-4o-mini",
-        "vision_model": "openai/gpt-4o",
-        "recommended": [
-            ("openai/gpt-4o", "GPT-4o", "quality"),
-            ("openai/gpt-4o-mini", "GPT-4o Mini", "fast"),
-        ],
-        "patterns": [
-            _p(r"^openai/", namespaced=True),
-            _p(r"embed", kinds=["embedding"]),
-        ],
-    },
     "ollama_cloud": {
         "id_pattern": r"^[a-z0-9][a-z0-9._/-]*(:[a-z0-9._-]+)?$",
         "default_model": "gpt-oss:120b",
