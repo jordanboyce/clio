@@ -383,6 +383,51 @@ def test_mcp_tools_mirror_the_rest_shapes(client, mcp_indexer):
     assert computed["source"] == "computed"
 
 
+def test_mcp_event_tree_gives_each_sequence_its_path_and_end_state(client, mcp_indexer):
+    et = _call("pra_event_tree", {"document_id": DOC, "name": "LOOP"})
+
+    assert et == {**client.get(f"/api/pra/models/{DOC}/event-trees/LOOP").json(), "collection_id": "default"}
+    assert et["initiating_event"] == "IE-LOOP" and et["initiating_event_frequency"] == 0.5
+    assert et["functional_events"] == [{"name": "PUMPS-FT", "fault_tree": "PUMPS-FT", "description": "Both trains fail"}]
+    assert [(s["name"], s["end_state"], s["path"], s["has_cut_sets"]) for s in et["sequences"]] == [
+        ("LOOP-1", "OK", [{"functional_event": "PUMPS-FT", "state": "success"}], False),
+        ("LOOP-2", "CD", [{"functional_event": "PUMPS-FT", "state": "failure"}], True),
+    ]
+    assert et["notice"] == queries.NOTICE and "screening estimate" in et["notice"].lower()
+    assert et["filename"] == "pumps.xml"
+    with pytest.raises(ToolError, match="No event tree named 'NOPE'"):
+        _call("pra_event_tree", {"document_id": DOC, "name": "NOPE"})
+
+
+def test_mcp_cut_sets_and_importance_take_the_event_tree_of_a_sequence(client, mcp_indexer):
+    """SAPHIRE numbers each event tree's sequences 01, 02, ...: the name alone is ambiguous."""
+    m = _pumps_model()
+    for et_name, ie in (("LOOP", "IE-LOOP"), ("TRANS", "IE-TRANS")):
+        m.event_trees[et_name] = EventTree(et_name, initiating_event=ie, functional_events=["PUMPS-FT"], sequences=[
+            Sequence("01", end_state="OK"), Sequence("02", end_state="CD")])
+    m.initiating_events["IE-TRANS"] = BasicEvent("IE-TRANS", "Transient", probability=1.0)
+    m.cut_sets = [CutSetList("02", kind="sequence", event_tree="LOOP", cut_sets=[["IE-LOOP", "VALVE"]]),
+                  CutSetList("02", kind="sequence", event_tree="TRANS", cut_sets=[["IE-TRANS", "PUMP-A"]])]
+    _add_doc(client.indexer, "twotrees", "two.zip", "pra-mard", m)
+
+    trans = _call("pra_cut_sets", {"document_id": "twotrees", "context": "02", "event_tree": "TRANS"})
+    loop = _call("pra_cut_sets", {"document_id": "twotrees", "context": "02", "event_tree": "LOOP"})
+    assert trans["cut_sets"][0]["events"] == ["IE-TRANS", "PUMP-A"]
+    assert loop["cut_sets"][0]["events"] == ["IE-LOOP", "VALVE"]
+    imp = _call("pra_importance", {"document_id": "twotrees", "context": "02", "event_tree": "TRANS"})
+    assert {e["event"] for e in imp["events"]} == {"IE-TRANS", "PUMP-A"}
+    assert _call("pra_event_tree", {"document_id": "twotrees", "name": "TRANS"})["sequences"][1]["has_cut_sets"] is True
+
+
+def test_mcp_event_tree_keeps_to_what_the_caller_may_see(client, mcp_indexer):
+    with pytest.raises(ToolError, match="not a PRA model"):
+        _call("pra_event_tree", {"document_id": "plaindoc", "name": "LOOP"})
+    with sqlite3.connect(client.indexer.vector_store.metadata_store.db_path) as conn:
+        conn.execute("UPDATE documents SET policy_status = 'quarantined' WHERE document_id = ?", (DOC,))
+    with pytest.raises(ToolError, match="not found"):
+        _call("pra_event_tree", {"document_id": DOC, "name": "LOOP"})
+
+
 def test_mcp_tools_refuse_what_they_cannot_show(client, mcp_indexer):
     with pytest.raises(ToolError, match="not a PRA model"):
         _call("pra_fault_tree", {"document_id": "plaindoc", "tree": "X"})
@@ -405,7 +450,7 @@ def test_mcp_pra_tools_are_read_only_and_short():
     import services.mcp_server as mcp
 
     tools = {t.name: t for t in asyncio.run(mcp._clio_mcp.list_tools())}
-    for name in ("pra_models", "pra_fault_tree", "pra_cut_sets", "pra_importance", "pra_event"):
+    for name in ("pra_models", "pra_fault_tree", "pra_event_tree", "pra_cut_sets", "pra_importance", "pra_event"):
         assert tools[name].annotations.readOnlyHint is True
         assert len(tools[name].description) < 400
     assert "pra_models" in mcp._SERVER_INSTRUCTIONS

@@ -208,8 +208,8 @@ _SERVER_INSTRUCTIONS = (
     "and get_document_context to read the surrounding text before quoting. For "
     "counts, sums, filters, or rankings over CSV/XLSX data use list_tables and the "
     "table tools, never passage search. For PRA models (SAPHIRE or Open-PSA fault "
-    "and event trees) start with pra_models, then pra_fault_tree, pra_cut_sets, "
-    "pra_importance and pra_event; their numbers are a screening estimate from the "
+    "and event trees) start with pra_models, then pra_fault_tree, pra_event_tree, "
+    "pra_cut_sets, pra_importance and pra_event; their numbers are a screening estimate from the "
     "cut sets and the PRA tool's own quantification governs. "
     "Cite filename and page from the results "
     "and say what the sources do not establish. Responses carry a corpus_version "
@@ -3275,17 +3275,20 @@ def pra_cut_sets(
     context: str,
     limit: Annotated[int, Field(ge=1, le=_PRA_MAX_LIMIT)] = 20,
     compute: bool = False,
+    event_tree: str | None = None,
     collection_id: str | None = None,
 ) -> dict[str, Any]:
     """The cut sets of a fault tree, sequence or end state, most probable first, quantified.
 
     Each has its probability and share; totals by rare-event sum and MCUB. compute=true
     generates them for a fault tree or gate when the model stores none (source "computed").
+    For a sequence pass event_tree: sequence names repeat across event trees.
     """
     from services.pra import queries as pra_queries
 
     return _pra_payload("pra_cut_sets", collection_id, document_id,
-                        lambda _doc, model: pra_queries.cut_sets_view(model, context, limit=limit, compute=compute))
+                        lambda _doc, model: pra_queries.cut_sets_view(model, context, limit=limit, compute=compute,
+                                                                event_tree=event_tree))
 
 
 @_threaded_tool(title="PRA importance", annotations=_read_only("PRA importance"))
@@ -3295,17 +3298,29 @@ def pra_importance(
     limit: Annotated[int, Field(ge=1, le=_PRA_MAX_LIMIT)] = 20,
     sort: Literal["fv", "raw", "rrw", "birnbaum"] = "fv",
     compute: bool = False,
+    event_tree: str | None = None,
     collection_id: str | None = None,
 ) -> dict[str, Any]:
     """Fussell-Vesely, RAW, RRW and Birnbaum importance of each event in a context's cut sets.
 
-    Same contexts and compute flag as pra_cut_sets; sort picks the measure to rank by.
+    Same contexts, compute flag and event_tree as pra_cut_sets; sort picks the measure to rank by.
     """
     from services.pra import queries as pra_queries
 
     return _pra_payload("pra_importance", collection_id, document_id,
                         lambda _doc, model: pra_queries.importance_view(model, context, limit=limit, sort=sort,
-                                                                  compute=compute))
+                                                                  compute=compute, event_tree=event_tree))
+
+
+@_threaded_tool(title="PRA event tree", annotations=_read_only("PRA event tree"))
+def pra_event_tree(document_id: str, name: str, collection_id: str | None = None) -> dict[str, Any]:
+    """An event tree: its initiating event and frequency, functional events (with their fault
+    trees), and every sequence with its path (functional event, success or failure), end state
+    or transfer, and whether it stores cut sets (pra_cut_sets with event_tree=name)."""
+    from services.pra import queries as pra_queries
+
+    return _pra_payload("pra_event_tree", collection_id, document_id,
+                        lambda _doc, model: pra_queries.event_tree_view(model, name))
 
 
 @_threaded_tool(title="PRA event", annotations=_read_only("PRA event"))

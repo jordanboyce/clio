@@ -126,8 +126,9 @@ shapes.
 |---|---|
 | `pra_models` | `collection_id?`, `document_id?` (list, or one model's summary) |
 | `pra_fault_tree` | `document_id`, `tree`, `depth` 1-6 |
-| `pra_cut_sets` | `document_id`, `context`, `limit` 1-100, `compute` |
-| `pra_importance` | `document_id`, `context`, `limit` 1-100, `sort`, `compute` |
+| `pra_event_tree` | `document_id`, `name` (the REST event tree shape: sequences with path and end state) |
+| `pra_cut_sets` | `document_id`, `context`, `limit` 1-100, `compute`, `event_tree?` |
+| `pra_importance` | `document_id`, `context`, `limit` 1-100, `sort`, `compute`, `event_tree?` |
 | `pra_event` | `document_id`, `name` |
 
 There is no tool-profile mechanism yet (ROADMAP M4). These belong in a `pra`

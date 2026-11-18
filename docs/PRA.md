@@ -175,7 +175,29 @@ viewer directly.
 Once a model is indexed, Clio can quantify its cut sets, rank basic events by
 importance (Fussell-Vesely, RAW, RRW, Birnbaum) and generate cut sets for a
 fault tree that carries none, through `/api/pra` and the read-only MCP tools
-`pra_models`, `pra_fault_tree`, `pra_cut_sets`, `pra_importance` and
-`pra_event`. Every number is a screening estimate from point values; the PRA
+`pra_models`, `pra_fault_tree`, `pra_event_tree`, `pra_cut_sets`,
+`pra_importance` and `pra_event`. Every number is a screening estimate from point values; the PRA
 tool's own quantification governs. Definitions, guards and the validation
 against SAPHIRE and SCRAM results are in [PRA_ANALYSIS.md](PRA_ANALYSIS.md).
+
+### Event trees over MCP
+
+`pra_event_tree(document_id, name)` returns what the viewer's event tree
+shows, in the shape of `GET /api/pra/models/{id}/event-trees/{name}`:
+
+- the initiating event and its frequency;
+- the functional events, each with the fault tree of the same name when the
+  model has one;
+- every sequence, in order, with its `path` (each functional event it asks
+  about and whether that branch is `success` or `failure`), its `end_state`
+  or `transfer`, its `logic` and frequency when the model records them, and
+  `has_cut_sets`.
+
+A sequence's cut sets and importance come from `pra_cut_sets` and
+`pra_importance` with the sequence name as `context` and `event_tree` set to
+the tree's name. SAPHIRE numbers every event tree's sequences `01`, `02`, ...,
+so without `event_tree` the first list of that name answers. Like the other
+PRA tools it is read-only, sees only the collections and documents the
+credential may see (a held document reads as not found), and carries the same
+`notice`: the numbers are a screening estimate, and the PRA tool's own
+quantification governs.
