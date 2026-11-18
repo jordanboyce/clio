@@ -49,6 +49,11 @@ os.environ["ALLOWED_HOSTS"] = "testserver"
 # Reranker tests set it (or the auto-detection) explicitly.
 os.environ["ENABLE_RERANKER"] = "false"
 
+# Trust no one is off by default, which turns the prompt-injection and PII
+# scans off; most governance tests are about those scans. The switch's own
+# tests (tests/test_trust_no_one.py) set it both ways.
+os.environ["TRUST_NO_ONE"] = "true"
+
 
 import pytest  # noqa: E402
 

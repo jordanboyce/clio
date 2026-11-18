@@ -207,8 +207,11 @@ def _get_engine():
 # ── Settings ────────────────────────────────────────────────────────────────
 
 def action() -> str:
+    """What the scan does now: "off" unless TRUST_NO_ONE is on, else PII_SCAN_ACTION."""
     from config import settings
 
+    if not getattr(settings, "trust_no_one", False):
+        return "off"
     a = getattr(settings, "pii_scan_action", "label")
     return a if a in ("off", "label", "flag", "quarantine") else "label"
 
@@ -243,7 +246,7 @@ def entities() -> List[str]:
 def redaction_enabled() -> bool:
     from config import settings
 
-    return bool(getattr(settings, "pii_redact_outputs", False))
+    return bool(getattr(settings, "trust_no_one", False) and getattr(settings, "pii_redact_outputs", False))
 
 
 def engine_status() -> Dict[str, Any]:

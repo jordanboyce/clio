@@ -42,7 +42,7 @@ VALID_CONFIG_FIELDS = {
     "enable_chat_tab",
     "ollama_num_ctx",
     # Content governance (Admin tab → Policy)
-    "content_policy_action", "injection_scan_action", "content_policy_llm_review",
+    "trust_no_one", "content_policy_action", "injection_scan_action", "content_policy_llm_review",
     "content_policy_llm_provider", "content_policy_llm_model",
     "content_policy_llm_sample_pages",
     "pii_scan_action", "pii_flag_threshold", "pii_entities", "pii_redact_outputs",
@@ -149,6 +149,7 @@ class ConfigManager:
             # UI feature flags
             "enable_chat_tab": settings.enable_chat_tab,
             # Content governance
+            "trust_no_one": settings.trust_no_one,
             "content_policy_action": settings.content_policy_action,
             "injection_scan_action": settings.injection_scan_action,
             "content_policy_llm_review": settings.content_policy_llm_review,
@@ -288,6 +289,11 @@ class ConfigManager:
                 )
                 result["success"] = False
                 return result
+
+        if "trust_no_one" in updates and not isinstance(updates["trust_no_one"], bool):
+            result["errors"].append("trust_no_one must be true or false")
+            result["success"] = False
+            return result
 
         if "injection_scan_action" in updates:
             if updates["injection_scan_action"] not in ("review", "warn", "off"):

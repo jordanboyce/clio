@@ -54,6 +54,26 @@ describe('FeatureSettings', () => {
     expect(wrapper.emitted('changed')[0]).toEqual(['links'])
   })
 
+  it('Trust no one is one switch; the personal data choice shows only while it is on', async () => {
+    const stored = { ...CONFIG, trust_no_one: false }
+    http.get.mockImplementation((url) => Promise.resolve({
+      data: url === '/api/features' ? { features: FEATURES } : { ...stored },
+    }))
+    http.post.mockImplementation((url, body) => { Object.assign(stored, body); return Promise.resolve({ data: { success: true } }) })
+    const wrapper = mount(FeatureSettings)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="feature-pii"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="trust-no-one-note"]').text()).toContain('sources are trusted')
+
+    await wrapper.get('[data-testid="feature-toggle-pii"]').setValue(true)
+    await flushPromises()
+
+    expect(http.post).toHaveBeenCalledWith('/api/config', { trust_no_one: true })
+    expect(wrapper.find('[data-testid="feature-pii"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="trust-no-one-note"]').text()).toContain('checked for instructions aimed at an AI model')
+  })
+
   it('sends automatic for the reranker as no value, not as text', async () => {
     const wrapper = await mountSettings()
     await wrapper.get('[data-testid="feature-reranker"]').setValue('false')

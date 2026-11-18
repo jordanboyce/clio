@@ -29,6 +29,7 @@ SECURE_PROFILE_DEFAULTS = {
     "mcp_token_max_days": 90,        # personal MCP tokens are re-minted each quarter
     "trusted_header_allow_legacy_signature": False,  # proxy signatures must carry a time
     "ai_allowed_base_urls": "none",  # model calls go only to AI_BASE_URL / OLLAMA_BASE_URL
+    "trust_no_one": True,            # sources are screened for injected instructions and personal data
 }
 
 
@@ -654,6 +655,15 @@ class Settings(BaseSettings):
     # a floor, not a ceiling. Rule packs are local regex; nothing leaves the
     # machine unless CONTENT_POLICY_LLM_REVIEW is on.
     content_policy_action: Literal["off", "flag", "quarantine", "reject"] = "flag"
+
+    # "Trust no one": screen every source for instructions aimed at a model
+    # (the prompt-injection scan) and for personal data (the PII scan and,
+    # with PII_REDACT_OUTPUTS, masking). Off, the people adding sources are
+    # trusted and neither scan runs, whatever INJECTION_SCAN_ACTION and
+    # PII_SCAN_ACTION say; those two choose what the scans do once it is on.
+    # The content policy and the blocklist are not part of it and always
+    # apply. Off by default; on under CLIO_PROFILE=secure.
+    trust_no_one: bool = False
 
     # What the prompt-injection text scan does with what it finds. The scan
     # is wording-based and can misread ordinary prose, so the posture is

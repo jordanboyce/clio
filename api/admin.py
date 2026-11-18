@@ -53,9 +53,13 @@ def get_review_queue():
     queue = governance.review_queue()
     governance.invalidate_review_summary()
     tuning = current_tuning(max_age=0)
+    from services.prompt_injection_detector import scan_action
+
     return {
+        "trust_no_one": settings.trust_no_one,
         "content_policy_action": settings.content_policy_action,
-        "injection_scan_action": settings.injection_scan_action,
+        # What the scans do now: "off" while Trust no one is off.
+        "injection_scan_action": scan_action(),
         "pii_scan_action": pii_detector.action(),
         "pii_engine": pii_detector.engine_status(),
         "injection_tuning": {

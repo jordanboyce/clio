@@ -50,19 +50,6 @@
               <option value="true">On</option>
               <option value="false">Off</option>
             </select>
-            <select
-              v-else-if="f.id === 'pii'"
-              class="select select-bordered select-sm flex-shrink-0 w-36"
-              :value="form.pii_scan_action"
-              aria-label="What the personal data scan does"
-              data-testid="feature-pii"
-              @change="save('pii', { pii_scan_action: $event.target.value })"
-            >
-              <option value="off">Off</option>
-              <option value="label">Label</option>
-              <option value="flag">Flag for review</option>
-              <option value="quarantine">Hold for review</option>
-            </select>
             <button
               v-else-if="f.id === 'semantic'"
               type="button"
@@ -178,10 +165,34 @@
             Tokens, defaults and what agents may see are on the
             <button type="button" class="link link-primary" @click="$emit('switch-tab', 'mcp')">MCP</button> page.
           </p>
-          <p v-if="f.id === 'pii'" class="text-xs text-base-content/45 mt-2 max-w-[60ch]">
-            The threshold, what counts as personal data and masking are under Policy on the
-            <button type="button" class="link link-primary" @click="$emit('switch-tab', 'admin')">Admin</button> page.
-          </p>
+          <template v-if="f.id === 'pii'">
+            <div v-if="form.trust_no_one" class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              <label for="feature-pii" class="text-xs text-base-content/70">Personal data found in a source</label>
+              <select
+                id="feature-pii"
+                class="select select-bordered select-sm w-40"
+                :value="form.pii_scan_action"
+                data-testid="feature-pii"
+                @change="save('pii', { pii_scan_action: $event.target.value })"
+              >
+                <option value="off">Not scanned</option>
+                <option value="label">Label</option>
+                <option value="flag">Flag for review</option>
+                <option value="quarantine">Hold for review</option>
+              </select>
+            </div>
+            <p class="text-xs text-base-content/45 mt-2 max-w-[60ch]" data-testid="trust-no-one-note">
+              <template v-if="form.trust_no_one">
+                Every source is checked for instructions aimed at an AI model and for personal data.
+                What happens to an injection finding, the personal data threshold and masking are under
+                Policy on the <button type="button" class="link link-primary" @click="$emit('switch-tab', 'admin')">Admin</button> page.
+              </template>
+              <template v-else>
+                The people adding sources are trusted, so sources are not checked for instructions aimed at
+                an AI model or for personal data. The content policy and blocklist still apply.
+              </template>
+            </p>
+          </template>
         </div>
       </div>
     </fieldset>
@@ -226,6 +237,7 @@ const TOGGLES = {
   research: 'research_lookup_enabled',
   links: 'link_indexing_enabled',
   mcp: 'enable_mcp',
+  pii: 'trust_no_one',
 }
 const WHISPER_MODELS = [
   { id: 'tiny', label: 'tiny (39 MB)' },
@@ -266,6 +278,7 @@ const form = reactive({
   git_allowed_hosts: '',
   enable_mcp: true,
   pii_scan_action: 'label',
+  trust_no_one: false,
 })
 const ai = reactive({ provider: '', loadedProvider: '', model: '', baseUrl: '', key: '', keySet: false, label: '' })
 

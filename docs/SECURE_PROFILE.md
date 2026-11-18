@@ -19,6 +19,7 @@ CLIO_PROFILE=secure
 | `MCP_TOKEN_MAX_DAYS` | 90 | Personal MCP tokens are re-issued every quarter (standard: 365) |
 | `TRUSTED_HEADER_ALLOW_LEGACY_SIGNATURE` | off | A signed proxy header must carry a timestamp, so it cannot be replayed later |
 | `AI_ALLOWED_BASE_URLS` | `none` | A request cannot point model calls at an endpoint of its choosing (`X-AI-Base-URL`); only `AI_BASE_URL` and `OLLAMA_BASE_URL` |
+| `TRUST_NO_ONE` | on | Every source is checked for instructions aimed at an AI model and for personal data (standard: off, the people adding sources are trusted) |
 
 **Things it refuses to start with.** The standard profile logs a warning for
 these; the secure profile exits with a message that names each problem:

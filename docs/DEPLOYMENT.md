@@ -472,7 +472,17 @@ rule-pack finding. It sends content to a provider chat already trusts, and
 costs tokens per upload, so it is off by default. Air-gapped deployments can
 point it at local Ollama.
 
-**Prompt-injection wording** (`INJECTION_SCAN_ACTION`, default `review`)
+**Trust no one** (`TRUST_NO_ONE`, default off; on under `CLIO_PROFILE=secure`)
+
+One switch for the two scans below, in Settings, Features. Off, the people
+adding sources are trusted: no source is checked for prompt-injection wording
+or personal data, and nothing is masked, whatever `INJECTION_SCAN_ACTION` and
+`PII_SCAN_ACTION` say. On, those two decide what each scan does. The content
+policy and the blocklist are not part of it and always apply. A deployment
+upgraded from a release before this switch scanned by default; set
+`TRUST_NO_ONE=true` to keep that.
+
+**Prompt-injection wording** (`INJECTION_SCAN_ACTION`, default `review`, when Trust no one is on)
 
 A separate, local scan looks for text that tries to steer an AI reading the
 document (instruction overrides, chat-format tokens, exfiltration). It badges
@@ -516,7 +526,7 @@ a system-prompt rule saying it is quoted content, and MCP results
 carry the same field beside the excerpt, with the rule in the server
 instructions. The label follows the same tuning as the ingest scan.
 
-**Personal data** (`PII_SCAN_ACTION`, default `label`)
+**Personal data** (`PII_SCAN_ACTION`, default `label`, when Trust no one is on)
 
 A local scan for personal data: Microsoft Presidio when it is installed
 (`pip install -r requirements-pii.txt` and a spaCy English model; in Docker,

@@ -42,10 +42,13 @@ logger = logging.getLogger(__name__)
 
 
 def scan_action() -> str:
-    """The configured posture: "review" (badge + admin queue), "warn"
-    (badge the document, keep it out of the queue) or "off" (no scan)."""
+    """The posture now: "review" (badge + admin queue), "warn" (badge the
+    document, keep it out of the queue) or "off" (no scan). Always "off"
+    unless TRUST_NO_ONE is on."""
     from config import settings  # late import: config must not depend on services
 
+    if not getattr(settings, "trust_no_one", False):
+        return "off"
     action = getattr(settings, "injection_scan_action", "review")
     return action if action in ("review", "warn", "off") else "review"
 

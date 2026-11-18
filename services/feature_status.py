@@ -215,15 +215,25 @@ def _mcp() -> Dict[str, Any]:
 def _pii() -> Dict[str, Any]:
     from services.pii_detector import presidio_installed
 
-    label = "PII scan"
+    # The id stays "pii" so the status bar and saved layouts keep finding it.
+    label = "Trust no one"
+    if not settings.trust_no_one:
+        return _feature("pii", label, OFF,
+                        "Off: sources are trusted, so none is checked for instructions aimed at an AI "
+                        "model or for personal data.",
+                        "Turn on Trust no one in Settings, Features.")
     if settings.pii_scan_action == "off":
-        return _feature("pii", label, OFF, "Turned off. Sources are not scanned for personal data.",
-                        "Choose what the scan does in Settings, Features.")
+        return _feature("pii", label, LIMITED,
+                        "Sources are checked for instructions aimed at an AI model, but not for "
+                        "personal data.",
+                        "Choose what the personal data scan does in Settings, Features.")
     if presidio_installed():
-        return _feature("pii", label, ON, "Sources are scanned for personal data with Presidio.")
+        return _feature("pii", label, ON,
+                        "Sources are checked for instructions aimed at an AI model and, with Presidio, "
+                        "for personal data.")
     return _feature("pii", label, LIMITED,
-                    "Sources are scanned with patterns only, which find things like emails and phone "
-                    "numbers but not names.",
+                    "Sources are checked for instructions aimed at an AI model, and for personal data "
+                    "with patterns only, which find things like emails and phone numbers but not names.",
                     "Build the image with WITH_PII=1 for full detection.")
 
 
