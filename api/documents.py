@@ -1522,6 +1522,7 @@ def export_documents(
     import io
 
     from services import file_kinds
+    from services.csv_safety import safe_dict_row
 
     fmt = (format or "csv").lower()
     if fmt not in _EXPORT_MEDIA_TYPES:
@@ -1554,11 +1555,8 @@ def export_documents(
             if fmt == "csv":
                 buf.seek(0); buf.truncate()
                 for d in rows:
-                    row = _document_row_for_export(d)
                     # Spreadsheet formula injection: a filename is attacker-controlled.
-                    row = {k: ("'" + v if isinstance(v, str) and v and v[0] in "=+-@\t\r" else v)
-                           for k, v in row.items()}
-                    writer.writerow(row)
+                    writer.writerow(safe_dict_row(_document_row_for_export(d)))
                 yield buf.getvalue()
             elif fmt == "txt":
                 # A filename with a line break in it must stay one line of the list.

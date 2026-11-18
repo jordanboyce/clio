@@ -178,6 +178,8 @@ def to_csv(rows: List[Dict[str, Any]]) -> str:
     import csv
     import io
 
+    from services.csv_safety import safe_row
+
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(["id", "timestamp", "actor", "action", "collection_id",
@@ -186,9 +188,11 @@ def to_csv(rows: List[Dict[str, Any]]) -> str:
         detail = r.get("detail")
         if isinstance(detail, (dict, list)):
             detail = json.dumps(detail, default=str)
-        writer.writerow([
+        # Actors, targets and details carry caller-chosen text (a filename,
+        # a token name); an admin opens this file in a spreadsheet.
+        writer.writerow(safe_row([
             r.get("id"), r.get("timestamp"), r.get("actor") or "",
             r.get("action"), r.get("collection_id") or "",
             r.get("document_id") or "", r.get("target") or "", detail or "",
-        ])
+        ]))
     return out.getvalue()
