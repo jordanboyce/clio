@@ -104,3 +104,30 @@ def test_the_readiness_report_names_the_mirror_and_still_counts_it_outbound(mirr
     assert row["destination"] == "artifactory.corp.example"
     # A mirror may be public; the posture report must not call it internal.
     assert row["state"] == "open"
+
+
+def test_without_a_mirror_the_report_names_every_host_a_download_reaches(monkeypatch):
+    """B10: the hub and the storage its downloads redirect to."""
+    from services import readiness
+
+    monkeypatch.delenv("HF_ENDPOINT", raising=False)
+    row = next(p for p in readiness.egress_paths() if p["kind"] == "Model downloads")
+    for host in ("huggingface.co", "cdn-lfs.huggingface.co", "cas-bridge.xethub.hf.co", "transfer.xethub.hf.co"):
+        assert host in row["destination"]
+
+
+def test_a_mirror_turns_off_the_xet_client_so_nothing_bypasses_it(monkeypatch):
+    """B10: huggingface_hub's Xet client reads from Hugging Face's storage
+    directly; through a mirror every byte must come from the mirror."""
+    import os
+
+    from config import Settings
+
+    monkeypatch.delenv("HF_HUB_DISABLE_XET", raising=False)
+    monkeypatch.setenv("HF_ENDPOINT", "https://artifactory.corp.example/hf")
+    Settings()
+    assert os.environ.get("HF_HUB_DISABLE_XET") == "1"
+
+    monkeypatch.setenv("HF_HUB_DISABLE_XET", "0")   # the operator's own choice stands
+    Settings()
+    assert os.environ.get("HF_HUB_DISABLE_XET") == "0"

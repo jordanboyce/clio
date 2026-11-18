@@ -377,6 +377,12 @@ def hub_endpoint() -> str:
     return (os.environ.get("HF_ENDPOINT") or "").strip().rstrip("/") or DEFAULT_HUB_ENDPOINT
 
 
+# Every host a download from huggingface.co can reach (B10): the hub, and
+# the storage its file downloads redirect to. With a mirror, only the mirror.
+HUB_DOWNLOAD_HOSTS = ("huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.hf.co",
+                      "cas-bridge.xethub.hf.co", "cas-server.xethub.hf.co", "transfer.xethub.hf.co")
+
+
 def hub_host() -> str:
     """The model source's host name, for messages: "huggingface.co" or a mirror's."""
     from urllib.parse import urlparse

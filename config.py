@@ -1009,6 +1009,14 @@ class Settings(BaseSettings):
         # HF_ENDPOINT of its own (from .env under `python main.py`, say).
         if self.hf_endpoint.strip():
             os.environ.setdefault("HF_ENDPOINT", self.hf_endpoint.strip().rstrip("/"))
+        # B10: with a mirror, every model byte must come through the mirror.
+        # huggingface_hub's Xet transfer client talks to Hugging Face's own
+        # storage servers when a response carries Xet headers, which a mirror
+        # that passes the hub's headers through would send, so it is turned
+        # off. Plain downloads then go to HF_ENDPOINT only. An operator who
+        # set HF_HUB_DISABLE_XET themselves keeps their value.
+        if os.environ.get("HF_ENDPOINT", "").strip():
+            os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 
 # Global settings instance

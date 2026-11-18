@@ -319,6 +319,22 @@ name the mirror instead of huggingface.co, so you can see which one is in use.
 This is not offline mode: with `OFFLINE_MODE` set, nothing downloads from
 anywhere.
 
+**Every host a model download contacts.** Without a mirror: `huggingface.co`,
+plus the storage it redirects file downloads to (`cdn-lfs.huggingface.co`,
+`cdn-lfs-us-1.hf.co` and, for repositories stored with Xet,
+`cas-bridge.xethub.hf.co`, `cas-server.xethub.hf.co` and
+`transfer.xethub.hf.co`). With `HF_ENDPOINT` set: the mirror only. Clio turns
+off huggingface_hub's Xet transfer client when a mirror is set
+(`HF_HUB_DISABLE_XET=1`, unless you set it yourself), because that client
+fetches from Hugging Face's storage servers directly when a response carries
+Xet headers, which a mirror that passes the hub's headers through would send.
+The embedding runtime (fastembed 0.9) has no second download source of its
+own: its log line "Falling back to other sources" tries nothing else. With
+`OFFLINE_MODE` set, nothing is contacted. Checked on 2026-11-18 by running the
+slim image's warm-up for a model it does not bake, with every request sent
+through a deny-all proxy that logs each host: with a mirror the log held only
+the mirror; without one, only `huggingface.co`; offline, nothing.
+
 **A firewall that drops packets** can take minutes to fail, where a refused
 connection takes a moment. Nothing waits for it: a model that is not on disk is
 fetched in the background, one attempt at a time, while the collection works by

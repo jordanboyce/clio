@@ -459,15 +459,20 @@ def egress_paths() -> List[Dict[str, str]]:
             add("Content review", reviewer, "internal" if local else ("blocked" if offline else "open"),
                 "Sampled pages are sent for review.")
 
-    from services.embedder import DEFAULT_HUB_ENDPOINT, hub_endpoint, hub_host
+    from services.embedder import DEFAULT_HUB_ENDPOINT, HUB_DOWNLOAD_HOSTS, hub_endpoint, hub_host
 
     mirrored = hub_endpoint() != DEFAULT_HUB_ENDPOINT
     # "open", mirror or not: HF_ENDPOINT may name a public mirror as well as an
     # internal one, and this report must not understate an outbound path.
-    add("Model downloads", hub_host(), "blocked" if offline else "open",
+    # B10: every host a download can reach. Through a mirror, only the
+    # mirror (config.py turns off the Xet client, which would otherwise go
+    # to Hugging Face's storage directly); without one, the hub and the
+    # storage hosts its file downloads redirect to.
+    add("Model downloads", hub_host() if mirrored else ", ".join(HUB_DOWNLOAD_HOSTS),
+        "blocked" if offline else "open",
         "Models load from the local cache only." if offline else (
-            "Models download on first use if missing, from this mirror (HF_ENDPOINT)." if mirrored
-            else "Models download on first use if missing."))
+            "Models download on first use if missing, from this mirror (HF_ENDPOINT) and nowhere else."
+            if mirrored else "Models download on first use if missing."))
     add("Telemetry / analytics", "none", "none", "The server and the frontend make no analytics calls.")
     return paths
 
