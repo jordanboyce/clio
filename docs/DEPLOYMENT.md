@@ -923,7 +923,10 @@ scrape_configs:
 For load balancers and orchestrators, `/livez` and `/readyz` need no credential
 and never open a collection; see [ENTERPRISE.md](ENTERPRISE.md#health-probes).
 `LOG_FORMAT=json` writes one JSON object per log line for a log shipper;
-`LOG_LEVEL` (default `INFO`) sets the least severe line the app writes.
+`LOG_LEVEL` (default `INFO`) sets the least severe line the app writes. Every
+line logged while a request is handled carries its id (`request_id` in JSON,
+` rid=...` at the end of a text line), the same id the caller got back as
+`X-Request-ID`.
 
 Numeric settings are checked at start: a value outside the range that works
 (a zero `WORKER_THREADS`, a `CHUNK_OVERLAP` as large as `CHUNK_SIZE`) stops the
@@ -955,6 +958,10 @@ The ones that tell you a deployment is reaching its limit:
 | `clio_db_pool_in_use`, `clio_db_pool_waits_total`, `clio_db_pool_timeouts_total` | Postgres only. Timeouts are 503s people saw: raise `POSTGRES_POOL_MAX` |
 | `clio_rate_limit_rejected_total` | People hitting their limits, by class |
 | `clio_api_app_requests_total` | Traffic from each [registered app](APP_API.md), by app name and status class. The one label that names a caller: an app is a system an admin registered, not a person |
+| `clio_data_dir_free_bytes`, `clio_data_dir_min_free_bytes` | Free space where the data directory lives. Below the second (`MIN_FREE_DISK_MB`, 500 by default) ingest is refused with 507 and `/readyz` says `disk` |
+| `clio_auth_failures_total`, `clio_auth_lockouts_total` | Refused credentials, and addresses cut off for too many of them. Lockouts behind a proxy usually mean `FORWARDED_ALLOW_IPS` is unset |
+| `clio_jobs_failed_total` | Background jobs that failed, by kind: `index`, `report`, `library` |
+| `clio_provider_errors_total` | Model calls that raised, by provider: an endpoint that is down or refusing |
 
 Numbers belong to one process and reset when it restarts, which is what
 Prometheus counters expect.

@@ -24,6 +24,7 @@ one ledger (see docs/DEPLOYMENT.md on the single-process model).
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
 from contextlib import contextmanager
 from typing import Dict, Iterator, Optional
@@ -38,6 +39,8 @@ _lock = threading.Lock()
 
 class StorageLimitExceeded(Exception):
     """Raised when accepting ``incoming_bytes`` would push a collection past its cap."""
+
+    status_code = 413
 
     def __init__(self, collection_id: str, incoming_bytes: int, usage_bytes: int, limit_bytes: int,
                  filename: Optional[str] = None):
@@ -64,6 +67,63 @@ class StorageLimitExceeded(Exception):
             "incoming_bytes": self.incoming_bytes,
             "filename": self.filename,
         }
+
+
+class DiskSpaceLow(StorageLimitExceeded):
+    """The data directory would drop below MIN_FREE_DISK_MB. Every catch site
+    of StorageLimitExceeded refuses it the same way, with 507."""
+
+    status_code = 507
+
+    def __init__(self, collection_id: str, incoming_bytes: int, free: int, keep: int,
+                 filename: Optional[str] = None):
+        self.collection_id = collection_id
+        self.incoming_bytes = incoming_bytes
+        self.usage_bytes = 0
+        self.limit_bytes = 0
+        self.filename = filename
+        self.free_bytes = free
+        self.keep_bytes = keep
+        what = filename or "this upload"
+        Exception.__init__(
+            self,
+            f"The server is almost out of disk space, so {what} was not added. Nothing was "
+            "lost. Ask an administrator to free space, then try again.",
+        )
+
+    def to_detail(self) -> dict:
+        return {
+            "detail": str(self),
+            "error": "disk_space_low",
+            "collection_id": self.collection_id,
+            "incoming_bytes": self.incoming_bytes,
+            "filename": self.filename,
+        }
+
+
+def min_free_bytes() -> int:
+    return max(0, int(getattr(config.settings, "min_free_disk_mb", 0) or 0)) * 1024 * 1024
+
+
+def free_disk_bytes() -> Optional[int]:
+    """Free space where the data directory lives, or None when it cannot be read."""
+    try:
+        return int(shutil.disk_usage(config.settings.data_dir).free)
+    except OSError:
+        return None
+
+
+def check_disk(collection_id: str, incoming_bytes: int, filename: Optional[str] = None) -> None:
+    """Raise DiskSpaceLow when ``incoming_bytes`` would leave less than MIN_FREE_DISK_MB."""
+    keep = min_free_bytes()
+    if not keep:
+        return
+    free = free_disk_bytes()
+    incoming = max(0, int(incoming_bytes or 0))
+    if free is not None and free - incoming < keep:
+        logger.warning(f"Refused {filename or 'an ingest'}: {format_bytes(free)} free, "
+                       f"{format_bytes(keep)} kept (MIN_FREE_DISK_MB)")
+        raise DiskSpaceLow(collection_id, incoming, free, keep, filename)
 
 
 def format_bytes(n: int) -> str:
@@ -115,6 +175,7 @@ def describe(collection_id: str) -> dict:
 
 def check(collection_id: str, incoming_bytes: int, filename: Optional[str] = None) -> None:
     """Raise StorageLimitExceeded if ``incoming_bytes`` does not fit. Cheap; no reservation."""
+    check_disk(collection_id, incoming_bytes, filename)
     limit = limit_bytes()
     if not limit:
         return
@@ -133,6 +194,7 @@ def reserve(collection_id: str, incoming_bytes: int, filename: Optional[str] = N
     the file was committed (it now counts through SUM(file_size)) or
     failed (it counts for nothing).
     """
+    check_disk(collection_id, incoming_bytes, filename)
     limit = limit_bytes()
     if not limit:
         yield
@@ -159,6 +221,7 @@ def take(collection_id: str, incoming_bytes: int, filename: Optional[str] = None
 
     Returns the number of bytes held; pass it back to release().
     """
+    check_disk(collection_id, incoming_bytes, filename)
     limit = limit_bytes()
     if not limit:
         return 0

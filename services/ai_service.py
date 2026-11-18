@@ -1358,6 +1358,30 @@ def apply_deployment_defaults(provider_name: str, api_key, kwargs: dict):
     return api_key, kwargs
 
 
+_COUNTED_CALLS = ("complete", "complete_with_tools", "complete_with_image")
+
+
+def _count_model_call_errors(provider: AIProvider, provider_name: str) -> None:
+    """Count each model call that raises, by provider (clio_provider_errors_total)."""
+    from services import ops_counters
+
+    for name in _COUNTED_CALLS:
+        method = getattr(provider, name, None)
+        if method is None:
+            continue
+
+        def counted(*args, _method=method, **kwargs):
+            try:
+                return _method(*args, **kwargs)
+            except NotImplementedError:
+                raise
+            except Exception:
+                ops_counters.incr("provider_errors", provider_name)
+                raise
+
+        setattr(provider, name, counted)
+
+
 def create_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProvider:
     """Create an AI provider instance, marked with whether it is outside this
     network (``external``), which is what keeps local-only data away from it
@@ -1382,6 +1406,7 @@ def create_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProv
             "or ask the administrator to allow the address."
         )
     provider = _build_provider(provider_name, api_key, **kwargs)
+    _count_model_call_errors(provider, provider_name)
     _, resolved = apply_deployment_defaults(provider_name, api_key, kwargs)
     provider.external = data_controls.model_is_external(provider_name, resolved.get("base_url") or "")
     provider.egress_name = provider_name

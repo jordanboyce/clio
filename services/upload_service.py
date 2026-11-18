@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 
 from config import settings
-from services import audit, git_source, pasted_text, source_changes, storage_quota
+from services import audit, git_source, ops_counters, pasted_text, source_changes, storage_quota
 from services.app_database import app_db
 from services.indexer_manager import indexer_manager
 from services.collection_locks import collection_write_lock
@@ -346,6 +346,7 @@ class UploadService:
             job.target(*job.args)
         except Exception as e:
             logger.error(f"Index job {job.job_id} crashed: {e}", exc_info=True)
+            ops_counters.incr("jobs_failed", "index")
             try:
                 app_db.update_upload_job(
                     job.job_id, status="failed", error=str(e), current_file=None
@@ -1936,6 +1937,7 @@ class UploadService:
                 f"Bulk index job {job_id} failed (collection '{collection_id}', "
                 f"{type(e).__name__}): {e}"
             )
+            ops_counters.incr("jobs_failed", "index")
             error_code = getattr(e, "code", None)
             if error_code:
                 results["error_code"] = error_code

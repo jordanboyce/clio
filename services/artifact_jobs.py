@@ -78,6 +78,9 @@ def start(store: ArtifactStore, work: Callable[[], Dict[str, Any]], **fields: An
             store.update(artifact_id, status="done", finished_at=_now(), error=None, **result)
         except Exception as exc:  # noqa: BLE001 - the row must not stay active
             logger.warning("Artifact %s failed: %s", artifact_id, exc)
+            from services import ops_counters
+
+            ops_counters.incr("jobs_failed", "report")
             store.update(artifact_id, status="failed", finished_at=_now(),
                          error=str(exc)[:300] or exc.__class__.__name__)
         finally:

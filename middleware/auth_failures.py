@@ -40,6 +40,7 @@ class FailedAuthLimiter:
         self._lock = threading.Lock()
         self._failures: Dict[str, Deque[float]] = {}
         self.lockouts = 0
+        self.failures = 0  # every failed credential since start, for /metrics
 
     @staticmethod
     def _limits() -> tuple[int, int]:
@@ -70,6 +71,7 @@ class FailedAuthLimiter:
         """Count one failed credential, and say so once the address is cut off."""
         limit, window = self._limits()
         logger.info("Failed sign-in (%s) from %s on %s", kind, key, path)
+        self.failures += 1
         _audit("auth.sign_in_failed", key, {"kind": kind, "path": path})
         if limit <= 0:
             return
@@ -99,6 +101,7 @@ class FailedAuthLimiter:
         with self._lock:
             self._failures.clear()
             self.lockouts = 0
+            self.failures = 0
 
 
 def _audit(action: str, address: str, detail: dict) -> None:

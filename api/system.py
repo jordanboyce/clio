@@ -159,6 +159,11 @@ def _readiness_problem() -> Optional[str]:
         return "database"
     if not os.access(settings.data_dir, os.W_OK):
         return "storage"
+    from services import storage_quota
+
+    keep, free = storage_quota.min_free_bytes(), storage_quota.free_disk_bytes()
+    if keep and free is not None and free < keep:
+        return "disk"
     return None
 
 

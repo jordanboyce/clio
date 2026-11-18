@@ -102,6 +102,7 @@ SETTING_RANGES: dict[str, tuple] = {
     "chat_daily_token_budget": (0, _UNBOUNDED),
     "max_concurrent_index_jobs": (1, 64),
     "collection_storage_limit_bytes": (0, _UNBOUNDED),
+    "min_free_disk_mb": (0, _UNBOUNDED),
     "search_history_retention_days": (0, _UNBOUNDED),
     "usage_retention_days": (0, _UNBOUNDED),
     "pii_flag_threshold": (1, 1000),
@@ -790,6 +791,11 @@ class Settings(BaseSettings):
     # accepting a file, so one collection cannot fill the disk or the
     # embedding queue for everyone else. 0 = unlimited. Default 5 GiB.
     collection_storage_limit_bytes: int = 5 * 1024 * 1024 * 1024
+    # Free space the data directory keeps, in MB. An upload or other ingest
+    # that would leave less is refused (507), and /readyz reports "disk" once
+    # free space is below it, so a full disk is a clear refusal rather than a
+    # half-written index. 0 turns the check off.
+    min_free_disk_mb: int = 500
 
     # Retention (days). search_history stores result snippets, so it is a
     # privacy liability with no expiry; chat_usage is small but unbounded.

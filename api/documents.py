@@ -181,8 +181,9 @@ def _content_disposition(disposition: str, filename: str) -> str:
 
 
 def _storage_error(error: StorageLimitExceeded) -> HTTPException:
-    """The per-collection cap answers 413 with the numbers the UI needs."""
-    return HTTPException(status_code=413, detail=error.to_detail())
+    """The per-collection cap answers 413 with the numbers the UI needs; a
+    disk short of MIN_FREE_DISK_MB answers 507."""
+    return HTTPException(status_code=error.status_code, detail=error.to_detail())
 
 
 def _unsupported_message(filename: str) -> str:
