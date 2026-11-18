@@ -216,8 +216,23 @@
       <!-- Main panel -->
       <main class="flex-1 flex flex-col overflow-hidden min-w-0">
 
+        <!-- A PRA model opened as a source: its viewer takes the main panel
+             until closed; the tab underneath keeps its state (v-show). -->
+        <div v-if="ui.praViewer" class="flex-1 min-h-0 overflow-hidden" data-testid="pra-viewer-host">
+          <PraViewer
+            :key="`${ui.praViewer.collectionId}:${ui.praViewer.documentId}:${ui.praViewer.openedAt}`"
+            :document-id="ui.praViewer.documentId"
+            :collection-id="ui.praViewer.collectionId"
+            :filename="ui.praViewer.filename"
+            :focus="ui.praViewer.focus"
+            :return-label="activeTabLabel"
+            @close="ui.closePra()"
+          />
+        </div>
+
         <!-- Tab content -->
         <div
+          v-show="!ui.praViewer"
           class="flex-1 min-h-0"
           :class="activeTab === 'chat' ? 'overflow-hidden p-0' : 'overflow-y-auto'"
         >
@@ -1390,7 +1405,8 @@ import StudioSidebar from './components/StudioSidebar.vue'
 import WorkspaceNav from './components/WorkspaceNav.vue'
 import AppRibbon from './components/AppRibbon.vue'
 import RibbonCustomizeDialog from './components/RibbonCustomizeDialog.vue'
-import { resolveTab, ribbonItems, visibleItems } from './utils/ribbon.js'
+import { RIBBON_ITEMS, resolveTab, ribbonItems, visibleItems } from './utils/ribbon.js'
+import { parsePraHref } from './utils/praFormat'
 import { useLayoutStore } from './stores/layoutStore'
 import ReviewBell from './components/ReviewBell.vue'
 import FeatureStatus from './components/FeatureStatus.vue'
@@ -1415,6 +1431,9 @@ const ExpertiseLibrary = lazyView(() => import('./components/ExpertiseLibrary.vu
 const WelcomeOnboarding = lazyView(() => import('./components/WelcomeOnboarding.vue'))
 const AdminTab = lazyView(() => import('./components/AdminTab.vue'), { name: 'Administration' })
 const AcceptableUseModal = lazyView(() => import('./components/AcceptableUseModal.vue'))
+// The PRA model viewer (fault trees, event trees, cut sets) opens from a PRA
+// source; most collections never hold one, so it ships in its own chunk.
+const PraViewer = lazyView(() => import('./components/PraViewer.vue'), { name: 'the model' })
 import { SENSITIVITY_HELP, classificationInfo, classificationTitle, labelBadgeClass, showLabel } from './utils/governance'
 import ClassificationBadge from './components/ClassificationBadge.vue'
 import { formatBytes, describeStorage } from './utils/format'
@@ -1650,6 +1669,13 @@ const isWorkspaceView = computed(() => ['chat', 'search'].includes(activeTab.val
 // the work (Ask, Find, Library, Reports), the panel is there to change it.
 const SOURCES_TABS = ['chat', 'search', 'research', 'generate']
 const hasSourcesPanel = computed(() => SOURCES_TABS.includes(activeTab.value))
+// A model opened from the sources overlay (phones, narrow windows) shows at once.
+watch(() => ui.praViewer, (open) => {
+  if (open && isCompact.value) {
+    sourcesSidebarOpen.value = false
+    analysisSidebarOpen.value = false
+  }
+})
 const navigateMobile = (tab) => {
   switchTab(tab)
   sourcesSidebarOpen.value = false
@@ -2026,7 +2052,12 @@ const onChatTabToggled = (enabled) => {
 
 const switchTab = (tabName) => {
   activeTab.value = resolveTab(tabName) || tabName
+  // Going anywhere from the ribbon, the tab bar or a shortcut leaves an open model.
+  ui.closePra()
 }
+// What the viewer's back arrow returns to, in the ribbon's words.
+const activeTabLabel = computed(() => RIBBON_ITEMS.find(i => i.tab === activeTab.value)?.label
+  || (activeTab.value === 'settings' ? 'Settings' : ''))
 
 // The footer's feature panel: land on the settings that change what it shows.
 const settingsSectionRequest = ref(null)
@@ -2462,6 +2493,13 @@ onMounted(async () => {
   const wantedTab = resolveTab(params.get('tab'))
   if (wantedTab) {
     activeTab.value = wantedTab
+    window.history.replaceState({}, '', window.location.pathname)
+  }
+  // ?pra=<document>&collection_id=… opens a PRA model in its viewer (a
+  // citation or "open in a new tab"); ft= / et= name the tree to show.
+  const praLink = parsePraHref(window.location.search)
+  if (praLink) {
+    ui.openPra(praLink)
     window.history.replaceState({}, '', window.location.pathname)
   }
 

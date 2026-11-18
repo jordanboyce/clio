@@ -46,7 +46,12 @@
             <div class="min-w-0 flex-1">
               <p class="text-sm leading-relaxed whitespace-pre-wrap break-words max-w-prose" :class="{ 'quoted-passage': source.instruction_text }">{{ source.text_snippet || 'No passage preview available.' }}</p>
               <FigureStrip :source="source" />
-              <a v-if="sourceHref(source)" :href="sourceHref(source)" target="_blank" rel="noopener noreferrer"
+              <a v-if="praTargetFor(source)" :href="praHref(praTargetFor(source))"
+                class="link link-primary inline-flex items-center min-h-9 text-sm mt-1"
+                data-testid="open-pra-model"
+                :aria-label="`Open the model ${source.filename}`"
+                @click="openModel($event, source)">Open the model</a>
+              <a v-else-if="sourceHref(source)" :href="sourceHref(source)" target="_blank" rel="noopener noreferrer"
                 class="link link-primary inline-flex items-center min-h-9 text-sm mt-1"
                 :aria-label="`Open ${source.filename}, page or section ${source.page_number || 1}, in a new tab`">Open original ↗</a>
             </div>
@@ -64,6 +69,8 @@
 import { computed, nextTick, ref, useId } from 'vue'
 import { renderEvidenceMarkdown, sourceHref } from '../utils/answerEvidence'
 import { locationLabel } from '../utils/fileTypes'
+import { isPlainClick, praHref, praTargetFor } from '../utils/praFormat'
+import { useUiStore } from '../stores/uiStore'
 import SupersedeNote from './SupersedeNote.vue'
 import InstructionTextNote from './InstructionTextNote.vue'
 import PagePreview from './PagePreview.vue'
@@ -81,6 +88,14 @@ const id = useId()
 const selected = ref(null)
 const evidencePanel = ref(null)
 const html = computed(() => renderEvidenceMarkdown(props.content, props.sources))
+
+// A PRA model opens in its viewer, here, at the tree the passage is from.
+function openModel(event, source) {
+  if (!isPlainClick(event)) return
+  event.preventDefault()
+  // The store is asked for on click: these lists also render where no app is mounted.
+  useUiStore().openPra(praTargetFor(source))
+}
 
 const MAX_CHIPS = 8
 const visibleSources = computed(() => props.sources.slice(0, MAX_CHIPS))

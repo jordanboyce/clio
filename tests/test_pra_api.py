@@ -204,6 +204,42 @@ def test_sequence_cut_sets_carry_the_frequency(client):
     assert imp["basis"] == "rare_event"
 
 
+def test_sequence_names_repeat_across_event_trees(client):
+    """SAPHIRE numbers each event tree's sequences 01, 02, ...: event_tree
+    picks the right list, and has_cut_sets only counts the tree's own."""
+    m = _pumps_model()
+    for et_name, ie in (("LOOP", "IE-LOOP"), ("TRANS", "IE-TRANS")):
+        m.event_trees[et_name] = EventTree(et_name, initiating_event=ie, functional_events=["PUMPS-FT"], sequences=[
+            Sequence("01", end_state="OK", path=[SequencePathStep("PUMPS-FT", "success")]),
+            Sequence("02", end_state=None, transfer="LOOP" if et_name == "TRANS" else None,
+                     path=[SequencePathStep("PUMPS-FT", "failure")])])
+    m.initiating_events["IE-TRANS"] = BasicEvent("IE-TRANS", "Transient", probability=2.0)
+    m.cut_sets = [CutSetList("02", kind="sequence", event_tree="LOOP", cut_sets=[["IE-LOOP", "VALVE"]]),
+                  CutSetList("01", kind="sequence", event_tree="TRANS", cut_sets=[["IE-TRANS", "PUMP-A"]])]
+    _add_doc(client.indexer, "twotrees", "two.zip", "pra-mard", m)
+    base = "/models/twotrees"
+
+    loop = _get(client, f"{base}/event-trees/LOOP").json()["sequences"]
+    trans = _get(client, f"{base}/event-trees/TRANS").json()["sequences"]
+    assert [s["has_cut_sets"] for s in loop] == [False, True]
+    assert [s["has_cut_sets"] for s in trans] == [True, False]
+    assert trans[1]["transfer"] == "LOOP" and loop[1]["transfer"] is None
+
+    r = _get(client, f"{base}/cut-sets/01", event_tree="TRANS")
+    assert r.status_code == 200, r.text
+    assert r.json()["event_tree"] == "TRANS" and r.json()["cut_sets"][0]["events"] == ["IE-TRANS", "PUMP-A"]
+    assert _get(client, f"{base}/importance/02", event_tree="LOOP").json()["events"][0]["event"] in ("IE-LOOP", "VALVE")
+    assert "stores no cut sets" in _get(client, f"{base}/cut-sets/01", event_tree="LOOP").json()["detail"]
+    assert "no sequence" in _get(client, f"{base}/cut-sets/09", event_tree="LOOP").json()["detail"]
+    assert _get(client, f"{base}/cut-sets/01", event_tree="NOPE").status_code == 404
+    # Without event_tree the first list of that name answers, as before.
+    assert _get(client, f"{base}/cut-sets/01").json()["event_tree"] == "TRANS"
+
+    ev = _get(client, f"{base}/events/VALVE").json()
+    assert ev["stored_cut_sets"]["by_context"] == [{"context": "02", "kind": "sequence", "event_tree": "LOOP",
+                                                     "cut_sets": 1}]
+
+
 def test_computed_cut_sets_and_their_errors(client):
     r = _get(client, f"/models/{DOC}/cut-sets/NO-LIST-FT")
     assert r.status_code == 404 and "compute=true" in r.json()["detail"]

@@ -148,6 +148,28 @@ Each of these is named in the model's warnings when it occurs:
   included files in the same zip instead).
 - The other MAR-D kinds (attributes, recovery rules, phases, ...).
 
+## In the app
+
+Opening a PRA source (the Sources panel's eye or Open, a cited passage's
+"Open the model", a search hit) shows the model's viewer in place of the
+current tab; the arrow at its top goes back. It has the model's name, format,
+counts and warnings at the top, then three lists, each beside a reader:
+
+- **Fault trees**: the logic as an outline (gates with their type, `3 of 4`
+  for k-of-n, basic events with their probability, house events with their
+  state, transfers that open the other tree), loading deeper gates when one is
+  opened. Arrow keys move through it as a tree. **Cut sets** and
+  **Importance** for the tree, from the model or, when it stores none,
+  computed on request within the time budget, with how complete the list is.
+- **Event trees**: the sequences, each path a mark per functional event
+  (filled failed, hollow succeeded, blank not asked), the end state or
+  transfer, and the sequence's stored cut sets.
+- **End states**: their stored cut sets and importance.
+
+Any event or gate name opens where it is used. A link of the form
+`/?pra=<document>&collection_id=<collection>&ft=<tree>` (or `et=`) opens the
+viewer directly.
+
 ## Analysis and tools
 
 Once a model is indexed, Clio can quantify its cut sets, rank basic events by

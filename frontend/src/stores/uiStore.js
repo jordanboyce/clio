@@ -27,6 +27,18 @@ export const useUiStore = defineStore('ui', () => {
   // ribbon can open the Library straight onto its citation map or reviews.
   const researchView = ref('library')
 
+  // The PRA model viewer (PraViewer.vue), when a PRA source is open:
+  // { documentId, collectionId, filename, focus }. App.vue shows it over the
+  // current tab, which keeps its state underneath.
+  const praViewer = ref(null)
+  function openPra({ documentId, collectionId = 'default', filename = '', focus = null }) {
+    if (!documentId) return
+    praViewer.value = { documentId, collectionId, filename, focus, openedAt: Date.now() }
+  }
+  function closePra() {
+    praViewer.value = null
+  }
+
   let nextId = 1
 
   function notify(message, type = 'info', { duration = 4000 } = {}) {
@@ -52,5 +64,5 @@ export const useUiStore = defineStore('ui', () => {
     return notify(message, 'error', { duration: 6000 })
   }
 
-  return { toasts, offline, highlightAddSources, sourcesVersion, sourcesChanged, researchView, notify, dismiss, toastError }
+  return { toasts, offline, highlightAddSources, sourcesVersion, sourcesChanged, researchView, praViewer, openPra, closePra, notify, dismiss, toastError }
 })

@@ -99,10 +99,13 @@ export const extOf = (name) => {
 
 // { family, label, icon, tile } for any filename; web sources pass isWeb,
 // text typed or pasted into the app passes isNote (it is stored as .html,
-// but nobody uploaded a file).
-export function describeFile(name, { isWeb = false, isNote = false } = {}) {
+// but nobody uploaded a file), and a PRA model passes isPra.
+export function describeFile(name, { isWeb = false, isNote = false, isPra = false } = {}) {
   if (isWeb) return { family: 'web', label: 'web', icon: Globe, tile: FAMILIES.web.tile }
   if (isNote) return { family: 'docs', label: 'text', icon: StickyNote, tile: 'bg-warning/15 text-warning' }
+  // A model the server read as PRA (source_format pra-…) is drawn as one,
+  // whatever its suffix: an MEF .xml or a MAR-D .sql is a model, not code.
+  if (isPra) return { family: 'data', label: 'pra', icon: Network, tile: FAMILIES.data.tile }
   const b = baseName(name)
   const ext = extOf(name)
   const named = NAMED[b]
