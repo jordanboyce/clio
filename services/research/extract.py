@@ -203,11 +203,154 @@ def _looks_like_authors(line: str) -> bool:
     return capitalized >= 0.8 * len(words) and ("," in line or " and " in line or marked or len(words) <= 4)
 
 
+# ── plausibility (roadmap R2) ───────────────────────────────────────────
+#
+# A value the rules found is still refused when it cannot be what it claims
+# to be: a "title" that is two sentences of the abstract, an "author" that is
+# the journal's name. Refusing leaves the field empty, which the Library shows
+# as "needs checking" — better than a wrong value shown as fact.
+
+# A title read from text alone is rarely longer than this; one read from the
+# layout (the largest type) may run longer.
+MAX_TEXT_TITLE_CHARS = 150
+MAX_LAYOUT_TITLE_CHARS = 250
+_TRAILING_FUNCTION_WORDS = {"the", "a", "an", "of", "and", "or", "in", "on", "for", "to", "with", "from",
+                            "by", "at", "as", "is", "are", "that", "which", "its", "their", "our", "this"}
+# A full stop after an ordinary word and before a capital: the end of one
+# sentence and the start of the next ("vs. Model", "et al. Then" excluded by
+# the three-letter minimum).
+_SENTENCE_BREAK_RE = re.compile(r"\b[a-z]{3,}\.\s+[A-Z][a-z]")
+_VENUE_RE = re.compile(
+    r"^(?:in\s+)?(?:proceedings|proc\.|journal of|transactions on|workshop on|conference on|"
+    r"annals of|bulletin of)\b|,\s*(?:19|20)\d\d\.?$|\b(?:vol\.|volume\s+\d|no\.\s*\d|pp\.\s*\d)|"
+    r"\b(?:book\s+)?series\b|\bbriefs\b|\blecture notes\b",
+    re.IGNORECASE,
+)
+_RUN_TOGETHER_RE = re.compile(r"[^\s/]{25,}")
+# A cover that announces a status rather than naming the work.
+_NOTICE_RE = re.compile(r"^(?:withdrawn|superseded|archived|retracted|draft for comment)\b", re.IGNORECASE)
+# The article-type label some journals print before a title ("Comment: …").
+_ARTICLE_LABEL_RE = re.compile(
+    r"^(?:comment|commentary|editorial|perspective|opinion|essay|letter|correspondence|"
+    r"research article|original article|review article|brief communication)\s*:\s+", re.IGNORECASE)
+
+
+def strip_article_label(title: Optional[str]) -> Optional[str]:
+    return _ARTICLE_LABEL_RE.sub("", title or "").strip() or title
+
+
+def title_problem(title: Optional[str], from_layout: bool = False) -> Optional[str]:
+    """Why ``title`` cannot be a title, in words a person reads; None when
+    it could be."""
+    text = " ".join((title or "").split())
+    if not text:
+        return None
+    if _RUN_TOGETHER_RE.search(text):
+        return "the spaces between its words are missing"
+    if len(text) > (MAX_LAYOUT_TITLE_CHARS if from_layout else MAX_TEXT_TITLE_CHARS):
+        return "it is too long to be a title"
+    if _SENTENCE_BREAK_RE.search(text):
+        return "it reads like sentences of the text, not a title"
+    if text[:1].islower():
+        return "it starts in the middle of a sentence"
+    last = re.sub(r"[^\w]+$", "", text).split()
+    if last and last[-1].lower() in _TRAILING_FUNCTION_WORDS or re.search(r"[–—\-:,]$", text):
+        return "it stops in the middle of a sentence"
+    if _NOTICE_RE.search(text):
+        return "it is a notice on the cover, not the title"
+    if _VENUE_RE.search(text):
+        return "it looks like a journal, series or venue line"
+    return None
+
+
+def title_doubt(title: Optional[str]) -> Optional[str]:
+    """A title that could be right but shows a sign of a bad read: kept,
+    and marked as needing checking."""
+    text = " ".join((title or "").split())
+    if re.search(r"[A-Za-z]- [A-Za-z]", text):
+        return "a word in it may be broken across two lines"
+    if re.search(r"\b[A-Z]{2,}\b.*\b[A-Z]{2,}\b.*\b[A-Z]{2,}\b", text) and text.upper() == text:
+        return "it is printed in capitals, so its own capitalisation is unknown"
+    return None
+
+
+# Words that make a name an organisation, not a person.
+_ORGANIZATION_RE = re.compile(
+    r"\b(?:office|authority|agency|department|ministry|bureau|council|commission|committee|"
+    r"laborator(?:y|ies)|cent(?:er|re)|group|board|administration|service|survey|association|"
+    r"foundation|corporation|company|institute|university|college|society|team|consortium|"
+    r"directorate|division|program(?:me)?|project|network|organi[sz]ation|"
+    r"journal|review|proceedings|press|ecology|letters|transactions)\b",
+    re.IGNORECASE,
+)
+
+
+# The bodies that issue reports in their own name.
+_CORPORATE_RE = re.compile(
+    r"\b(?:office|authority|agency|ministry|bureau|council|commission|committee|laborator(?:y|ies)|"
+    r"administration|service|survey|board|directorate|division|department of)\b",
+    re.IGNORECASE,
+)
+
+
+# Company and lab names, and the words of a place, that sit on author lines.
+_AFFILIATION_WORDS_RE = re.compile(
+    r"\b(?:google|microsoft|facebook|meta|openai|deepmind|ibm|amazon|nvidia|apple|baidu|alibaba|tencent|"
+    r"huawei|intel|adobe|salesforce|research|ai|brain|labs?|inc|ltd|llc|nist|nasa|cswp|"
+    r"view|city|street|road|avenue|campus|valley|california|usa|germany|china|france|canada)\b",
+    re.IGNORECASE,
+)
+
+
+def author_problem(name: str, title: Optional[str] = None) -> Optional[str]:
+    """Why ``name`` is not a person's name, or None."""
+    name = name or ""
+    if _ORGANIZATION_RE.search(name):
+        return "it reads like an organisation or a journal, not a person"
+    if _AFFILIATION_WORDS_RE.search(name):
+        return "it reads like an affiliation or a place, not a person"
+    if re.search(r"\d", name):
+        return "it contains digits"
+    words = [w for w in name.split() if w.lower() not in _NAME_PARTICLES and not re.fullmatch(r"[A-Z]\.", w)]
+    if len(words) > 3:
+        return "it looks like two or more names run together"
+    if title and len(_norm(name)) >= 6 and _norm(name) in _norm(title):
+        return "it is part of the title"
+    return None
+
+
+def _body_started(line: str) -> bool:
+    """A long line closing a sentence: the body (or abstract) has begun,
+    and no title comes after it."""
+    return len(line) > 60 and line.rstrip().endswith((".", "?", "!")) and " " in line
+
+
 def title_from_text(first_page: str, page_number: int = 1) -> Optional[Tuple[str, str]]:
-    """The first title-like run of lines on a page: ``(title, rule)``."""
+    """The first title-like run of lines on a page: ``(title, rule)``.
+
+    Only lines above the abstract, the introduction and the first body
+    paragraph are candidates; a candidate that fails ``title_problem`` is
+    skipped rather than returned."""
+    found = title_from_text_checked(first_page, page_number)
+    return (found[0], found[1]) if found else None
+
+
+def title_from_text_checked(first_page: str, page_number: int = 1) -> Optional[Tuple[str, str, bool]]:
+    """``(title, rule, confident)``: confident when an author line follows the
+    title directly and none came before it (the usual title-then-authors
+    structure); a title found any other way needs checking."""
     lines = _lines(first_page)[:30]
+    authors_seen = False
     for i, line in enumerate(lines):
-        if not _looks_like_title(line) or _looks_like_authors(line):
+        if line.lower().startswith(("abstract", "introduction", "keywords", "1 introduction",
+                                    "1. introduction", "summary")):
+            break
+        if _body_started(line):
+            break
+        if _looks_like_authors(line):
+            authors_seen = True
+            continue
+        if not _looks_like_title(line):
             continue
         parts = [line]
         # Long titles wrap onto a second (rarely third) line.
@@ -222,8 +365,108 @@ def title_from_text(first_page: str, page_number: int = 1) -> Optional[Tuple[str
                 parts.append(nxt)
             else:
                 break
-        return clean_text(" ".join(parts)), f"first title-like lines of page {page_number}"
+        title = clean_text(" ".join(parts))
+        if title_problem(title):
+            continue
+        following = lines[i + len(parts)] if i + len(parts) < len(lines) else ""
+        confident = not authors_seen and _looks_like_authors(
+            re.sub(r"^(?:(?:edited|written|translated)\s+)?by\s+", "", following, flags=re.IGNORECASE))
+        return title, f"first title-like lines of page {page_number}", confident
     return None
+
+
+def _lines_of(words: List[dict], tolerance: float = 3.0) -> List[List[dict]]:
+    """Words grouped into lines by their top edge, top to bottom, each line
+    left to right."""
+    lines: List[List[dict]] = []
+    for word in sorted(words, key=lambda w: (w["top"], w["x0"])):
+        if lines and abs(lines[-1][0]["top"] - word["top"]) <= tolerance:
+            lines[-1].append(word)
+        else:
+            lines.append([word])
+    return [sorted(line, key=lambda w: w["x0"]) for line in lines]
+
+
+def _layout_title(page) -> Optional[Tuple[str, Tuple[float, float]]]:
+    """The text of the lines set in the page's largest type, in its top half.
+
+    Rotated text (arXiv's side stamp) is ignored. Words are first read with
+    their size to find the title's lines, then those lines are read again
+    whole, because a title in small capitals ("R" 17pt + "ECURSIVE" 14pt) is
+    split into pieces wherever the size changes. Returns ``(text, (top,
+    bottom))``, or None when the page has no type clearly larger than its
+    body text."""
+    sized = [w for w in page.extract_words(extra_attrs=["size", "upright"], keep_blank_chars=False)
+             if w.get("upright", True) and not re.match(r"arxiv:", w["text"], re.IGNORECASE)]
+    top_half = [w for w in sized if w["top"] < page.height * 0.5]
+    sizes = [round(w["size"], 1) for w in top_half if any(c.isalpha() for c in w["text"])]
+    if not sizes:
+        return None
+    biggest = max(sizes)
+    body = Counter(round(w["size"], 1) for w in sized).most_common(1)[0][0]
+    # A title page may hold nothing but the title, so "bigger than the body
+    # text" is measured against the page only when it has body text.
+    if biggest < body + 1.5 and len(sized) > 40:
+        return None
+    big = [w for w in top_half if abs(round(w["size"], 1) - biggest) <= 0.6 and any(c.isalpha() for c in w["text"])]
+    if not big:
+        return None
+    # The title's lines: those holding the largest type, consecutive (a gap
+    # of more than about two lines ends the block).
+    tops = sorted({round(w["top"]) for w in big})
+    block = [tops[0]]
+    for t in tops[1:]:
+        if t - block[-1] > biggest * 2.5:
+            break
+        block.append(t)
+    lower = block[0] - 2
+    upper = max(w["bottom"] for w in big if round(w["top"]) <= block[-1]) + 2
+    # Words on those lines in any size: the small capitals' lower letters.
+    plain = [w for w in page.within_bbox((0, max(0, lower), page.width, min(page.height, upper)))
+             .extract_words(keep_blank_chars=False, extra_attrs=["upright"])
+             if w.get("upright", True) and not re.match(r"arxiv:", w["text"], re.IGNORECASE)]
+    if not plain:
+        return None
+    return clean_text(" ".join(" ".join(w["text"] for w in line) for line in _lines_of(plain))), (lower, upper)
+
+
+def _respaced_lines(page, box: Optional[Tuple[float, float]]) -> Optional[str]:
+    """The title lines read again with smaller word gaps; None when that does
+    not help."""
+    if not box:
+        return None
+    region = page.within_bbox((0, max(0, box[0]), page.width, min(page.height, box[1])))
+    for tolerance in (1, 0.5):
+        try:
+            words = [w for w in region.extract_words(keep_blank_chars=False, x_tolerance=tolerance,
+                                                     extra_attrs=["upright"]) if w.get("upright", True)]
+        except Exception:  # noqa: BLE001
+            return None
+        text = clean_text(" ".join(" ".join(w["text"] for w in line) for line in _lines_of(words)))
+        if text and not _RUN_TOGETHER_RE.search(text):
+            return text
+    return None
+
+
+def respace_lines(text: str) -> str:
+    """Run-together name lines with the spaces put back at the case changes:
+    "OskarLindgren1WenZhao2" (no spaces at all) and "KaimingHe XiangyuZhang"
+    (a space between names, none inside them). Only a line made entirely of
+    such names is touched; everything else is returned as it was."""
+    camel = r"[A-Z][a-z]+(?:[A-Z][a-z]+)+[\d∗*†‡§¶,]*"
+    out = []
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        tokens = stripped.replace(",", " ").split()
+        glued = _RUN_TOGETHER_RE.search(stripped) and re.fullmatch(f"(?:{camel})+", stripped)
+        spaced = len(tokens) >= 2 and all(re.fullmatch(camel, t) for t in tokens)
+        if glued or spaced:
+            # Affiliation marks and spaces separate the names; inside each
+            # name a lower-to-upper change is a lost space.
+            names = [n for n in re.split(r"[\d∗*†‡§¶,\s]+", stripped) if n]
+            line = ", ".join(re.sub(r"(?<=[a-z])(?=[A-Z])", " ", n) for n in names)
+        out.append(line)
+    return "\n".join(out)
 
 
 def title_from_pdf(path: Path, pages: Dict[int, str]) -> Optional[Tuple[str, str, int]]:
@@ -240,23 +483,16 @@ def title_from_pdf(path: Path, pages: Dict[int, str]) -> Optional[Tuple[str, str
                 if number - 1 >= len(pdf.pages):
                     break
                 page = pdf.pages[number - 1]
-                words = page.extract_words(extra_attrs=["size"], keep_blank_chars=False)
-                top_half = [w for w in words if w["top"] < page.height * 0.5]
-                sizes = [round(w["size"], 1) for w in top_half if any(c.isalpha() for c in w["text"])]
-                if not sizes:
+                found = _layout_title(page)
+                if found is None:
                     continue
-                biggest = max(sizes)
-                body = Counter(round(w["size"], 1) for w in words).most_common(1)[0][0]
-                # A title page may hold nothing but the title, so "bigger
-                # than the body text" is measured against the page only
-                # when the page has body text to measure.
-                if biggest < body + 1.5 and len(words) > 40:
-                    continue
-                title_words = [w for w in top_half if abs(round(w["size"], 1) - biggest) <= 0.6]
-                title_words.sort(key=lambda w: (round(w["top"]), w["x0"]))
-                candidate = clean_text(" ".join(w["text"] for w in title_words))
-                if 12 <= len(candidate) <= 300 and _norm(candidate) in _norm(pages[number]) \
-                        and _looks_like_title(candidate):
+                candidate, box = found
+                if _RUN_TOGETHER_RE.search(candidate):
+                    # Words set apart by kerning rather than spaces: read the
+                    # same lines again with a tighter gap (roadmap R2,
+                    # "repair lost spaces").
+                    candidate = _respaced_lines(page, box) or candidate
+                if 12 <= len(candidate) <= 300 and _norm(candidate) in _norm(pages[number])                         and _looks_like_title(candidate) and not title_problem(candidate, from_layout=True):
                     return candidate, f"largest type on page {number}", number
                 break
     except Exception:  # noqa: BLE001 - a layout read is a bonus, never required
@@ -265,7 +501,8 @@ def title_from_pdf(path: Path, pages: Dict[int, str]) -> Optional[Tuple[str, str
         from pypdf import PdfReader
         meta = PdfReader(str(path)).metadata
         raw = clean_text(str(meta.title)) if meta and meta.title else ""
-        if 12 <= len(raw) <= 300:
+        if 12 <= len(raw) <= 300 and not title_problem(raw, from_layout=True) \
+                and not re.match(r"(?:microsoft\s+\w+\s*-|untitled)", raw, re.IGNORECASE):
             for number in front:
                 if _norm(raw) in _norm(pages[number]):
                     return raw, f"PDF title field, confirmed on page {number}", number
@@ -276,10 +513,16 @@ def title_from_pdf(path: Path, pages: Dict[int, str]) -> Optional[Tuple[str, str
 
 # ── authors ─────────────────────────────────────────────────────────────
 
+# Names keep their accents: "Andreas Rücklé", "Baptiste Rozière", "Barlas Oğuz".
+_UPPER = "A-ZÀ-ÖØ-ÞĀĂĄĆĈĊČĎĐĒĔĖĘĚĜĞĠĢĤĦĨĪĬĮİĴĶĹĻĽĿŁŃŅŇŊŌŎŐŒŔŖŘŚŜŞŠŢŤŦŨŪŬŮŰŲŴŶŸŹŻŽ"
+_LETTER = r"[^\W\d_]"
 _NAME_RE = re.compile(
-    r"^(?:[A-Z][a-zA-Z'\-]*\.?\s+){1,3}(?:(?:van|von|de|der|da|di|le|la|del|den|du|dos|ter)\s+)*"
-    r"[A-Z][a-zA-Z'\-]+$"
+    rf"^(?:[{_UPPER}](?:{_LETTER}|['\-])*\.?\s+){{1,3}}(?:(?:van|von|de|der|da|di|le|la|del|den|du|dos|ter)\s+)*"
+    rf"[{_UPPER}](?:{_LETTER}|['\-])+$"
 )
+# A line of capitalised words with no separators and no ordinary words: a
+# row of names in a grid ("Prafulla Dhariwal Arvind Neelakantan Pranav Shyam").
+_NAME_ROW_RE = re.compile(rf"^(?:[{_UPPER}](?:{_LETTER}|['\-.])*\s+){{3,}}[{_UPPER}](?:{_LETTER}|['\-])+[\d∗*†‡§¶]*$")
 
 
 _PUBLISHER_RE = re.compile(
@@ -289,29 +532,142 @@ _PUBLISHER_RE = re.compile(
 
 def authors_from_text(first_page: str, title: Optional[str]) -> List[str]:
     """Names on the author line(s) between the title and the abstract."""
-    lines = _lines(first_page)[:40]
-    start = 0
-    if title:
-        title_norm = _norm(title)
-        for i, line in enumerate(lines):
-            if _norm(line) and _norm(line) in title_norm:
-                start = i + 1
-    names: List[str] = []
-    for line in lines[start:start + 8]:
-        if line.lower().startswith(("abstract", "introduction")):
+    return authors_from_text_checked(first_page, title)["names"]
+
+
+def _title_end(lines: List[str], title: Optional[str]) -> int:
+    """The index just past the lines that print the title (the first run of
+    them near the top; a later line that happens to be part of the title,
+    on a copyright page say, does not count)."""
+    if not title:
+        return 0
+    title_norm = _norm(title)
+    end = 0
+    for i, line in enumerate(lines[:20]):
+        if _norm(line) and _norm(line) in title_norm:
+            end = i + 1
+        elif end:
             break
+    return end
+
+
+def authors_from_text_checked(first_page: str, title: Optional[str]) -> dict:
+    """``{"names", "organization", "problems", "repaired"}``.
+
+    ``organization`` is a corporate author ("Harbour Authority Engineering
+    Office") kept apart from people, so a citation does not turn it into
+    "Office, H. A. E."; ``problems`` says why candidate names were refused;
+    ``repaired`` is true when spaces had to be put back into the line."""
+    lines = _lines(first_page)[:40]
+    start = _title_end(lines, title)
+    names: List[str] = []
+    organization: Optional[str] = None
+    problems: List[str] = []
+    repaired = False
+    block_end = start
+    for position, line in enumerate(lines[start:start + 8]):
+        if line.lower().startswith(("abstract", "introduction")) or _body_started(line):
+            break
+        block_end = start + position + 1
         # Books: "by Ada Lovelace", "Edited by …".
         line = re.sub(r"^(?:(?:edited|written|translated)\s+)?by\s+", "", line, flags=re.IGNORECASE)
-        if not _looks_like_authors(line):
+        fixed = respace_lines(line)
+        if fixed != line:
+            line, repaired = fixed, True
+        if _VENUE_RE.search(line):
+            # "Imaginary Urban Ecology, 2022": a venue and year, not people.
             if names:
                 break
             continue
-        for part in re.split(r",|\band\b|&|;", re.sub(r"[\d∗*†‡§¶]", "", line)):
-            name = " ".join(part.split())
-            if (_NAME_RE.match(name) and 1 < len(name.split()) <= 5 and name not in names
-                    and not _PUBLISHER_RE.search(name)):
-                names.append(name)
-    return names[:30]
+        if not _looks_like_authors(line):
+            if names:
+                # This line is not part of the list: the check for more
+                # names below starts with it.
+                block_end = start + position
+                break
+            continue
+        if _ORGANIZATION_RE.search(line) and not re.search(r"[,&;]|\band\b", line):
+            # Directly under the title, an issuing body is the author of a
+            # report; anywhere else it is an affiliation.
+            if (position == 0 and not names and _CORPORATE_RE.search(line)
+                    and not re.match(r"[\d∗*†‡§¶]", line)):
+                organization = " ".join(line.split())
+            break
+        for name in _names_on(line):
+            if name in names:
+                continue
+            problem = author_problem(name, title)
+            if problem:
+                problems.append(f"“{name}”: {problem}")
+                continue
+            names.append(name)
+    # More names further down (under an affiliation, in a second column):
+    # what was read is only the start of the list.
+    incomplete = False
+    if names:
+        for line in lines[block_end:block_end + 15]:
+            if line.lower().startswith(("abstract", "introduction")) or _body_started(line):
+                break
+            line = respace_lines(line)
+            words = re.sub(r"[\d∗*†‡§¶,]", " ", line).split()
+            if (_NAME_ROW_RE.match(line) and not any(w in _TITLE_WORDS for w in words)
+                    and not _AFFILIATION_WORDS_RE.search(line) and not _ORGANIZATION_RE.search(line)):
+                incomplete = True
+                break
+            if not _looks_like_authors(line):
+                continue
+            if any(n not in names and not author_problem(n, title) for n in _names_on(line)):
+                incomplete = True
+                break
+    # Affiliation letters printed as plain lower-case letters ("Yunfan Gaoa",
+    # "Yun Xiongb") cannot be told from the name's own last letter.
+    marks = set(re.findall(r"(?m)^([a-f])[A-Z]", first_page or ""))
+    glued = marks and sum(1 for n in names if n[-1] in marks) >= max(2, len(names) // 2)
+    return {"names": names[:30], "organization": organization, "problems": problems, "repaired": repaired,
+            "incomplete": incomplete, "letters_glued": bool(glued)}
+
+
+def _names_on(line: str) -> List[str]:
+    """The person-shaped parts of an author line."""
+    # Affiliation marks glued to a name separate it from the next one
+    # ("Rhea Castellanos1* Bram Vos2").
+    marked = re.sub(r"(?<=[A-Za-z])[\d∗*†‡§¶]+(?:,[\d∗*†‡§¶]+)*", ",", line)
+    out = []
+    for part in re.split(r",|\band\b|&|;|·", re.sub(r"[\d∗*†‡§¶]", "", marked)):
+        name = " ".join(part.split())
+        if name and _NAME_RE.match(name) and 1 < len(name.split()) <= 5 and not _PUBLISHER_RE.search(name):
+            out.append(name)
+    return out
+
+
+# ── venue ───────────────────────────────────────────────────────────────
+
+_VENUE_PATTERNS = (
+    # "Proceedings of the Workshop on Imaginary Retrieval, pages 12-20"
+    re.compile(r"^((?:in\s+)?proceedings of [^,]{5,150}?)(?:,|\s+pages\b|$)", re.IGNORECASE),
+    # "Published 2023 in the Journal of Invented Coasts."
+    re.compile(r"\b[Pp]ublished\s+(?:(?:19|20)\d\d\s+)?in\s+(?:the\s+)?([A-Z][^.]{3,120}?)\.?$"),
+    # "Imaginary Urban Ecology, 2022" or "Imaginary Urban Ecology 14(2), 2022"
+    re.compile(r"^((?:[A-Z][A-Za-z&\-]+)(?:\s+(?:of|and|for|on|the|in|&|[A-Z][A-Za-z&\-]+)){1,8})"
+               r"(?:\s+\d+(?:\(\d+\))?)?,\s*(?:19|20)\d\d\.?$"),
+)
+# An affiliation with a year ("Google Research, 2019") is not a venue.
+_AFFILIATION_RE = re.compile(r"\b(?:universit\w*|institute|college|school|research|labs?|inc|corp\w*|"
+                             r"department|centre|center|office|authority|agency)\b", re.IGNORECASE)
+
+
+def venue_from_text(first_page: str) -> Optional[str]:
+    """A journal or proceedings named on its own line of page one, or None.
+    Only these explicit shapes count; a guess is worse than nothing."""
+    for line in _lines(first_page)[:60]:
+        for pattern in _VENUE_PATTERNS:
+            match = pattern.search(line)
+            if not match:
+                continue
+            venue = re.sub(r"^in\s+", "", " ".join(match.group(1).split()).strip(" ,."), flags=re.IGNORECASE)
+            if 4 <= len(venue) <= 150 and not _AFFILIATION_RE.search(venue):
+                return venue
+    return None
 
 
 # ── year ────────────────────────────────────────────────────────────────
@@ -334,6 +690,27 @@ def copyright_year(pages: Dict[int, str]) -> Optional[Tuple[int, int]]:
         if years:
             return max(years), number
     return None
+
+
+_DATED_LINE_RE = re.compile(
+    r"\b(?:proceedings|published|journal|conference|accepted|received|vol\.|volume|"
+    r"january|february|march|april|may|june|july|august|september|october|november|december)\b",
+    re.IGNORECASE,
+)
+
+
+def dated_line_year(first_page: str) -> Optional[int]:
+    """The latest year on a journal, proceedings or publication-date line of
+    page one ("Proceedings of …, July 2002, pp. 311-318"), or None."""
+    this_year = datetime.now().year
+    years = []
+    for line in _lines(first_page):
+        if len(line) > 240 or not _DATED_LINE_RE.search(line):
+            continue
+        if _body_started(line) and not re.search(r"\b(?:proceedings|published|accepted|received)\b", line, re.I):
+            continue
+        years.extend(int(y) for y in _YEAR_RE.findall(line) if int(y) <= this_year + 1)
+    return max(years) if years else None
 
 
 def year_from_text(first_page: str, arxiv_id: Optional[str]) -> Optional[Tuple[int, str]]:
@@ -669,12 +1046,65 @@ def title_from_markdown(text: str) -> Optional[str]:
     return title if 2 <= len(title) <= 250 else None
 
 
-def extract_paper(pages: Dict[int, str], path: Optional[Path] = None, fmt: Optional[str] = None) -> dict:
+_FILENAME_ARXIV_RE = re.compile(r"^(?:arxiv[-_ ]?)?(\d{2}(?:0[1-9]|1[0-2])\.\d{4,5})(v\d+)?$", re.IGNORECASE)
+
+
+def arxiv_id_from_filename(filename: Optional[str]) -> Optional[str]:
+    """``2401.18059.pdf`` (arXiv's own download name) → ``2401.18059``."""
+    stem = Path(filename or "").stem.strip()
+    match = _FILENAME_ARXIV_RE.match(stem)
+    return match.group(1) if match else None
+
+
+def doi_from_pdf_metadata(path: Optional[Path]) -> Optional[str]:
+    """A DOI the publisher wrote into the PDF's own metadata (``/doi``,
+    ``prism:doi`` or a ``doi:`` in the Subject), which many publishers do
+    without printing it on page one."""
+    if path is None or path.suffix.lower() != ".pdf" or not path.exists():
+        return None
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(str(path))
+        meta = reader.metadata or {}
+        values = [str(meta.get(key) or "") for key in ("/doi", "/DOI", "/Subject", "/Keywords", "/WPS-ARTICLEDOI")]
+        try:
+            xmp = reader.xmp_metadata
+            if xmp is not None:
+                values.append(xmp.xmp_metadata.toxml() if hasattr(xmp, "xmp_metadata") else "")
+        except Exception:  # noqa: BLE001
+            pass
+        for value in values:
+            found = find_dois(value)
+            if found:
+                return found[0]
+    except Exception:  # noqa: BLE001 - metadata is a bonus, never required
+        return None
+    return None
+
+
+# Confidence a field is right, from how it was found. "low" fields are shown
+# as "needs checking" in the Library instead of being stated as fact.
+HIGH, LOW = "high", "low"
+
+
+def _mark(provenance: Dict[str, dict], field: str, confidence: str, reason: Optional[str] = None) -> None:
+    entry = provenance.get(field)
+    if entry is None:
+        return
+    entry["confidence"] = confidence
+    if confidence == LOW and reason:
+        entry["check"] = reason
+
+
+def extract_paper(pages: Dict[int, str], path: Optional[Path] = None, fmt: Optional[str] = None,
+                  filename: Optional[str] = None) -> dict:
     """Bibliographic record + references + links, each field with provenance.
 
     Works for articles (everything on page one) and books (cover, title
     page, copyright page, per-chapter bibliographies); ``kind`` says which
-    the document looked like."""
+    the document looked like. Each found title, author list and year carries
+    a ``confidence`` in its provenance, with ``check`` saying why a low one
+    needs a person to look."""
     pages = {int(k): v or "" for k, v in (pages or {}).items()}
     ordered = sorted(pages)
     front_numbers = [p for p in ordered[:FRONT_PAGES] if pages[p].strip()]
@@ -694,23 +1124,36 @@ def extract_paper(pages: Dict[int, str], path: Optional[Path] = None, fmt: Optio
     if isbn:
         provenance["isbn"] = {"source": "paper", "detail": "printed in the front matter"}
 
+    # A cover that announces a withdrawal or a draft status: its dates and
+    # names belong to the notice, not to the work.
+    notice_page = any(_NOTICE_RE.search(line) for line in _lines(first)[:6])
     found = title_from_pdf(path, pages) if path else None
     title_page = found[2] if found else None
+    title_confident = bool(found)
     if not found and (fmt or "").lower() in ("md", "markdown"):
         md_title = title_from_markdown(first)
         if md_title:
             found, title_page = (md_title, "first Markdown heading", first_number), first_number
+            title_confident = True
     if not found and (fmt or "").lower() not in ("md", "markdown"):
         for number in front_numbers if is_book else front_numbers[:1]:
             if _is_contents_page(pages[number]):
                 continue
-            text_title = title_from_text(pages[number], number)
+            text_title = title_from_text_checked(pages[number], number)
             if text_title:
-                found, title_page = (*text_title, number), number
+                found, title_page = (text_title[0], text_title[1], number), number
+                title_confident = text_title[2]
                 break
-    title = found[0] if found else None
+    title = strip_article_label(found[0]) if found else None
     if found:
         provenance["title"] = {"source": "paper", "page": title_page, "detail": found[1]}
+        doubt = title_doubt(title)
+        if not title_confident:
+            doubt = "it was read from the text without a clear title line above the authors"
+        elif is_book and "largest type" not in found[1] and "title field" not in found[1]:
+            doubt = "a book's front pages hold series and imprint lines that read like titles"
+        _mark(provenance, "title", LOW if doubt else HIGH, doubt)
+        title_confident = not doubt
     else:
         notes.append("No title could be read from the first pages.")
     title_page = title_page or first_number
@@ -726,29 +1169,78 @@ def extract_paper(pages: Dict[int, str], path: Optional[Path] = None, fmt: Optio
     if doi:
         provenance["doi"] = {"source": "paper", "page": doi_page,
                              "detail": "printed on the copyright page" if is_book else "printed on page 1"}
+    else:
+        doi = doi_from_pdf_metadata(path) if path else None
+        if doi:
+            provenance["doi"] = {"source": "paper", "detail": "written in the PDF's own metadata"}
     arxiv = find_arxiv_ids(first)
     arxiv_id = arxiv[0] if arxiv else None
     if arxiv_id:
         provenance["arxiv_id"] = {"source": "paper", "page": first_number, "detail": "printed on page 1"}
+    else:
+        arxiv_id = arxiv_id_from_filename(filename or (path.name if path else None))
+        if arxiv_id:
+            provenance["arxiv_id"] = {"source": "paper", "detail": "the file name is this arXiv id"}
 
     after_title = [p for p in front_numbers if p >= title_page][:2]
-    authors = authors_from_text("\n".join(pages[p] for p in after_title), title)
+    read = authors_from_text_checked(chr(10).join(pages[p] for p in after_title), title)
+    authors = read["names"]
+    organization = read["organization"]
     if authors:
         provenance["authors"] = {"source": "paper", "page": title_page,
                                  "detail": "author line under the title (heuristic)"}
+        reason = None
+        if not title:
+            reason = "no title was found to read the author line under"
+        elif not title_confident:
+            reason = "the title above them needs checking too"
+        elif read["repaired"]:
+            reason = "the spaces between the names were missing and were put back"
+        elif read["problems"]:
+            reason = "some names on that line were left out: " + "; ".join(read["problems"][:2])
+        elif read.get("incomplete"):
+            reason = "more names follow further down the page, so the list may be incomplete"
+        elif read.get("letters_glued"):
+            reason = "affiliation letters may be stuck to the ends of the names"
+        elif notice_page:
+            reason = "the first page is a notice about the document, not its title page"
+        _mark(provenance, "authors", LOW if reason else HIGH, reason)
+    elif organization:
+        provenance["organization"] = {"source": "paper", "page": title_page,
+                                      "detail": "the line under the title names an organisation"}
+        _mark(provenance, "organization", HIGH if title_confident else LOW,
+              "an organisation is named where the authors would be, under a title that needs checking")
+    elif read["problems"]:
+        notes.append("The line under the title was not used as the authors: " + "; ".join(read["problems"][:2]) + ".")
 
-    found_year, year_page = None, first_number
+    found_year, year_page, year_reason = None, first_number, None
     if arxiv_id:
         found_year = year_from_text(first, arxiv_id)
     if not found_year:
-        copy = copyright_year(pages)
+        # A book's copyright page is in its front matter; an article's own
+        # copyright line is on its first page (a later page's belongs to
+        # something it reprints or cites).
+        copy = copyright_year(pages if is_book else {first_number: first})
         if copy:
             found_year, year_page = (copy[0], f"copyright line on page {copy[1]}"), copy[1]
     if not found_year and not is_book:
-        found_year = year_from_text(first, None)
+        dated = dated_line_year(first)
+        if dated:
+            found_year = (dated, "the date on the journal or proceedings line of page 1")
+        else:
+            found_year = year_from_text(first, None)
+            if found_year:
+                year_reason = "it is the year printed most often on page 1, which is not always when it was published"
+        if found_year and notice_page:
+            year_reason = "the first page is a notice about the document, so its dates may be the notice's"
     year = found_year[0] if found_year else None
     if found_year:
         provenance["year"] = {"source": "paper", "page": year_page, "detail": found_year[1]}
+        _mark(provenance, "year", LOW if year_reason else HIGH, year_reason)
+
+    venue = None if is_book else venue_from_text(first)
+    if venue:
+        provenance["venue"] = {"source": "paper", "page": first_number, "detail": "a journal or proceedings line on page 1"}
 
     found_abstract = abstract_from_text(pages)
     abstract = found_abstract[0] if found_abstract else None
@@ -761,8 +1253,6 @@ def extract_paper(pages: Dict[int, str], path: Optional[Path] = None, fmt: Optio
             abstract = opening[0]
             provenance["abstract"] = {"source": "paper", "page": opening[1], "kind": "opening",
                                       "detail": f"opening of the {opening[2]}, quoted (there is no abstract)"}
-        else:
-            notes.append("No abstract, preface or introduction was found in the first pages.")
 
     references = references_from_text(pages)
     if not references:
@@ -778,7 +1268,8 @@ def extract_paper(pages: Dict[int, str], path: Optional[Path] = None, fmt: Optio
         "doi": doi,
         "arxiv_id": arxiv_id,
         "isbn": isbn,
-        "venue": None,
+        "venue": venue,
+        "organization": organization,
         "abstract": abstract,
         "provenance": provenance,
         "notes": notes,

@@ -707,6 +707,25 @@ def _record(paper: dict) -> dict:
     out["sources"] = {k: (v or {}).get("source") for k, v in (paper.get("provenance") or {}).items()
                       if k in FIELDS and isinstance(v, dict)}
     out["notes"] = list(paper.get("analysis_notes") or [])
+    from services.research import library
+    out["needs_checking"] = sorted(library.needs_checking(paper))
+    return out
+
+
+# The fields the Library marks "needs checking" when it is not sure of them.
+CHECKED = ("title", "authors", "year")
+
+
+def confidently_wrong(record: Optional[dict], scores: Dict[str, "FieldScore"]) -> List[str]:
+    """Fields that are wrong and shown as if certain (roadmap R3: "not sure"
+    beats wrong). An empty field shows nothing, so it is never counted."""
+    flagged = set((record or {}).get("needs_checking") or [])
+    out = []
+    for name in CHECKED:
+        score = scores[name]
+        if score.correct or score.status == "missing" or name in flagged:
+            continue
+        out.append(name)
     return out
 
 
@@ -824,6 +843,11 @@ def field_summary(results: Sequence[DocResult], pass_name: str) -> Dict[str, dic
         ok = sum(s[name].correct for s in scores)
         out[name] = {"correct": ok, "of": n}
     out["title_near"] = {"correct": sum(bool(s["title"].near) for s in scores), "of": n}
+    records = [r.passes[pass_name]["record"] for r in results]
+    out["confidently_wrong"] = {name: sum(name in confidently_wrong(rec, sc) for rec, sc in zip(records, scores))
+                                for name in CHECKED}
+    out["needs_checking"] = {name: sum(name in ((rec or {}).get("needs_checking") or []) for rec in records)
+                             for name in CHECKED}
     f1s = [s["authors"].f1 or 0.0 for s in scores]
     out["authors"] = {"mean_f1": round(sum(f1s) / n, 4) if n else 0.0,
                       "exact": sum(s["authors"].correct for s in scores), "of": n}
@@ -904,6 +928,10 @@ def render_markdown(report: Report) -> str:
     row("authors, mean F1 over family names", lambda s: f"{s['authors']['mean_f1']:.2f}")
     row("authors, whole list right", lambda s: _pct(s["authors"]["exact"], s["authors"]["of"]))
     row("year (exact)", lambda s: _pct(s["year"]["correct"], s["year"]["of"]))
+    row("wrong and shown as certain (title · authors · year)",
+        lambda s: " · ".join(str(s["confidently_wrong"][f]) for f in CHECKED))
+    row("marked needs checking (title · authors · year)",
+        lambda s: " · ".join(str(s["needs_checking"][f]) for f in CHECKED))
     for ident, label in (("arxiv_id", "arXiv id"), ("doi", "DOI"), ("isbn", "ISBN")):
         row(f"{label} found, of documents that have one",
             lambda s, i=ident: _pct(s[i]["found"], s[i]["has"]) + (f", {s[i]['wrong']} wrong" if s[i]["wrong"] else ""))

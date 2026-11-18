@@ -331,7 +331,7 @@ def test_analyze_from_chunks_matches_references_and_builds_graph(indexer):
     b = library.analyze_document("c1", indexer, "doc-2", store=store)
     assert a["title"].startswith("Root Hydraulics") and b["title"] == "Xylem Embolism Thresholds Across Forest Biomes"
     assert b["doi"] == "10.5555/ifs.2018.007"
-    assert any("Registry lookups are off" in n for n in a["analysis_notes"])
+    assert any("Catalogue lookups are off" in n for n in a["analysis_notes"])
 
     papers = [d for d in indexer.list_documents() if library.is_paper(d)]
     assert library.match_library(store, papers) == 1
@@ -799,7 +799,8 @@ def client(indexer, monkeypatch):
 
 def test_api_library_flow(client):
     listed = client.get("/api/research/papers?collection_id=c1").json()
-    assert listed["stats"] == {"papers": 3, "analyzed": 0, "renameable": 0, "unread_reviews": 0, "unread_briefs": 0}
+    assert listed["stats"] == {"papers": 3, "analyzed": 0, "needs_checking": 0, "renameable": 0,
+                              "unread_reviews": 0, "unread_briefs": 0}
     assert listed["can_write"] is True and listed["capabilities"]["registry_lookups"] is False
 
     detail = client.post("/api/research/papers/doc-2/analyze?collection_id=c1", json={}).json()

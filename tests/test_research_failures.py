@@ -246,5 +246,5 @@ def test_analysis_says_the_catalogue_was_unreachable_not_that_it_has_no_record(i
     catalogue["answer"] = FAILURES["timeout"][0]
     paper = library.analyze_document("c1", indexer, "doc-1")
     notes = " ".join(paper["analysis_notes"])
-    assert "could not be reached" in notes and "No scholarly registry record" not in notes
+    assert "could not be reached" in notes and "No catalogue record could be confirmed" not in notes
     assert paper["title"].startswith("Root Hydraulics")          # from the paper's own text

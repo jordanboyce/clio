@@ -102,7 +102,7 @@ def _confirm_registry(record: Optional[dict], printed_in: str, how: str, where: 
     score = similarity(record["title"], printed_in)
     if score < PAGE_ONE_MATCH_THRESHOLD:
         notes.append(
-            f"The {how} printed {where} points to a registry record titled “{record['title'][:120]}”, "
+            f"The {how} printed {where} points to a catalogue record titled “{record['title'][:120]}”, "
             "which is not this document's title, so that record was not used."
         )
         return None
@@ -137,7 +137,8 @@ def analyze_document(collection_id: str, indexer, document_id: str,
         store.replace_references(document_id, [])
         return store.get_paper(document_id) or {}
 
-    found = extract_paper(pages, document_path(collection_id, doc), fmt=doc.get("source_format"))
+    found = extract_paper(pages, document_path(collection_id, doc), fmt=doc.get("source_format"),
+                          filename=doc.get("filename"))
     notes = list(found["notes"])
     provenance = dict(found["provenance"])
     fields = {k: found[k] for k in ("title", "authors", "year", "doi", "arxiv_id", "isbn", "venue",
@@ -184,7 +185,12 @@ def analyze_document(collection_id: str, indexer, document_id: str,
             for field in ("title", "authors", "year", "venue", "doi", "arxiv_id"):
                 if record.get(field):
                     fields[field] = record[field]
-                    provenance[field] = {"source": record["source"], "detail": detail}
+                    # Confirmed against the title printed in the document,
+                    # so stated as fact.
+                    provenance[field] = {"source": record["source"], "detail": detail, "confidence": "high"}
+            if record.get("authors"):
+                found["organization"] = None
+                provenance.pop("organization", None)
             # The document's own abstract is quoted verbatim; a registry
             # abstract only fills the gap when none could be found.
             if not fields["abstract"] and record.get("abstract"):
@@ -195,13 +201,17 @@ def analyze_document(collection_id: str, indexer, document_id: str,
             notes.append("The catalogue could not be reached (" + "; ".join(unreachable) + "), so its "
                          "details come from its own text for now. Read it again later to try the "
                          "catalogue once more.")
-        elif not notes or "registry" not in " ".join(notes):
-            notes.append("No scholarly registry record could be confirmed for this document; "
+        elif not notes or "catalogue" not in " ".join(notes):
+            notes.append("No catalogue record could be confirmed for this document; "
                          "its details come from its own text.")
     elif use_registry:
-        notes.append("Registry lookups are off on this server; details come from the document's own text.")
+        notes.append("Catalogue lookups are off on this server; details come from the document's own text.")
 
     details: Dict[str, object] = {}
+    if found.get("organization"):
+        # A report's issuing body is its author, kept as an organisation so
+        # a citation reads "Harbour Authority (2021)", not "Authority, H.".
+        details["organization"] = found["organization"]
     printed = citations.page_offset(pages)
     if printed:
         offset, agreeing = printed
@@ -234,6 +244,57 @@ def analyze_document(collection_id: str, indexer, document_id: str,
     entries = [_deterministic_resolution(e) for e in found["references"] + found["links"]]
     store.replace_references(document_id, entries)
     return store.get_paper(document_id) or {}
+
+
+# ── confidence (roadmap R3) ─────────────────────────────────────────────
+
+# The fields whose doubt the Library shows: a wrong one is what makes a
+# citation or a file name wrong.
+CHECKED_FIELDS = ("title", "authors", "year")
+
+
+def needs_checking(paper: Optional[dict]) -> Dict[str, str]:
+    """``{field: why}`` for every title, author list or year that is not
+    known to be right. A value a person typed, or one a catalogue confirmed,
+    is right; one read from the text carries the confidence the reader gave
+    it. A record analysed before confidence existed is judged by the same
+    plausibility rules now, so an old wrong title is not shown as fact."""
+    from services.research.extract import author_problem, title_problem
+
+    paper = paper or {}
+    if not paper.get("analyzed_at"):
+        return {}
+    provenance = paper.get("provenance") or {}
+    out: Dict[str, str] = {}
+    for field in CHECKED_FIELDS:
+        value = paper.get(field)
+        prov = provenance.get(field) if isinstance(provenance.get(field), dict) else {}
+        if prov.get("source") == "user":
+            continue
+        if field == "title" and not value:
+            out["title"] = "no title could be read"
+            continue
+        if field == "authors" and not value:
+            organization = provenance.get("organization") if isinstance(provenance.get("organization"), dict) else {}
+            if organization.get("source") == "user" or organization.get("confidence") == "high":
+                continue
+            if (paper.get("details") or {}).get("organization") and organization.get("source") == "paper":
+                out["authors"] = organization.get("check") or "an organisation is named where the authors would be"
+            continue
+        if not value or prov.get("source") not in (None, "paper"):
+            continue
+        confidence = prov.get("confidence")
+        if confidence == "low":
+            out[field] = prov.get("check") or "it was read from the text by a rule that is often wrong"
+        elif confidence is None:
+            problem = None
+            if field == "title":
+                problem = title_problem(value, from_layout="largest type" in (prov.get("detail") or ""))
+            elif field == "authors":
+                problem = next((author_problem(n) for n in value if author_problem(n)), None)
+            if problem:
+                out[field] = problem
+    return out
 
 
 # ── corrections by a person ─────────────────────────────────────────────

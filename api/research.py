@@ -212,6 +212,8 @@ def _record_usage(user, collection_id: str, provider_name: str, usage: dict, sta
 def _paper_summary(doc: dict, paper: Optional[dict], counts: dict) -> dict:
     paper = paper or {}
     did = doc["document_id"]
+    doubtful = library.needs_checking(paper)
+    suggested = naming.suggest_filename(paper, doc.get("filename") or "") if paper else None
     return {
         "document_id": did,
         "filename": doc.get("filename"),
@@ -235,7 +237,14 @@ def _paper_summary(doc: dict, paper: Optional[dict], counts: dict) -> dict:
         "arxiv_id": paper.get("arxiv_id"),
         "abstract": paper.get("abstract"),
         "provenance": paper.get("provenance") or {},
-        "suggested_filename": naming.suggest_filename(paper, doc.get("filename") or "") if paper else None,
+        # R3: what is not known to be right, and why. The Library shows the
+        # file name in place of a doubtful title and "Authors need checking"
+        # in place of doubtful names.
+        "needs_checking": doubtful,
+        "suggested_filename": suggested,
+        # A3: a descriptive name is offered by default only when the title
+        # and authors it is built from are known to be right.
+        "rename_ready": bool(suggested) and not ({"title", "authors"} & set(doubtful)),
         "original_filename": paper.get("original_filename"),
         "renamed_at": paper.get("renamed_at"),
         "references": counts.get("references", {}).get(did, 0),
@@ -283,6 +292,7 @@ def list_papers(collection_id: str = "default") -> dict:
         "stats": {
             "papers": len(items),
             "analyzed": sum(1 for p in items if p["analyzed"]),
+            "needs_checking": sum(1 for p in items if p["needs_checking"]),
             "renameable": sum(1 for p in items if p["suggested_filename"]
                               and p["suggested_filename"] != p["filename"]),
             "unread_reviews": sum(p["unread_reviews"] for p in items),
