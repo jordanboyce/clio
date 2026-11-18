@@ -48,5 +48,7 @@ server {
         # Whatever a client claims. If your SSO terminates here, set this header
         # from what it verified instead, and see docs/IDENTITY.md.
         proxy_set_header X-Forwarded-User "";
+        proxy_set_header X-Forwarded-User-Timestamp "";
+        proxy_set_header X-Forwarded-User-Signature "";
     }
 }

@@ -24,8 +24,8 @@ start without a guard that actually holds. Two do:
 
   * the app is bound to loopback, so nothing but a process on the host —
     i.e. the proxy — can open a connection to it at all; or
-  * the proxy signs the identity with a shared secret (HMAC-SHA256), which
-    holds no matter what the network path looks like.
+  * the proxy signs the identity and the current time with a shared secret
+    (HMAC-SHA256), which holds no matter what the network path looks like.
 
 ``TRUSTED_HEADER_PROXIES`` is available on top of those, but never as the
 only guard, and the distinction matters: uvicorn's proxy-header handling
@@ -67,6 +67,11 @@ from urllib.parse import urlsplit
 logger = logging.getLogger(__name__)
 
 _JWKS_TTL_SECONDS = 3600
+# An unknown key id forces a refetch, and anyone can send a JWS-shaped bearer
+# naming one, so forced refetches are rate limited per key set: at most one
+# per this many seconds. A real rotation is picked up by the first token
+# after the cooldown; a failed fetch is not retried sooner either.
+_JWKS_REFRESH_COOLDOWN_SECONDS = 60.0
 
 # Providers that establish identity. "" means none: an open appliance.
 IDENTITY_PROVIDERS = ("oidc", "trusted_header")
@@ -90,6 +95,20 @@ class InsufficientScope(Exception):
     def __init__(self, scope: str):
         super().__init__(f"token lacks the required scope {scope!r}")
         self.scope = scope
+
+
+class IdentityRefused(Exception):
+    """A credential that verified, but cannot be turned into an identity.
+
+    Raised rather than returning None so the middleware can answer 401 with
+    the reason: the person holds a token their own IdP issued, and "Not
+    authenticated" alone would not tell them or their administrator what to
+    fix. ``reason`` is safe to show the caller.
+    """
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
 
 
 class IdentityVerifier(Protocol):
@@ -116,7 +135,7 @@ class IdentityVerifier(Protocol):
 
 # ── Shared JWKS cache ───────────────────────────────────────────────────────
 # Both JWT backends need the same thing: fetch a key set, cache it, and
-# refresh once on an unknown key id so the IdP can rotate keys without a
+# refresh on an unknown key id so the IdP can rotate keys without a
 # restart. Kept here rather than duplicated per backend.
 
 
@@ -125,36 +144,68 @@ class JWKSCache:
         self.url = url
         self._keys: Dict[str, Any] = {}
         self._fetched_at = 0.0
+        # Monotonic times of the last forced refetch and the last failed
+        # fetch. Each holds further fetches off for the cooldown, so neither
+        # a stream of forged key ids nor an unreachable IdP turns every
+        # request into an outbound fetch under this lock.
+        self._forced_at: Optional[float] = None
+        self._failed_at: Optional[float] = None
         self._lock = threading.Lock()
+
+    @staticmethod
+    def _within_cooldown(since: Optional[float], now: float) -> bool:
+        return since is not None and now - since < _JWKS_REFRESH_COOLDOWN_SECONDS
 
     def _load(self, force: bool = False) -> None:
         with self._lock:
+            now = time.monotonic()
             if not force and self._keys and time.time() - self._fetched_at < _JWKS_TTL_SECONDS:
                 return
-            from jwt.algorithms import RSAAlgorithm, ECAlgorithm
+            if self._within_cooldown(self._failed_at, now):
+                return
+            if force:
+                # Checked inside the lock: requests that queued behind a
+                # refetch find it already done and do not repeat it.
+                if self._within_cooldown(self._forced_at, now):
+                    logger.debug("JWKS refetch for %s skipped: cooling down", self.url)
+                    return
+                self._forced_at = now
+            try:
+                self._fetch()
+            except Exception:
+                self._failed_at = now
+                raise
+            self._failed_at = None
 
-            with urllib.request.urlopen(self.url, timeout=10) as resp:
-                jwks = json.load(resp)
-            keys: Dict[str, Any] = {}
-            for key in jwks.get("keys", []):
-                kid = key.get("kid")
-                if not kid:
-                    continue
-                kty = key.get("kty")
-                try:
-                    if kty == "RSA":
-                        keys[kid] = RSAAlgorithm.from_jwk(json.dumps(key))
-                    elif kty == "EC":
-                        keys[kid] = ECAlgorithm.from_jwk(json.dumps(key))
-                except Exception as e:
-                    logger.warning(f"JWKS key {kid} could not be parsed: {e}")
-            if keys:
-                self._keys = keys
-                self._fetched_at = time.time()
-                logger.info(f"JWKS refreshed: {len(keys)} keys from {self.url}")
+    def _fetch(self) -> None:
+        """Fetch and parse the key set. Called with the lock held."""
+        from jwt.algorithms import RSAAlgorithm, ECAlgorithm
+
+        with urllib.request.urlopen(self.url, timeout=10) as resp:
+            jwks = json.load(resp)
+        keys: Dict[str, Any] = {}
+        for key in jwks.get("keys", []):
+            kid = key.get("kid")
+            if not kid:
+                continue
+            kty = key.get("kty")
+            try:
+                if kty == "RSA":
+                    keys[kid] = RSAAlgorithm.from_jwk(json.dumps(key))
+                elif kty == "EC":
+                    keys[kid] = ECAlgorithm.from_jwk(json.dumps(key))
+            except Exception as e:
+                logger.warning(f"JWKS key {kid} could not be parsed: {e}")
+        if not keys:
+            # Counts as a failed fetch, so it is not retried on every request.
+            raise ValueError("the key set holds no usable signing keys")
+        self._keys = keys
+        self._fetched_at = time.time()
+        logger.info(f"JWKS refreshed: {len(keys)} keys from {self.url}")
 
     def get(self, kid: str) -> Optional[Any]:
-        """Return the signing key for ``kid``, refreshing once if unknown."""
+        """Return the signing key for ``kid``, refreshing if it is unknown
+        and no forced refresh ran within the cooldown."""
         try:
             self._load()
         except Exception as e:
@@ -193,10 +244,19 @@ class OIDCIdentity:
         identity_claim: str = "email",
         required_claims: str = "",
         required_scope: str = "",
+        fallback_claims: str = "",
+        require_email_verified: bool = False,
     ):
         self.issuer = issuer.strip().rstrip("/")
         self.audiences = [a.strip() for a in audiences if a.strip()]
         self.identity_claim = identity_claim.strip() or "email"
+        # Claims tried, in order, when the identity claim is missing. Empty
+        # by default: a token without the identity claim is refused.
+        self.fallback_claims = [
+            c.strip() for c in (fallback_claims or "").split(",")
+            if c.strip() and c.strip() != self.identity_claim
+        ]
+        self.require_email_verified = bool(require_email_verified)
         self.required = _parse_required_claims(required_claims)
         # An OAuth scope the token must carry (the /mcp verifier). Checked
         # after signature, issuer, audience and expiry: a token that fails
@@ -309,13 +369,78 @@ class OIDCIdentity:
                 return None
         return claims
 
-    def identity_from_claims(self, claims: Dict[str, Any]) -> Optional[str]:
-        value = claims.get(self.identity_claim)
-        if not value:
-            # preferred_username and sub are the usual fallbacks when the
-            # deployment's IdP does not release email to this client.
-            value = claims.get("preferred_username") or claims.get("sub")
-        return str(value) if value else None
+    def identity_from_claims(self, claims: Dict[str, Any]) -> str:
+        """The identity string for a verified token, or IdentityRefused.
+
+        The result is matched against owners and ADMIN_EMAILS, so it must
+        never be one person's value in another person's namespace:
+
+        * the email claim counts only when the IdP has not said it is
+          unverified (``email_verified: false``), and, with
+          OIDC_REQUIRE_EMAIL_VERIFIED, only when it says it is verified;
+        * a missing identity claim is refused, not replaced by another
+          claim. Fallbacks apply only when OIDC_IDENTITY_FALLBACK_CLAIMS
+          names them, and a fallback value is prefixed with its claim name
+          (``sub:4f1c…``), so it can never equal an email address or the
+          identity claim of someone else.
+        """
+        value = _claim_text(claims.get(self.identity_claim))
+        if value:
+            if self.identity_claim == "email":
+                self._check_email_verified(claims)
+            return value
+        for name in self.fallback_claims:
+            fallback = _claim_text(claims.get(name))
+            if fallback:
+                return f"{name}:{fallback}"
+        logger.warning(
+            "OIDC token from %s refused: it has no %r claim. Have the IdP "
+            "release it to this client, change OIDC_IDENTITY_CLAIM, or name "
+            "OIDC_IDENTITY_FALLBACK_CLAIMS. Claims present: %s",
+            self.issuer, self.identity_claim, ", ".join(sorted(claims)) or "none",
+        )
+        raise IdentityRefused(
+            f"Your sign-in token has no '{self.identity_claim}' claim, which "
+            "this deployment uses to identify people. Ask your administrator "
+            "to release it to this application."
+        )
+
+    def _check_email_verified(self, claims: Mapping[str, Any]) -> None:
+        verified = _claim_flag(claims.get("email_verified"))
+        if verified is True:
+            return
+        if verified is None and not self.require_email_verified:
+            # Entra ID and ADFS do not send email_verified at all; refusing
+            # its absence by default would lock those sites out.
+            return
+        logger.warning(
+            "OIDC token from %s refused: email_verified is %s.",
+            self.issuer,
+            "absent and OIDC_REQUIRE_EMAIL_VERIFIED is on" if verified is None else "not true",
+        )
+        raise IdentityRefused(
+            "Your email address is not verified at your identity provider, "
+            "so it cannot identify you here. Verify it there and sign in again."
+        )
+
+
+def _claim_text(value: Any) -> str:
+    """A claim value usable as an identity: a non-empty string or number."""
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return ""
+    return str(value).strip()
+
+
+def _claim_flag(value: Any) -> Optional[bool]:
+    """A boolean claim as the IdP meant it. None when absent; some IdPs send
+    the string "true"; anything else unrecognised is not a yes."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() == "true":
+        return True
+    return False
 
 
 def _parse_required_claims(spec: str) -> list[tuple[str, str]]:
@@ -387,11 +512,17 @@ class TrustedHeaderIdentity:
         trusted_proxies: str = "",
         shared_secret: str = "",
         signature_header: str = "",
+        timestamp_header: str = "",
+        max_skew_seconds: int = 300,
+        allow_legacy_signature: bool = True,
     ):
         self.header_name = (header_name or "").strip().lower()
         self.networks = _parse_networks(trusted_proxies)
         self.shared_secret = (shared_secret or "").strip()
         self.signature_header = (signature_header or "").strip().lower()
+        self.timestamp_header = (timestamp_header or "").strip().lower()
+        self.max_skew_seconds = int(max_skew_seconds)
+        self.allow_legacy_signature = bool(allow_legacy_signature)
 
     def has_candidate(self, headers: Mapping[str, str]) -> bool:
         return bool((headers.get(self.header_name) or "").strip())
@@ -411,20 +542,69 @@ class TrustedHeaderIdentity:
             )
             return None
 
-        if self.shared_secret:
-            presented = (headers.get(self.signature_header) or "").strip()
-            expected = hmac.new(
-                self.shared_secret.encode("utf-8"),
-                identity.encode("utf-8"),
-                hashlib.sha256,
-            ).hexdigest()
-            if not presented or not hmac.compare_digest(presented.lower(), expected):
-                logger.warning(
-                    "Rejected %s header: signature missing or invalid.", self.header_name
-                )
-                return None
+        if self.shared_secret and not self._signature_holds(identity, headers):
+            return None
 
         return identity
+
+    def _signature_holds(self, identity: str, headers: Mapping[str, str]) -> bool:
+        """Check the proxy's HMAC over ``identity|timestamp``.
+
+        The timestamp is what stops a captured header set from being replayed
+        later: it is signed with the identity, and a value outside
+        TRUSTED_HEADER_MAX_SKEW_SECONDS of this server's clock is refused.
+        Without a timestamp header the signature is checked over the identity
+        alone (the format before the timestamp existed) while
+        TRUSTED_HEADER_ALLOW_LEGACY_SIGNATURE allows it.
+        """
+        presented = (headers.get(self.signature_header) or "").strip().lower()
+        stamp = (headers.get(self.timestamp_header) or "").strip() if self.timestamp_header else ""
+        if not presented:
+            return self._refuse("signature missing")
+        if stamp:
+            if not (stamp.isascii() and stamp.isdigit() and len(stamp) <= 12):
+                return self._refuse("timestamp is not a Unix time in seconds")
+            if abs(time.time() - int(stamp)) > self.max_skew_seconds:
+                return self._refuse("timestamp outside the allowed clock skew")
+            message = f"{identity}|{stamp}"
+        else:
+            if not self.allow_legacy_signature:
+                return self._refuse(f"no {self.timestamp_header or 'timestamp'} header")
+            if "|" in identity:
+                # Would let a timestamped signature for "x" at time T pass as
+                # a legacy signature for the identity "x|T".
+                return self._refuse("identity contains '|'")
+            message = identity
+        expected = hmac.new(
+            self.shared_secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(presented.encode(), expected.encode()):
+            return self._refuse("signature invalid")
+        if not stamp:
+            _note_legacy_signature(self.header_name, self.timestamp_header)
+        return True
+
+    def _refuse(self, why: str) -> bool:
+        logger.warning("Rejected %s header: %s.", self.header_name, why)
+        return False
+
+
+_legacy_signature_noted = False
+
+
+def _note_legacy_signature(header_name: str, timestamp_header: str) -> None:
+    """Log once per process that the proxy still signs the identity alone."""
+    global _legacy_signature_noted
+    if _legacy_signature_noted:
+        return
+    _legacy_signature_noted = True
+    logger.warning(
+        "Accepted a %s signature with no %s header. Signatures over the "
+        "identity alone can be replayed indefinitely and are deprecated: have "
+        "the proxy sign \"identity|unix_time\" and send the time in %s, then "
+        "set TRUSTED_HEADER_ALLOW_LEGACY_SIGNATURE=false. See docs/IDENTITY.md.",
+        header_name, timestamp_header or "timestamp", timestamp_header or "a timestamp header",
+    )
 
 
 def _parse_networks(spec: str) -> list:
@@ -538,6 +718,22 @@ def validate_config() -> None:
                 "is empty - the signature would never be read. Name the header "
                 "your proxy puts the HMAC in."
             )
+        if settings.trusted_header_secret:
+            if settings.trusted_header_max_skew_seconds < 1:
+                raise RuntimeError(
+                    "TRUSTED_HEADER_MAX_SKEW_SECONDS must be at least 1 - no "
+                    "signed timestamp could ever be accepted."
+                )
+            if (
+                not settings.trusted_header_timestamp_name
+                and not settings.trusted_header_allow_legacy_signature
+            ):
+                raise RuntimeError(
+                    "TRUSTED_HEADER_TIMESTAMP_NAME is empty and "
+                    "TRUSTED_HEADER_ALLOW_LEGACY_SIGNATURE is off - no signature "
+                    "could ever be accepted. Name the header your proxy puts "
+                    "the signed Unix time in."
+                )
         if bound_loopback and not settings.trusted_header_secret:
             logger.info(
                 "Identity: trusted header %s, guarded by the loopback bind. "
@@ -583,6 +779,8 @@ class MCPOAuthConfig:
     scope: str
     identity_claim: str
     required_claims: str
+    fallback_claims: str
+    require_email_verified: bool
     # Canonical MCP URL from settings ("" = derive from the request; only
     # the advertised metadata is ever derived, never an accepted audience).
     public_url: str
@@ -645,6 +843,8 @@ def mcp_oauth_config() -> Optional[MCPOAuthConfig]:
         scope=(settings.mcp_oauth_scope or "").strip(),
         identity_claim=settings.oidc_identity_claim,
         required_claims=settings.oidc_required_claims,
+        fallback_claims=settings.oidc_identity_fallback_claims,
+        require_email_verified=bool(settings.oidc_require_email_verified),
         public_url=public_url,
     )
 
@@ -723,7 +923,8 @@ class _ChainedVerifier:
     JWT (a trusted proxy header) but whose MCP clients
     sign in at an IdP: the OAuth verifier looks only at a JWS-shaped bearer,
     the deployment's own verifier only at its own header, so the two never
-    contend for one request. InsufficientScope propagates untouched.
+    contend for one request. InsufficientScope and IdentityRefused propagate
+    untouched.
     """
 
     via = "chained"
@@ -767,6 +968,8 @@ def get_mcp_oauth_verifier() -> Optional[OIDCIdentity]:
             identity_claim=config.identity_claim,
             required_claims=config.required_claims,
             required_scope=config.scope,
+            fallback_claims=config.fallback_claims,
+            require_email_verified=config.require_email_verified,
         )
         verifier.via = "oauth"
         _mcp_verifier, _mcp_signature = verifier, config
@@ -813,6 +1016,8 @@ def get_identity_verifier(path: str = "") -> Optional[IdentityVerifier]:
             settings.oidc_jwks_url,
             settings.oidc_identity_claim,
             settings.oidc_required_claims,
+            settings.oidc_identity_fallback_claims,
+            settings.oidc_require_email_verified,
         )
         if _oidc_verifier is None or _oidc_signature != signature:
             _oidc_verifier = OIDCIdentity(
@@ -821,6 +1026,8 @@ def get_identity_verifier(path: str = "") -> Optional[IdentityVerifier]:
                 jwks_url=settings.oidc_jwks_url,
                 identity_claim=settings.oidc_identity_claim,
                 required_claims=settings.oidc_required_claims,
+                fallback_claims=settings.oidc_identity_fallback_claims,
+                require_email_verified=settings.oidc_require_email_verified,
             )
             _oidc_signature = signature
         return _oidc_verifier
@@ -831,6 +1038,9 @@ def get_identity_verifier(path: str = "") -> Optional[IdentityVerifier]:
             trusted_proxies=settings.trusted_header_proxies,
             shared_secret=settings.trusted_header_secret,
             signature_header=settings.trusted_header_signature_name,
+            timestamp_header=settings.trusted_header_timestamp_name,
+            max_skew_seconds=settings.trusted_header_max_skew_seconds,
+            allow_legacy_signature=settings.trusted_header_allow_legacy_signature,
         )
 
     return None

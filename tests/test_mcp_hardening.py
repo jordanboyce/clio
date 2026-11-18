@@ -89,6 +89,98 @@ def test_generate_token_rejects_bad_lifetimes(fresh_app_db, days):
         mcp_tokens.generate_token("alice", "x", expires_in_days=days)
 
 
+@pytest.fixture()
+def max_days(monkeypatch):
+    """Sets MCP_TOKEN_MAX_DAYS on the live settings object."""
+    import config
+
+    def set_cap(days):
+        monkeypatch.setattr(config.settings, "mcp_token_max_days", days)
+
+    return set_cap
+
+
+def _lifetime(record):
+    return datetime.fromisoformat(record["expires_at"]) - utcnow()
+
+
+def test_a_token_minted_without_an_expiry_gets_the_maximum(fresh_app_db, max_days):
+    max_days(365)
+    record = mcp_tokens.generate_token("alice", "Laptop")
+    assert record["expires_at"] is not None
+    assert timedelta(days=364) < _lifetime(record) <= timedelta(days=365)
+    assert record["token"] and mcp_tokens.verify_token(record["token"]) is not None
+
+
+def test_no_cap_still_allows_a_token_that_never_expires(fresh_app_db, max_days):
+    max_days(0)
+    assert mcp_tokens.generate_token("alice", "Laptop")["expires_at"] is None
+    long = mcp_tokens.generate_token("alice", "Laptop", expires_in_days=mcp_tokens.MAX_EXPIRY_DAYS)
+    assert _lifetime(long) > timedelta(days=3000)
+
+
+def test_a_lifetime_beyond_the_cap_is_refused(fresh_app_db, max_days):
+    max_days(90)
+    with pytest.raises(ValueError, match="expires_in_days must be between 1 and 90"):
+        mcp_tokens.generate_token("alice", "x", expires_in_days=91)
+    assert timedelta(days=89) < _lifetime(mcp_tokens.generate_token("alice", "x", expires_in_days=90))
+
+
+def test_the_secure_profile_caps_tokens_at_ninety_days(monkeypatch):
+    import config
+
+    monkeypatch.delenv("MCP_TOKEN_MAX_DAYS", raising=False)
+    # Offline mode would set HF_HUB_OFFLINE for the rest of the run.
+    monkeypatch.setenv("OFFLINE_MODE", "false")
+    monkeypatch.setenv("CLIO_PROFILE", "secure")
+    assert config.Settings().mcp_token_max_days == 90
+    monkeypatch.setenv("CLIO_PROFILE", "standard")
+    assert config.Settings().mcp_token_max_days == 365
+
+
+def test_tokens_minted_before_the_cap_keep_working_and_are_flagged(fresh_app_db, max_days, caplog, monkeypatch):
+    monkeypatch.setattr(mcp_tokens, "_flagged_ids", set())
+    forever = f"{mcp_tokens.TOKEN_PREFIX}minted-long-ago"
+    fresh_app_db.create_mcp_token("alice", "Old laptop", mcp_tokens._hash(forever), forever[:14])
+    long = f"{mcp_tokens.TOKEN_PREFIX}ten-year-token"
+    fresh_app_db.create_mcp_token("alice", "CI", mcp_tokens._hash(long), long[:14],
+                                  expires_at=(utcnow() + timedelta(days=3650)).isoformat())
+    max_days(365)
+    fresh = mcp_tokens.generate_token("alice", "New laptop")
+
+    with caplog.at_level("WARNING", logger="services.mcp_tokens"):
+        for _ in range(3):
+            assert mcp_tokens.verify_token(forever) is not None
+        assert mcp_tokens.verify_token(long) is not None
+        assert mcp_tokens.verify_token(fresh["token"]) is not None
+    flagged = [r.getMessage() for r in caplog.records if "MCP_TOKEN_MAX_DAYS" in r.getMessage()]
+    assert len(flagged) == 2  # each old token once, the new one never
+    assert all("mint a new one" in line for line in flagged)
+
+    listed = {t["name"]: t["exceeds_max_lifetime"] for t in mcp_tokens.list_tokens("alice")}
+    assert listed == {"Old laptop": True, "CI": True, "New laptop": False}
+    max_days(0)
+    assert not any(t["exceeds_max_lifetime"] for t in mcp_tokens.list_tokens("alice"))
+
+
+def test_token_api_reports_the_cap_and_refuses_beyond_it(fresh_app_db, max_days, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import main
+    from services.collection_service import collection_service
+
+    monkeypatch.setattr(collection_service, "base_dir", tmp_path / "collections")
+    max_days(90)
+    client = TestClient(main.app)
+    r = client.post("/api/mcp/tokens", json={"name": "x", "expires_in_days": 365})
+    assert r.status_code == 400 and "90" in r.json()["detail"]
+    r = client.post("/api/mcp/tokens", json={"name": "x", "expires_in_days": None})
+    assert r.status_code == 201 and r.json()["expires_at"]
+    listed = client.get("/api/mcp/tokens").json()
+    assert listed["max_days"] == 90
+    assert listed["tokens"][0]["exceeds_max_lifetime"] is False
+
+
 def test_allowlist_requires_a_scope(fresh_app_db):
     with pytest.raises(ValueError, match="allowlist"):
         mcp_tokens.generate_token("alice", "x", allowlist=True)

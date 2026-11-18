@@ -16,6 +16,8 @@ CLIO_PROFILE=secure
 | `OFFLINE_MODE` | on | No cloud AI providers, hosted embeddings, web fetching or model downloads |
 | `MCP_AUDIT_TOOL_CALLS` | on | Every agent read is attributable, not just writes |
 | `LINK_INDEXING_ENABLED` | off | The server does not fetch arbitrary web pages |
+| `MCP_TOKEN_MAX_DAYS` | 90 | Personal MCP tokens are re-issued every quarter (standard: 365) |
+| `TRUSTED_HEADER_ALLOW_LEGACY_SIGNATURE` | off | A signed proxy header must carry a timestamp, so it cannot be replayed later |
 
 **Things it refuses to start with.** The standard profile logs a warning for
 these; the secure profile exits with a message that names each problem:

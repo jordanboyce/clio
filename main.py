@@ -499,7 +499,10 @@ async def _caller_may_see_health_details(request) -> bool:
         return True  # an open appliance has nothing to withhold
     verifier = identity_service.get_identity_verifier()
     if verifier is not None and verifier.has_candidate(request.headers):
-        who = await asyncio.to_thread(verifier.verify_request, request.headers, _client_ip(request))
+        try:
+            who = await asyncio.to_thread(verifier.verify_request, request.headers, _client_ip(request))
+        except identity_service.IdentityRefused:
+            who = None
         if who:
             request.state.auth_identity = who
             return True
@@ -587,7 +590,7 @@ async def require_auth(request, call_next):
     # threadpool slot to discover it has no assertion.
     # On /mcp the verifier also covers OAuth bearer tokens from the
     # authorization server the endpoint advertises (services/mcp_oauth.py).
-    from services.identity import InsufficientScope, get_identity_verifier, is_mcp_path
+    from services.identity import IdentityRefused, InsufficientScope, get_identity_verifier, is_mcp_path
     verifier = get_identity_verifier(request.url.path)
     if not app_credential and verifier is not None and verifier.has_candidate(request.headers):
         try:
@@ -603,6 +606,15 @@ async def require_auth(request, call_next):
                 {"detail": f"This token lacks the scope '{exc.scope}' required for the MCP endpoint."},
                 status_code=403,
                 headers={"WWW-Authenticate": challenge(request, error="insufficient_scope")},
+            )
+        except IdentityRefused as exc:
+            # A valid IdP token that names no usable identity: say why.
+            from services.mcp_oauth import challenge
+            return JSONResponse(
+                {"detail": exc.reason, "code": "identity_refused"},
+                status_code=401,
+                headers={"WWW-Authenticate": challenge(request, error="invalid_token")
+                         if is_mcp_path(request.url.path) else 'Bearer error="invalid_token"'},
             )
         if who:
             request.state.auth_identity = who

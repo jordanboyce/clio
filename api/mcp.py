@@ -136,7 +136,8 @@ async def create_mcp_token(body: MCPTokenRequest, user_id: Optional[str] = Depen
         can_write: optional bool (default false). Lets agents holding this
             token add and update sources via the write_document tool.
         expires_in_days: optional lifetime; the token stops verifying after
-            it. Omitted means the token never expires.
+            it. At most MCP_TOKEN_MAX_DAYS (400 beyond it). Omitted means that
+            maximum, or never expires when MCP_TOKEN_MAX_DAYS is 0.
         allowlist: optional bool (default false). Makes collection_scope the
             only collections the token may see over MCP, whatever their
             sensitivity. Requires a non-empty scope.
@@ -181,7 +182,10 @@ async def create_mcp_token(body: MCPTokenRequest, user_id: Optional[str] = Depen
     tags=["mcp"],
 )
 async def list_mcp_tokens(user_id: Optional[str] = Depends(get_current_user_id)):
-    return {"tokens": mcp_tokens.list_tokens(user_id)}
+    """Each token carries ``exceeds_max_lifetime`` when it was minted before
+    MCP_TOKEN_MAX_DAYS with a longer (or no) expiry. ``max_days`` is that cap,
+    0 for none, so the UI offers only lifetimes the server accepts."""
+    return {"tokens": mcp_tokens.list_tokens(user_id), "max_days": mcp_tokens.max_lifetime_days()}
 
 
 @router.delete(

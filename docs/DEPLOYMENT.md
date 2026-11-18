@@ -245,15 +245,21 @@ wrinkle: **MCP clients authenticate with a token, not by signing in.**
   tool (save notes, summaries, markdown into a collection). A write still
   needs write permission on the collection, passes the content policy scan,
   is attributed to the token's owner, and lands in the audit trail.
-  Two more knobs at mint time: an **expiry** (30 days, 90 days, a year, or
-  never - the form defaults to 90 days; an expired token is refused exactly
-  like a revoked one) and **Limit this token to specific collections**,
+  Two more knobs at mint time: an **expiry** (30 days, 90 days or a year -
+  the form defaults to 90 days; an expired token is refused exactly like a
+  revoked one) and **Limit this token to specific collections**,
   which makes the ticked collections the *only* ones the agent can see over
   MCP, whatever their sensitivity - the right shape for a client that works
   on one project. Without that limit a token sees everything its owner can,
   plus any restricted collections it was explicitly granted. The table shows
   each token's expiry, last use and call count, so idle or runaway agents are
   easy to spot and revoke.
+  `MCP_TOKEN_MAX_DAYS` (default 365, 90 under `CLIO_PROFILE=secure`) is the
+  longest lifetime a token may have: a longer one is refused, and a token
+  minted with no expiry gets this one. Set it to `0` to allow tokens that
+  never expire. Tokens minted before the limit keep working; the table
+  marks them *Rotate*, and the server log names each one the first time it
+  is used.
 - With `AUTH_PASSWORD` alone (no personal token), clients send
   `Authorization: Bearer <password>` and work normally, but anonymously -
   see below.

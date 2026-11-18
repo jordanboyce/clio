@@ -13,7 +13,8 @@ applies:
   MCP clients send `Authorization: Bearer <password>`. Everyone who knows it
   sees the same corpus. See [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Agents need to connect.** Mint a personal MCP token in Settings -> MCP
-  (prefix `asy_mcp_`). Tokens are read-only unless minted with writes allowed.
+  (prefix `asy_mcp_`). Tokens are read-only unless minted with writes allowed,
+  and last at most `MCP_TOKEN_MAX_DAYS` (a year by default).
 - **An application needs to call Clio.** An admin registers it, and it gets a key
   or uses your IdP's client credentials, limited to the collections you grant.
   See [APP_API.md](APP_API.md).
@@ -64,7 +65,7 @@ The on-prem answer. Tokens your IdP already issues become identities here.
 IDENTITY_PROVIDER=oidc
 OIDC_ISSUER=https://sso.agency.gov/realms/main
 OIDC_AUDIENCE=clio               # the client id / API audience
-OIDC_IDENTITY_CLAIM=email             # default; preferred_username and sub are fallbacks
+OIDC_IDENTITY_CLAIM=email             # default
 PRIVATE_COLLECTIONS=true
 ```
 
@@ -77,6 +78,44 @@ the issuer, the audience, and the expiry. Asymmetric algorithms only
 (`RS*`/`ES*`/`PS*`) — an `HS256` token is refused even when it names a known
 key id, because otherwise the published JWKS modulus becomes a signing key
 anyone can use.
+
+### Which claim identifies a person
+
+The value of `OIDC_IDENTITY_CLAIM` (default `email`) is the person's
+identity: it owns their collections and is what `ADMIN_EMAILS` is matched
+against. So it has to be a value only that person can have.
+
+- **A token without that claim is refused**, with a 401 that says which
+  claim is missing. It is not replaced by another claim. Have your IdP
+  release the claim to this client, or pick a claim every token carries.
+- **Fallbacks are opt-in and kept apart.** To admit tokens without the
+  claim anyway, name the claims to try instead, in order:
+
+  ```bash
+  OIDC_IDENTITY_FALLBACK_CLAIMS=preferred_username,sub
+  ```
+
+  A fallback identity is stored with its claim name in front
+  (`preferred_username:jsmith`, `sub:4f1c…`), so it can never equal an email
+  address, an `ADMIN_EMAILS` entry or someone else's identity. To make such a
+  person an admin, list the prefixed value.
+- **An email the IdP marks unverified is refused.** With the email claim as
+  the identity, a token carrying `email_verified: false` is refused.
+  Whether a token with no `email_verified` claim at all is accepted is up to
+  you:
+
+  ```bash
+  OIDC_REQUIRE_EMAIL_VERIFIED=true      # default false
+  ```
+
+  Keycloak, Okta, Auth0 and Google send `email_verified`; turn this on for
+  them. Entra ID and ADFS do not send it: on those, leave it off and rely
+  on the IdP only issuing addresses it controls, or use a claim such as
+  `upn` or `oid` as the identity instead.
+
+Changing `OIDC_IDENTITY_CLAIM` changes everyone's identity, so collections
+owned under the old value no longer belong to them. Pick the claim before
+people start creating collections.
 
 ### Narrowing admission by claim
 
@@ -97,9 +136,12 @@ find the JWKS URL. If that is unreachable, name the key set directly:
 OIDC_JWKS_URL=https://sso.internal/realms/main/protocol/openid-connect/certs
 ```
 
-Keys are cached for an hour and refreshed once on an unknown key id, so IdP
-key rotation needs no restart. If the JWKS cannot be fetched at all, requests
-are **refused**, never admitted.
+Keys are cached for an hour and refreshed on an unknown key id, so IdP key
+rotation needs no restart. That refresh runs at most once a minute per key
+set, whatever the tokens say, and a failed fetch is not retried for a
+minute either; after a rotation, tokens signed with the new key are accepted
+within that minute. If the JWKS cannot be fetched at all, requests are
+**refused**, never admitted.
 
 ### Certificates
 
@@ -140,25 +182,44 @@ one of two guards is **mandatory** — the app will not start otherwise:
 1. **`HOST` is loopback.** Only a process on the host can connect, so the
    proxy is the only route in. Simplest, and correct for the usual
    nginx/Apache-in-front shape.
-2. **`TRUSTED_HEADER_SECRET`.** The proxy proves the identity with
-   HMAC-SHA256 over the header value, hex-encoded, in
-   `TRUSTED_HEADER_SIGNATURE_NAME`. Holds regardless of network path — use
-   it when the proxy is on another host.
+2. **`TRUSTED_HEADER_SECRET`.** The proxy signs the identity and the
+   current time with HMAC-SHA256. Holds regardless of network path — use it
+   when the proxy is on another host.
 
 ```bash
 TRUSTED_HEADER_SECRET=<32+ random bytes>
 TRUSTED_HEADER_SIGNATURE_NAME=X-Forwarded-User-Signature
+TRUSTED_HEADER_TIMESTAMP_NAME=X-Forwarded-User-Timestamp
+TRUSTED_HEADER_MAX_SKEW_SECONDS=300
 ```
 
-The signature covers the identity value exactly:
+On every request the proxy sends three headers:
 
 ```
-signature = hex( HMAC-SHA256( TRUSTED_HEADER_SECRET, "analyst@agency.gov" ) )
+X-Forwarded-User:            analyst@agency.gov
+X-Forwarded-User-Timestamp:  1763475000            # Unix time, seconds
+X-Forwarded-User-Signature:  hex( HMAC-SHA256( TRUSTED_HEADER_SECRET,
+                                               "analyst@agency.gov|1763475000" ) )
 ```
 
-Signing the value — not just sending a shared secret — is what stops a proxy
-bug, or anything that learns the secret from a log, from claiming to be
-someone else.
+The signed message is the identity, a `|`, and the timestamp exactly as sent.
+The app refuses a timestamp more than `TRUSTED_HEADER_MAX_SKEW_SECONDS` away
+from its own clock, in either direction, so keep both hosts on NTP. A
+captured set of headers therefore stops working within that window. Signing
+the value — not just sending a shared secret — is what stops a proxy bug, or
+anything that learns a header from a log, from claiming to be someone else.
+
+**The older format** — a signature over the identity alone, with no
+timestamp header — is still accepted for this release, with a warning in the
+log the first time it is seen, because it never expires. Move the proxy to
+the format above, then turn it off:
+
+```bash
+TRUSTED_HEADER_ALLOW_LEGACY_SIGNATURE=false   # default true; false under CLIO_PROFILE=secure
+```
+
+A request that carries a timestamp header is always checked in the new
+format, never the old one.
 
 ### Why `TRUSTED_HEADER_PROXIES` is not a guard by itself
 
@@ -177,14 +238,49 @@ this: a configuration whose only guard is a CIDR list refuses to start.
 Terminate TLS at the proxy, then pass the subject:
 
 ```nginx
-# nginx
+# nginx, loopback bind: the subject is enough
 proxy_set_header X-Forwarded-User $ssl_client_s_dn_cn;
-proxy_set_header X-Forwarded-User-Signature $hmac;   # njs/Lua, if not loopback
 ```
 
-Make sure the proxy **strips any inbound `X-Forwarded-User`** before setting
-its own. `proxy_set_header` replaces rather than appends, which covers the
-usual case.
+With the app on another host, the proxy computes the signature. Stock nginx
+has no HMAC, so use njs (or OpenResty's Lua):
+
+```nginx
+# nginx with njs
+js_import clio from /etc/nginx/clio_sign.js;
+js_set $clio_ts  clio.timestamp;
+js_set $clio_sig clio.signature;
+
+location / {
+    proxy_set_header X-Forwarded-User           $ssl_client_s_dn_cn;
+    proxy_set_header X-Forwarded-User-Timestamp $clio_ts;
+    proxy_set_header X-Forwarded-User-Signature $clio_sig;
+    proxy_pass http://clio-upstream:8473;
+}
+```
+
+```js
+// /etc/nginx/clio_sign.js
+const crypto = require('crypto');
+const SECRET = process.env.TRUSTED_HEADER_SECRET;   // needs `env TRUSTED_HEADER_SECRET;` in nginx.conf
+
+function timestamp(r) {
+    return String(Math.floor(Date.now() / 1000));
+}
+
+function signature(r) {
+    // Read the timestamp through its variable, which nginx evaluates once
+    // per request, so the signed value is the one sent.
+    const who = r.variables.ssl_client_s_dn_cn || '';
+    return crypto.createHmac('sha256', SECRET).update(`${who}|${r.variables.clio_ts}`).digest('hex');
+}
+
+export default { timestamp, signature };
+```
+
+Make sure the proxy **strips any inbound copy** of the identity,
+timestamp and signature headers before setting its own. `proxy_set_header`
+replaces rather than appends, which covers the usual case.
 
 ---
 
@@ -357,6 +453,34 @@ row per tool call — an agent turn is typically several.
 
 ---
 
+## Upgrading an existing deployment
+
+What changed in identity handling, and what to check:
+
+- **`oidc`: no silent claim fallback.** Earlier releases used
+  `preferred_username`, then `sub`, when a token had no `email`. Those
+  tokens are now refused with a 401 naming the claim. If some of your users
+  have no email claim, either have the IdP release one, or set
+  `OIDC_IDENTITY_FALLBACK_CLAIMS=preferred_username,sub`. Their identity is
+  then `preferred_username:<value>`, a new identity: collections they owned
+  under the bare value need their owner changed, and `ADMIN_EMAILS` needs the
+  prefixed value.
+- **`oidc`: `email_verified: false` is refused.** Set
+  `OIDC_REQUIRE_EMAIL_VERIFIED=true` as well if your IdP sends the claim.
+- **`trusted_header` with `TRUSTED_HEADER_SECRET`: timestamped signatures.**
+  The old format keeps working for this release (a warning is logged), except
+  under `CLIO_PROFILE=secure`, where it is refused at once. Change the proxy
+  to send `X-Forwarded-User-Timestamp` and sign `identity|timestamp`, check
+  the hosts' clocks agree, then set `TRUSTED_HEADER_ALLOW_LEGACY_SIGNATURE=false`.
+  A secure-profile site that cannot change its proxy first can set it to
+  `true` for the transition.
+- **Personal MCP tokens expire.** New tokens last at most
+  `MCP_TOKEN_MAX_DAYS` (365 days; 90 under the secure profile). Existing
+  tokens are untouched and keep working; Settings → MCP marks those longer
+  than the limit *Rotate*.
+
+---
+
 ## Checklist
 
 Only for deployments using `oidc` or `trusted_header`:
@@ -365,8 +489,12 @@ Only for deployments using `oidc` or `trusted_header`:
       what is missing)
 - [ ] `OIDC_AUDIENCE` is this app's client id, not a shared or wildcard value
 - [ ] `PRIVATE_COLLECTIONS=true` if people should not see each other's sources
+- [ ] For `oidc`: every token carries `OIDC_IDENTITY_CLAIM`;
+      `OIDC_REQUIRE_EMAIL_VERIFIED=true` if your IdP sends `email_verified`
 - [ ] For `trusted_header`: loopback bind or HMAC secret, and the proxy
       strips inbound copies of the identity header
+- [ ] With an HMAC secret: the proxy sends the timestamp header and
+      `TRUSTED_HEADER_ALLOW_LEGACY_SIGNATURE=false`
 - [ ] `MCP_AUDIT_TOOL_CALLS=true` where reads must be accountable
 - [ ] `ADMIN_EMAILS` lists identities as this provider reports them (the
       email claim, the certificate CN - whatever `OIDC_IDENTITY_CLAIM` or the
