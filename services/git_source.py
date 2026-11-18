@@ -9,7 +9,8 @@ network.
 Hardening applied to every invocation:
 
 * no prompts (``GIT_TERMINAL_PROMPT=0``), no LFS downloads, no hooks, no
-  submodule recursion, only ``https`` and ``ssh`` transports;
+  submodule recursion, only ``https`` and ``ssh`` transports, and no HTTP
+  redirects (the checked address is the one cloned);
 * ``safe.directory`` is pinned to the one path being read, so a repository
   owned by another account (a bind mount into a container) is readable
   without lowering the check globally;
@@ -101,8 +102,12 @@ def _run(args: List[str], *, cwd: Optional[Path] = None, safe_dir: Optional[Path
          env_extra: Optional[Dict[str, str]] = None, timeout: Optional[float] = None) -> str:
     if not git_available():
         raise GitError("git is not installed on this server")
+    # http.followRedirects=false: the address was checked against the
+    # private-network policy, and a redirect would move the clone somewhere
+    # that was not (git's default follows the first request's redirects).
     cmd = ["git", "-c", "core.hooksPath=", "-c", f"protocol.file.allow={FILE_PROTOCOL}",
-           "-c", "core.fsmonitor=false", "-c", "core.quotepath=off"]
+           "-c", "core.fsmonitor=false", "-c", "core.quotepath=off",
+           "-c", "http.followRedirects=false"]
     if safe_dir is not None:
         cmd += ["-c", f"safe.directory={Path(safe_dir).resolve().as_posix()}"]
     cmd += args

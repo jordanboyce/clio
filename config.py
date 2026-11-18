@@ -20,6 +20,7 @@ SECURE_PROFILE_DEFAULTS = {
     "offline_mode": True,            # no cloud providers, hosted embeddings or downloads
     "mcp_audit_tool_calls": True,    # every agent read is attributable
     "link_indexing_enabled": False,  # the server does not fetch arbitrary web pages
+    "ai_allowed_base_urls": "none",  # model calls go only to AI_BASE_URL / OLLAMA_BASE_URL
 }
 
 
@@ -177,6 +178,14 @@ class Settings(BaseSettings):
     ai_base_url: str = ""
     ai_model: str = ""
     ai_api_key: str = ""
+    # Model endpoints a request may name in X-AI-Base-URL (with its own key),
+    # comma-separated. The server makes that call, so an open choice lets
+    # anyone who can chat make it send requests into this network. Empty: any
+    # endpoint (the standard profile). "none": only the operator's own
+    # AI_BASE_URL and OLLAMA_BASE_URL (the secure profile's default). Those two
+    # are always allowed. An entry matches itself and any path beneath it,
+    # e.g. "https://llm.corp.example, http://vllm.internal:8000/v1".
+    ai_allowed_base_urls: str = ""
     # What the UI calls it. Empty falls back to the provider id, which reads
     # badly for a private endpoint ("openai_compatible" is not a product
     # anyone recognises); name it after the thing people know.

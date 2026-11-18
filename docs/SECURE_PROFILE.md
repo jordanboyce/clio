@@ -16,6 +16,7 @@ CLIO_PROFILE=secure
 | `OFFLINE_MODE` | on | No cloud AI providers, hosted embeddings, web fetching or model downloads |
 | `MCP_AUDIT_TOOL_CALLS` | on | Every agent read is attributable, not just writes |
 | `LINK_INDEXING_ENABLED` | off | The server does not fetch arbitrary web pages |
+| `AI_ALLOWED_BASE_URLS` | `none` | A request cannot point model calls at an endpoint of its choosing (`X-AI-Base-URL`); only `AI_BASE_URL` and `OLLAMA_BASE_URL` |
 
 **Things it refuses to start with.** The standard profile logs a warning for
 these; the secure profile exits with a message that names each problem:
