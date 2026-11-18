@@ -11,6 +11,11 @@ Hardening applied to every invocation:
 * no prompts (``GIT_TERMINAL_PROMPT=0``), no LFS downloads, no hooks, no
   submodule recursion, only ``https`` and ``ssh`` transports, and no HTTP
   redirects (the checked address is the one cloned);
+* when the private-network check ran, git connects to the address that was
+  checked rather than looking the name up again, so a name that answers
+  differently a moment later (DNS rebinding) cannot move the clone onto an
+  internal host: ``http.curloptResolve`` for https, ``HostName`` (with
+  ``HostKeyAlias`` keeping the host key check on the name) for ssh;
 * ``safe.directory`` is pinned to the one path being read, so a repository
   owned by another account (a bind mount into a container) is readable
   without lowering the check globally;
@@ -26,15 +31,18 @@ clone is a disposable mirror, never a working copy anyone edits.
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
+import ipaddress
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from config import settings
@@ -83,6 +91,14 @@ def repos_dir() -> Path:
 
 # ── Running git ──────────────────────────────────────────────────────────
 
+# A hung ssh must fail rather than wait for a passphrase or host-key prompt.
+_DEFAULT_SSH_COMMAND = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20"
+
+
+def _ssh_command() -> str:
+    return os.environ.get("GIT_SSH_COMMAND") or _DEFAULT_SSH_COMMAND
+
+
 def _base_env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     env = dict(os.environ)
     env.update({
@@ -90,16 +106,58 @@ def _base_env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         "GIT_LFS_SKIP_SMUDGE": "1",
         "GIT_ALLOW_PROTOCOL": ALLOW_PROTOCOL,
         "GIT_OPTIONAL_LOCKS": "0",
-        # A hung ssh must fail rather than wait for a passphrase or host-key prompt.
-        "GIT_SSH_COMMAND": env.get("GIT_SSH_COMMAND")
-        or "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20",
+        "GIT_SSH_COMMAND": _ssh_command(),
     })
     env.update(extra or {})
     return env
 
 
+# http.curloptResolve arrived in git 2.37; an older git ignores the setting
+# without a word, so the pin would silently not apply.
+MIN_PIN_GIT_VERSION = (2, 37)
+
+
+@functools.lru_cache(maxsize=1)
+def git_version() -> Tuple[int, int]:
+    """(major, minor) of the git binary; (0, 0) when it cannot be told."""
+    try:
+        out = subprocess.run(["git", "--version"], capture_output=True, timeout=30).stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError):
+        return (0, 0)
+    match = re.search(r"(\d+)\.(\d+)", out)
+    return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+
+
+def _pin_options(info: Dict[str, object]) -> Tuple[List[str], Dict[str, str]]:
+    """git ``-c`` options and environment that make git connect to the checked address.
+
+    ``info`` is what :func:`validate_remote` returned; its ``pin`` is set
+    only when the private-network check ran (no GIT_ALLOWED_HOSTS, private
+    networks not allowed). With an outbound proxy configured, the proxy
+    resolves the name, as for web links.
+    """
+    pin = info.get("pin")
+    if not pin:
+        return [], {}
+    host, address, port = str(info["host"]), str(pin["address"]), int(pin["port"])
+    if pin["scheme"] == "https":
+        if git_version() < MIN_PIN_GIT_VERSION:
+            have = ".".join(map(str, git_version()))
+            raise GitRefused(
+                f"This server's git ({have}) cannot be held to the address Clio checked; git 2.37 or "
+                f"later is needed to clone from {host}. Add it to GIT_ALLOWED_HOSTS to allow it anyway."
+            )
+        target = f"[{address}]" if ":" in address else address
+        return ["-c", f"http.curloptResolve={host}:{port}:{target}"], {}
+    # ssh: the first value of an option wins, and the command line comes before
+    # ssh_config, so these hold even under an operator's own GIT_SSH_COMMAND.
+    return [], {"GIT_SSH_COMMAND": f"{_ssh_command()} -o HostName={shlex.quote(address)} "
+                                   f"-o HostKeyAlias={shlex.quote(host)}"}
+
+
 def _run(args: List[str], *, cwd: Optional[Path] = None, safe_dir: Optional[Path] = None,
-         env_extra: Optional[Dict[str, str]] = None, timeout: Optional[float] = None) -> str:
+         env_extra: Optional[Dict[str, str]] = None, timeout: Optional[float] = None,
+         remote: Optional[Dict[str, object]] = None) -> str:
     if not git_available():
         raise GitError("git is not installed on this server")
     # http.followRedirects=false: the address was checked against the
@@ -110,6 +168,10 @@ def _run(args: List[str], *, cwd: Optional[Path] = None, safe_dir: Optional[Path
            "-c", "http.followRedirects=false"]
     if safe_dir is not None:
         cmd += ["-c", f"safe.directory={Path(safe_dir).resolve().as_posix()}"]
+    if remote is not None:
+        pin_config, pin_env = _pin_options(remote)
+        cmd += pin_config
+        env_extra = {**(env_extra or {}), **pin_env}
     cmd += args
     try:
         proc = subprocess.run(
@@ -260,8 +322,10 @@ def _host_allowed(host: str, allowed: List[str]) -> bool:
 def validate_remote(url: str, branch: Optional[str] = None) -> Dict[str, str]:
     """Normalize a repository address and enforce the deployment's policy.
 
-    Returns ``{url, host, branch}``. Raises :class:`GitRefused` for anything
-    the server must not clone.
+    Returns ``{url, host, branch, pin}``. ``pin`` is ``{scheme, address,
+    port}`` when the host had to be shown to be public: the address git must
+    then connect to (see :func:`_pin_options`). Otherwise it is None.
+    Raises :class:`GitRefused` for anything the server must not clone.
     """
     from services import link_fetcher
 
@@ -275,6 +339,7 @@ def validate_remote(url: str, branch: Optional[str] = None) -> Dict[str, str]:
     scp = _SCP_LIKE.match(raw)
     if scp:
         host = scp.group("host").lower()
+        scheme, port = "ssh", 22
     else:
         parsed = urlparse(raw)
         if parsed.scheme not in ("https", "ssh"):
@@ -286,7 +351,13 @@ def validate_remote(url: str, branch: Optional[str] = None) -> Dict[str, str]:
         if not parsed.hostname:
             raise GitRefused("That repository address has no host")
         host = parsed.hostname.lower()
+        scheme = parsed.scheme
+        try:
+            port = parsed.port or (443 if scheme == "https" else 22)
+        except ValueError:
+            raise GitRefused("That repository address has an invalid port") from None
 
+    pin = None
     allowed = _allowed_hosts()
     if allowed:
         if not _host_allowed(host, allowed):
@@ -305,7 +376,17 @@ def validate_remote(url: str, branch: Optional[str] = None) -> Dict[str, str]:
             raise GitRefused(
                 f"{host} is on a private network. Add it to GIT_ALLOWED_HOSTS to allow it."
             )
-    return {"url": raw, "host": host, "branch": ref}
+        if not _is_ip_literal(host):  # an address resolves to itself: nothing to pin
+            pin = {"scheme": scheme, "address": addresses[0], "port": port}
+    return {"url": raw, "host": host, "branch": ref, "pin": pin}
+
+
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return True
+    except ValueError:
+        return False
 
 
 def clone_path(url: str, branch: str = "") -> Path:
@@ -365,7 +446,7 @@ def ensure_clone(url: str, branch: str = "") -> Path:
         if (dest / ".git").exists():
             ref = info["branch"] or "HEAD"
             _run(["fetch", f"--depth={CLONE_DEPTH}", "--no-tags", "--no-recurse-submodules", "origin", ref],
-                 cwd=dest, safe_dir=dest, env_extra=env)
+                 cwd=dest, safe_dir=dest, env_extra=env, remote=info)
             _run(["reset", "--hard", "FETCH_HEAD"], cwd=dest, safe_dir=dest)
             _run(["clean", "-fdxq"], cwd=dest, safe_dir=dest)
             return dest
@@ -375,7 +456,7 @@ def ensure_clone(url: str, branch: str = "") -> Path:
             args += ["--branch", info["branch"]]
         args += ["--", info["url"], str(dest)]
         try:
-            _run(args, env_extra=env)
+            _run(args, env_extra=env, remote=info)
         except GitError:
             shutil.rmtree(dest, ignore_errors=True)  # a half-made clone must not be mistaken for one
             raise
@@ -386,6 +467,7 @@ def remote_head(url: str, branch: str = "") -> Optional[str]:
     """Tip commit of the remote branch, without downloading it (a cheap change check)."""
     info = validate_remote(url, branch)
     ref = info["branch"] or "HEAD"
-    out = _run(["ls-remote", "--", info["url"], ref], env_extra=_auth_env(info["url"], info["host"]), timeout=60)
+    out = _run(["ls-remote", "--", info["url"], ref], env_extra=_auth_env(info["url"], info["host"]), timeout=60,
+               remote=info)
     first = out.split("\n", 1)[0].split("\t", 1)[0].strip()
     return first or None

@@ -78,6 +78,34 @@ The same report is available to administrators at
 `GET /api/system/readiness` and from **About → Check this deployment** in the
 app. `GET /health` reports the active `profile` to a caller with a credential.
 
+## Git remotes and DNS
+
+A repository address is checked before anything is cloned
+(`services/git_source.py`). With `GIT_ALLOWED_HOSTS` set, the host must be on
+the list. Without it, and with `LINK_ALLOW_PRIVATE_NETWORKS` off, Clio
+resolves the host itself and refuses it unless every address it gets back is
+public. Redirects are never followed.
+
+git would otherwise look the name up again for itself, so a name that gave a
+public address to the check and an internal one a moment later (DNS
+rebinding) could still have been cloned from inside the network. So git is
+held to the address that was checked, on every clone, fetch and `ls-remote`:
+
+- **https**: `http.curloptResolve=<host>:<port>:<address>`. The URL keeps the
+  host name, so TLS still verifies the certificate against it. This needs git
+  2.37 or later; an older git ignores the setting silently, so Clio refuses a
+  remote it would have to pin and names `GIT_ALLOWED_HOSTS` as the way to allow
+  it anyway.
+- **ssh** (`ssh://` and `user@host:path`): `-o HostName=<address>
+  -o HostKeyAlias=<host>` is added to `GIT_SSH_COMMAND`, the operator's own
+  command included. ssh connects to the checked address and still checks the
+  host key against the name in `known_hosts`.
+
+Nothing is pinned when the operator decided instead of the check: a host in
+`GIT_ALLOWED_HOSTS`, or `LINK_ALLOW_PRIVATE_NETWORKS=true`. An address typed
+as an IP needs no pin. With an outbound proxy (`HTTPS_PROXY`), the proxy
+resolves the name, as it does for web links.
+
 ## Typical secure install
 
 1. On a connected machine: `docker compose build --build-arg OFFLINE_BUNDLE=1`,
