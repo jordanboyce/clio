@@ -18,7 +18,7 @@ vi.mock('../../utils/http', () => ({ default: { get: vi.fn(() => Promise.resolve
 import ModelPicker from '../ModelPicker.vue'
 import AnswerModelSelect from '../AnswerModelSelect.vue'
 import CollectionPicker from '../CollectionPicker.vue'
-import { getProviderConfig, setActiveProviderLS, upsertProviderConfig } from '../../utils/aiProviders'
+import { getProviderConfig, invalidateModelCache, setActiveProviderLS, upsertProviderConfig } from '../../utils/aiProviders'
 import { useProviderStore } from '../../stores/providerStore'
 
 beforeEach(() => {
@@ -120,5 +120,25 @@ describe('CollectionPicker', () => {
     const shown = wrapper.findAll('[role="option"]')
     expect(shown).toHaveLength(1)
     expect(shown[0].text()).toContain('Needle')
+  })
+})
+
+describe('ModelPicker says why it cannot list models (B12)', () => {
+  it('shows the reason with Try again, and a model can still be typed', async () => {
+    invalidateModelCache()
+    const axios = (await import('axios')).default
+    axios.post.mockImplementationOnce(() => Promise.reject(Object.assign(new Error('Connection refused. Is the provider reachable?'), {})))
+    upsertProviderConfig('anthropic', { apiKey: 'sk-ant-test' })
+    setActiveProviderLS('anthropic')
+    const wrapper = mount(ModelPicker)
+    await wrapper.get('label').trigger('focus')
+    await flushPromises()
+    const box = wrapper.get('[data-testid="model-list-error"]')
+    expect(box.text()).toContain('Could not list models from')
+    expect(box.text()).toContain('Connection refused')
+    expect(box.text()).toContain('Try again')
+    await box.get('input').setValue('llama3.1:8b')
+    await box.get('form').trigger('submit')
+    expect(getProviderConfig('anthropic').model).toBe('llama3.1:8b')
   })
 })

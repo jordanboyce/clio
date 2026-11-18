@@ -73,6 +73,25 @@
             </optgroup>
           </select>
           <p v-if="loadingModels" class="text-xs text-base-content/60 mt-1">Loading models…</p>
+          <!-- B12: a provider that cannot list its models says why, and a
+               model can still be typed. -->
+          <div v-else-if="loadError" class="mt-1.5 space-y-1.5" data-testid="model-list-error">
+            <p class="text-xs text-base-content/70">
+              Could not list models from {{ name }}: {{ loadError }}.
+              <button type="button" class="link link-primary" @click="loadModels">Try again</button>
+            </p>
+            <form class="flex gap-1.5" @submit.prevent="useTyped">
+              <input
+                v-model="typedModel"
+                class="input input-bordered input-xs flex-1 font-mono"
+                placeholder="Type a model name"
+                aria-label="Model name"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button class="btn btn-xs" :disabled="!typedModel.trim()">Use</button>
+            </form>
+          </div>
           <p v-else-if="abilities.length" class="text-xs text-base-content/70 mt-1.5" data-testid="model-badges">{{ abilities.join(' · ') }}</p>
         </div>
 
@@ -123,6 +142,8 @@ const pillTitle = computed(() => `AI: ${name.value}${modelLabel.value ? ', ' + m
 
 const models = ref([])
 const loadingModels = ref(false)
+const loadError = ref('')
+const typedModel = ref('')
 let seq = 0
 // Only models that can write answers: an embedding or speech model a key
 // also lists is not offered here (the server's capability records say which).
@@ -139,14 +160,35 @@ async function loadModels() {
   if (!id || deployment.value) { models.value = []; return }
   const mine = ++seq
   loadingModels.value = true
+  loadError.value = ''
   try {
-    const { models: list } = await fetchProviderModels(id)
-    if (mine === seq) models.value = list || []
-  } catch {
-    if (mine === seq) models.value = []
+    // A provider that cannot be listed answers with `error`, not a throw.
+    const { models: list, error } = await fetchProviderModels(id)
+    if (mine === seq) {
+      models.value = list || []
+      if (error && !(list || []).length) loadError.value = shortReason({ message: error })
+    }
+  } catch (err) {
+    if (mine !== seq) return
+    models.value = []
+    loadError.value = shortReason(err)
   } finally {
     if (mine === seq) loadingModels.value = false
   }
+}
+
+// The first sentence of whatever the provider or the network said.
+function shortReason(err) {
+  const text = String(err?.message || err?.response?.data?.detail || 'it did not answer')
+  const first = text.split(/(?<=[.!?])\s|\r?\n/)[0].replace(/[.!?]+$/, '').trim()
+  return first.length > 140 ? `${first.slice(0, 139)}…` : (first || 'it did not answer')
+}
+
+function useTyped() {
+  const model = typedModel.value.trim()
+  if (!model || !activeId.value) return
+  setProviderModel(activeId.value, model)
+  typedModel.value = ''
 }
 
 function choose(pid) {
