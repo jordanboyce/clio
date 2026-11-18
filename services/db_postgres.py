@@ -362,6 +362,8 @@ class PostgresBackend(DatabaseBackend):
                         detail TEXT
                     )
                 """)
+                for col in ("source_ip", "request_id", "auth_method"):  # E1
+                    cur.execute(f"ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS {col} TEXT")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_events(timestamp DESC)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_events(action, timestamp DESC)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_events(actor, timestamp DESC)")
@@ -1416,16 +1418,19 @@ class PostgresBackend(DatabaseBackend):
     # ── Audit trail ──────────────────────────────────────────
 
     def add_audit_events(self, actor: Optional[str], action: str, collection_id: Optional[str],
-                         events: List[Dict[str, Optional[str]]]) -> None:
+                         events: List[Dict[str, Optional[str]]],
+                         context: Optional[Dict[str, Optional[str]]] = None) -> None:
         timestamp = utcnow().isoformat()
+        ctx = [(context or {}).get(c) for c in ("source_ip", "request_id", "auth_method")]
         conn = self._conn()
         try:
             with conn.cursor() as cur:
                 cur.executemany(
-                    """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                    [(timestamp, actor, action, collection_id, e.get("document_id"), e.get("target"), e.get("detail"))
-                     for e in events],
+                    """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail,
+                                                 source_ip, request_id, auth_method)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    [(timestamp, actor, action, collection_id, e.get("document_id"), e.get("target"), e.get("detail"),
+                      *ctx) for e in events],
                 )
             conn.commit()
         finally:
@@ -1439,14 +1444,17 @@ class PostgresBackend(DatabaseBackend):
         document_id: Optional[str] = None,
         target: Optional[str] = None,
         detail: Optional[str] = None,
+        context: Optional[Dict[str, Optional[str]]] = None,
     ) -> int:
+        ctx = [(context or {}).get(c) for c in ("source_ip", "request_id", "auth_method")]
         conn = self._conn()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                    (utcnow().isoformat(), actor, action, collection_id, document_id, target, detail),
+                    """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail,
+                                                 source_ip, request_id, auth_method)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (utcnow().isoformat(), actor, action, collection_id, document_id, target, detail, *ctx),
                 )
                 event_id = cur.fetchone()[0]
             conn.commit()
@@ -1462,6 +1470,7 @@ class PostgresBackend(DatabaseBackend):
         collection_id: Optional[str] = None,
         document_id: Optional[str] = None,
         since: Optional[str] = None,
+        before_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         clauses, params = [], []
         for col, val in (("action", action), ("actor", actor),
@@ -1472,13 +1481,16 @@ class PostgresBackend(DatabaseBackend):
         if since:
             clauses.append("timestamp >= %s")
             params.append(since)
+        if before_id is not None:
+            clauses.append("id < %s")
+            params.append(int(before_id))
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         conn = self._conn()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT * FROM audit_events {where} ORDER BY timestamp DESC, id DESC LIMIT %s",
+                    f"SELECT * FROM audit_events {where} ORDER BY id DESC LIMIT %s",
                     params,
                 )
                 return self._fetchall_dict(cur)

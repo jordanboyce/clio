@@ -347,12 +347,16 @@ class DatabaseBackend(ABC):
         document_id: Optional[str] = None,
         target: Optional[str] = None,
         detail: Optional[str] = None,
+        context: Optional[Dict[str, Optional[str]]] = None,
     ) -> int:
+        """``context`` carries the request's ``source_ip``, ``request_id`` and
+        ``auth_method`` (services/audit.py)."""
         ...
 
     @abstractmethod
     def add_audit_events(self, actor: Optional[str], action: str, collection_id: Optional[str],
-                         events: List[Dict[str, Optional[str]]]) -> None:
+                         events: List[Dict[str, Optional[str]]],
+                         context: Optional[Dict[str, Optional[str]]] = None) -> None:
         """Record one action over many documents in one transaction."""
         ...
 
@@ -365,7 +369,9 @@ class DatabaseBackend(ABC):
         collection_id: Optional[str] = None,
         document_id: Optional[str] = None,
         since: Optional[str] = None,
+        before_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        """Newest first. ``before_id`` continues a page: only rows older than it."""
         ...
 
     @abstractmethod

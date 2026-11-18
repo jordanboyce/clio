@@ -629,6 +629,7 @@ async def _serve_registered_app(request, call_next, presented: str):
     request.state.auth_via = via
     request.state.rate_limit_key = f"app:{app_record['id']}"
     request.state.rate_limit_overrides = api_apps.rate_limit_overrides(app_record)
+    await _audit_sign_in(request)
     with mcp_server.app_request_scope(app_record):
         return await call_next(request)
 
@@ -755,6 +756,7 @@ async def require_auth(request, call_next):
         and not presented.startswith("asy_mcp_")
         and not app_credential
     ):
+        request.state.auth_via = "open"  # nothing to sign in with; the audit trail says so
         return await call_next(request)
 
     # Browsers get the Basic challenge so the native prompt still works. The
@@ -782,6 +784,36 @@ async def require_auth(request, call_next):
         status_code=401,
         headers={"WWW-Authenticate": www_authenticate},
     )
+
+# Every request carries its credential, so "signed in" is recorded once per
+# caller, method and address in this window rather than on every call.
+_SIGN_IN_AUDIT_WINDOW_SECONDS = 3600
+_SIGN_IN_AUDIT_MAX = 10_000
+_signed_in: dict = {}
+
+
+async def _audit_sign_in(request) -> None:
+    """An auth.sign_in row the first time a caller succeeds in a while."""
+    import time as _time
+
+    via = getattr(request.state, "auth_via", None)
+    who = getattr(request.state, "auth_identity", None)
+    key = (via, who, _client_ip(request))
+    now = _time.monotonic()
+    last = _signed_in.get(key)
+    if last is not None and now - last < _SIGN_IN_AUDIT_WINDOW_SECONDS:
+        return
+    if len(_signed_in) >= _SIGN_IN_AUDIT_MAX:
+        _signed_in.clear()
+    _signed_in[key] = now
+    from services import audit
+
+    detail = {"method": via}
+    token_id = getattr(request.state, "mcp_token_id", None)
+    if token_id:
+        detail["token_id"] = token_id
+    await asyncio.to_thread(audit.record, "auth.sign_in", actor=who, detail=detail)
+
 
 async def _refuse_if_suspended(request, identity: str):
     from services import governance
@@ -826,6 +858,7 @@ async def _call_with_user_context(request, call_next):
         refused = await _refuse_if_suspended(request, identity)
         if refused is not None:
             return refused
+    await _audit_sign_in(request)
     identity_token = set_request_identity(identity)
     user_token = set_request_user(identity) if settings.private_collections else None
     try:
@@ -857,6 +890,13 @@ app.middleware("http")(_enforce_boundary)
 # Added last, which makes it the OUTERMOST middleware: it times auth and rate
 # limiting too, and reads the identity auth left on request.state for its
 # access line. /api/admin/stats reads its counters.
+# Inside track_request (registered next, so outside this), which puts the
+# request id in scope["state"]: binds the scope for the audit trail and the
+# request id on log lines (middleware/request_context.py).
+from middleware.request_context import RequestContext as _RequestContext
+
+app.add_middleware(_RequestContext)
+
 from middleware.request_meta import track_request as _track_request
 
 app.middleware("http")(_track_request)

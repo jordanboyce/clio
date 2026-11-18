@@ -301,15 +301,20 @@ async def get_audit(
     collection_id: Optional[str] = None,
     document_id: Optional[str] = None,
     since: Optional[str] = None,
+    before: Optional[int] = None,
     format: Optional[str] = None,
 ):
-    """Newest-first events, filterable; ``format=csv`` returns a file."""
+    """Newest-first events, filterable; ``format=csv`` returns a file.
+
+    A page holds at most 2000 rows. ``next_before`` is the cursor for the
+    next, older page (pass it back as ``before``), or null at the end.
+    """
     require_admin("view the audit trail")
     limit = max(1, min(limit, 2000))
     rows = audit.list_events(
         limit=limit, action=action or None, actor=actor or None,
         collection_id=collection_id or None, document_id=document_id or None,
-        since=since or None,
+        since=since or None, before_id=before,
     )
     if (format or "").lower() == "csv":
         return PlainTextResponse(
@@ -321,6 +326,7 @@ async def get_audit(
         "retention_days": settings.audit_retention_days,
         "actions": audit.ACTIONS,
         "events": rows,
+        "next_before": rows[-1]["id"] if len(rows) == limit else None,
     }
 
 

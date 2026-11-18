@@ -317,10 +317,16 @@ driver at your SIEM.
 **Metrics:** set `METRICS_ENABLED=true` and `METRICS_TOKEN=<token>`. That token opens
 `/metrics` and nothing else. See [Monitoring](DEPLOYMENT.md#monitoring).
 
-**Audit trail:** Admin → Audit trail, or `GET /api/admin/audit` (add `format=csv` to export).
-It records uploads, deletions, shares, tokens, app changes and admin decisions, and agent and
-app reads with `MCP_AUDIT_TOOL_CALLS=true` (on under the secure profile). It keeps
-`AUDIT_RETENTION_DAYS`, 365 by default.
+**Audit trail:** Admin → Audit trail, or `GET /api/admin/audit` (add `format=csv` to export;
+pass the response's `next_before` back as `before` for the next older page).
+It records uploads, deletions, shares, tokens, app changes and admin decisions, sign-ins,
+failed sign-ins and lockouts, and agent and app reads with `MCP_AUDIT_TOOL_CALLS=true` (on
+under the secure profile). Each row has the source address, request id and sign-in method.
+It keeps `AUDIT_RETENTION_DAYS`, 365 by default.
+
+Each row is also written to the log as it happens, on the `clio.audit` logger: with
+`LOG_FORMAT=json`, one line whose `audit` object is the row, so the SIEM that collects the
+container's stdout has the trail without polling the API.
 
 ## Limits
 

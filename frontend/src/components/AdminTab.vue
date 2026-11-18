@@ -586,7 +586,7 @@
           <tbody>
             <tr v-for="e in auditEvents" :key="e.id">
               <td class="whitespace-nowrap">{{ formatWhen(e.timestamp) }}</td>
-              <td class="truncate max-w-[20ch]">{{ e.actor || 'anonymous' }}</td>
+              <td class="truncate max-w-[20ch]" :title="auditOrigin(e)">{{ e.actor || 'anonymous' }}</td>
               <td class="font-mono">{{ e.action }}</td>
               <td class="truncate max-w-[24ch]">
                 {{ e.collection_id || '' }}<span v-if="e.document_id"> · {{ e.document_id.slice(0, 8) }}</span><span v-if="e.target"> · {{ e.target }}</span>
@@ -595,6 +595,11 @@
             </tr>
           </tbody>
         </table>
+        <div v-if="auditNextBefore" class="p-2 text-center">
+          <button class="btn btn-xs btn-ghost" data-testid="audit-older" :disabled="auditLoadingOlder" @click="loadOlderAudit">
+            {{ auditLoadingOlder ? 'Loading…' : 'Show older events' }}
+          </button>
+        </div>
       </div>
       <p class="text-[11px] text-base-content/45 mt-1">
         Kept for {{ auditRetention ? auditRetention + ' days' : 'ever' }} (AUDIT_RETENTION_DAYS).
@@ -933,14 +938,41 @@ const auditCsvHref = computed(() => {
   return `/api/admin/audit?${p.toString()}`
 })
 
+// The server pages with a cursor (next_before); older pages are appended.
+const auditNextBefore = ref(null)
+const auditLoadingOlder = ref(false)
+
+const auditParams = () => {
+  const params = { limit: 200 }
+  if (auditFilter.action) params.action = auditFilter.action
+  if (auditFilter.actor.trim()) params.actor = auditFilter.actor.trim()
+  return params
+}
+
+// How and from where the actor signed in, for the actor cell's tooltip.
+const auditOrigin = (e) => [e.auth_method && `via ${e.auth_method}`, e.source_ip && `from ${e.source_ip}`,
+  e.request_id && `request ${e.request_id}`].filter(Boolean).join(' · ')
+
+const loadOlderAudit = async () => {
+  if (!auditNextBefore.value) return
+  auditLoadingOlder.value = true
+  try {
+    const resp = await http.get('/api/admin/audit', { params: { ...auditParams(), before: auditNextBefore.value } })
+    auditEvents.value = [...auditEvents.value, ...(resp.data.events || [])]
+    auditNextBefore.value = resp.data.next_before ?? null
+  } catch (err) {
+    ui.toastError(err, 'Could not load older events')
+  } finally {
+    auditLoadingOlder.value = false
+  }
+}
+
 const loadAudit = async () => {
   auditError.value = ''
   try {
-    const params = { limit: 200 }
-    if (auditFilter.action) params.action = auditFilter.action
-    if (auditFilter.actor.trim()) params.actor = auditFilter.actor.trim()
-    const resp = await http.get('/api/admin/audit', { params })
+    const resp = await http.get('/api/admin/audit', { params: auditParams() })
     auditEvents.value = resp.data.events || []
+    auditNextBefore.value = resp.data.next_before ?? null
     auditActions.value = resp.data.actions || []
     auditRetention.value = resp.data.retention_days || 0
   } catch (err) {

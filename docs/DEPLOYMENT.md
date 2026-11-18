@@ -437,9 +437,16 @@ it applies to any corpus.
   deployment settings and embedding model changes (field names and model ids,
   never values), the team AI key being stored or removed (provider only) and
   every admin action land in an
-  append-only `audit_events` table. Admin tab → *Audit trail* filters it and
-  exports CSV; `AUDIT_RETENTION_DAYS` (default 365, `0` = forever) is the
-  only knob, and it is separate from the search-history sweep.
+  append-only `audit_events` table, as do sign-ins (once per caller, method
+  and address an hour), failed sign-ins and lockouts. Every row carries the
+  source address, the request id (the `X-Request-ID` the caller was answered
+  with) and the sign-in method (`password`, `mcp_token`, the identity
+  verifier, `app_key`, or `open` where nothing is asked), so a shared-password
+  action is at least attributable to an address and a moment. Admin tab →
+  *Audit trail* filters it, pages back through it and exports CSV;
+  `GET /api/admin/audit` returns `next_before`, the cursor for the next older
+  page. `AUDIT_RETENTION_DAYS` (default 365, `0` = forever) is the only knob,
+  and it is separate from the search-history sweep.
 - **Report.** Anyone who can read a collection can report one of its
   documents (the flag icon in the sidebar). The report is audited and, when
   `RESEND_API_KEY` is set, emailed to `ADMIN_EMAILS`.

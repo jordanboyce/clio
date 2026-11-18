@@ -31,6 +31,9 @@ from services.db_helpers import _get_document_count_from_metadata, _get_storage_
 
 logger = logging.getLogger(__name__)
 
+# Request context on every audit row (services/audit.py), in column order.
+AUDIT_CONTEXT_COLUMNS = ("source_ip", "request_id", "auth_method")
+
 
 def _collection_holds_nothing(collection_id: str) -> bool:
     """True only when the collection's index provably has no documents.
@@ -418,9 +421,18 @@ class SQLiteBackend(DatabaseBackend):
                     collection_id TEXT,
                     document_id TEXT,
                     target TEXT,
-                    detail TEXT
+                    detail TEXT,
+                    source_ip TEXT,
+                    request_id TEXT,
+                    auth_method TEXT
                 )
             """)
+            # Where a request came from and how it signed in (E1).
+            for col in AUDIT_CONTEXT_COLUMNS:
+                try:
+                    conn.execute(f"ALTER TABLE audit_events ADD COLUMN {col} TEXT")
+                except sqlite3.OperationalError:
+                    pass
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_events(timestamp DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_events(action, timestamp DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_events(actor, timestamp DESC)")
@@ -1482,14 +1494,17 @@ class SQLiteBackend(DatabaseBackend):
     # ── Audit trail ──────────────────────────────────────────
 
     def add_audit_events(self, actor: Optional[str], action: str, collection_id: Optional[str],
-                         events: List[Dict[str, Optional[str]]]) -> None:
+                         events: List[Dict[str, Optional[str]]],
+                         context: Optional[Dict[str, Optional[str]]] = None) -> None:
         timestamp = utcnow().isoformat()
+        ctx = [(context or {}).get(c) for c in AUDIT_CONTEXT_COLUMNS]
         with sqlite_connect(self.db_path) as conn:
             conn.executemany(
-                """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                [(timestamp, actor, action, collection_id, e.get("document_id"), e.get("target"), e.get("detail"))
-                 for e in events],
+                """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail,
+                                             source_ip, request_id, auth_method)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [(timestamp, actor, action, collection_id, e.get("document_id"), e.get("target"), e.get("detail"),
+                  *ctx) for e in events],
             )
             conn.commit()
 
@@ -1501,12 +1516,15 @@ class SQLiteBackend(DatabaseBackend):
         document_id: Optional[str] = None,
         target: Optional[str] = None,
         detail: Optional[str] = None,
+        context: Optional[Dict[str, Optional[str]]] = None,
     ) -> int:
+        ctx = [(context or {}).get(c) for c in AUDIT_CONTEXT_COLUMNS]
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute(
-                """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (utcnow().isoformat(), actor, action, collection_id, document_id, target, detail),
+                """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail,
+                                             source_ip, request_id, auth_method)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (utcnow().isoformat(), actor, action, collection_id, document_id, target, detail, *ctx),
             )
             conn.commit()
             return cursor.lastrowid
@@ -1519,6 +1537,7 @@ class SQLiteBackend(DatabaseBackend):
         collection_id: Optional[str] = None,
         document_id: Optional[str] = None,
         since: Optional[str] = None,
+        before_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         clauses, params = [], []
         for col, val in (("action", action), ("actor", actor),
@@ -1529,12 +1548,17 @@ class SQLiteBackend(DatabaseBackend):
         if since:
             clauses.append("timestamp >= ?")
             params.append(since)
+        if before_id is not None:
+            clauses.append("id < ?")
+            params.append(int(before_id))
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
+        # By id, the order rows were appended in, so a cursor never skips or
+        # repeats a row even when two share a timestamp.
         with sqlite_connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                f"SELECT * FROM audit_events {where} ORDER BY timestamp DESC, id DESC LIMIT ?",
+                f"SELECT * FROM audit_events {where} ORDER BY id DESC LIMIT ?",
                 params,
             ).fetchall()
             return [dict(r) for r in rows]
