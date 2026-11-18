@@ -311,7 +311,7 @@ class DocumentIndexer:
         """
         if not settings.extract_figures or not figure_extractor.supports_figures(source_format):
             return []
-        found = figure_extractor.extract_figures(document_path, source_format, page_texts)
+        found = self._figures_in(document_path, source_format, page_texts, filename)
         if not found:
             return []
         engine = None
@@ -325,6 +325,30 @@ class DocumentIndexer:
             described = figures.describe_figures(found, engine, filename)
             logger.info(f"Described {described}/{len(found)} figure(s) in {filename}")
         return found
+
+    @staticmethod
+    def _figures_in(document_path: Path, source_format: str, page_texts: dict,
+                    filename: str) -> List[figure_extractor.ExtractedFigure]:
+        """The figures, read in a parse helper (services/extract_sandbox.py).
+
+        A file whose pictures hang the reader or take all the memory loses its
+        figures, said in the log, and keeps its text.
+        """
+        from services import extract_sandbox
+        from services.link_fetcher import link_indexing_available
+
+        fetch_remote = link_indexing_available()
+        try:
+            return extract_sandbox.run(
+                "figures", document_path,
+                lambda: figure_extractor.extract_figures(document_path, source_format, page_texts,
+                                                         fetch_remote=fetch_remote),
+                args={"source_format": source_format, "fetch_remote": fetch_remote,
+                      "page_texts": {str(k): v for k, v in (page_texts or {}).items()}},
+            )
+        except Exception as e:  # noqa: BLE001 - figures never fail a document
+            logger.warning(f"Figures in {filename} were not kept: {e}")
+            return []
 
     def _admit(self, document_path: Path, filename: str, collection_id: str | None,
                uploaded_by: str | None) -> tuple[str, str]:

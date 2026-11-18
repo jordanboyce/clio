@@ -233,10 +233,10 @@ def test_a_helper_that_dies_fails_only_that_file(tmp_path, limits, monkeypatch):
     limits(extract_isolation=True)
     real_call = extract_sandbox._Helper.call
 
-    def die_first(self, task, path, timeout):
+    def die_first(self, task, path, timeout, args=None):
         self.proc.kill()
         self.proc.wait()
-        return real_call(self, task, path, timeout)
+        return real_call(self, task, path, timeout, args)
 
     monkeypatch.setattr(extract_sandbox._Helper, "call", die_first)
     with pytest.raises(ExtractionLimitExceeded, match="parser stopped"):

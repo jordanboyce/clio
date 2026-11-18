@@ -27,6 +27,20 @@ reused for up to ``_MAX_TASKS_PER_HELPER`` files and exits on its own after
 parses hostile input, so what it sends back is decoded as data, never
 unpickled.
 
+Three kinds of helper, each with limits of its own, because each kind of work
+needs different room:
+
+* ``parse``: the document parsers above and figure extraction
+  (``EXTRACT_TIMEOUT_SECONDS``, ``EXTRACT_MEMORY_LIMIT_MB``);
+* ``ocr``: the local OCR engines, Docling and Tesseract, which take minutes on
+  a long scan (``OCR_TIMEOUT_SECONDS``, ``OCR_MEMORY_LIMIT_MB``);
+* ``audio``: Whisper transcription, which runs for about as long as a
+  recording on a CPU and keeps its model loaded between files
+  (``TRANSCRIBE_TIMEOUT_SECONDS``, ``TRANSCRIBE_MEMORY_LIMIT_MB``).
+
+The vision OCR engine stays in the server: it is a call to a model endpoint,
+and the page images it sends are rendered by poppler's own process.
+
 ``EXTRACT_ISOLATION=false`` parses in-process, as before; so does a platform
 where the helper cannot start (logged once).
 """
@@ -71,6 +85,40 @@ def _unreadable_file_errors() -> dict:
     return {"ArchiveLimitError": ArchiveLimitError, "PraFormatError": PraFormatError}
 
 
+def _rebuilt_errors() -> dict:
+    """Every error type an answer may name and the server rebuilds as itself.
+
+    The unreadable-file types above, plus the server's own reasons a task
+    could not run (a transcription model that is not on this server), so a
+    caller handles them exactly as when the work ran in-process.
+    """
+    from services.audio_transcriber import TranscriptionModelUnavailable
+
+    return {**_unreadable_file_errors(), "TranscriptionModelUnavailable": TranscriptionModelUnavailable,
+            "ValueError": ValueError, "ImportError": ImportError, "RuntimeError": RuntimeError}
+
+
+# What each kind of helper is for, and the settings that limit it.
+KINDS = {
+    "parse": {"what": "Reading", "timeout": "extract_timeout_seconds", "memory": "extract_memory_limit_mb",
+              "timeout_name": "EXTRACT_TIMEOUT_SECONDS", "memory_name": "EXTRACT_MEMORY_LIMIT_MB"},
+    "ocr": {"what": "Running OCR on", "timeout": "ocr_timeout_seconds", "memory": "ocr_memory_limit_mb",
+            "timeout_name": "OCR_TIMEOUT_SECONDS", "memory_name": "OCR_MEMORY_LIMIT_MB"},
+    "audio": {"what": "Transcribing", "timeout": "transcribe_timeout_seconds", "memory": "transcribe_memory_limit_mb",
+              "timeout_name": "TRANSCRIBE_TIMEOUT_SECONDS", "memory_name": "TRANSCRIBE_MEMORY_LIMIT_MB"},
+}
+# Modules each kind loads before its memory cap is set, so they count as the
+# helper's baseline rather than against the file.
+_PRELOAD = {
+    "parse": ("docx", "pptx", "pandas", "openpyxl", "pypdfium2", "pdfplumber", "bs4", "PIL"),
+    "ocr": ("pdf2image", "pytesseract", "PIL", "pypdfium2", "docling.document_converter"),
+    "audio": ("faster_whisper", "ctranslate2", "av"),
+}
+# A test seam: the module this environment variable names may add tasks
+# (a dict TASKS of name -> function(extractor, path, args)). Unset outside tests.
+TEST_TASKS_ENV = "CLIO_EXTRACT_TEST_TASKS"
+
+
 class ExtractionLimitExceeded(ValueError):
     """A file whose parse ran out of time or memory, or crashed its parser."""
 
@@ -85,7 +133,59 @@ def _pages(result: Dict[int, str]) -> Dict[str, str]:
     return {str(k): v for k, v in result.items()}
 
 
-def _run_task(extractor, task: str, path: Path) -> Any:
+def _figure_to_json(figure) -> Dict[str, Any]:
+    import base64
+
+    return {"page_number": figure.page_number, "position": figure.position,
+            "data": base64.b64encode(figure.data).decode("ascii"), "ext": figure.ext,
+            "width": figure.width, "height": figure.height, "caption": figure.caption,
+            "content_hash": figure.content_hash, "description": figure.description}
+
+
+def _figure_from_json(data: Dict[str, Any]):
+    import base64
+
+    from services.figure_extractor import ExtractedFigure
+
+    return ExtractedFigure(
+        page_number=int(data["page_number"]), position=int(data["position"]),
+        data=base64.b64decode(data["data"]), ext=str(data["ext"]), width=int(data["width"]),
+        height=int(data["height"]), caption=str(data.get("caption") or ""),
+        content_hash=str(data.get("content_hash") or ""), description=data.get("description"),
+    )
+
+
+def _extra_tasks() -> Dict[str, Callable]:
+    module = os.environ.get(TEST_TASKS_ENV)
+    if not module:
+        return {}
+    import importlib
+
+    return dict(getattr(importlib.import_module(module), "TASKS", {}))
+
+
+def _run_task(extractor, task: str, path: Path, args: Optional[Dict[str, Any]] = None) -> Any:
+    args = args or {}
+    extra = _extra_tasks().get(task)
+    if extra is not None:  # tests only (TEST_TASKS_ENV): may stand in for a real task
+        return extra(extractor, path, args)
+    if task == "figures":
+        from services.figure_extractor import extract_figures
+
+        page_texts = {int(k): v for k, v in (args.get("page_texts") or {}).items()} or None
+        found = extract_figures(path, args.get("source_format"), page_texts,
+                                fetch_remote=bool(args.get("fetch_remote")))
+        return [_figure_to_json(f) for f in found]
+    if task == "ocr_local":
+        return _pages(extractor._local_ocr_here(path, pages=args.get("pages")))
+    if task == "transcribe":
+        from services.audio_transcriber import get_transcriber
+
+        transcriber = get_transcriber(model_size=args["model_size"], device=args["device"],
+                                      compute_type=args["compute_type"])
+        result = transcriber.transcribe(path, language=args.get("language"))
+        return {"text": result.text, "segments": result.segments, "language": result.language,
+                "duration": result.duration}
     if task == "docx":
         return _pages(extractor._extract_docx(path))
     if task == "pptx":
@@ -106,12 +206,19 @@ def _run_task(extractor, task: str, path: Path) -> Any:
 
 
 # How the server turns each task's JSON back into what the extractor returns.
-_PAGE_TASKS = {"docx", "pptx", "excel_pages", "document", "pdf_native"}
+_PAGE_TASKS = {"docx", "pptx", "excel_pages", "document", "pdf_native", "ocr_local"}
 
 
 def _decode(task: str, result: Any) -> Any:
     if task in _PAGE_TASKS:
         return {int(k): v for k, v in result.items()}
+    if task == "figures":
+        return [_figure_from_json(f) for f in result]
+    if task == "transcribe":
+        from services.audio_transcriber import TranscriptionResult
+
+        return TranscriptionResult(text=result["text"], segments=result["segments"],
+                                   language=result["language"], duration=float(result["duration"]))
     if task == "pra":
         from services.pra.model import PraModel
 
@@ -179,6 +286,7 @@ def _near_cap(cap: Optional[int]) -> bool:
 def _helper_main(argv: List[str]) -> None:
     """The helper's loop: one JSON request per line in, one answer per line out."""
     limit_mb = int(argv[0]) if argv else 0
+    kind = argv[1] if len(argv) > 1 else "parse"
     # The answers own the real stdout; anything a parser prints goes to stderr.
     out = os.fdopen(os.dup(sys.stdout.fileno()), "wb")
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
@@ -187,10 +295,10 @@ def _helper_main(argv: List[str]) -> None:
 
     from services.document_extractor import DocumentExtractor
 
-    for module in ("docx", "pptx", "pandas", "openpyxl", "pypdfium2", "pdfplumber", "bs4"):
+    for module in _PRELOAD.get(kind, ()):
         try:
             __import__(module)  # loaded before the cap, so it counts as baseline
-        except ImportError:
+        except Exception:  # noqa: BLE001 - an optional engine that is absent or broken
             pass
     extractor = DocumentExtractor(enable_ocr=False)
     cap = _cap_memory(limit_mb)
@@ -213,7 +321,7 @@ def _helper_main(argv: List[str]) -> None:
             return  # the server went away
         request = json.loads(line)
         try:
-            result = _run_task(extractor, request["task"], Path(request["path"]))
+            result = _run_task(extractor, request["task"], Path(request["path"]), request.get("args"))
             retire = _near_cap(cap)  # said in the answer, so the server does not reuse it
             answer({"ok": True, "result": result, "retire": retire})
             if retire:
@@ -225,12 +333,18 @@ def _helper_main(argv: List[str]) -> None:
             if _near_cap(cap):
                 answer({"ok": False, "type": "MemoryError", "error": str(e)})
                 return
-            if type(e).__name__ in _unreadable_file_errors():
-                kind = type(e).__name__  # rebuilt as itself on the server side
-            else:
-                kind = "ValueError" if isinstance(e, ValueError) else (
-                    "ImportError" if isinstance(e, ImportError) else "Exception")
-            answer({"ok": False, "type": kind, "error": str(e)})
+            answer({"ok": False, "type": _error_name(e), "error": str(e)})
+
+
+def _error_name(e: BaseException) -> str:
+    """The name the server rebuilds this error as: its own, or the nearest it knows."""
+    known = _rebuilt_errors()
+    if type(e).__name__ in known:
+        return type(e).__name__
+    for name in ("ValueError", "ImportError", "RuntimeError"):
+        if isinstance(e, known[name]):
+            return name
+    return "Exception"
 
 
 # ---------------------------------------------------------------------------
@@ -238,13 +352,14 @@ def _helper_main(argv: List[str]) -> None:
 # ---------------------------------------------------------------------------
 
 class _Helper:
-    def __init__(self, memory_limit_mb: int):
+    def __init__(self, memory_limit_mb: int, kind: str = "parse"):
         extra = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "services.extract_sandbox", str(memory_limit_mb)],
+            [sys.executable, "-m", "services.extract_sandbox", str(memory_limit_mb), kind],
             cwd=str(_REPO_ROOT), stdin=subprocess.PIPE, stdout=subprocess.PIPE, **extra,
         )
         self.memory_limit_mb = memory_limit_mb
+        self.kind = kind
         self.tasks = 0
         self.last_used = time.monotonic()
         ready = self._read(_STARTUP_TIMEOUT_SECONDS)
@@ -264,9 +379,9 @@ class _Helper:
         except queue.Empty:
             return None
 
-    def call(self, task: str, path: Path, timeout: Optional[float]) -> dict:
+    def call(self, task: str, path: Path, timeout: Optional[float], args: Optional[dict] = None) -> dict:
         self.tasks += 1
-        request = json.dumps({"task": task, "path": str(path)}).encode("utf-8") + b"\n"
+        request = json.dumps({"task": task, "path": str(path), "args": args or {}}).encode("utf-8") + b"\n"
         try:
             self.proc.stdin.write(request)
             self.proc.stdin.flush()
@@ -334,21 +449,26 @@ class _Pool:
     def available(self) -> bool:
         return time.monotonic() >= self._unavailable_until
 
-    def acquire(self, memory_limit_mb: int) -> Optional[_Helper]:
+    def acquire(self, memory_limit_mb: int, kind: str = "parse") -> Optional[_Helper]:
         with self._lock:
             while True:
-                while self._idle:
-                    helper = self._idle.pop()
-                    if helper.usable() and helper.memory_limit_mb == memory_limit_mb:
+                for helper in list(self._idle):
+                    if not helper.usable():
+                        self._idle.remove(helper)
+                        helper.close()
+                    elif helper.memory_limit_mb == memory_limit_mb and helper.kind == kind:
+                        self._idle.remove(helper)
                         self._busy += 1
                         return helper
-                    helper.close()
+                if self._idle and self._busy + len(self._idle) >= self.size():
+                    self._idle.pop(0).close()  # make room: a helper of another kind
+                    continue
                 if self._busy < self.size():
                     self._busy += 1
                     break
                 self._lock.wait()
         try:
-            return _Helper(memory_limit_mb)
+            return _Helper(memory_limit_mb, kind)
         except OSError as e:
             with self._lock:
                 self._busy -= 1
@@ -379,25 +499,31 @@ _pool = _Pool()
 atexit.register(_pool.shutdown)
 
 
-def run(task: str, path: Path, in_process: Callable[[], T]) -> T:
-    """``task`` on ``path`` in a helper, or ``in_process()`` when isolation is off."""
+def run(task: str, path: Path, in_process: Callable[[], T], *, args: Optional[dict] = None,
+        kind: str = "parse") -> T:
+    """``task`` on ``path`` in a helper of ``kind``, or ``in_process()`` when isolation is off.
+
+    ``args`` travel to the helper as JSON. The kind's own settings (``KINDS``)
+    limit the helper's time and memory.
+    """
     import config
 
     settings = config.settings
+    limits = KINDS[kind]
     if not settings.extract_isolation or not _pool.available():
         return in_process()
-    helper = _pool.acquire(max(0, settings.extract_memory_limit_mb))
+    helper = _pool.acquire(max(0, int(getattr(settings, limits["memory"]) or 0)), kind)
     if helper is None:
         return in_process()
     name = Path(path).name
-    timeout = settings.extract_timeout_seconds or None
+    timeout = int(getattr(settings, limits["timeout"]) or 0) or None
     keep = False
     try:
-        reply = helper.call(task, Path(path).resolve(), timeout)
+        reply = helper.call(task, Path(path).resolve(), timeout, args)
         if reply.get("timeout"):
             raise ExtractionLimitExceeded(
-                f"Reading {name} took longer than {timeout:g} seconds, so it was stopped "
-                f"(EXTRACT_TIMEOUT_SECONDS)."
+                f"{limits['what']} {name} took longer than {timeout:g} seconds, so it was stopped "
+                f"({limits['timeout_name']})."
             )
         if reply.get("exited"):
             code = helper.exit_code()
@@ -409,23 +535,16 @@ def run(task: str, path: Path, in_process: Callable[[], T]) -> T:
             result = _decode(task, reply.get("result"))
             keep = not reply.get("retire")
             return result
-        kind, error = reply.get("type"), reply.get("error") or "unknown error"
-        if kind == "MemoryError":
+        error_kind, error = reply.get("type"), reply.get("error") or "unknown error"
+        if error_kind == "MemoryError":
             raise ExtractionLimitExceeded(
-                f"Reading {name} needs more than {helper.memory_limit_mb} MB of memory, so it "
-                f"was stopped (EXTRACT_MEMORY_LIMIT_MB)."
+                f"{limits['what']} {name} needs more than {helper.memory_limit_mb} MB of memory, so it "
+                f"was stopped ({limits['memory_name']})."
             )
-        keep = True  # an ordinary parse error leaves the helper fine
-        unreadable = _unreadable_file_errors().get(kind)
-        if unreadable is not None:
-            # The file itself is at fault: keep the type, so the upload can say
-            # so (422) instead of reporting a server failure.
-            raise unreadable(error)
-        if kind == "ValueError":
-            raise ValueError(error)
-        if kind == "ImportError":
-            raise ImportError(error)
-        raise Exception(error)
+        keep = True  # an ordinary error leaves the helper fine
+        # Rebuilt as its own type: a file at fault stays a 422 rather than a
+        # server failure, and a missing model stays a missing model.
+        raise _rebuilt_errors().get(error_kind, Exception)(error)
     finally:
         _pool.release(helper, keep)
 

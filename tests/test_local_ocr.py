@@ -14,6 +14,15 @@ from services import document_extractor as de, ocr_engine
 from services.document_extractor import DocumentExtractor
 from services.ocr_engine import OCRPage, OCRResult
 
+
+@pytest.fixture(autouse=True)
+def _engines_run_here(monkeypatch):
+    """The stand-in engines below live in this process; the OCR helper process
+    (tests/test_sandboxed_work.py covers it) would not see them."""
+    import config
+
+    monkeypatch.setattr(config.settings, "extract_isolation", False)
+
 needs_tesseract = pytest.mark.skipif(
     not ("pytesseract" in ocr_engine.get_available_engines() and shutil.which("pdftoppm")),
     reason="Tesseract and Poppler are not installed",

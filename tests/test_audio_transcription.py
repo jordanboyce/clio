@@ -49,6 +49,9 @@ def test_video_upload_is_transcribed_with_timestamps(tmp_path, monkeypatch):
     stand_in = SimpleNamespace(transcribe=lambda audio_path, language=None: audio_transcriber.TranscriptionResult(
         text="", segments=segments, language="en", duration=253.0))
     monkeypatch.setattr(audio_transcriber, "get_transcriber", lambda **_: stand_in)
+    import config
+
+    monkeypatch.setattr(config.settings, "extract_isolation", False)  # the stand-in lives in this process
 
     result = DocumentExtractor(enable_ocr=False).extract_text(path)
 

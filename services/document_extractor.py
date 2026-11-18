@@ -1007,8 +1007,23 @@ class DocumentExtractor:
     def _local_ocr(self, path: Path, pages: Optional[List[int]] = None) -> Dict[int, str]:
         """Text per page from the first local engine that can read the file.
 
-        Tries each in turn: Docling needs model files a locked-down site may
-        not have, and Tesseract can still read the page when it cannot.
+        Runs in an OCR helper process (services/extract_sandbox.py, the "ocr"
+        kind), so a scan that hangs Docling or Tesseract, or takes all the
+        memory, stops at OCR_TIMEOUT_SECONDS / OCR_MEMORY_LIMIT_MB and fails
+        that one file with ExtractionLimitExceeded.
+        """
+        from services import extract_sandbox
+
+        return extract_sandbox.run(
+            "ocr_local", path, lambda: self._local_ocr_here(path, pages=pages),
+            args={"pages": list(pages) if pages else None}, kind="ocr",
+        )
+
+    def _local_ocr_here(self, path: Path, pages: Optional[List[int]] = None) -> Dict[int, str]:
+        """:meth:`_local_ocr` in this process.
+
+        Tries each engine in turn: Docling needs model files a locked-down site
+        may not have, and Tesseract can still read the page when it cannot.
         """
         for name in get_available_engines():
             try:
@@ -1790,7 +1805,17 @@ class DocumentExtractor:
         )
 
         language = settings.whisper_language or None
-        result = transcriber.transcribe(audio_path, language=language)
+        # In an audio helper process (services/extract_sandbox.py, the "audio"
+        # kind): a recording that hangs the decoder or the model stops at
+        # TRANSCRIBE_TIMEOUT_SECONDS / TRANSCRIBE_MEMORY_LIMIT_MB.
+        from services import extract_sandbox
+
+        result = extract_sandbox.run(
+            "transcribe", audio_path, lambda: transcriber.transcribe(audio_path, language=language),
+            args={"model_size": settings.whisper_model, "device": settings.whisper_device,
+                  "compute_type": settings.whisper_compute_type, "language": language},
+            kind="audio",
+        )
 
         if not result.segments:
             logger.warning(f"No speech detected in {audio_path.name}")

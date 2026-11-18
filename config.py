@@ -847,6 +847,13 @@ class Settings(BaseSettings):
     extract_isolation: bool = True
     extract_timeout_seconds: int = 300
     extract_memory_limit_mb: int = 2048
+    # Local OCR (Docling, Tesseract) and Whisper transcription run in helpers
+    # of their own kind with longer limits: a long scan or a recording takes
+    # minutes where a parse takes seconds.
+    ocr_timeout_seconds: int = 1800
+    ocr_memory_limit_mb: int = 4096
+    transcribe_timeout_seconds: int = 7200
+    transcribe_memory_limit_mb: int = 4096
 
     # Git repositories as sources (services/git_source.py). Local checkouts are
     # read with `git ls-files`, so .gitignore is honoured. Remote repositories
