@@ -460,9 +460,15 @@
           >
             <div class="min-w-0">
               <div class="text-sm font-medium">How this collection is built</div>
-              <p class="text-xs text-base-content/55 mt-1 leading-relaxed max-w-[52ch]">
-                {{ collectionStore.currentCollection?.name || 'This collection' }} belongs to someone else,
-                so its indexing settings are theirs to change. Make your own copy if you need different ones.
+              <p class="text-xs text-base-content/55 mt-1 leading-relaxed max-w-[52ch]" data-testid="configure-blocked-reason">
+                <template v-if="collectionStore.currentCollection?.team">
+                  {{ collectionStore.currentConfigureBlockedReason }} Re-indexing and its indexing settings are theirs;
+                  make your own copy if you need different ones.
+                </template>
+                <template v-else>
+                  {{ collectionStore.currentCollection?.name || 'This collection' }} belongs to someone else,
+                  so its indexing settings are theirs to change. Make your own copy if you need different ones.
+                </template>
               </p>
             </div>
             <button class="btn btn-sm btn-outline flex-shrink-0" @click="$emit('clone-collection')">
@@ -839,6 +845,7 @@
             <CoverageReportPanel
               :collection-id="collectionStore.currentCollection.id"
               :can-run="collectionStore.canConfigureCurrent"
+              :who-can-run="collectionStore.currentCollection?.team ? 'An admin' : undefined"
             />
           </div>
         </section>

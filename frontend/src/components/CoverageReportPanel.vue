@@ -30,7 +30,7 @@
     </p>
 
     <p v-if="loaded && !report && !running" class="text-xs text-base-content/55" data-testid="coverage-empty">
-      {{ canRun ? 'No report yet. Run one to see which sources are hard to find.' : 'No report yet. The collection’s owner can run one.' }}
+      {{ canRun ? 'No report yet. Run one to see which sources are hard to find.' : `No report yet. ${whoCanRun} can run one.` }}
     </p>
 
     <template v-if="report">
@@ -183,6 +183,8 @@ import http from '../utils/http'
 const props = defineProps({
   collectionId: { type: String, required: true },
   canRun: { type: Boolean, default: false },
+  // Who may run it when this person may not: a team collection's admins.
+  whoCanRun: { type: String, default: 'The collection’s owner' },
   pollMs: { type: Number, default: 2000 },
 })
 

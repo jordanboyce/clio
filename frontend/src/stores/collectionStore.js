@@ -59,6 +59,22 @@ export const useCollectionStore = defineStore('collection', () => {
     return (collection?.permission || 'owner') === 'owner'
   }
 
+  // Why the owner-tier actions are not this person's, in the words of the
+  // server's own 403 (api/deps.require_collection_access), or null when they
+  // are. A team collection has no single owner: once ADMIN_EMAILS is in
+  // force its setup belongs to the admins, and everyone else contributes.
+  function configureBlockedReason(collection) {
+    const permission = collection?.permission || 'owner'
+    if (permission === 'owner') return null
+    if (permission === 'read') return 'This collection is shared with you read-only.'
+    if (collection?.team) {
+      return 'This is a team collection: only an admin can change how it is set up, export, relabel or delete it. You can add and remove sources.'
+    }
+    return "Only the collection's owner can change how it is set up, export or delete it. Make your own copy to get one you control."
+  }
+
+  const currentConfigureBlockedReason = computed(() => configureBlockedReason(currentCollection.value))
+
   // Actions. CRUD failures throw the http client's normalized error —
   // callers decide how to present them. loadCollections is fire-and-forget
   // from several places, so it reports its own failure.
@@ -185,6 +201,8 @@ export const useCollectionStore = defineStore('collection', () => {
     isReadOnlyCurrent,
     currentIsPublished,
     canConfigure,
+    configureBlockedReason,
+    currentConfigureBlockedReason,
     // Actions
     loadCollections,
     createCollection,

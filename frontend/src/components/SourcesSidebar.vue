@@ -594,8 +594,10 @@
               </li>
             </ul>
           </div>
-          <p v-else-if="!collectionStore.canConfigureCurrent" class="text-xs text-base-content/40">
-            Only the owner of this collection can change its instructions.
+          <p v-else-if="!collectionStore.canConfigureCurrent" class="text-xs text-base-content/40" data-testid="instructions-blocked">
+            {{ collectionStore.currentCollection?.team
+              ? 'This is a team collection: only an admin can change which instructions it follows.'
+              : 'Only the owner of this collection can change its instructions.' }}
           </p>
           <p v-else-if="expertiseStore.packs.length === 0" class="text-xs text-base-content/40">
             Nothing saved yet. Create instructions from More, then Saved instructions.
@@ -2735,7 +2737,9 @@ const availablePacks = computed(() =>
 // server answers 403 to anyone else, including a read-write collaborator).
 function expertiseError(err, fallback) {
   if (err?.status === 403) {
-    return new Error('Only the owner of this collection can change which instructions it follows.')
+    return new Error(collectionStore.currentCollection?.team
+      ? 'This is a team collection: only an admin can change which instructions it follows.'
+      : 'Only the owner of this collection can change which instructions it follows.')
   }
   return new Error(err?.message || fallback)
 }

@@ -321,8 +321,19 @@ def get_reindex_status(job_id: int = None):
     tags=["collections"],
 )
 def list_collections(request: Request, user_id: str = Depends(get_current_user_id)):
-    """Get all document collections visible to the current user."""
+    """Get all document collections visible to the current user.
+
+    Each carries ``permission`` ('owner', 'readwrite' or 'read'), what this
+    caller may do with it, so the app can hide or explain the actions the
+    server would refuse; ``team`` marks a collection with no single owner,
+    whose owner-tier actions belong to the admins once ADMIN_EMAILS is set.
+    """
     collections = collection_service.get_all_collections(user_id=user_id)
+    for c in collections:
+        # With private collections off every caller owns everything
+        # (sharing_service.check_collection_access), and the listing skips
+        # the field; say it anyway so the app reads one shape.
+        c.setdefault("permission", "owner")
     return {
         "collections": collections,
         "user_id": user_id,

@@ -471,24 +471,11 @@
                       >
                         <ChartColumn :size="13" />
                       </button>
-                      <button
-                        v-if="collectionStore.canConfigure(collection)"
-                        @click.stop="openExportModal(collection)"
-                        class="btn btn-ghost btn-xs btn-square"
-                        title="Export for another Clio or a website"
-                        :aria-label="`Export collection ${collection.name}`"
-                      >
-                        <Download :size="13" />
-                      </button>
-                      <button
-                        v-if="collectionStore.canConfigure(collection)"
-                        @click.stop="openEditCollectionModal(collection)"
-                        class="btn btn-ghost btn-xs btn-square"
-                        title="Edit collection"
-                        :aria-label="`Edit collection ${collection.name}`"
-                      >
-                        <Pencil :size="13" />
-                      </button>
+                      <CollectionOwnerActions
+                        :collection="collection"
+                        @export="openExportModal"
+                        @edit="openEditCollectionModal"
+                      />
                     </div>
                   </div>
                 </li>
@@ -598,24 +585,11 @@
                       >
                         <ChartColumn :size="13" />
                       </button>
-                      <button
-                        v-if="collectionStore.canConfigure(collection)"
-                        @click.stop="openExportModal(collection)"
-                        class="btn btn-ghost btn-xs btn-square"
-                        title="Export for another Clio or a website"
-                        :aria-label="`Export collection ${collection.name}`"
-                      >
-                        <Download :size="13" />
-                      </button>
-                      <button
-                        v-if="collectionStore.canConfigure(collection)"
-                        @click.stop="openEditCollectionModal(collection)"
-                        class="btn btn-ghost btn-xs btn-square"
-                        title="Edit collection"
-                        :aria-label="`Edit collection ${collection.name}`"
-                      >
-                        <Pencil :size="13" />
-                      </button>
+                      <CollectionOwnerActions
+                        :collection="collection"
+                        @export="openExportModal"
+                        @edit="openEditCollectionModal"
+                      />
                     </div>
                   </div>
                 </div>
@@ -1383,7 +1357,7 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
 import { useOverlayFocus } from './composables/useOverlayFocus'
-import { ChartColumn, Settings, Plus, Check, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, RotateCcw, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Download, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig, Network, SlidersHorizontal, Sparkles, Quote } from 'lucide-vue-next'
+import { ChartColumn, Settings, Plus, Check, ChevronDown, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, RotateCcw, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig, Network, SlidersHorizontal, Sparkles, Quote } from 'lucide-vue-next'
 import CommandPalette from './components/CommandPalette.vue'
 import EmbeddingMismatchNotice from './components/EmbeddingMismatchNotice.vue'
 import ShortcutsDialog from './components/ShortcutsDialog.vue'
@@ -1456,6 +1430,7 @@ import { useProviderStore } from './stores/providerStore'
 import { useStatsStore } from './stores/statsStore'
 import { useUiStore } from './stores/uiStore'
 import { useCustomFileTypesStore } from './stores/customFileTypesStore'
+import CollectionOwnerActions from './components/CollectionOwnerActions.vue'
 
 // Fold legacy provider keys (chat_provider, ai_api_key_*) into the unified
 // config before any tab mounts and reads it.
