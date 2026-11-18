@@ -96,7 +96,7 @@ async def search_documents(
                     ai_service = AIService(provider=provider)
                     ai_provider_used = "ollama"
                 else:
-                    resolved_key = resolve_ai_key(ai_options.provider, x_ai_key)
+                    resolved_key = resolve_ai_key(ai_options.provider, x_ai_key, x_ai_base_url)
                     if not resolved_key and ai_options.provider != "openai_compatible":
                         logger.warning(f"AI key required for provider: {ai_options.provider}")
                     else:

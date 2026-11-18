@@ -1210,6 +1210,64 @@ class OpenAICompatibleProvider(OpenAIProvider):
         return True
 
 
+def _endpoint_identity(url: str) -> str:
+    """A base URL reduced to what decides where a request goes: lowercased
+    scheme and host, default ports dropped, trailing slashes and a trailing
+    ``/v1`` removed (clients add or omit it for the same endpoint)."""
+    from urllib.parse import urlsplit
+
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    parts = urlsplit(raw if "://" in raw else f"http://{raw}")
+    scheme = (parts.scheme or "http").lower()
+    host = (parts.hostname or "").lower()
+    port = parts.port
+    if port and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
+        host = f"{host}:{port}"
+    path = parts.path.rstrip("/")
+    if path.endswith("/v1"):
+        path = path[:-3]
+    return f"{scheme}://{host}{path.rstrip('/')}"
+
+
+def server_key_allowed(provider_name: str, base_url) -> bool:
+    """May a key the server holds travel to ``base_url``?
+
+    Server-held keys are the team keys stored through /api/agent/config and
+    the deployment's AI_API_KEY. Each is approved for one destination: a team
+    key for its provider's own endpoint (it is validated there before it is
+    stored), AI_API_KEY for AI_BASE_URL. A base URL the caller chose is
+    neither, so a request that names one must bring its own key: otherwise
+    anyone who can reach the API could point the request at a server they run
+    and read the key (and the retrieved document text) off the wire.
+    """
+    if not (base_url or "").strip():
+        return True
+    from config import settings
+
+    default = (settings.ai_provider or "").strip()
+    approved = settings.ai_base_url if (default and provider_name == default) else ""
+    return bool(approved) and _endpoint_identity(base_url) == _endpoint_identity(approved)
+
+
+def _is_server_held_key(api_key: str) -> bool:
+    """True when ``api_key`` is AI_API_KEY or one of the stored team keys."""
+    import hmac
+
+    from config import CLOUD_AI_PROVIDERS, settings
+
+    if not api_key:
+        return False
+    candidates = [settings.ai_api_key or ""]
+    try:
+        from services.app_database import app_db
+        candidates += [app_db.get_agent_api_key(p) or "" for p in CLOUD_AI_PROVIDERS]
+    except Exception:  # noqa: BLE001 - no database, no stored keys
+        pass
+    return any(c and hmac.compare_digest(c.encode(), api_key.encode()) for c in candidates)
+
+
 def apply_deployment_defaults(provider_name: str, api_key, kwargs: dict):
     """Fill in the deployment's configured model/endpoint/key.
 
@@ -1221,6 +1279,9 @@ def apply_deployment_defaults(provider_name: str, api_key, kwargs: dict):
       operator's endpoint, with no per-user setup.
     - A caller that brings its own key, model or base URL overrides the
       default rather than silently talking to someone else's endpoint.
+    - AI_API_KEY only ever goes to AI_BASE_URL (or the provider's own
+      endpoint when AI_BASE_URL is unset): a caller that names another base
+      URL gets no deployment key (``server_key_allowed``).
 
     Returns the (api_key, kwargs) to build with.
     """
@@ -1231,12 +1292,17 @@ def apply_deployment_defaults(provider_name: str, api_key, kwargs: dict):
         return api_key, kwargs
 
     kwargs = dict(kwargs)
-    if not kwargs.get("base_url") and settings.ai_base_url:
+    caller_base_url = kwargs.get("base_url")
+    if not caller_base_url and settings.ai_base_url:
         kwargs["base_url"] = settings.ai_base_url
     if not kwargs.get("model") and settings.ai_model:
         kwargs["model"] = settings.ai_model
     if not api_key and settings.ai_api_key:
-        api_key = settings.ai_api_key
+        if server_key_allowed(provider_name, caller_base_url):
+            api_key = settings.ai_api_key
+        else:
+            logger.warning("Not sending AI_API_KEY to a base URL the request chose; "
+                           "it is only sent to AI_BASE_URL")
     return api_key, kwargs
 
 
@@ -1247,6 +1313,16 @@ def create_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProv
     """
     from services import data_controls
 
+    # Second line of defence behind resolve_ai_key and apply_deployment_
+    # defaults: whatever path a key took to get here, a key the server holds
+    # is never paired with a base URL it was not configured for.
+    base_url = kwargs.get("base_url")
+    if api_key and base_url and not server_key_allowed(provider_name, base_url) \
+            and _is_server_held_key(api_key):
+        raise ValueError(
+            "A key stored on this server is only sent to the endpoint it was configured for; "
+            "pass your own key (X-AI-Key) to use another base URL."
+        )
     provider = _build_provider(provider_name, api_key, **kwargs)
     _, resolved = apply_deployment_defaults(provider_name, api_key, kwargs)
     provider.external = data_controls.model_is_external(provider_name, resolved.get("base_url") or "")

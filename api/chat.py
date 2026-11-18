@@ -13,7 +13,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from middleware.user_context import get_request_user
 from services.usage_service import check_daily_budget, record_chat_usage
 
-from services.ai_service import AIService, AnthropicProvider, DEFAULT_OLLAMA_MODEL, OllamaProvider, create_provider
+from services.ai_service import (
+    AIService, AnthropicProvider, DEFAULT_OLLAMA_MODEL, OllamaProvider, create_provider, server_key_allowed,
+)
 from services import authored_text, data_controls, figures, page_preview
 from services.agent_tools import anthropic_tools, openai_tools
 from services.collection_overview import build_collection_overview as _build_collection_overview
@@ -1312,6 +1314,12 @@ _STARTERS_MAX_ENTRIES = 256
 _STARTERS_SAMPLE_DOCS = 6
 
 
+_CUSTOM_URL_NEEDS_KEY = (
+    "API key required for {provider} at this base URL: pass X-AI-Key. Keys stored on the "
+    "server are only sent to the endpoint they were configured for."
+)
+
+
 def _build_provider(provider_name: str, x_ai_key, x_ollama_model, x_anthropic_model,
                     x_openai_model, x_ai_model, x_ai_base_url):
     """The provider a request runs on, resolved exactly as /api/chat does."""
@@ -1330,7 +1338,7 @@ def _build_provider(provider_name: str, x_ai_key, x_ollama_model, x_anthropic_mo
             if x_ai_base_url:
                 extra["base_url"] = x_ai_base_url
             return create_provider("ollama", **extra)
-        key = resolve_ai_key(provider_name, x_ai_key)
+        key = resolve_ai_key(provider_name, x_ai_key, x_ai_base_url)
         if not key and provider_name != "openai_compatible":
             raise HTTPException(
                 status_code=400,
@@ -1339,6 +1347,8 @@ def _build_provider(provider_name: str, x_ai_key, x_ollama_model, x_anthropic_mo
                     "use local Ollama or an OpenAI-compatible server (AI_PROVIDER, AI_BASE_URL, AI_MODEL). "
                     "Search works without one."
                 ) if settings.offline_mode else
+                _CUSTOM_URL_NEEDS_KEY.format(provider=provider_name)
+                if x_ai_base_url and not server_key_allowed(provider_name, x_ai_base_url) else
                 f"API key required for {provider_name} — pass X-AI-Key or store a team key via /api/agent/config",
             )
         extra = {}
@@ -1614,7 +1624,9 @@ def list_provider_models(  # sync: provider round-trip runs in the threadpool
                 "listed": False, "error": f"Invalid provider: {x_ai_provider}"}
 
     api_key = x_ai_key
-    if not api_key and x_ai_provider != "ollama":
+    # A team key is listed against its own provider's endpoint only, never a
+    # base URL the request chose (services.ai_service.server_key_allowed).
+    if not api_key and x_ai_provider != "ollama" and server_key_allowed(x_ai_provider, x_ai_base_url):
         try:
             from services.app_database import app_db
             api_key = app_db.get_agent_api_key(x_ai_provider) or None

@@ -1,11 +1,15 @@
 """Shared state and helpers used across API router modules."""
 
+import logging
+
 from fastapi import HTTPException
 
 from config import ALL_AI_PROVIDERS, CLOUD_AI_PROVIDERS  # noqa: F401 — re-exported for routers
 from services.expertise_store import ExpertiseStore
 from services.indexer_manager import indexer_manager
 from services.indexing import DocumentIndexer
+
+logger = logging.getLogger(__name__)
 
 expertise_store = ExpertiseStore()
 
@@ -38,7 +42,7 @@ def _truncate_tool_result(payload_json: str) -> str:
     )
 
 
-def resolve_ai_key(provider: str, header_key: str | None) -> str:
+def resolve_ai_key(provider: str, header_key: str | None, base_url: str | None = None) -> str:
     """Resolve the API key for a cloud provider request.
 
     In order: a per-request X-AI-Key header (the user brought their own key);
@@ -47,9 +51,18 @@ def resolve_ai_key(provider: str, header_key: str | None) -> str:
     finally the deployment default key (AI_API_KEY) when the request names
     the deployment's own provider — how an on-prem appliance serves a private
     endpoint nobody holds individual credentials for.
+
+    The two server-held keys are only returned when ``base_url`` (the
+    request's X-AI-Base-URL) is empty or is the deployment's own AI_BASE_URL;
+    see ``services.ai_service.server_key_allowed``. A request aimed at any
+    other endpoint must bring its own key.
     """
     if header_key:
         return header_key
+    from services.ai_service import server_key_allowed
+    if not server_key_allowed(provider, base_url):
+        logger.warning("Not sending a server-held %s key to a base URL the request chose", provider)
+        return ""
     stored = ""
     if provider in CLOUD_AI_PROVIDERS:
         try:
