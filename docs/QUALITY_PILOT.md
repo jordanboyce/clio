@@ -108,9 +108,56 @@ tested offline. The demo flow was checked in a running instance without an
 embedding model (keyword search): both "Replaced by" pairs were suggested,
 and marking them moved rev G above rev F. With a stand-in hash embedder (not
 a real model, so not a quality claim), revision safety was 100% with marks
-honoured and 62.5% with them ignored. Real-model numbers are still to be run
-on a machine that can download the models, and must be quoted with the
-corpus version, model and commit.
+honoured and 62.5% with them ignored. The real models give lower numbers,
+below.
+
+### Retrieval with the models the images bake (2026-11-18)
+
+Synthetic fixture only (`tests/fixtures/quality_bench`, corpus v1, queries
+v1: 16 documents, 51 chunks, 41 queries, 24 of them revision questions).
+Commit `0543144`. One query at a time, `top_k=10`, each query run three times.
+Reranker: `cross-encoder/ms-marco-MiniLM-L-6-v2` (fastembed), pool `top_k x 3`.
+"Marks ignored" sets `SUPERSEDED_PENALTY=0`, as if nobody had recorded the
+"Replaced by" marks. Latency is on one Windows 11 machine (i7-8750H, 12
+logical CPUs, Python 3.12, fastembed 0.9.1, onnxruntime 1.31.1) and includes
+embedding the query.
+
+```
+venv/Scripts/python scripts/retrieval_bench.py --fixture tests/fixtures/quality_bench \
+  --skip-concurrency --multipliers 3 --repeats 3 --embedding-model all-MiniLM-L6-v2
+venv/Scripts/python scripts/retrieval_bench.py --fixture tests/fixtures/quality_bench \
+  --skip-concurrency --multipliers 3 --repeats 3 --embedding-model BAAI/bge-small-en-v1.5
+```
+
+| Embedding model | Reranker | Marks | Recall@5 | Recall@10 | MRR | Revision-safe | Stale passage first | p50 ms | p95 ms |
+|---|---|---|---|---|---|---|---|---|---|
+| all-MiniLM-L6-v2 | off | honoured | 0.959 | 0.959 | 0.872 | 75% | 12% | 21 | 35 |
+| all-MiniLM-L6-v2 | off | ignored | 0.959 | 0.959 | 0.854 | 62% | 38% | 23 | 43 |
+| all-MiniLM-L6-v2 | on | honoured | 1.000 | 1.000 | 0.901 | 75% | 12% | 391 | 446 |
+| all-MiniLM-L6-v2 | on | ignored | 1.000 | 1.000 | 0.873 | 38% | 50% | 381 | 459 |
+| BAAI/bge-small-en-v1.5 | off | honoured | 0.986 | 1.000 | 0.901 | 75% | 12% | 27 | 48 |
+| BAAI/bge-small-en-v1.5 | off | ignored | 0.986 | 1.000 | 0.865 | 50% | 50% | 35 | 60 |
+| BAAI/bge-small-en-v1.5 | on | honoured | 1.000 | 1.000 | 0.901 | 75% | 12% | 401 | 524 |
+| BAAI/bge-small-en-v1.5 | on | ignored | 1.000 | 1.000 | 0.873 | 38% | 50% | 414 | 500 |
+
+What this says, on this fixture:
+
+- Recording revisions is what makes answers revision-safe. With the marks
+  ignored, a stale passage ranked first on 38-50% of revision questions; with
+  them honoured, on 12%.
+- Marks honoured, both models are revision-safe on 75% of revision questions,
+  not the 100% the stand-in embedder showed. A quarter still has a superseded
+  or informal passage above the current one. That is the next thing to look
+  at before quoting revision safety to a pilot.
+- The reranker brings recall@5 to 1.000 at roughly 15 times the latency. It
+  does not improve revision safety, and with the marks ignored it makes it
+  worse (38%), because it scores the old passage on its wording alone.
+- bge-small edges MiniLM on recall without the reranker (0.986 against
+  0.959 recall@5) at a few milliseconds more per query.
+
+The corpus is 51 chunks, so absolute recall does not transfer to a real
+collection; the comparison between configurations does. These are retrieval
+numbers, not answer quality, and they make no conformance claim of any kind.
 
 ## The pilot offer
 
@@ -149,7 +196,9 @@ not value, try $5,000 with a smaller scope before changing anything else.
 
 ## Known gaps to close before the first pilot
 
-- Real-model benchmark numbers for this fixture (above).
+- Revision safety is 75% with the real models and the marks honoured (above):
+  find out why a quarter of revision questions still rank a stale passage
+  above the current one.
 - Part numbers in keyword search: `7731-204` is split into `7731` and `204`
   (`services/bm25_service.py`, `_TOKEN_RE`), so a sibling part such as
   7731-240 can rank second for a 7731-204 question. Benchmark query `id-04`
