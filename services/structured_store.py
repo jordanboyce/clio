@@ -491,6 +491,15 @@ _DEFAULT_MAX_QUERY_ROWS = 1000
 _IN_CLAUSE_BATCH = 900
 # Wall-clock cap on one model/MCP-written SELECT.
 _QUERY_TIMEOUT_SECONDS = 5.0
+# The progress handler only runs between VM steps, so one function call
+# could still allocate without bound: randomblob(5e8) took half a gigabyte.
+# SQLITE_LIMIT_LENGTH caps every string and blob a query makes (printf
+# widths, replace() and || amplifiers, group_concat), the functions that only
+# manufacture bytes are refused, and the rows handed back are capped in bytes
+# as well as in number.
+_QUERY_MAX_VALUE_BYTES = 1_000_000
+_QUERY_MAX_RESULT_BYTES = 8 * 1024 * 1024
+_QUERY_DENIED_FUNCTIONS = frozenset({'randomblob', 'zeroblob', 'load_extension'})
 
 
 class StructuredStore:
@@ -1137,8 +1146,16 @@ class StructuredStore:
             'sqlite_temp_schema', 'sqlite_sequence',
         }
 
+        denied_functions: List[str] = []
+
         def _authorize(action, arg1, arg2, dbname, source):
-            if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE):
+            if action == sqlite3.SQLITE_FUNCTION:
+                # arg2 is the function name; arg1 is unused.
+                if (arg2 or '').lower() in _QUERY_DENIED_FUNCTIONS:
+                    denied_functions.append(arg2.lower())
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+            if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_RECURSIVE):
                 return sqlite3.SQLITE_OK
             if action == sqlite3.SQLITE_READ:
                 name = (arg1 or '').lower()
@@ -1159,6 +1176,15 @@ class StructuredStore:
             msg = str(e)
             if denied_hidden:
                 return SQLValidationError(f'SQL error: no such table: {denied_hidden[0]}')
+            if denied_functions:
+                return SQLValidationError(
+                    f'Query refused: {denied_functions[0]}() is not available here.'
+                )
+            if 'too big' in msg:
+                return SQLValidationError(
+                    'Query refused: it builds a value larger than '
+                    f'{_QUERY_MAX_VALUE_BYTES // 1_000_000} MB.'
+                )
             if 'not authorized' in msg or 'prohibited' in msg:
                 return SQLValidationError(
                     'Query refused: only the structured data tables '
@@ -1180,6 +1206,7 @@ class StructuredStore:
             )
             conn.set_authorizer(_authorize)
             conn.set_progress_handler(_check_deadline, 10000)
+            conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, _QUERY_MAX_VALUE_BYTES)
             try:
                 cursor = conn.execute(cleaned)
             except sqlite3.Error as e:
@@ -1188,12 +1215,20 @@ class StructuredStore:
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows: List[List[Any]] = []
             truncated = False
+            result_bytes = 0
             try:
                 for i, row in enumerate(cursor):
                     if i >= max_rows:
                         truncated = True
                         break
-                    rows.append([row[col] for col in columns])
+                    values = [row[col] for col in columns]
+                    result_bytes += sum(
+                        len(v) if isinstance(v, (str, bytes)) else 8 for v in values
+                    )
+                    if result_bytes > _QUERY_MAX_RESULT_BYTES and rows:
+                        truncated = True
+                        break
+                    rows.append(values)
             except sqlite3.Error as e:
                 raise _translate(e)
 

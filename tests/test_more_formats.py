@@ -301,6 +301,10 @@ def test_legacy_xls_is_read_when_xlrd_is_installed(extractor, tmp_path):
 
 
 def test_legacy_xls_without_xlrd_gives_an_actionable_error(extractor, tmp_path, monkeypatch):
+    import config
+
+    # The missing module is faked in this process, so read the workbook here.
+    monkeypatch.setattr(config.settings, "extract_isolation", False)
     monkeypatch.setitem(sys.modules, "xlrd", None)  # makes `import xlrd` fail
     path = tmp_path / "pumps.xls"
     shutil.copy(FIXTURES / "pumps.xls", path)

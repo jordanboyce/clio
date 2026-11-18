@@ -55,6 +55,7 @@ from api.deps import (
     require_admin,
     require_collection_access,
 )
+from middleware.upload_limit import max_upload_file_bytes, too_large_message
 from middleware.user_context import get_request_user
 
 logger = logging.getLogger(__name__)
@@ -135,6 +136,22 @@ def _upload_size(file: UploadFile) -> int:
         return max(0, end - pos)
     except Exception:
         return 0
+
+
+class UploadTooLarge(ValueError):
+    """One uploaded file over MAX_UPLOAD_FILE_MB."""
+
+
+def _check_upload_file_size(file: UploadFile) -> None:
+    """MAX_UPLOAD_FILE_MB for each file, before it is staged.
+
+    middleware/upload_limit.py has already answered 413 to a request declared
+    larger than one file may be; this catches a file inside a request that
+    passed that check.
+    """
+    limit = max_upload_file_bytes()
+    if limit and _upload_size(file) > limit:
+        raise UploadTooLarge(too_large_message(limit))
 
 
 def _content_disposition(disposition: str, filename: str) -> str:
@@ -229,6 +246,7 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
 
     for file in files:
         try:
+          _check_upload_file_size(file)
           # The cap is checked before a single byte lands in the collection,
           # and the reservation holds until the row is committed so parallel
           # uploads into one collection cannot jointly overshoot it.
@@ -273,7 +291,7 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
             total_chunks += doc_metadata.total_chunks
 
         except Exception as e:
-            if isinstance(e, StorageLimitExceeded):
+            if isinstance(e, (StorageLimitExceeded, UploadTooLarge)):
                 storage_refusals += 1
                 logger.warning(f"Refused {file.filename}: {e}")
             elif _is_policy_refusal(e):
@@ -381,6 +399,11 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
             continue
         if not is_supported_filename(file.filename):
             failed.append({"filename": file.filename, "error": _unsupported_message(file.filename)})
+            continue
+        try:
+            _check_upload_file_size(file)
+        except UploadTooLarge as e:
+            failed.append({"filename": file.filename, "error": str(e)})
             continue
         raw_filename = file.filename.replace('\\', '/').lstrip('/')
         safe_filename = raw_filename.replace('/', '_') if '/' in raw_filename else raw_filename

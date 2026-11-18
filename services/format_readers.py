@@ -10,6 +10,8 @@ not what its extension says.
 XML is parsed with ``xml.etree`` (expat), which never fetches external
 entities; documents that declare entities at all are refused, and zip members
 and SVG files are size-capped, so a crafted file cannot exhaust memory.
+:func:`check_zip_container` applies the same idea to every zip-based format
+(Office Open XML too) before its parser opens it.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import logging
 import posixpath
 import re
 import zipfile
+import zlib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -228,6 +231,113 @@ def _open_zip(path: Path, what: str) -> zipfile.ZipFile:
         return zipfile.ZipFile(path)
     except zipfile.BadZipFile:
         raise ValueError(f"This is not a valid {what} file (it is not a zip container).") from None
+
+
+# ---------------------------------------------------------------------------
+# Zip-container preflight (DOCX, PPTX, XLSX, ODF, EPUB)
+# ---------------------------------------------------------------------------
+
+class ArchiveLimitError(ValueError):
+    """A zip container that would unpack to more than Clio is willing to parse."""
+
+    code = "archive_too_large"
+
+
+# What each zip-based extension is called in a refusal. Spreadsheets are
+# streamed by openpyxl, so their XML is not counted element by element.
+ZIP_CONTAINERS = {
+    ".docx": "Word", ".pptx": "PowerPoint", ".xlsx": "Excel", ".xlsm": "Excel",
+    ".odt": "OpenDocument .odt", ".ods": "OpenDocument .ods", ".odp": "OpenDocument .odp",
+    ".epub": "EPUB",
+}
+_STREAMED_CONTAINERS = {".xlsx", ".xlsm"}
+_XML_MEMBER_SUFFIXES = (".xml", ".rels", ".xhtml", ".html", ".htm", ".opf", ".ncx")
+# A member smaller than this cannot hurt however well it compresses, and tiny
+# parts (an empty styles.xml) routinely compress far better than 100:1.
+_RATIO_FLOOR_BYTES = 1024 * 1024
+_SCAN_CHUNK = 1 << 20
+
+
+def _container_limits() -> Dict[str, int]:
+    from config import settings
+
+    return {
+        "total": settings.archive_max_uncompressed_mb * 1024 * 1024,
+        "members": settings.archive_max_members,
+        "ratio": settings.archive_max_compression_ratio,
+        "elements": settings.archive_max_xml_elements,
+    }
+
+
+def check_zip_container(path: Path, ext: Optional[str] = None) -> None:
+    """Refuse a zip container that would take unreasonable memory to parse.
+
+    python-docx, python-pptx and ElementTree build the whole XML tree of a
+    part in memory, and deflate packs ``<w:p/>`` about a thousand to one, so a
+    125 KB upload used to cost minutes and gigabytes. This reads only the zip
+    directory (declared sizes, which ``zipfile`` enforces while reading) and,
+    for tree-built formats, counts XML elements while streaming the parts,
+    before any parser runs. Raises :class:`ArchiveLimitError` naming the
+    limit; ``ValueError`` when the file is not a zip at all. Each limit is
+    off at 0.
+    """
+    path = Path(path)
+    ext = (ext or path.suffix).lower()
+    what = ZIP_CONTAINERS.get(ext, ext.lstrip(".").upper() or "zip")
+    limits = _container_limits()
+    with _open_zip(path, what) as zf:
+        infos = zf.infolist()
+        if limits["members"] and len(infos) > limits["members"]:
+            raise ArchiveLimitError(
+                f"This {what} file holds {len(infos)} parts, more than the {limits['members']} "
+                f"Clio reads (ARCHIVE_MAX_MEMBERS)."
+            )
+        total = 0
+        for info in infos:
+            if info.file_size > MAX_XML_BYTES and info.filename.lower().endswith(_XML_MEMBER_SUFFIXES):
+                raise ArchiveLimitError(
+                    f"{info.filename} in this {what} file unpacks to more than "
+                    f"{MAX_XML_BYTES // (1024 * 1024)} MB; Clio does not read parts that large."
+                )
+            total += info.file_size
+            if limits["total"] and total > limits["total"]:
+                raise ArchiveLimitError(
+                    f"This {what} file unpacks to more than {limits['total'] // (1024 * 1024)} MB; "
+                    f"Clio does not read files that large (ARCHIVE_MAX_UNCOMPRESSED_MB)."
+                )
+            ratio = info.file_size / max(info.compress_size, 1)
+            if limits["ratio"] and info.file_size >= _RATIO_FLOOR_BYTES and ratio > limits["ratio"]:
+                raise ArchiveLimitError(
+                    f"{info.filename} in this {what} file is compressed {ratio:.0f} to 1, which only "
+                    f"a file built to exhaust memory does; Clio refuses above {limits['ratio']} to 1 "
+                    f"(ARCHIVE_MAX_COMPRESSION_RATIO)."
+                )
+        if limits["elements"] and ext not in _STREAMED_CONTAINERS:
+            _count_xml_elements(zf, infos, limits["elements"], what)
+
+
+def _count_xml_elements(zf: zipfile.ZipFile, infos, limit: int, what: str) -> None:
+    """Approximate element count (start and empty-element tags) across the XML parts."""
+    seen = 0
+    for info in infos:
+        if not info.filename.lower().endswith(_XML_MEMBER_SUFFIXES):
+            continue
+        try:
+            with zf.open(info) as member:
+                while True:
+                    block = member.read(_SCAN_CHUNK)
+                    if not block:
+                        break
+                    seen += block.count(b"<") - block.count(b"</")
+                    if seen > limit:
+                        raise ArchiveLimitError(
+                            f"This {what} file has more than {limit:,} XML elements; Clio does not "
+                            f"read documents that large (ARCHIVE_MAX_XML_ELEMENTS)."
+                        )
+        except (zipfile.BadZipFile, zlib.error, EOFError, RuntimeError, NotImplementedError, OSError) as e:
+            # Encrypted, damaged or oddly compressed: the real parser says why.
+            logger.info("Zip preflight could not read %s: %s", info.filename, e)
+            return
 
 
 # ---------------------------------------------------------------------------

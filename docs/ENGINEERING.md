@@ -50,8 +50,14 @@ was found and deliberately left for later.
   from the table's own schema (aggregate columns are checked against it).
 - **Model-written SQL is sandboxed**: a read-only connection, one statement,
   an authorizer that permits reads of the structured-data tables only (not
-  `documents`, `chunks` or `sqlite_master`), and a five-second progress-handler
-  deadline.
+  `documents`, `chunks` or `sqlite_master`), a five-second progress-handler
+  deadline, no `randomblob`/`zeroblob`, a 1 MB cap on any value it builds
+  (`SQLITE_LIMIT_LENGTH`) and an 8 MB cap on the rows it returns.
+- **Hostile files are parsed with limits.** Zip containers are sized up
+  before a parser opens them (`check_zip_container`); Office, ODF, EPUB and
+  PDF text parsing runs in a helper process with a deadline and a memory cap
+  (`services/extract_sandbox.py`); a document upload over
+  `MAX_UPLOAD_FILE_MB` is refused before its body is read.
 - **Secrets never reach the log.** Share tokens are logged as a six-character
   prefix.
 - **Indexes cover the hot predicates**: `documents(content_hash)` for upload
@@ -108,7 +114,8 @@ than a convention fix. In rough order of value:
 2. **Link fetcher DNS pinning.** The host is validated, then resolved again by
    the HTTP client; pin the connection to the validated address.
 3. **One error envelope** (`{"detail", "code", ...}`) across the main API, as
-   `/api/v1` already has; a global request-body size limit in middleware.
+   `/api/v1` already has; a global request-body size limit in middleware
+   (document uploads have one, `middleware/upload_limit.py`).
 4. **Refactors**: `execute_tool_calls` to a dispatch table, `create_provider`
    to a registry like `embedding_providers.py`, `_run_turn` and
    `DocumentIndexer.search` split along their stage markers, then

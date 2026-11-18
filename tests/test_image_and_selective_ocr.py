@@ -93,6 +93,11 @@ def fake_pdf(tmp_path):
 
 
 def _with_native_pages(monkeypatch, ex, pages):
+    import config
+
+    # The fake reader lives in this process, so the text layer is read here
+    # rather than in the extraction helper.
+    monkeypatch.setattr(config.settings, "extract_isolation", False)
     monkeypatch.setattr(ex, "_extract_pdf_with_pdfplumber", lambda path: dict(pages))
 
 

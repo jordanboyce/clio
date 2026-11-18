@@ -409,6 +409,14 @@ if _cors_origins:
     )
 
 
+# ── Upload size ─────────────────────────────────────────────────────────────
+# Innermost of the request checks, so auth and rate limiting answer first; it
+# refuses an oversized document upload before the body is spooled.
+from middleware.upload_limit import UploadSizeLimit as _UploadSizeLimit
+
+app.add_middleware(_UploadSizeLimit)
+
+
 # ── Rate limiting ───────────────────────────────────────────────────────────
 # Registered BEFORE the auth block on purpose: Starlette runs the last-added
 # middleware first, so auth ends up outermost and resolves
