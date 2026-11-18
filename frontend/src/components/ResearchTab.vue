@@ -23,6 +23,29 @@
       </div>
     </div>
 
+    <!-- One strip for the tab's background work (R8b): Analyze, Screen and
+         Reviews, with n of m, failures and Stop. Rebuilt from the server's
+         job list when the tab opens, so a reload finds it again. -->
+    <ul v-if="activeJobs.length" class="space-y-1" aria-label="Library work in progress" data-testid="library-job-strip">
+      <li
+        v-for="job in activeJobs"
+        :key="job.job_id"
+        class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-box bg-base-200/70 px-3 py-1.5 text-sm"
+        data-testid="library-job"
+      >
+        <span v-if="job.status === 'running'" class="loading loading-spinner loading-xs" aria-hidden="true" />
+        <span class="font-medium">{{ jobLabel(job) }}</span>
+        <span class="tabular-nums text-base-content/70" data-testid="library-job-count">{{ (job.done || 0) + (job.failed || 0) }} of {{ job.total || 0 }}</span>
+        <span v-if="job.failed" class="text-warning tabular-nums">{{ job.failed }} failed</span>
+        <span v-if="job.current" class="min-w-0 flex-1 truncate text-xs text-base-content/60">Now: {{ job.current }}</span>
+        <span v-else class="flex-1" />
+        <progress class="progress w-24" :value="(job.done || 0) + (job.failed || 0)" :max="job.total || 1" />
+        <button v-if="canWrite" class="btn btn-xs btn-ghost" :disabled="stopping.has(job.job_id)" @click="stopJob(job)">
+          {{ stopping.has(job.job_id) ? 'Stopping…' : 'Stop' }}
+        </button>
+      </li>
+    </ul>
+
     <!-- The app-wide source selection (the Sources panel's checkboxes) scopes everything here. -->
     <div v-if="selectionCount" class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-box bg-base-200/70 px-3 py-2 text-sm" data-testid="research-scope">
       <ListChecks :size="15" class="shrink-0 text-base-content/60" aria-hidden="true" />
@@ -34,7 +57,7 @@
     </div>
 
     <div class="flex gap-4 min-h-0">
-      <div class="flex-1 min-w-0">
+      <div class="library-main flex-1 min-w-0">
         <!-- Library -->
         <div v-if="view === 'library'" class="space-y-3">
           <div v-if="loaded && !papers.length" class="text-sm text-base-content/60 py-10 text-center">
@@ -81,7 +104,10 @@
                 {{ screenLabel }}
               </button>
             </form>
-            <p v-if="screenHint && question.trim()" class="text-xs text-base-content/65 -mt-1">{{ screenHint }}</p>
+            <p v-if="screenHint && question.trim()" class="text-xs text-base-content/65 -mt-1 flex flex-wrap items-center gap-2">
+              {{ screenHint }}
+              <button v-if="!providerId" class="btn btn-xs btn-outline" data-testid="connect-model" @click="ui.connectModel()">Connect a model</button>
+            </p>
 
             <div class="flex flex-wrap items-center gap-2 text-xs">
               <input v-model="filter" class="input input-bordered input-xs w-48" placeholder="Filter by title, author, year" aria-label="Filter sources" />
@@ -94,6 +120,10 @@
               </select>
               <label v-if="selectionCount" class="flex items-center gap-1 cursor-pointer">
                 <input v-model="selectedOnly" type="checkbox" class="checkbox checkbox-xs" />Selected only
+              </label>
+              <label v-if="checkCount || checkOnly" class="flex items-center gap-1 cursor-pointer" data-testid="needs-checking-filter">
+                <input v-model="checkOnly" type="checkbox" class="checkbox checkbox-xs" />Needs checking
+                <span class="tabular-nums text-base-content/55">({{ checkCount }})</span>
               </label>
               <span class="text-base-content/50 tabular-nums">{{ shown.length }} of {{ papers.length }}</span>
               <button class="btn btn-xs btn-ghost" :disabled="!shown.length" @click="selectShown">
@@ -108,9 +138,13 @@
                   title="Read titles, authors, abstracts and references again (after an update, or a wrong result)"
                   @click="analyzeAgain"
                 ><span v-if="analyzing" class="loading loading-spinner loading-xs" />Read {{ selectionCount ? 'selected' : 'all' }} again</button>
-                <button class="btn btn-xs btn-ghost" :disabled="!renameCandidates.length" @click="openRenamePreview">
-                  Rename to descriptive names ({{ renameCandidates.length }})
-                </button>
+                <button
+                  v-if="renameCandidates.length || !unanalyzed.length"
+                  class="btn btn-xs btn-ghost"
+                  :disabled="!renameCandidates.length"
+                  @click="openRenamePreview"
+                >Rename to descriptive names ({{ renameCandidates.length }})</button>
+                <span v-else class="text-base-content/55" data-testid="rename-needs-analysis">Rename to descriptive names: analyze first</span>
               </template>
             </div>
 
@@ -125,21 +159,27 @@
                   type="checkbox"
                   class="checkbox checkbox-xs mt-1"
                   :checked="selectedSet.has(p.document_id)"
-                  :aria-label="`Select ${p.title || p.filename}`"
+                  :aria-label="`Select ${displayTitle(p)}`"
                   @change="selection.toggle(p.document_id)"
                 />
                 <button class="min-w-0 flex-1 text-left" @click="openPaper(p.document_id)">
                   <span class="block text-sm font-medium leading-snug">
-                    {{ p.title || p.filename }}
+                    {{ displayTitle(p) }}
                     <span v-if="p.kind === 'book'" class="badge badge-ghost badge-xs align-middle ml-1">book</span>
+                    <span
+                      v-if="needsChecking(p)"
+                      class="badge badge-warning badge-outline badge-xs align-middle ml-1"
+                      :title="checkReasons(p).join('\n')"
+                      data-testid="needs-checking"
+                    >needs checking</span>
                   </span>
                   <span class="block text-xs text-base-content/60 mt-0.5">
                     <template v-if="p.analyzed">
-                      {{ authorsShort(p.authors) || 'Authors unknown' }}<span v-if="p.year"> · {{ p.year }}</span><span v-if="p.venue"> · {{ p.venue }}</span>
+                      <span :class="doubtful(p, 'authors') ? 'italic' : ''">{{ authorsLine(p) || 'Authors unknown' }}</span><span v-if="p.year"> · {{ p.year }}<span v-if="doubtful(p, 'year')">?</span></span><span v-if="p.venue"> · {{ p.venue }}</span>
                     </template>
                     <template v-else>Not analyzed</template>
                     <span v-if="p.analyzed && p.missing?.length" class="text-warning" :title="`A citation of this source lacks: ${missingLabel(p.missing)}. Open it to add.`"> · cite: no {{ missingLabel(p.missing) }}</span>
-                    <span v-if="p.title && p.filename !== p.suggested_filename" class="text-base-content/50"> · {{ p.filename }}</span>
+                    <span v-if="p.title && !doubtful(p, 'title') && p.filename !== p.suggested_filename" class="text-base-content/50"> · {{ p.filename }}</span>
                   </span>
                   <span v-if="verdicts[p.document_id]?.evidence?.[0]" class="block text-xs text-base-content/70 mt-1 line-clamp-2">
                     “{{ verdicts[p.document_id].evidence[0].quote }}” <span class="text-base-content/55">p. {{ verdicts[p.document_id].evidence[0].page }}</span>
@@ -243,15 +283,33 @@
           <input v-model="pattern" class="input input-bordered input-sm font-mono" />
         </label>
         <p v-if="renameError" class="text-xs text-error" role="alert">{{ renameError }}</p>
-        <ul class="max-h-80 overflow-y-auto divide-y divide-base-300/60 text-xs">
-          <li v-for="p in renamePreview" :key="p.document_id" class="py-1.5 flex items-start gap-2">
-            <input v-model="renameChecked" type="checkbox" class="checkbox checkbox-xs mt-0.5" :value="p.document_id" :aria-label="`Rename ${p.filename}`" />
-            <div class="min-w-0">
-              <div class="text-base-content/50 line-through truncate">{{ p.filename }}</div>
-              <div class="truncate">{{ p.newName }}</div>
-            </div>
-          </li>
-        </ul>
+        <div class="max-h-80 overflow-y-auto space-y-3">
+          <ul class="divide-y divide-base-300/60 text-xs" data-testid="rename-ready">
+            <li v-for="p in renameReady" :key="p.document_id" class="py-1.5 flex items-start gap-2">
+              <input v-model="renameChecked" type="checkbox" class="checkbox checkbox-xs mt-0.5" :value="p.document_id" :aria-label="`Rename ${p.filename}`" />
+              <div class="min-w-0">
+                <div class="text-base-content/50 line-through truncate">{{ p.filename }}</div>
+                <div class="truncate">{{ p.newName }}</div>
+              </div>
+            </li>
+          </ul>
+          <section v-if="renameDoubtful.length" data-testid="rename-check-first">
+            <h4 class="text-xs font-semibold">Check these first</h4>
+            <p class="text-xs text-base-content/60 mb-1">
+              The title or authors these names are built from need checking. Open a source to correct its details, or tick it to rename anyway.
+            </p>
+            <ul class="divide-y divide-base-300/60 text-xs">
+              <li v-for="p in renameDoubtful" :key="p.document_id" class="py-1.5 flex items-start gap-2">
+                <input v-model="renameChecked" type="checkbox" class="checkbox checkbox-xs mt-0.5" :value="p.document_id" :aria-label="`Rename ${p.filename}`" />
+                <div class="min-w-0 flex-1">
+                  <div class="text-base-content/50 truncate">{{ p.filename }}</div>
+                  <div class="truncate text-base-content/70">{{ p.newName }}</div>
+                </div>
+                <button class="btn btn-xs btn-ghost shrink-0" @click="openFromRename(p.document_id)">Open</button>
+              </li>
+            </ul>
+          </section>
+        </div>
         <div class="modal-action">
           <button class="btn btn-sm btn-ghost" @click="renameModal.close()">Cancel</button>
           <button class="btn btn-sm btn-primary" :disabled="!renameChecked.length || renaming" @click="renameSelected">
@@ -276,8 +334,8 @@ import { librarySteps } from '../utils/libraryFlow.js'
 // The map brings the canvas force graph; load it only when the map is opened.
 // lazyView says what is loading, and offers Try again if the chunk fails (F19).
 const ResearchMap = lazyView(() => import('./ResearchMap.vue'), { name: 'Citation map' })
-import { researchApi, VERDICTS, authorsShort } from '../utils/researchApi.js'
-import { createJobPoller, finishNotice } from '../utils/researchJobs.js'
+import { researchApi, VERDICTS, authorsLine, checkReasons, displayTitle, doubtful } from '../utils/researchApi.js'
+import { createJobPoller, finishNotice, isActive } from '../utils/researchJobs.js'
 import { useModal } from '../composables/useModal'
 import { missingLabel } from '../utils/citations.js'
 import { useCollectionStore } from '../stores/collectionStore'
@@ -336,11 +394,85 @@ const renaming = ref(false)
 const pattern = ref('')
 const renameChecked = ref([])
 let previewTimer = null
+const checkOnly = ref(false)
+// The server's job list for this collection, kept by every poll: the job
+// strip reads it, so it shows the same thing however a job was started.
+const jobs = ref([])
+const activeJobs = computed(() => jobs.value.filter(isActive))
+const stopping = ref(new Set())
 // Analyze and Screen each follow their own jobs: one starting never stops
 // the other's poll (whose spinner would then never clear).
-const poller = createJobPoller(async (cid) => (await researchApi.jobs(cid)).jobs || [])
+const poller = createJobPoller(async (cid) => {
+  const list = (await researchApi.jobs(cid)).jobs || []
+  if (cid === collectionId.value) jobs.value = list
+  return list
+})
 const ANALYZE_WORDS = { noun: 'Analysis', past: 'analyzed', failed: 'could not be read' }
 const SCREEN_WORDS = { noun: 'Screening', past: 'screened', failed: 'could not be screened' }
+const REVIEW_WORDS = { noun: 'Reviews', past: 'reviewed', failed: 'could not be reviewed' }
+// The job kinds as stored (assess and brief predate R9's names).
+const KIND = { analyze: 'analyze', assess: 'screen', screen: 'screen', brief: 'review', review: 'review' }
+const watched = new Set()
+
+function jobLabel(job) {
+  const kind = KIND[job.kind]
+  if (job.status === 'queued' && job.params?.not_before) return 'Reviews scheduled'
+  if (kind === 'analyze') return job.params?.parts > 1 ? `Analyzing (part ${job.params.part} of ${job.params.parts})` : 'Analyzing'
+  if (kind === 'screen') return job.params?.question ? `Screening for “${job.params.question}”` : 'Screening'
+  if (kind === 'review') return job.params?.depth === 'thorough' ? 'Preparing thorough reviews' : 'Preparing reviews'
+  return 'Working'
+}
+
+// Follow jobs to their end: spinners, the strip and the finish notice.
+function follow(ids, kind) {
+  const fresh = ids.filter(id => !watched.has(id))
+  if (!fresh.length) return
+  fresh.forEach(id => watched.add(id))
+  if (kind === 'analyze') analyzing.value = true
+  if (kind === 'screen') screening.value = true
+  poller.watch(fresh, {
+    context: collectionId.value,
+    onProgress: (list) => {
+      if (!list.some(j => j.done)) return
+      if (kind === 'screen') loadVerdicts()
+      else loadPapers()
+    },
+    onFinished: (list, extra) => {
+      fresh.forEach(id => { watched.delete(id); stopping.value.delete(id) })
+      stopping.value = new Set(stopping.value)
+      if (kind === 'analyze') { analyzing.value = false; loadPapers(); refreshKey.value++ }
+      if (kind === 'screen') { screening.value = false; loadVerdicts() }
+      if (kind === 'review') { loadPapers(); refreshKey.value++ }
+      reportFinish(list, { analyze: ANALYZE_WORDS, screen: SCREEN_WORDS, review: REVIEW_WORDS }[kind], extra)
+    },
+  })
+}
+
+// On opening the tab (or a reload): pick up whatever is still running.
+async function attachRunningJobs() {
+  const cid = collectionId.value
+  if (!cid) return
+  try {
+    const list = (await researchApi.jobs(cid)).jobs || []
+    if (cid !== collectionId.value) return
+    jobs.value = list
+    for (const kind of ['analyze', 'screen', 'review']) {
+      const ids = list.filter(j => isActive(j) && KIND[j.kind] === kind).map(j => j.job_id)
+      if (ids.length) follow(ids, kind)
+    }
+  } catch { /* the strip is an extra; the buttons still work */ }
+}
+
+async function stopJob(job) {
+  stopping.value = new Set([...stopping.value, job.job_id])
+  try {
+    await researchApi.cancelJob(collectionId.value, job.job_id)
+  } catch (err) {
+    stopping.value.delete(job.job_id)
+    stopping.value = new Set(stopping.value)
+    ui.toastError(err, 'Could not stop the job')
+  }
+}
 
 async function loadPapers() {
   if (!collectionId.value) return
@@ -380,9 +512,19 @@ watch(collectionId, () => {
   openId.value = null
   verdicts.value = {}
   loaded.value = false
+  // Jobs belong to a collection: the previous one's watches end here.
+  poller.stopAll()
+  watched.clear()
+  jobs.value = []
+  analyzing.value = false
+  screening.value = false
   loadPapers()
   loadVerdicts()
+  attachRunningJobs()
 }, { immediate: true })
+
+// Reviews started from the Reviews view or a source panel join the strip.
+watch(refreshKey, () => attachRunningJobs())
 
 let verdictTimer = null
 watch(question, () => {
@@ -410,10 +552,15 @@ const scopeIds = computed(() => scoped.value.map(p => p.document_id))
 watch(selectionCount, (n) => { if (!n) selectedOnly.value = false })
 
 const unanalyzed = computed(() => scoped.value.filter(p => !p.analyzed))
+// R3: records with a title, authors or year that are not known to be right.
+const needsChecking = (p) => Object.keys(p.needs_checking || {}).length > 0
+const checkCount = computed(() => scoped.value.filter(needsChecking).length)
+watch(checkCount, (n) => { if (!n) checkOnly.value = false })
 const hasVerdicts = computed(() => Object.keys(verdicts.value).length > 0)
 const shown = computed(() => {
   const f = filter.value.trim().toLowerCase()
   let list = selectedOnly.value ? selectedPapers.value : papers.value
+  if (checkOnly.value) list = list.filter(needsChecking)
   if (f) {
     list = list.filter(p => [p.title, p.filename, (p.authors || []).join(' '), p.year, p.venue]
       .some(v => String(v || '').toLowerCase().includes(f)))
@@ -424,7 +571,7 @@ const shown = computed(() => {
     recent: (a, b) => String(b.uploaded || '').localeCompare(String(a.uploaded || '')),
     year: (a, b) => (b.year || 0) - (a.year || 0),
     cited: (a, b) => (b.cited_by || 0) - (a.cited_by || 0),
-    title: (a, b) => String(a.title || a.filename).localeCompare(String(b.title || b.filename)),
+    title: (a, b) => displayTitle(a).localeCompare(displayTitle(b)),
   }
   return [...list].sort(by[sort.value] || by.recent)
 })
@@ -452,7 +599,7 @@ const steps = computed(() => librarySteps({
 }))
 const canScreen = computed(() => canWrite.value && providerId.value && question.value.trim().length >= 3 && screenTargets.value.length)
 const screenHint = computed(() => {
-  if (!providerId.value) return 'Screening needs a model (Settings). Open a source to see where it discusses your question without one.'
+  if (!providerId.value) return 'Screening needs a model. Without one, open a source to see where it discusses your question.'
   if (!canWrite.value) return 'Open a source to check it; screening the collection needs edit access.'
   return ''
 })
@@ -493,17 +640,9 @@ async function analyzeNew({ onlyNew = true } = {}) {
     })
     if (!out.job) { analyzing.value = false; return loadPapers() }
     // A big selection comes back as several jobs (one after another).
-    const ids = (out.jobs?.length ? out.jobs : [out.job]).map(j => j.job_id)
-    poller.watch(ids, {
-      context: collectionId.value,
-      onProgress: (jobs) => { if (jobs.some(j => j.done)) loadPapers() },
-      onFinished: (jobs, extra) => {
-        analyzing.value = false
-        loadPapers()
-        refreshKey.value++
-        reportFinish(jobs, ANALYZE_WORDS, extra)
-      },
-    })
+    const started = out.jobs?.length ? out.jobs : [out.job]
+    jobs.value = [...jobs.value.filter(j => !started.some(s => s.job_id === j.job_id)), ...started]
+    follow(started.map(j => j.job_id), 'analyze')
   } catch (err) {
     analyzing.value = false
     ui.toastError(err, 'Analysis failed to start')
@@ -518,15 +657,8 @@ async function screen() {
       kind: 'screen', question: question.value.trim(), document_ids: screenTargets.value,
     }, providerId.value)
     sort.value = 'verdict'
-    poller.watch([out.job.job_id], {
-      context: collectionId.value,
-      onProgress: (jobs) => { if (jobs.some(j => j.done)) loadVerdicts() },
-      onFinished: (jobs, extra) => {
-        screening.value = false
-        loadVerdicts()
-        reportFinish(jobs, SCREEN_WORDS, extra)
-      },
-    })
+    jobs.value = [...jobs.value.filter(j => j.job_id !== out.job.job_id), out.job]
+    follow([out.job.job_id], 'screen')
   } catch (err) {
     screening.value = false
     ui.toastError(err, 'Screening failed to start')
@@ -552,9 +684,16 @@ async function refreshPreview({ checkAll = false } = {}) {
     const out = await researchApi.renameMany(collectionId.value, ids, pattern.value, true)
     if (mine !== previewSeq) return
     renameError.value = ''
-    renamePreview.value = out.renamed.map(r => ({ document_id: r.document_id, filename: r.previous_filename, newName: r.filename }))
+    const ready = new Set(renameCandidates.value.filter(p => p.rename_ready).map(p => p.document_id))
+    renamePreview.value = out.renamed.map(r => ({
+      document_id: r.document_id, filename: r.previous_filename, newName: r.filename, ready: ready.has(r.document_id),
+    }))
     const valid = new Set(renamePreview.value.map(p => p.document_id))
-    renameChecked.value = checkAll ? [...valid] : renameChecked.value.filter(id => valid.has(id))
+    // A3: only names built from a title and authors known to be right are
+    // ticked to begin with; the rest wait under "Check these first".
+    renameChecked.value = checkAll
+      ? renamePreview.value.filter(p => p.ready).map(p => p.document_id)
+      : renameChecked.value.filter(id => valid.has(id))
   } catch (err) {
     if (mine !== previewSeq) return
     renameError.value = err?.message || 'That pattern cannot be used'
@@ -574,12 +713,33 @@ async function openRenamePreview() {
   await refreshPreview({ checkAll: true })
 }
 
+const renameReady = computed(() => renamePreview.value.filter(p => p.ready))
+const renameDoubtful = computed(() => renamePreview.value.filter(p => !p.ready))
+
+function openFromRename(id) {
+  renameModal.close()
+  openPaper(id)
+}
+
+// Every source renamed in one go gets its arrival name back (each kept it).
+async function undoRename(ids) {
+  const cid = collectionId.value
+  const results = await Promise.allSettled(ids.map(id => researchApi.restoreName(cid, id)))
+  const failed = results.filter(r => r.status === 'rejected').length
+  ui.notify(failed ? `Restored ${ids.length - failed} names; ${failed} could not be restored` : `Restored ${ids.length} original names`,
+    failed ? 'warning' : 'success')
+  ui.sourcesChanged()
+  onChanged()
+}
+
 async function renameSelected() {
   renaming.value = true
   try {
     const out = await researchApi.renameMany(collectionId.value, renameChecked.value, pattern.value)
+    const ids = out.renamed.map(r => r.document_id)
     ui.notify(`Renamed ${out.renamed.length} source${out.renamed.length === 1 ? '' : 's'}`
-      + (out.skipped.length ? ` · ${out.skipped.length} left as they were` : ''), 'success')
+      + (out.skipped.length ? ` · ${out.skipped.length} left as they were` : ''), 'success',
+    ids.length > 1 ? { duration: 12000, action: { label: 'Undo all', run: () => undoRename(ids) } } : {})
     renameModal.close()
     ui.sourcesChanged()
     onChanged()
@@ -594,8 +754,11 @@ async function renameSelected() {
 <style scoped>
 /* The four steps read as one line of progress, not as cards: a numbered
    mark, the step and its count, and what it needs. */
+/* A7: the column the list sits in decides, not the window: with the Sources
+   panel and a source open, a 1280px window leaves the list about 30rem. */
+.library-main { container-type: inline-size; }
 .library-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem 1rem; padding-block: 0.25rem; }
-@media (min-width: 48rem) { .library-steps { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@container (min-width: 46rem) { .library-steps { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .library-step { display: flex; align-items: flex-start; gap: 0.5rem; min-width: 0; }
 .step-mark { display: inline-grid; place-items: center; flex-shrink: 0; width: 1.25rem; height: 1.25rem; margin-top: 0.0625rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; border: 1.5px solid color-mix(in oklch, var(--color-base-content) 30%, transparent); color: color-mix(in oklch, var(--color-base-content) 70%, transparent); }
 .library-step[data-state='partial'] .step-mark { border-color: var(--color-primary); color: var(--color-primary); }

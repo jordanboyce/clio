@@ -8,6 +8,11 @@ const ui = useUiStore()
 // and a thin tint on its colour, not by a full-colour alert block.
 const icons = { success: CheckCircle2, error: CircleAlert, warning: AlertTriangle, info: Info }
 const iconClass = { success: 'text-success', error: 'text-error', warning: 'text-warning', info: 'text-info' }
+
+function runAction(toast) {
+  ui.dismiss(toast.id)
+  toast.action?.run?.()
+}
 </script>
 
 <template>
@@ -26,6 +31,11 @@ const iconClass = { success: 'text-success', error: 'text-error', warning: 'text
       >
         <component :is="icons[toast.type] || Info" :size="16" class="mt-0.5 flex-shrink-0" :class="iconClass[toast.type] || 'text-info'" aria-hidden="true" />
         <span class="flex-1 min-w-0 text-[13px] leading-snug whitespace-pre-line break-words">{{ toast.message }}</span>
+        <button
+          v-if="toast.action"
+          class="btn btn-xs btn-ghost -my-0.5"
+          @click="runAction(toast)"
+        >{{ toast.action.label }}</button>
         <button
           class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content -mr-1 -mt-1"
           aria-label="Dismiss notification"

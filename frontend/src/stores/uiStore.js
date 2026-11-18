@@ -40,11 +40,24 @@ export const useUiStore = defineStore('ui', () => {
     praViewer.value = null
   }
 
+  // A request to open Settings on one section ({ id, at }): any view can
+  // ask, App.vue switches to Settings and the section scrolls into view.
+  // "Connect a model" always lands on the providers (C3).
+  const settingsRequest = ref(null)
+  function openSettings(id) {
+    settingsRequest.value = { id, at: Date.now() }
+  }
+  function connectModel() {
+    openSettings('providers')
+  }
+
   let nextId = 1
 
-  function notify(message, type = 'info', { duration = 4000 } = {}) {
+  // `action`: { label, run } renders one button on the toast ("Undo all");
+  // pressing it runs the action and dismisses the toast.
+  function notify(message, type = 'info', { duration = 4000, action = null } = {}) {
     const id = nextId++
-    toasts.value.push({ id, message, type })
+    toasts.value.push({ id, message, type, action })
     if (duration > 0) {
       setTimeout(() => dismiss(id), duration)
     }
@@ -65,5 +78,5 @@ export const useUiStore = defineStore('ui', () => {
     return notify(message, 'error', { duration: 6000 })
   }
 
-  return { toasts, offline, highlightAddSources, sourcesVersion, sourcesChanged, researchView, praViewer, openPra, closePra, notify, dismiss, toastError }
+  return { toasts, offline, highlightAddSources, sourcesVersion, sourcesChanged, researchView, praViewer, openPra, closePra, notify, dismiss, toastError, settingsRequest, openSettings, connectModel }
 })

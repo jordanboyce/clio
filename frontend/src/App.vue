@@ -2040,6 +2040,8 @@ const openSettingsSection = (id) => {
   settingsSectionRequest.value = { id, at: Date.now() }
   switchTab('settings')
 }
+// Any view may ask for a Settings section through the UI store (C3).
+watch(() => ui.settingsRequest, (request) => { if (request?.id) openSettingsSection(request.id) })
 
 // Notification bell / footer indicator: land on the part of Admin that holds
 // the thing being counted, not just the top of the page.

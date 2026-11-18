@@ -214,7 +214,11 @@ def build_item(doc: dict, paper: Optional[dict], collection_name: Optional[str] 
         "analyzed": bool(paper.get("analyzed_at")),
         "provenance": provenance,
     }
-    item["internal"] = not (item["doi"] or item["isbn"] or item["arxiv_id"] or item["url"])
+    # "Internal document, collection …, file …" is for reports and memos: a
+    # journal article or a book with no identifier is still published work.
+    # A person makes any source internal by setting its type to report or other.
+    item["internal"] = (not (item["doi"] or item["isbn"] or item["arxiv_id"] or item["url"])
+                        and item["kind"] not in ("article", "book", "chapter"))
     item["missing"] = missing_fields(item)
     return item
 

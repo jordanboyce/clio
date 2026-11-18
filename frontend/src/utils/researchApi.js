@@ -101,6 +101,32 @@ export function authorsShort(authors = []) {
   return `${surname(authors[0])} et al.`
 }
 
+// R3: a field the server is not sure of (needs_checking) is never stated as
+// fact. A doubtful title shows the file name; doubtful authors show
+// "Authors need checking"; a report's issuing body stands in for authors.
+export function doubtful(paper, field) {
+  return Boolean(paper?.needs_checking && Object.prototype.hasOwnProperty.call(paper.needs_checking, field))
+}
+
+export function displayTitle(paper) {
+  if (!paper) return ''
+  if (doubtful(paper, 'title')) return paper.filename || paper.title || ''
+  return paper.title || paper.filename || ''
+}
+
+export function authorsLine(paper, { short = true } = {}) {
+  if (!paper) return ''
+  if (doubtful(paper, 'authors')) return 'Authors need checking'
+  const authors = paper.authors || []
+  if (authors.length) return short ? authorsShort(authors) : authors.join(', ')
+  return paper.details?.organization || ''
+}
+
+export function checkReasons(paper) {
+  const labels = { title: 'Title', authors: 'Authors', year: 'Year' }
+  return Object.entries(paper?.needs_checking || {}).map(([field, why]) => `${labels[field] || field}: ${why}`)
+}
+
 // provenance.source 'paper' means "read from the document itself" (the
 // stored value predates books; it is not shown as the word "paper").
 export function sourceLabel(provenance) {

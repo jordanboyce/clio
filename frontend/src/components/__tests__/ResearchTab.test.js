@@ -31,6 +31,7 @@ async function mountTab() {
     return { data: {} }
   })
   http.post.mockImplementation(async (url, body) => {
+    if (url.includes('/cancel') || url.includes('/restore-name')) return { data: {} }
     if (url.startsWith('/api/research/analyze')) {
       serverJobs.a1 = job('a1', 'analyze', 'running')
       return { data: { job: serverJobs.a1, jobs: [serverJobs.a1] } }
@@ -187,3 +188,114 @@ describe('the order of work (R10)', () => {
     expect(body).toMatchObject({ kind: 'screen', document_ids: ['d2'] })
   })
 })
+
+describe('records that are not sure say so (A1)', () => {
+  it('shows the file name for a doubtful title and never states doubtful authors', async () => {
+    papers = [
+      paper('d1', { analyzed: true, title: 'Right Title', authors: ['Ines Halvorsen'], needs_checking: {} }),
+      paper('d2', {
+        analyzed: true, filename: 'gulls.pdf', title: 'We count nesting gulls on city rooftops from fixed cameras',
+        authors: ['Imaginary Urban Ecology'], needs_checking: { title: 'it stops mid-sentence', authors: 'reads like a journal' },
+      }),
+    ]
+    const w = await mountTab()
+    const rows = w.get('[data-testid="research-paper-list"]').findAll('li')
+    expect(rows[0].text()).toContain('Right Title')
+    expect(rows[0].find('[data-testid="needs-checking"]').exists()).toBe(false)
+    const doubtfulRow = rows.find(r => r.text().includes('gulls.pdf'))
+    expect(doubtfulRow.text()).not.toContain('We count nesting gulls')
+    expect(doubtfulRow.text()).toContain('Authors need checking')
+    expect(doubtfulRow.text()).not.toContain('Ecology')
+    expect(doubtfulRow.find('[data-testid="needs-checking"]').exists()).toBe(true)
+  })
+
+  it('filters to the records that need checking, with a count', async () => {
+    papers = [
+      paper('d1', { analyzed: true, title: 'One', needs_checking: {} }),
+      paper('d2', { analyzed: true, title: 'Two', needs_checking: { title: 'why' } }),
+    ]
+    const w = await mountTab()
+    const filter = w.get('[data-testid="needs-checking-filter"]')
+    expect(filter.text()).toContain('(1)')
+    await filter.get('input').setValue(true)
+    const rows = w.get('[data-testid="research-paper-list"]').findAll('li')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].text()).toContain('d2.pdf')
+  })
+})
+
+describe('bulk rename ticks only names built from records known to be right (A3)', () => {
+  it('pre-ticks ready records and lists the rest unticked under Check these first', async () => {
+    papers = [
+      paper('d1', { analyzed: true, title: 'One', suggested_filename: 'One.pdf', rename_ready: true }),
+      paper('d2', { analyzed: true, title: 'Two', suggested_filename: 'Two.pdf', rename_ready: false, needs_checking: { title: 'why' } }),
+    ]
+    const w = await mountTab()
+    await w.findAll('button').find(b => b.text().startsWith('Rename to descriptive names')).trigger('click')
+    await flushPromises()
+    const ready = w.get('[data-testid="rename-ready"]')
+    const later = w.get('[data-testid="rename-check-first"]')
+    expect(ready.findAll('input[type="checkbox"]').map(i => i.element.checked)).toEqual([true])
+    expect(later.text()).toContain('Check these first')
+    expect(later.findAll('input[type="checkbox"]').map(i => i.element.checked)).toEqual([false])
+    expect(w.findAll('button').find(b => b.text().startsWith('Rename 1')).exists()).toBe(true)
+  })
+
+  it('offers Undo all after renaming several', async () => {
+    papers = [
+      paper('d1', { analyzed: true, title: 'One', suggested_filename: 'One.pdf', rename_ready: true }),
+      paper('d2', { analyzed: true, title: 'Two', suggested_filename: 'Two.pdf', rename_ready: true }),
+    ]
+    const w = await mountTab()
+    await w.findAll('button').find(b => b.text().startsWith('Rename to descriptive names')).trigger('click')
+    await flushPromises()
+    await w.findAll('button').find(b => b.text().startsWith('Rename 2')).trigger('click')
+    await flushPromises()
+    const toast = useUiStore().toasts.find(t => t.action)
+    expect(toast.action.label).toBe('Undo all')
+    toast.action.run()
+    await flushPromises()
+    const restores = http.post.mock.calls.filter(([url]) => url.includes('/restore-name'))
+    expect(restores).toHaveLength(2)
+  })
+
+  it('says Analyze first instead of a disabled button with no reason', async () => {
+    papers = [paper('d1')]
+    const w = await mountTab()
+    expect(w.get('[data-testid="rename-needs-analysis"]').text()).toContain('analyze first')
+  })
+})
+
+describe('one job strip for the Library (A5)', () => {
+  it('comes back after a reload with the right count, and Stop cancels the job', async () => {
+    // A reload: the tab mounts while an analysis started earlier still runs.
+    serverJobs.a9 = job('a9', 'analyze', 'running', { total: 7, done: 3, failed: 1 })
+    const w = await mountTab()
+    const strip = w.get('[data-testid="library-job-strip"]')
+    expect(strip.text()).toContain('Analyzing')
+    expect(strip.get('[data-testid="library-job-count"]').text()).toBe('4 of 7')
+    expect(strip.text()).toContain('1 failed')
+    expect(spinning(analyzeButton(w))).toBe(true)
+
+    await strip.findAll('button').find(b => b.text() === 'Stop').trigger('click')
+    await flushPromises()
+    expect(http.post.mock.calls.some(([url]) => url.includes('/api/research/jobs/a9/cancel'))).toBe(true)
+    expect(w.get('[data-testid="library-job-strip"]').text()).toContain('Stopping…')
+
+    serverJobs.a9 = job('a9', 'analyze', 'cancelled', { total: 7, done: 3, failed: 1 })
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(w.find('[data-testid="library-job-strip"]').exists()).toBe(false)
+    expect(useUiStore().toasts[0].message).toContain('Analysis was cancelled')
+  })
+
+  it('shows screening and reviews started elsewhere', async () => {
+    serverJobs.s2 = job('s2', 'assess', 'running', { params: { question: 'root depth?' } })
+    serverJobs.b2 = job('b2', 'brief', 'queued', { params: { depth: 'thorough' } })
+    const w = await mountTab()
+    const text = w.get('[data-testid="library-job-strip"]').text()
+    expect(text).toContain('Screening for “root depth?”')
+    expect(text).toContain('Preparing thorough reviews')
+  })
+})
+

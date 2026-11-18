@@ -69,7 +69,9 @@
           <span v-if="starting" class="loading loading-spinner loading-xs" />
           {{ when === 'later' ? 'Schedule' : 'Start' }} {{ targetIds.length }} review{{ targetIds.length === 1 ? '' : 's' }}
         </button>
-        <span v-if="!providerId" class="text-xs text-base-content/70">Reviews need a model. Connect one in Settings first.</span>
+        <span v-if="!providerId" class="text-xs text-base-content/70 flex flex-wrap items-center gap-2">Reviews need a model.
+          <button class="btn btn-xs btn-outline" data-testid="connect-model" @click="ui.connectModel()">Connect a model</button>
+        </span>
         <span v-else-if="targetIds.length" class="text-xs text-base-content/60">{{ providerName }} · {{ reviewCost(targetIds.length, depth) }}</span>
         <span v-else class="text-xs text-base-content/60">Every source in this scope already has a review.</span>
       </div>
@@ -148,7 +150,7 @@
       <template v-else>
         <p class="text-base-content">No reviews yet.</p>
         <p v-if="!canWrite">Reviews appear here once someone with edit access to this collection prepares them.</p>
-        <p v-else-if="!providerId">Reviews need a model. Connect one in Settings, then prepare reviews here.</p>
+        <p v-else-if="!providerId">Reviews need a model. <button class="link" @click="ui.connectModel()">Connect a model</button>, then prepare reviews here.</p>
         <p v-else>Prepare reviews above. Each one quotes the source for every statement, with its page.</p>
       </template>
     </div>

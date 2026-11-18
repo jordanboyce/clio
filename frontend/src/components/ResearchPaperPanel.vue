@@ -2,12 +2,22 @@
   <aside class="flex flex-col h-full min-h-0 min-w-0 w-full" data-testid="research-paper-panel" aria-label="Source details">
     <header class="flex items-start gap-2 px-4 pt-4 pb-3 border-b border-base-300">
       <div class="min-w-0 flex-1 [overflow-wrap:anywhere]">
-        <h3 class="font-semibold leading-snug">{{ paper?.title || paper?.filename || 'Loading…' }}</h3>
+        <h3 class="font-semibold leading-snug">{{ paper ? displayTitle(paper) : 'Loading…' }}</h3>
         <p v-if="paper" class="text-xs text-base-content/60 mt-1">
-          <span v-if="paper.authors?.length" :title="paper.authors.join(', ')">{{ authorList(paper.authors) }}</span>
-          <span v-if="paper.year"> · {{ paper.year }}</span>
+          <span v-if="doubtful(paper, 'authors')" class="italic">Authors need checking</span>
+          <span v-else-if="paper.authors?.length" :title="paper.authors.join(', ')">{{ authorList(paper.authors) }}</span>
+          <span v-else-if="paper.details?.organization">{{ paper.details.organization }}</span>
+          <span v-if="paper.year"> · {{ paper.year }}<span v-if="doubtful(paper, 'year')">?</span></span>
           <span v-if="paper.venue"> · {{ paper.venue }}</span>
         </p>
+        <div v-if="paper && checkReasons(paper).length" class="mt-1.5 text-xs" data-testid="paper-needs-checking">
+          <span class="badge badge-warning badge-outline badge-xs">needs checking</span>
+          <ul class="mt-1 space-y-0.5 text-base-content/65">
+            <li v-for="reason in checkReasons(paper)" :key="reason">{{ reason }}</li>
+          </ul>
+          <p v-if="doubtful(paper, 'title') && paper.title" class="mt-0.5 text-base-content/55">Read as: “{{ truncate(paper.title, 120) }}”</p>
+          <p v-if="paper.can_write" class="mt-0.5 text-base-content/55">Correct it under Cite, below.</p>
+        </div>
         <p v-if="paper && (paper.doi || paper.arxiv_id || paper.isbn)" class="text-xs mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
           <span v-if="paper.kind === 'book'" class="badge badge-ghost badge-xs">book</span>
           <a v-if="paper.isbn" class="link link-hover" :href="`https://openlibrary.org/isbn/${paper.isbn}`" target="_blank" rel="noopener">ISBN {{ paper.isbn }}</a>
@@ -29,13 +39,20 @@
         </div>
         <div v-if="paper.can_write" class="flex flex-wrap items-center gap-2">
           <template v-if="!editingName">
+            <!-- A3: a descriptive name is offered only when the title and
+                 authors it is built from are known to be right. -->
             <button
-              v-if="paper.suggested_filename && paper.suggested_filename !== paper.filename"
+              v-if="paper.suggested_filename && paper.suggested_filename !== paper.filename && paper.rename_ready"
               class="btn btn-xs btn-outline max-w-full"
               :disabled="busy.rename"
               :title="paper.suggested_filename"
               @click="rename()"
             ><span class="truncate">Rename to “{{ truncate(paper.suggested_filename, 48) }}”</span></button>
+            <span
+              v-else-if="paper.suggested_filename && paper.suggested_filename !== paper.filename"
+              class="text-xs text-base-content/55"
+              data-testid="rename-check-first-hint"
+            >Check the title and authors before giving it a descriptive name.</span>
             <button class="btn btn-xs btn-ghost" @click="startEdit">Edit name</button>
             <button v-if="paper.original_filename && paper.original_filename !== paper.filename" class="btn btn-xs btn-ghost max-w-full" @click="restore">
               <span class="truncate">Restore “{{ truncate(paper.original_filename, 30) }}”</span>
@@ -70,7 +87,7 @@
             {{ abstractOpen ? 'Show less' : 'Show more' }}
           </button>
         </template>
-        <p v-else-if="paper.analyzed" class="text-sm text-base-content/55">No abstract, preface or introduction was found.</p>
+        <p v-else-if="paper.analyzed" class="text-sm text-base-content/55" data-testid="no-abstract">No abstract, preface or introduction was found in the first pages.</p>
         <div v-else class="text-sm text-base-content/60 flex items-center gap-2">
           Not analyzed yet.
           <button v-if="paper.can_write" class="btn btn-xs btn-outline" :disabled="busy.analyze" @click="analyze">
@@ -78,8 +95,8 @@
           </button>
         </div>
         <p v-if="busy.analyze" class="text-xs text-base-content/50 mt-1">Reading it in the background — a long book can take a minute or two.</p>
-        <ul v-if="paper.analysis_notes?.length" class="mt-2 space-y-0.5">
-          <li v-for="note in paper.analysis_notes" :key="note" class="text-xs text-base-content/50">{{ note }}</li>
+        <ul v-if="visibleNotes.length" class="mt-2 space-y-0.5">
+          <li v-for="note in visibleNotes" :key="note" class="text-xs text-base-content/50">{{ note }}</li>
         </ul>
         <details v-if="Object.keys(paper.provenance || {}).length" class="mt-1 text-xs text-base-content/50">
           <summary class="cursor-pointer">Where these details came from</summary>
@@ -268,7 +285,7 @@ import { FileText, X } from 'lucide-vue-next'
 import ResearchEvidence from './ResearchEvidence.vue'
 import ResearchBrief from './ResearchBrief.vue'
 import ResearchCitePanel from './ResearchCitePanel.vue'
-import { researchApi, VERDICTS, pageUrl, sourceLabel, abstractLabel, isOpening } from '../utils/researchApi.js'
+import { researchApi, VERDICTS, pageUrl, sourceLabel, abstractLabel, isOpening, checkReasons, displayTitle, doubtful } from '../utils/researchApi.js'
 import { useUiStore } from '../stores/uiStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useModal } from '../composables/useModal'
@@ -305,6 +322,9 @@ function authorList(authors) {
 }
 
 const visibleRefs = computed(() => (paper.value?.reference_list || []).slice(0, refLimit.value))
+// The "no abstract" line above already says so; records analysed before it
+// moved there still carry the same sentence as a note (A8).
+const visibleNotes = computed(() => (paper.value?.analysis_notes || []).filter(n => !n.startsWith('No abstract, preface or introduction')))
 
 async function load() {
   loading.value = true
@@ -336,6 +356,11 @@ function truncate(text, n) {
 function refStatus(entry) {
   if (entry.status === 'in_library') return { label: 'In your library', tone: 'badge-success' }
   if (entry.status === 'queued') return { label: 'Queued', tone: 'badge-info' }
+  // A8: an arXiv id or URL as printed is not known to exist until a lookup
+  // or a download confirms it (a typo in a reference list is common).
+  if (entry.resolved_kind && /printed in the (reference|source)/.test(entry.resolved_via || '')) {
+    return { label: 'Link as printed', tone: 'badge-ghost' }
+  }
   if (entry.resolved_kind === 'pdf') return { label: 'Open PDF', tone: 'badge-outline' }
   if (entry.resolved_kind === 'page') return { label: 'Web page', tone: 'badge-ghost' }
   if (entry.status === 'unavailable') return { label: 'No open copy found', tone: 'badge-ghost' }
