@@ -147,3 +147,13 @@ Each of these is named in the model's warnings when it occurs:
   formulas), substitutions, alignments and phases, and `<include>` (put the
   included files in the same zip instead).
 - The other MAR-D kinds (attributes, recovery rules, phases, ...).
+
+## Analysis and tools
+
+Once a model is indexed, Clio can quantify its cut sets, rank basic events by
+importance (Fussell-Vesely, RAW, RRW, Birnbaum) and generate cut sets for a
+fault tree that carries none, through `/api/pra` and the read-only MCP tools
+`pra_models`, `pra_fault_tree`, `pra_cut_sets`, `pra_importance` and
+`pra_event`. Every number is a screening estimate from point values; the PRA
+tool's own quantification governs. Definitions, guards and the validation
+against SAPHIRE and SCRAM results are in [PRA_ANALYSIS.md](PRA_ANALYSIS.md).
