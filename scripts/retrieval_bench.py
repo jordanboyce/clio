@@ -202,7 +202,8 @@ def validate_corpus(corpus: Corpus) -> List[str]:
 
 # ── Index ────────────────────────────────────────────────────────────────────
 
-def build_index(corpus: Corpus, index_dir: Path, cache_dir: Path, embedder=None):
+def build_index(corpus: Corpus, index_dir: Path, cache_dir: Path, embedder=None,
+                model_name: str = EMBEDDING_MODEL):
     """Index every passage as one chunk with the real local embedder.
     Returns the DocumentIndexer whose ``search`` the benchmark calls.
 
@@ -217,7 +218,7 @@ def build_index(corpus: Corpus, index_dir: Path, cache_dir: Path, embedder=None)
 
     if embedder is None:
         from services.embedder import FastEmbedService
-        embedder = FastEmbedService(EMBEDDING_MODEL, cache_dir=cache_dir)
+        embedder = FastEmbedService(model_name, cache_dir=cache_dir)
     store = VectorStore(index_dir, embedding_dim=getattr(embedder, "embedding_dim", 384))
     chunks: List[ChunkMetadata] = []
     for d in corpus.documents:
@@ -529,7 +530,8 @@ class BenchmarkReport:
         }
 
 
-def _environment(corpus: Corpus, backend: str, cache_dir: Path) -> Dict[str, Any]:
+def _environment(corpus: Corpus, backend: str, cache_dir: Path,
+                 model_name: str = EMBEDDING_MODEL) -> Dict[str, Any]:
     import subprocess
 
     env: Dict[str, Any] = {
@@ -540,7 +542,7 @@ def _environment(corpus: Corpus, backend: str, cache_dir: Path) -> Dict[str, Any
         "chunks": sum(len(d["passages"]) for d in corpus.documents),
         "queries": len(corpus.queries),
         "supersede_marks": len(corpus.supersede_marks),
-        "embedding_model": EMBEDDING_MODEL,
+        "embedding_model": model_name,
         "reranker_backend": backend,
         "python": platform.python_version(),
         "platform": platform.platform(),
@@ -567,7 +569,7 @@ def _environment(corpus: Corpus, backend: str, cache_dir: Path) -> Dict[str, Any
 def run_benchmark(*, top_k: int = 10, repeats: int = 1, multipliers: Sequence[int] = (2, 3, 5),
                   parallel: int = 8, concurrency_multiplier: int = 3, concurrency_queries: int = 40,
                   skip_concurrency: bool = False, index_dir: Optional[Path] = None,
-                  fixture_dir: Path = FIXTURE_DIR,
+                  fixture_dir: Path = FIXTURE_DIR, embedding_model: str = EMBEDDING_MODEL,
                   log: Callable[[str], None] = lambda s: None) -> BenchmarkReport:
     """Build the index once and run every configuration against it.
 
@@ -589,11 +591,11 @@ def run_benchmark(*, top_k: int = 10, repeats: int = 1, multipliers: Sequence[in
         raise ValueError("fixture is inconsistent:\n  " + "\n  ".join(problems))
 
     workdir = index_dir or Path(tempfile.mkdtemp(prefix="clio-bench-index-"))
-    log(f"indexing {len(corpus.documents)} documents with {EMBEDDING_MODEL} ...")
-    indexer = build_index(corpus, workdir / "index", cache_dir)
+    log(f"indexing {len(corpus.documents)} documents with {embedding_model} ...")
+    indexer = build_index(corpus, workdir / "index", cache_dir, model_name=embedding_model)
     log("checking the reranker model ...")
     backend = ensure_reranker_model(cache_dir)
-    env = _environment(corpus, backend, cache_dir)
+    env = _environment(corpus, backend, cache_dir, embedding_model)
     env["top_k"] = top_k
 
     sequential: List[ConfigResult] = []
@@ -749,6 +751,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--json", type=Path, help="write the raw numbers here")
     parser.add_argument("--out", type=Path, help="write the markdown report here (also printed)")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--embedding-model", default=EMBEDDING_MODEL,
+                        help="fastembed model to index with (the images bake all-MiniLM-L6-v2 or BAAI/bge-small-en-v1.5)")
     args = parser.parse_args(argv)
 
     sys.path.insert(0, str(REPO_ROOT))
@@ -761,7 +765,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         multipliers=[int(m) for m in args.multipliers.split(",") if m.strip()],
         parallel=args.parallel, concurrency_multiplier=args.concurrency_multiplier,
         concurrency_queries=args.concurrency_queries,
-        skip_concurrency=args.skip_concurrency, fixture_dir=args.fixture, log=log,
+        skip_concurrency=args.skip_concurrency, fixture_dir=args.fixture,
+        embedding_model=args.embedding_model, log=log,
     )
     markdown = render_markdown(report)
     print(markdown)
