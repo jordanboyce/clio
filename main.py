@@ -539,7 +539,10 @@ async def _caller_may_see_health_details(request) -> bool:
     if credentialed and failed_auth_limiter.retry_after(_client_key(request)) is not None:
         return False
     if verifier is not None and verifier.has_candidate(request.headers):
-        who = await asyncio.to_thread(verifier.verify_request, request.headers, _client_ip(request))
+        try:
+            who = await asyncio.to_thread(verifier.verify_request, request.headers, _client_ip(request))
+        except identity_service.IdentityRefused:
+            who = None
         if who:
             request.state.auth_identity = who
             return True
@@ -607,7 +610,7 @@ async def require_auth(request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    from services.identity import InsufficientScope, get_identity_verifier, is_mcp_path
+    from services.identity import IdentityRefused, InsufficientScope, get_identity_verifier, is_mcp_path
     verifier = get_identity_verifier(request.url.path)
     # Failed sign-ins are budgeted per address before any credential is
     # checked (middleware/auth_failures.py); the request rate limiter runs
@@ -655,6 +658,17 @@ async def require_auth(request, call_next):
                 {"detail": f"This token lacks the scope '{exc.scope}' required for the MCP endpoint."},
                 status_code=403,
                 headers={"WWW-Authenticate": challenge(request, error="insufficient_scope")},
+            )
+        except IdentityRefused as exc:
+            # A valid IdP token that names no usable identity: say why. It
+            # counts against the address like any other refused credential.
+            from services.mcp_oauth import challenge
+            failed_auth_limiter.record_failure(_client_key(request), "identity refused", request.url.path)
+            return JSONResponse(
+                {"detail": exc.reason, "code": "identity_refused"},
+                status_code=401,
+                headers={"WWW-Authenticate": challenge(request, error="invalid_token")
+                         if is_mcp_path(request.url.path) else 'Bearer error="invalid_token"'},
             )
         if who:
             request.state.auth_identity = who

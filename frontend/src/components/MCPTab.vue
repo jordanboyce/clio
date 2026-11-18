@@ -232,6 +232,11 @@
                     <span v-if="!t.expires_at" class="text-base-content/40">Never</span>
                     <span v-else-if="isExpired(t)" class="badge badge-xs badge-error badge-outline">Expired</span>
                     <span v-else class="text-base-content/60">{{ formatDate(t.expires_at) }}</span>
+                    <span
+                      v-if="t.exceeds_max_lifetime && !t.revoked_at && !isExpired(t)"
+                      class="badge badge-xs badge-warning badge-outline ml-1"
+                      title="Minted before this deployment's maximum token lifetime. It still works; revoke it and create a new one."
+                    >Rotate</span>
                   </td>
                   <td class="text-xs text-base-content/60 whitespace-nowrap">
                     <template v-if="t.last_used_at">{{ formatDate(t.last_used_at) }}<span v-if="t.use_count" class="text-base-content/40"> · {{ t.use_count }} {{ t.use_count === 1 ? 'call' : 'calls' }}</span></template>
@@ -726,12 +731,19 @@ const newTokenCanOverwriteUploads = ref(false)
 const newTokenAllowlist = ref(false)
 // null = never expires; otherwise days until the token stops working.
 const newTokenExpiryDays = ref(90)
-const expiryOptions = [
-  { value: 30, label: '30 days' },
-  { value: 90, label: '90 days' },
-  { value: 365, label: '1 year' },
-  { value: null, label: 'Never' },
-]
+// The server's longest lifetime (MCP_TOKEN_MAX_DAYS); 0 = no cap, so "Never" is offered.
+const tokenMaxDays = ref(0)
+const EXPIRY_CHOICES = [30, 90, 365]
+const dayLabel = (days) => (days === 365 ? '1 year' : `${days} days`)
+const expiryOptions = computed(() => {
+  const cap = tokenMaxDays.value
+  if (!cap) return [...EXPIRY_CHOICES.map((d) => ({ value: d, label: dayLabel(d) })), { value: null, label: 'Never' }]
+  const options = EXPIRY_CHOICES.filter((d) => d < cap).map((d) => ({ value: d, label: dayLabel(d) }))
+  return [...options, { value: cap, label: `${dayLabel(cap)} (longest allowed)` }]
+})
+watch(tokenMaxDays, (cap) => {
+  if (cap && (newTokenExpiryDays.value === null || newTokenExpiryDays.value > cap)) newTokenExpiryDays.value = cap
+})
 const newTokenPlaintext = ref('')
 const tokenCreating = ref(false)
 const exportTokenId = ref('')
@@ -989,6 +1001,7 @@ const loadTokens = async () => {
   try {
     const response = await http.get('/api/mcp/tokens')
     tokens.value = response.data.tokens || []
+    tokenMaxDays.value = Number(response.data.max_days) || 0
     if (!activeTokens.value.find((t) => t.id === exportTokenId.value)) {
       exportTokenId.value = activeTokens.value[0]?.id || ''
     }

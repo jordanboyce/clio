@@ -20,6 +20,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from config import settings
 from services import identity as identity_service
 from services.identity import (
+    IdentityRefused,
+    JWKSCache,
     OIDCIdentity,
     TrustedHeaderIdentity,
     _claims_satisfy,
@@ -218,7 +220,7 @@ def test_required_claims_gate_admission(keypair, monkeypatch):
     assert verifier.verify_request(_headers(_mint(key)), None) is None
 
 
-def test_identity_claim_is_configurable_with_fallbacks(keypair, monkeypatch):
+def test_identity_claim_is_configurable(keypair, monkeypatch):
     key, _ = keypair
     jwks = {"keys": [_jwk(key, "kid-1")]}
     monkeypatch.setattr(
@@ -347,6 +349,10 @@ def identity_settings(monkeypatch):
         ("trusted_header_name", "X-Forwarded-User"), ("trusted_header_proxies", ""),
         ("trusted_header_secret", ""),
         ("trusted_header_signature_name", "X-Forwarded-User-Signature"),
+        ("oidc_identity_fallback_claims", ""), ("oidc_require_email_verified", False),
+        ("trusted_header_timestamp_name", "X-Forwarded-User-Timestamp"),
+        ("trusted_header_max_skew_seconds", 300),
+        ("trusted_header_allow_legacy_signature", True),
         ("host", "0.0.0.0"),
     ):
         for obj in _settings_objects():
@@ -599,3 +605,316 @@ def test_loopback_detection(identity_settings):
         identity_settings.host = host
         with pytest.raises(RuntimeError, match="guard that holds"):
             identity_service.validate_config()
+
+
+# ── OIDC: which claim is the identity ───────────────────────────────────────
+
+
+@pytest.fixture()
+def jwks_verifier(keypair, monkeypatch):
+    """Builds an OIDC verifier against a fixed key set, with any options."""
+    key, _ = keypair
+    monkeypatch.setattr(
+        "services.identity.urllib.request.urlopen",
+        lambda url, timeout=10: _FakeResp({"keys": [_jwk(key, "kid-1")]}),
+    )
+
+    def build(**options):
+        return OIDCIdentity(issuer=ISSUER, audiences=[AUDIENCE], jwks_url=f"{ISSUER}/certs", **options)
+
+    return build
+
+
+@pytest.mark.parametrize("flag", [False, "false", "no", 0])
+def test_an_email_the_idp_says_is_unverified_is_refused(jwks_verifier, keypair, flag):
+    key, _ = keypair
+    token = _mint(key, email="admin@agency.test", email_verified=flag)
+    with pytest.raises(IdentityRefused, match="not verified"):
+        jwks_verifier().verify_request(_headers(token), None)
+
+
+@pytest.mark.parametrize("flag", [True, "true", "True"])
+def test_a_verified_email_is_the_identity(jwks_verifier, keypair, flag):
+    key, _ = keypair
+    token = _mint(key, email_verified=flag)
+    verifier = jwks_verifier(require_email_verified=True)
+    assert verifier.verify_request(_headers(token), None) == "analyst@agency.test"
+
+
+def test_absent_email_verified_is_accepted_unless_required(jwks_verifier, keypair):
+    """Entra ID and ADFS never send the claim, so its absence is accepted by
+    default; OIDC_REQUIRE_EMAIL_VERIFIED makes it a refusal."""
+    key, _ = keypair
+    token = _mint(key)  # no email_verified claim
+    assert jwks_verifier().verify_request(_headers(token), None) == "analyst@agency.test"
+    with pytest.raises(IdentityRefused, match="not verified"):
+        jwks_verifier(require_email_verified=True).verify_request(_headers(token), None)
+
+
+def test_email_verified_only_matters_when_email_is_the_identity(jwks_verifier, keypair):
+    key, _ = keypair
+    token = _mint(key, email_verified=False, upn="a.analyst@agency.test")
+    verifier = jwks_verifier(identity_claim="upn", require_email_verified=True)
+    assert verifier.verify_request(_headers(token), None) == "a.analyst@agency.test"
+
+
+def test_a_missing_identity_claim_is_refused_not_replaced(jwks_verifier, keypair):
+    """Without email the token used to become its preferred_username or sub,
+    in the same namespace as emails, so a username that reads like an
+    admin's address was that admin."""
+    key, _ = keypair
+    token = _mint(key, email=None, preferred_username="admin@agency.test", sub="admin@agency.test")
+    with pytest.raises(IdentityRefused, match="no 'email' claim"):
+        jwks_verifier().verify_request(_headers(token), None)
+
+
+def test_explicit_fallback_claims_are_namespaced(jwks_verifier, keypair, monkeypatch):
+    import config
+    from services import admins
+
+    monkeypatch.setattr(config.settings, "admin_emails", "admin@agency.test")
+    key, _ = keypair
+    verifier = jwks_verifier(fallback_claims="preferred_username, sub")
+    token = _mint(key, email=None, preferred_username="admin@agency.test", sub="9f1c")
+    who = verifier.verify_request(_headers(token), None)
+    assert who == "preferred_username:admin@agency.test"
+    assert not admins.is_admin(who)
+    # Next in order when the first fallback is absent too.
+    only_sub = _mint(key, email=None, sub="9f1c")
+    assert verifier.verify_request(_headers(only_sub), None) == "sub:9f1c"
+    # The identity claim itself, when present, is never prefixed.
+    assert verifier.verify_request(_headers(_mint(key)), None) == "analyst@agency.test"
+
+
+def test_non_text_claims_are_not_identities(jwks_verifier, keypair):
+    key, _ = keypair
+    token = _mint(key, email=["a@agency.test", "b@agency.test"])
+    with pytest.raises(IdentityRefused):
+        jwks_verifier().verify_request(_headers(token), None)
+
+
+def test_identity_settings_reach_both_oidc_verifiers(identity_settings, monkeypatch):
+    identity_settings.identity_provider = "oidc"
+    identity_settings.oidc_issuer = ISSUER
+    identity_settings.oidc_audience = AUDIENCE
+    identity_settings.oidc_identity_fallback_claims = "sub"
+    identity_settings.oidc_require_email_verified = True
+    identity_settings.mcp_oauth_issuer = ""
+    monkeypatch.setattr(identity_service, "_mcp_verifier", None)
+    monkeypatch.setattr(identity_service, "_mcp_signature", None)
+    for verifier in (identity_service.get_identity_verifier(), identity_service.get_mcp_oauth_verifier()):
+        assert verifier.fallback_claims == ["sub"]
+        assert verifier.require_email_verified is True
+
+
+def test_a_token_without_an_identity_gets_401_with_the_reason(oidc_app, keypair):
+    key, _ = keypair
+    r = oidc_app.get("/api/collections", headers=_headers(_mint(key, email=None, sub="9f1c")))
+    assert r.status_code == 401
+    assert r.json()["code"] == "identity_refused"
+    assert "'email' claim" in r.json()["detail"]
+    unverified = _mint(key, email_verified=False)
+    r = oidc_app.get("/api/collections", headers=_headers(unverified))
+    assert r.status_code == 401 and "not verified" in r.json()["detail"]
+    # /health never refuses, and never errors over it either.
+    assert oidc_app.get("/health", headers=_headers(unverified)).status_code == 200
+
+
+# ── OIDC: key set refresh ───────────────────────────────────────────────────
+
+
+class _CountingIdP:
+    """A JWKS endpoint whose key set the test can rotate, counting fetches."""
+
+    def __init__(self, keys):
+        self.keys = keys
+        self.fetches = 0
+        self.down = False
+
+    def __call__(self, url, timeout=10):
+        self.fetches += 1
+        if self.down:
+            raise OSError("network unreachable")
+        return _FakeResp({"keys": self.keys})
+
+
+@pytest.fixture()
+def clock(monkeypatch):
+    """The monotonic clock the JWKS cooldown reads, under test control."""
+    now = [1000.0]
+    monkeypatch.setattr("services.identity.time.monotonic", lambda: now[0])
+    return now
+
+
+def test_forged_key_ids_do_not_each_force_a_refetch(keypair, monkeypatch, clock):
+    key, _ = keypair
+    idp = _CountingIdP([_jwk(key, "kid-1")])
+    monkeypatch.setattr("services.identity.urllib.request.urlopen", idp)
+    verifier = OIDCIdentity(issuer=ISSUER, audiences=[AUDIENCE], jwks_url=f"{ISSUER}/certs")
+    assert verifier.verify_request(_headers(_mint(key)), None) == "analyst@agency.test"
+    assert idp.fetches == 1
+
+    for n in range(50):
+        forged = _mint(key, kid=f"forged-{n}")
+        assert verifier.verify_request(_headers(forged), None) is None
+    assert idp.fetches == 2  # one forced refetch, then the cooldown holds
+
+    clock[0] += identity_service._JWKS_REFRESH_COOLDOWN_SECONDS
+    assert verifier.verify_request(_headers(_mint(key, kid="forged-late")), None) is None
+    assert idp.fetches == 3  # at most one per cooldown
+
+
+def test_key_rotation_is_still_picked_up(keypair, monkeypatch, clock):
+    old, new = keypair
+    idp = _CountingIdP([_jwk(old, "kid-1")])
+    monkeypatch.setattr("services.identity.urllib.request.urlopen", idp)
+    verifier = OIDCIdentity(issuer=ISSUER, audiences=[AUDIENCE], jwks_url=f"{ISSUER}/certs")
+    assert verifier.verify_request(_headers(_mint(old)), None) == "analyst@agency.test"
+
+    # The IdP rotates: the first token signed with the new key refreshes.
+    idp.keys = [_jwk(new, "kid-2")]
+    assert verifier.verify_request(_headers(_mint(new, kid="kid-2")), None) == "analyst@agency.test"
+
+    # A rotation that lands while a forged token holds the cooldown is
+    # picked up once the cooldown has passed.
+    clock[0] += identity_service._JWKS_REFRESH_COOLDOWN_SECONDS
+    assert verifier.verify_request(_headers(_mint(new, kid="forged")), None) is None
+    idp.keys = [_jwk(old, "kid-3")]
+    clock[0] += 1
+    assert verifier.verify_request(_headers(_mint(old, kid="kid-3")), None) is None
+    clock[0] += identity_service._JWKS_REFRESH_COOLDOWN_SECONDS
+    assert verifier.verify_request(_headers(_mint(old, kid="kid-3")), None) == "analyst@agency.test"
+
+
+def test_an_unreachable_idp_is_not_retried_on_every_request(keypair, monkeypatch, clock):
+    key, _ = keypair
+    idp = _CountingIdP([_jwk(key, "kid-1")])
+    idp.down = True
+    monkeypatch.setattr("services.identity.urllib.request.urlopen", idp)
+    cache = JWKSCache(f"{ISSUER}/certs")
+    for _ in range(20):
+        assert cache.get("kid-1") is None
+    assert idp.fetches == 1
+
+    idp.down = False
+    clock[0] += identity_service._JWKS_REFRESH_COOLDOWN_SECONDS
+    assert cache.get("kid-1") is not None
+    assert idp.fetches == 2
+
+
+# ── Trusted header: timestamped signatures ──────────────────────────────────
+
+TS_SECRET = "s3cret"
+
+
+def _stamped(who, stamp, secret=TS_SECRET):
+    return {
+        "x-forwarded-user": who,
+        "x-forwarded-user-timestamp": str(stamp),
+        "x-forwarded-user-signature": _sign(secret, f"{who}|{stamp}"),
+    }
+
+
+def _ts_verifier(**options):
+    return TrustedHeaderIdentity(
+        "X-Forwarded-User", shared_secret=TS_SECRET,
+        signature_header="X-Forwarded-User-Signature",
+        timestamp_header="X-Forwarded-User-Timestamp", **options,
+    )
+
+
+def test_a_fresh_timestamped_signature_is_accepted():
+    who = "analyst@agency.test"
+    assert _ts_verifier().verify_request(_stamped(who, int(time.time())), None) == who
+    # Clock skew within the window either way is fine.
+    assert _ts_verifier().verify_request(_stamped(who, int(time.time()) + 200), None) == who
+
+
+def test_a_captured_header_set_stops_working_after_the_skew_window(monkeypatch):
+    who = "analyst@agency.test"
+    now = int(time.time())
+    captured = _stamped(who, now)
+    verifier = _ts_verifier(max_skew_seconds=300)
+    assert verifier.verify_request(captured, None) == who
+    monkeypatch.setattr("services.identity.time.time", lambda: now + 301)
+    assert verifier.verify_request(captured, None) is None
+
+
+def test_the_timestamp_is_covered_by_the_signature():
+    who = "analyst@agency.test"
+    replayed = _stamped(who, int(time.time()) - 3600)
+    replayed["x-forwarded-user-timestamp"] = str(int(time.time()))  # freshened, not re-signed
+    assert _ts_verifier().verify_request(replayed, None) is None
+    # Nor does the signature carry over to another identity.
+    forged = _stamped(who, int(time.time()))
+    forged["x-forwarded-user"] = "admin@agency.test"
+    assert _ts_verifier().verify_request(forged, None) is None
+
+
+@pytest.mark.parametrize("stamp", ["12a", "-5", "1.5", "１２３", "9" * 20])
+def test_a_malformed_timestamp_is_refused(stamp):
+    who = "analyst@agency.test"
+    headers = {
+        "x-forwarded-user": who,
+        "x-forwarded-user-timestamp": stamp,
+        "x-forwarded-user-signature": _sign(TS_SECRET, f"{who}|{stamp}"),
+    }
+    assert _ts_verifier().verify_request(headers, None) is None
+
+
+def test_legacy_signatures_are_accepted_only_while_allowed(caplog, monkeypatch):
+    monkeypatch.setattr(identity_service, "_legacy_signature_noted", False)
+    who = "analyst@agency.test"
+    legacy = {"x-forwarded-user": who, "x-forwarded-user-signature": _sign(TS_SECRET, who)}
+    with caplog.at_level("WARNING", logger="services.identity"):
+        assert _ts_verifier().verify_request(legacy, None) == who
+        assert _ts_verifier().verify_request(legacy, None) == who
+    deprecations = [r for r in caplog.records if "deprecated" in r.getMessage()]
+    assert len(deprecations) == 1  # once per process, not per request
+    assert _ts_verifier(allow_legacy_signature=False).verify_request(legacy, None) is None
+
+
+def test_a_timestamped_signature_is_not_a_legacy_one_for_another_identity():
+    """HMAC("x|T") is the new-format signature for "x" at T. Presented with no
+    timestamp header it must not pass as a legacy signature for "x|T"."""
+    stamp = int(time.time())
+    headers = {
+        "x-forwarded-user": f"analyst@agency.test|{stamp}",
+        "x-forwarded-user-signature": _sign(TS_SECRET, f"analyst@agency.test|{stamp}"),
+    }
+    assert _ts_verifier().verify_request(headers, None) is None
+
+
+def test_trusted_header_settings_reach_the_verifier(identity_settings):
+    identity_settings.identity_provider = "trusted_header"
+    identity_settings.trusted_header_secret = TS_SECRET
+    identity_settings.trusted_header_max_skew_seconds = 30
+    identity_settings.trusted_header_allow_legacy_signature = False
+    verifier = identity_service.get_identity_verifier()
+    assert verifier.timestamp_header == "x-forwarded-user-timestamp"
+    assert verifier.max_skew_seconds == 30 and verifier.allow_legacy_signature is False
+
+
+def test_signature_settings_that_admit_nothing_refuse_to_start(identity_settings):
+    identity_settings.identity_provider = "trusted_header"
+    identity_settings.trusted_header_secret = TS_SECRET
+    identity_settings.trusted_header_timestamp_name = ""
+    identity_settings.trusted_header_allow_legacy_signature = False
+    with pytest.raises(RuntimeError, match="TRUSTED_HEADER_TIMESTAMP_NAME"):
+        identity_service.validate_config()
+    identity_settings.trusted_header_timestamp_name = "X-Forwarded-User-Timestamp"
+    identity_settings.trusted_header_max_skew_seconds = 0
+    with pytest.raises(RuntimeError, match="TRUSTED_HEADER_MAX_SKEW_SECONDS"):
+        identity_service.validate_config()
+
+
+def test_the_secure_profile_refuses_legacy_signatures(monkeypatch):
+    import config
+
+    monkeypatch.delenv("TRUSTED_HEADER_ALLOW_LEGACY_SIGNATURE", raising=False)
+    # Offline mode would set HF_HUB_OFFLINE for the rest of the run.
+    monkeypatch.setenv("OFFLINE_MODE", "false")
+    monkeypatch.setenv("CLIO_PROFILE", "secure")
+    assert config.Settings().trusted_header_allow_legacy_signature is False
+    monkeypatch.setenv("CLIO_PROFILE", "standard")
+    assert config.Settings().trusted_header_allow_legacy_signature is True

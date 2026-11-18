@@ -80,6 +80,35 @@ describe('MCP client setup', () => {
     wrapper.unmount()
   })
 
+  it('offers only lifetimes within the server maximum and flags older tokens', async () => {
+    http.get.mockImplementation(async (path) => ({ data: {
+      '/api/collections': { collections: [{ id: 'default', name: 'Default' }] },
+      '/api/mcp/config': { enable_mcp: true },
+      '/api/mcp/tokens': {
+        max_days: 60,
+        tokens: [{ id: 'old', name: 'Old laptop', expires_at: null, exceeds_max_lifetime: true }],
+      },
+    }[path] }))
+    const wrapper = await openAnythingLLM()
+    const labels = wrapper.get('#mcp-token-expiry').findAll('option').map((o) => o.text())
+    expect(labels).toEqual(['30 days', '60 days (longest allowed)'])
+    expect(wrapper.text()).toContain('Rotate')
+    http.post.mockResolvedValue({ data: { id: 'new', token: 'test-only-secret' } })
+    await wrapper.get('#mcp-token-name').setValue('Laptop')
+    await wrapper.findAll('button').find(button => button.text() === 'Generate token').trigger('click')
+    await flushPromises()
+    // The default of 90 days was above the maximum, so the maximum is sent.
+    expect(http.post).toHaveBeenCalledWith('/api/mcp/tokens', expect.objectContaining({ expires_in_days: 60 }))
+    wrapper.unmount()
+  })
+
+  it('offers a token that never expires only when the server has no maximum', async () => {
+    const wrapper = await openAnythingLLM()
+    const labels = wrapper.get('#mcp-token-expiry').findAll('option').map((o) => o.text())
+    expect(labels).toEqual(['30 days', '90 days', '1 year', 'Never'])
+    wrapper.unmount()
+  })
+
   it('lists every connection fact on its own with a copy button', async () => {
     const wrapper = await openAnythingLLM()
     const details = wrapper.get('[data-testid="mcp-connection-details"]')

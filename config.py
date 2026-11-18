@@ -20,6 +20,8 @@ SECURE_PROFILE_DEFAULTS = {
     "offline_mode": True,            # no cloud providers, hosted embeddings or downloads
     "mcp_audit_tool_calls": True,    # every agent read is attributable
     "link_indexing_enabled": False,  # the server does not fetch arbitrary web pages
+    "mcp_token_max_days": 90,        # personal MCP tokens are re-minted each quarter
+    "trusted_header_allow_legacy_signature": False,  # proxy signatures must carry a time
 }
 
 
@@ -390,6 +392,13 @@ class Settings(BaseSettings):
     # AUDIT_RETENTION_DAYS applies as it does to every other audit row.
     mcp_audit_tool_calls: bool = False
 
+    # Longest lifetime, in days, of a personal MCP token. A token minted with
+    # no expiry gets this one, and a longer one is refused. 0 = no cap: tokens
+    # may be minted that never expire. Tokens minted before the cap keep
+    # working and are flagged in Settings -> MCP and in the log when used.
+    # 90 under CLIO_PROFILE=secure.
+    mcp_token_max_days: int = 365
+
     # Database backend for app metadata (collections, shares, jobs, usage).
     # "postgresql" moves ONLY app.db — per-collection vector/BM25/metadata
     # stores, structured tables, the answer cache, and faiss.index all stay
@@ -497,13 +506,30 @@ class Settings(BaseSettings):
     oidc_jwks_url: str = ""
     oidc_identity_claim: str = "email"
     oidc_required_claims: str = ""
+    # A token without OIDC_IDENTITY_CLAIM is refused. Name fallback claims
+    # here (e.g. "preferred_username,sub") to admit it anyway: a fallback
+    # identity is prefixed with its claim name ("sub:4f1c...") so it can never
+    # equal an email address in ADMIN_EMAILS or someone else's collections.
+    oidc_identity_fallback_claims: str = ""
+    # With the email claim as identity, email_verified=false is always
+    # refused. On, a token with no email_verified claim is refused too. Off by
+    # default because Entra ID and ADFS never send it; turn it on for
+    # Keycloak, Okta, Auth0 and Google, which do.
+    oidc_require_email_verified: bool = False
 
     # Trusted reverse-proxy header (IDENTITY_PROVIDER=trusted_header). The
     # header is forgeable by anything that can reach the port directly, so
     # the app refuses to start without a guard that holds: either HOST is
     # loopback (your proxy is the only route in) or TRUSTED_HEADER_SECRET is
-    # set, so the proxy proves the identity with HMAC-SHA256 over the value,
-    # hex-encoded, in TRUSTED_HEADER_SIGNATURE_NAME.
+    # set, so the proxy proves the identity with HMAC-SHA256 over
+    # "identity|unix_time", hex-encoded, in TRUSTED_HEADER_SIGNATURE_NAME,
+    # and sends the time in TRUSTED_HEADER_TIMESTAMP_NAME. A time more than
+    # TRUSTED_HEADER_MAX_SKEW_SECONDS from this server's clock is refused, so a
+    # captured header set stops working within minutes.
+    #
+    # TRUSTED_HEADER_ALLOW_LEGACY_SIGNATURE keeps accepting the older format
+    # (HMAC over the identity alone, no timestamp header) for one release,
+    # with a logged deprecation warning. Off under CLIO_PROFILE=secure.
     #
     # TRUSTED_HEADER_PROXIES is defence in depth, never the sole guard:
     # uvicorn rewrites the peer address from X-Forwarded-For for connections
@@ -513,6 +539,9 @@ class Settings(BaseSettings):
     trusted_header_proxies: str = ""  # comma-separated CIDRs or addresses
     trusted_header_secret: str = ""
     trusted_header_signature_name: str = "X-Forwarded-User-Signature"
+    trusted_header_timestamp_name: str = "X-Forwarded-User-Timestamp"
+    trusted_header_max_skew_seconds: int = 300
+    trusted_header_allow_legacy_signature: bool = True
 
     # Operator allowlist, comma-separated: how administrators are named when
     # identity comes from an external provider. Empty means nobody, so on a

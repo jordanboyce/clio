@@ -1,7 +1,7 @@
 """Personal MCP access tokens.
 
 Lets anyone who can already reach the app (a signed-in account, or the shared
-AUTH_PASSWORD) mint their own long-lived bearer credential for headless MCP
+AUTH_PASSWORD) mint their own bearer credential for headless MCP
 clients — Claude Code, Codex, GitHub Copilot — instead of hand-editing
 .env / .mcp.json / config.toml on every machine that wants a connection.
 
@@ -34,7 +34,23 @@ _PREFIX_DISPLAY_LEN = len(TOKEN_PREFIX) + 6
 
 # Longest lifetime a token may be minted with. Long enough for a standing
 # integration, short enough that "never expires" stays a deliberate choice.
+# MCP_TOKEN_MAX_DAYS narrows it per deployment.
 MAX_EXPIRY_DAYS = 3650
+
+# Ids of tokens beyond the lifetime cap already named in the log by this
+# process, so a busy agent does not repeat the line on every call.
+_flagged_ids: set = set()
+
+
+def max_lifetime_days() -> int:
+    """MCP_TOKEN_MAX_DAYS, clamped to 0..MAX_EXPIRY_DAYS. 0 means no cap."""
+    from config import settings
+
+    try:
+        days = int(settings.mcp_token_max_days)
+    except (TypeError, ValueError):
+        days = 0
+    return max(0, min(days, MAX_EXPIRY_DAYS))
 
 
 def _hash(token: str) -> str:
@@ -64,8 +80,9 @@ def generate_token(
     cannot plant content; the collection's own write permission and the
     AUP gate still apply on top.
 
-    ``expires_in_days`` (1..MAX_EXPIRY_DAYS) stamps an expiry after which
-    verify_token refuses the token; None means it never expires.
+    ``expires_in_days`` stamps an expiry after which verify_token refuses
+    the token. It may be 1..MCP_TOKEN_MAX_DAYS (``max_lifetime_days``);
+    None means the longest allowed, and never expires only when the cap is 0.
 
     ``allowlist`` turns ``collection_scope`` into the *only* collections
     the token may see over MCP, restricted or not. It requires a non-empty
@@ -85,12 +102,15 @@ def generate_token(
         raise ValueError("An allowlisted token needs at least one collection in its scope.")
     if can_overwrite_uploads and not can_write:
         raise ValueError("A token may only replace uploads if it may write: set can_write too.")
-    expires_at = None
+    cap = max_lifetime_days()
+    longest = cap or MAX_EXPIRY_DAYS
+    days = cap or None
     if expires_in_days is not None:
         days = int(expires_in_days)
-        if not 1 <= days <= MAX_EXPIRY_DAYS:
-            raise ValueError(f"expires_in_days must be between 1 and {MAX_EXPIRY_DAYS}.")
-        expires_at = (utcnow() + timedelta(days=days)).isoformat()
+        if not 1 <= days <= longest:
+            hint = " (MCP_TOKEN_MAX_DAYS on this deployment)" if cap else ""
+            raise ValueError(f"expires_in_days must be between 1 and {longest}{hint}.")
+    expires_at = (utcnow() + timedelta(days=days)).isoformat() if days else None
     record = app_db.create_mcp_token(
         user_id=user_id,
         name=name,
@@ -125,10 +145,37 @@ def is_expired(record: Dict[str, Any], now: Optional[datetime] = None) -> bool:
     return expires <= (now or utcnow())
 
 
+def exceeds_max_lifetime(record: Dict[str, Any], cap: Optional[int] = None) -> bool:
+    """True for a token whose lifetime is longer than MCP_TOKEN_MAX_DAYS
+    allows: one minted before the cap, with no expiry or a longer one. Such
+    tokens keep working; this is what flags them for rotation."""
+    cap = max_lifetime_days() if cap is None else cap
+    if not cap:
+        return False
+    raw = record.get("expires_at")
+    if not raw:
+        return True
+    try:
+        expires = datetime.fromisoformat(str(raw))
+        created = datetime.fromisoformat(str(record.get("created_at")))
+    except (TypeError, ValueError):
+        return False
+    if expires.tzinfo is not None:
+        expires = expires.replace(tzinfo=None) - expires.utcoffset()
+    if created.tzinfo is not None:
+        created = created.replace(tzinfo=None) - created.utcoffset()
+    # A minute of slack: expires_at and created_at are stamped moments apart.
+    return expires - created > timedelta(days=cap, minutes=1)
+
+
 def list_tokens(user_id: Optional[str]) -> List[Dict[str, Any]]:
     from services.app_database import app_db
 
-    return app_db.list_mcp_tokens(user_id)
+    cap = max_lifetime_days()
+    tokens = app_db.list_mcp_tokens(user_id)
+    for token in tokens:
+        token["exceeds_max_lifetime"] = exceeds_max_lifetime(token, cap)
+    return tokens
 
 
 def revoke_token(token_id: str, user_id: Optional[str]) -> bool:
@@ -151,6 +198,15 @@ def verify_token(presented: str) -> Optional[Dict[str, Any]]:
     record = app_db.get_mcp_token_by_hash(_hash(presented))
     if not record or record.get("revoked_at") or is_expired(record):
         return None
+    if record["id"] not in _flagged_ids and exceeds_max_lifetime(record):
+        _flagged_ids.add(record["id"])
+        logger.warning(
+            "MCP token %s (%s, owner %s) has %s, beyond MCP_TOKEN_MAX_DAYS=%d. "
+            "It keeps working; revoke it and mint a new one.",
+            record["id"], record.get("token_prefix"), record.get("user_id") or "shared",
+            "no expiry" if not record.get("expires_at") else f"an expiry of {record['expires_at']}",
+            max_lifetime_days(),
+        )
     try:
         app_db.touch_mcp_token(record["id"])
     except Exception as e:
