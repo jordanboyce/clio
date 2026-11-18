@@ -871,6 +871,33 @@ def _govern_imported(db_path: Path, kept: Dict[str, Any], sources: Dict[str, Tup
     return rejected, decisions
 
 
+# Source types whose stored copy is the whole source, so they mean the same
+# thing in the importing collection: a pasted note, an agent's note, a link.
+_PORTABLE_SOURCE_TYPES = ("text", "agent_note")
+
+
+def _settle_source_types(conn: sqlite3.Connection) -> None:
+    """Keep the source types that travel; make every other source an upload.
+
+    A local reference or a synced file names a path on the exporter's
+    machine. Here it means nothing, and a re-index or a folder sync must
+    never be pointed at a path a bundle chose, so those arrive as the
+    importer's own uploads. A link keeps its URL, but only a web URL.
+    """
+    placeholders = ", ".join("?" for _ in _PORTABLE_SOURCE_TYPES)
+    conn.execute(
+        "UPDATE documents SET source_path = NULL "
+        f"WHERE source_type IN ({placeholders})", _PORTABLE_SOURCE_TYPES,
+    )
+    conn.execute(
+        "UPDATE documents SET source_type = 'upload', source_path = NULL "
+        f"WHERE NOT (COALESCE(source_type, 'upload') IN ({placeholders}) "
+        "OR (source_type = 'url' AND (lower(COALESCE(source_path, '')) LIKE 'http://%' "
+        "OR lower(COALESCE(source_path, '')) LIKE 'https://%')))",
+        _PORTABLE_SOURCE_TYPES,
+    )
+
+
 def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
                       actor: Optional[str] = None) -> Dict[str, Any]:
     """Create a collection from a bundle and queue the job that finishes it.
@@ -977,7 +1004,7 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
             conn = sqlite3.connect(db_tmp)
             try:
                 try:
-                    conn.execute("UPDATE documents SET source_type = 'upload', source_path = NULL")
+                    _settle_source_types(conn)
                     conn.commit()
                 except sqlite3.OperationalError:
                     pass  # pre-3.1 database without the source columns

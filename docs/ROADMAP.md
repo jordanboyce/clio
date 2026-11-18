@@ -31,7 +31,7 @@ Evidence comes from three sources, marked where it matters:
 
 | Phase | Theme | Why it is here |
 |---|---|---|
-| 0 | Fix what is wrong today | Small defects that undercut trust; all S. F1-F17 shipped 2026-11-16 |
+| 0 | Fix what is wrong today | Small defects that undercut trust; all S. F1-F17 shipped 2026-11-16, F18-F21 on 2026-11-18 |
 | 1 | A clean MCP contract | The power is there; the surface is inconsistent and heavy |
 | 2 | A Library you can depend on | The foundation (paper records, lookups, jobs) is the shaky part |
 | 3 | Models that fit the job | Suggestions ignore what a model can do |
@@ -43,14 +43,7 @@ Evidence comes from three sources, marked where it matters:
 
 ## Phase 0 — Fix what is wrong today
 
-F1-F17 shipped on 2026-11-16, each with a regression test (see the git log), together with B1 from Phase 4. Every "Read" item reproduced before it was fixed. The same pass found these, still open and all small:
-
-| Id | Fix | Where | Evidence |
-|---|---|---|---|
-| F18 | A re-index restores only `local_reference` and `url`, so pasted (`text`) and synced (`folder_sync`) sources come back as plain uploads; a collection bundle import resets every `source_type`. Agent notes survive a re-index through the audit trail, but not a bundle import. | [reindex_service.py](../services/reindex_service.py) (about 172 and 628), `collection_bundle` | Read |
-| F19 | The citation map inside the Library loads through a bare `defineAsyncComponent`, so it is blank while loading and if it fails. Use `lazyView` like the other tabs. | [ResearchTab.vue:262](../frontend/src/components/ResearchTab.vue) | Read |
-| F20 | Onboarding's Ollama step picks the first installed model, which can be an embedding model. Use `defaults.model` from `/api/ai/models`. | [WelcomeOnboarding.vue](../frontend/src/components/WelcomeOnboarding.vue) | Read |
-| F21 | GitHub Models was retired on 2026-07-30 but is still offered as a provider. | [ai_service.py](../services/ai_service.py), `services/model_catalog.py` | Read |
+F1-F17 shipped on 2026-11-16 and F18-F21 on 2026-11-18, each with a regression test (see the git log), together with B1 from Phase 4. Every "Read" item reproduced before it was fixed. Nothing from that pass is still open.
 
 Kept as decided: with no model connected on a touch screen, Enter adds a new line and the "Find passages" button sends, as phones usually do.
 
@@ -319,7 +312,7 @@ Drop the hard-coded names. Recommend from the live list using the capability rec
 What exists today: `write_document` (create, replace, append) with a per-collection lock, staged atomic swap and `expected_document_id`; `read_document` for exact text; 114 write tests. What an agent still cannot do is below. All of it is **Read** from one pass over [mcp_server.py](../services/mcp_server.py).
 
 **B1 — Tell notes from human sources. (S) Shipped 2026-11-16.**
-Agent notes carry `source_type='agent_note'`; `replace` on a person's file needs a token minted with `can_overwrite_uploads`; `create_document` and `append_to_document` are non-destructive. See [ARCHITECTURE.md](ARCHITECTURE.md#mcp). The limits it left are in F18.
+Agent notes carry `source_type='agent_note'`; `replace` on a person's file needs a token minted with `can_overwrite_uploads`; `create_document` and `append_to_document` are non-destructive. See [ARCHITECTURE.md](ARCHITECTURE.md#mcp). F18 made the type survive a re-index and a bundle import.
 
 **B2 — History. (M)**
 Keep previous versions of a note (a bounded number, or by age). Add `list_versions` and `read_document(version=…)`. This also makes every other write feature safer to ship.
@@ -408,7 +401,7 @@ Do each split when a phase first touches the file.
 
 ## Suggested order of work
 
-1. **Week 1:** all of Phase 0, plus R9 (names) and B1 (protect human sources), since both are cheap and make later work clearer. Done on 2026-11-16, with R1, P1 and R9, except F18-F21.
+1. **Week 1:** all of Phase 0, plus R9 (names) and B1 (protect human sources), since both are cheap and make later work clearer. Done on 2026-11-16, with R1, P1 and R9, except F18-F21, which followed on 2026-11-18.
 2. **Then Phase 1A** (M1 → M2 → M3 → M4 → M5), splitting `mcp_server.py` as you go, then **1B** (the Connect tab).
 3. **Then Phase 2**: R1 (benchmark) → R2/R3/R5 (records) → R6/R7 (lookups) → R8/R8b (jobs) → R10 → R11.
 4. **Then Phase 3**, with U3 (Models page) in the same stretch.

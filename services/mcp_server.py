@@ -3489,10 +3489,10 @@ def _appended_text(file_path: Path, filename: str, content: str) -> str:
 def _is_agent_note(collection_id: str, row: dict[str, Any]) -> bool:
     """Whether this stored source was written by an agent rather than uploaded by a person.
 
-    New notes carry ``source_type='agent_note'``. Notes written before that
-    marker existed, and notes a full re-index has rebuilt as plain uploads
-    (it keeps only reference and URL types), are recognised from the audit
-    trail: every write_document version records a ``document.upload`` event
+    New notes carry ``source_type='agent_note'``, which a re-index and a
+    bundle import both keep. Notes written before that marker existed, and
+    notes an older re-index rebuilt as plain uploads, are recognised from the
+    audit trail: every write_document version records a ``document.upload`` event
     with ``via: "mcp"`` under its document_id, and the document_id is the
     hash of the bytes, so it survives a re-index. A version whose event says
     it kept the type ``upload`` (an agent appended to a person's file) stays

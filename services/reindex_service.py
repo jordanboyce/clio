@@ -113,6 +113,23 @@ def _safe_restore_supersede_marks(store, marks: list) -> None:
         logger.warning(f"Could not restore 'replaced by' marks after reindex: {e}")
 
 
+def _restore_source(metadata_store: MetadataStore, document_id: str, doc_info: Dict[str, Any]) -> None:
+    """Give a re-indexed document back the source type and path it had.
+
+    Indexing writes a fresh row typed 'upload'. Every other type says
+    something the app relies on: a pasted note ('text'), a link ('url'), a
+    synced file a later sync must find again ('folder_sync'), an agent's
+    note an agent may replace ('agent_note'), a file read in place
+    ('local_reference').
+    """
+    source_type = doc_info.get("source_type") or "upload"
+    if source_type == "upload":
+        return
+    metadata_store.update_document_source(
+        document_id=document_id, source_path=doc_info.get("source_path"), source_type=source_type,
+    )
+
+
 class ReindexService:
     """Manages document re-indexing operations."""
 
@@ -155,7 +172,6 @@ class ReindexService:
         for idx, doc_info in enumerate(document_list, 1):
             doc_path = doc_info["path"]
             source_type = doc_info.get("source_type", "upload")
-            source_path = doc_info.get("source_path")
 
             app_db.update_reindex_job(job_id, current_file=doc_path.name, processed_documents=idx - 1)
             self._set_live(job_id, "extracting", f"Reading {doc_path.name}")
@@ -169,12 +185,7 @@ class ReindexService:
                     doc_path, doc_path.name, progress_callback=report,
                 )
 
-                if source_type in ("local_reference", "url") and source_path:
-                    vector_store.metadata_store.update_document_source(
-                        document_id=metadata.document_id,
-                        source_path=source_path,
-                        source_type=source_type,
-                    )
+                _restore_source(vector_store.metadata_store, metadata.document_id, doc_info)
 
                 logger.info(
                     f"Indexed {doc_path.name}: "
@@ -623,12 +634,7 @@ class ReindexService:
                         f"re-index of the collection to bring this file back"
                     ) from e
 
-        source_type = doc_info.get("source_type", "upload")
-        source_path = doc_info.get("source_path")
-        if source_type in ("local_reference", "url") and source_path:
-            metadata_store.update_document_source(
-                document_id=new.document_id, source_path=source_path, source_type=source_type
-            )
+        _restore_source(metadata_store, new.document_id, doc_info)
         if prior:
             self._carry_over_review(metadata_store, new, prior)
         return new
@@ -667,7 +673,9 @@ class ReindexService:
         """Get list of documents to reindex from metadata store.
 
         This includes both:
-        - Uploaded files (in documents_dir)
+        - Stored copies in documents_dir: uploads, pasted text, links, synced
+          files and agent notes, each listed with its own source_type and
+          source_path so the re-index can put them back
         - Local references (source_type='local_reference' with source_path)
 
         Args:
@@ -724,7 +732,7 @@ class ReindexService:
                         })
                         seen_paths.add(str(path))
                 else:
-                    # Uploaded file or orphan chunks - use documents_dir
+                    # A stored copy, or orphan chunks - use documents_dir
                     path = documents_dir / filename
                     if not path.exists():
                         missing.append(f"{filename} (expected at {path})")
@@ -732,8 +740,8 @@ class ReindexService:
                         documents.append({
                             "path": path,
                             "document_id": doc_id,
-                            "source_type": "upload",
-                            "source_path": None
+                            "source_type": source_type,
+                            "source_path": source_path,
                         })
                         seen_paths.add(str(path))
 
