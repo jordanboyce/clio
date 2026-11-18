@@ -24,12 +24,19 @@ these; the secure profile exits with a message that names each problem:
   `AUTH_PASSWORD`, `AUTH_REQUIRE_IDENTITY=true` or `PRIVATE_COLLECTIONS=true`
   (`IDENTITY_PROVIDER` alone says who a caller is, and turns nobody away);
 - `CORS_ALLOW_ORIGINS=*` with no authentication requirement;
+- an `AUTH_PASSWORD` shorter than 12 characters;
 - `OFFLINE_MODE` explicitly turned off;
 - a hosted `EMBEDDING_PROVIDER` or `AI_PROVIDER` (only `local`, `ollama` and
   `openai_compatible` pointing at your own endpoint are accepted).
 
 A hardened deployment therefore cannot quietly come up in a weaker shape than
 it was declared to have.
+
+Two more are warnings in both profiles, because the app cannot see what is in
+front of it: a deployment reachable from the network that answers to any host
+name (set `ALLOWED_HOSTS`), and one reachable from the network that serves no
+TLS itself, which the report states more strongly when a shared password
+crosses that link.
 
 ## Proving it: `scripts/preflight.py`
 

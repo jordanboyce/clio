@@ -590,14 +590,14 @@ class MCPOAuthConfig:
 
 def mcp_public_url() -> str:
     """The canonical /mcp URL as settings know it, or "" if only a request
-    can tell. MCP_PUBLIC_URL wins; MCP_ALLOWED_HOSTS - already required for
+    can tell. MCP_PUBLIC_URL wins; ALLOWED_HOSTS - already required for
     any hostname deployment - is the fallback."""
     from config import settings
 
     explicit = (settings.mcp_public_url or "").strip()
     if explicit:
         return explicit.rstrip("/")
-    for host in (settings.mcp_allowed_hosts or "").split(","):
+    for host in (settings.allowed_hosts or "").split(","):
         host = host.strip()
         if host:
             scheme = "http" if _is_loopback_host(host.rsplit(":", 1)[0]) else "https"

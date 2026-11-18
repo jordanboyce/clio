@@ -30,7 +30,7 @@ services:
       # anything but loopback as reachable, which through this proxy it is.
       - BIND_ADDRESS=proxy
       - FORWARDED_ALLOW_IPS=${PROXY_IP:-172.30.73.2}
-      - MCP_ALLOWED_HOSTS=${CLIO_HOSTNAME:?Set CLIO_HOSTNAME in .env, e.g. clio.corp.example}
+      - ALLOWED_HOSTS=${CLIO_HOSTNAME:?Set CLIO_HOSTNAME in .env, e.g. clio.corp.example}
     networks:
       default: {}
       # Fixed as well as the proxy's: Clio starts first, and would otherwise be

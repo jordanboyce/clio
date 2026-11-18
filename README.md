@@ -819,14 +819,19 @@ opinion is off by default. Full description in
    sends no CORS headers, so other sites cannot read responses; `*` lets any page
    your browser visits read this API. Non-browser clients (MCP, curl, SDKs) are
    unaffected either way. Credentialed cross-origin requests are never allowed
-   for the wildcard.
-3. **Rate limits and budgets** are built in — per-identity request limits for
-   chat and search are on by default, an MCP class and a daily
+   for the wildcard. A browser write from a page on another site is refused
+   unless its origin is listed.
+3. **`ALLOWED_HOSTS`**: the host names people reach the app under. Requests
+   naming any other host are refused. A loopback install with no password
+   needs nothing here; set it for anything reachable from the network.
+4. **Rate limits and budgets** are built in — per-identity request limits for
+   chat and search are on by default, failed sign-ins are limited per address
+   (`AUTH_FAILURE_LIMIT`, 10 a minute), an MCP class and a daily
    provider-token budget per person are opt-in, and each collection has a
    storage cap (`RATE_LIMIT_*`, `CHAT_DAILY_TOKEN_BUDGET`,
    `COLLECTION_STORAGE_LIMIT_BYTES`). Tune them for your model's capacity; a
    proxy in front can add coarser protection.
-4. **Air-gapped environments** — set `OFFLINE_MODE=1` to disable cloud AI
+5. **Air-gapped environments** — set `OFFLINE_MODE=1` to disable cloud AI
    providers, web fetching and model downloads entirely (see
    [docs/AIRGAP.md](docs/AIRGAP.md)).
 

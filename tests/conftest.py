@@ -39,6 +39,11 @@ os.environ["AI_API_KEY"] = ""
 # 429s in unrelated tests. Rate-limit tests re-enable it explicitly.
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 
+# TestClient names its Host "testserver", which a loopback install would
+# refuse (middleware/boundary.py). The suite lists it the way an operator
+# lists a proxy's hostname; Host allowlist tests set their own.
+os.environ["ALLOWED_HOSTS"] = "testserver"
+
 # The reranker turns itself on when its model happens to be cached on the
 # developer's machine; that would reorder results in unrelated ranking tests.
 # Reranker tests set it (or the auto-detection) explicitly.
@@ -72,6 +77,17 @@ def _settings_saves_stay_out_of_the_real_env_file(tmp_path, monkeypatch):
     from services.config_manager import config_manager
 
     monkeypatch.setattr(config_manager, "env_file", tmp_path / ".env.test")
+
+
+@pytest.fixture(autouse=True)
+def _failed_sign_ins_are_not_shared_between_tests():
+    """Every TestClient call comes from one address; one test's wrong
+    passwords must not spend the next test's failed sign-in budget."""
+    from middleware.auth_failures import failed_auth_limiter
+
+    failed_auth_limiter.reset()
+    yield
+    failed_auth_limiter.reset()
 
 
 @pytest.fixture(autouse=True)

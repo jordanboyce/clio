@@ -216,7 +216,7 @@ That is the RFC 9728 `resource`. Clients always ask the IdP for a token
 *for that resource* (RFC 8707), and an IdP that honours the request mints a
 token whose audience is that URL — which is accepted, alongside
 `OIDC_AUDIENCE`, for IdPs that ignore the resource parameter (Entra ID
-among them). Left empty, the URL is derived from `MCP_ALLOWED_HOSTS`, and
+among them). Left empty, the URL is derived from `ALLOWED_HOSTS`, and
 failing that from each request's `Host` header; a derived value is only
 ever advertised, never accepted as an audience.
 

@@ -159,6 +159,16 @@ def _check_security_posture() -> None:
             settings.host,
         )
 
+    from config import MIN_AUTH_PASSWORD_LENGTH
+
+    if settings.auth_password and len(settings.auth_password) < MIN_AUTH_PASSWORD_LENGTH:
+        logger.warning(
+            "SECURITY: AUTH_PASSWORD is shorter than %d characters, so it can be guessed. Set a "
+            "longer one (python scripts/setup.py --password generates one). The secure profile "
+            "refuses to start with it.",
+            MIN_AUTH_PASSWORD_LENGTH,
+        )
+
     if settings.cors_allow_origins.strip() == "*" and not readiness.auth_gate(settings):
         logger.warning(
             "SECURITY: CORS_ALLOW_ORIGINS=* with no authentication requirement set. Any web "
@@ -415,6 +425,7 @@ if _cors_origins:
 # request.state.auth_identity before the limiter reads it. Deliberately
 # always-on (including on a local/open deployment) — an open deployment still deserves limits.
 from middleware.rate_limit import enforce_rate_limit as _enforce_rate_limit
+from middleware.auth_failures import failed_auth_limiter, too_many_failures
 
 app.middleware("http")(_enforce_rate_limit)
 
@@ -483,6 +494,28 @@ def _is_public_path(path: str) -> bool:
     )
 
 
+def _client_key(request) -> str:
+    """Whose failed sign-ins these are: the address uvicorn reports, which
+    behind a proxy listed in FORWARDED_ALLOW_IPS is the client's own."""
+    return _client_ip(request) or "unknown"
+
+
+def _presents_credential(request, verifier) -> bool:
+    """Is this request trying a credential at all? Only those are counted as
+    failed sign-ins, and only those are turned away once an address is out of
+    attempts, so a browser that has not been asked for the password yet, or a
+    local UI with nothing to send, is never locked out by someone else's guesses."""
+    if request.headers.get("authorization", "").strip():
+        return True
+    return verifier is not None and verifier.has_candidate(request.headers)
+
+
+def _refuse_credential(request, kind: str, body: dict, www_authenticate: str) -> JSONResponse:
+    """401 for a credential that did not verify, counted against the address."""
+    failed_auth_limiter.record_failure(_client_key(request), kind, request.url.path)
+    return JSONResponse(body, status_code=401, headers={"WWW-Authenticate": www_authenticate})
+
+
 def _password_matches(presented: str) -> bool:
     # Bytes: compare_digest refuses a str with non-ASCII characters, which a
     # header can hold, and that used to answer an unauthenticated caller with a 500.
@@ -495,16 +528,26 @@ async def _caller_may_see_health_details(request) -> bool:
     /health itself never refuses anyone. Works it out the way require_auth does,
     and leaves the identity on the request for the per-collection check.
     """
+    if getattr(request.state, "foreign_host", False):
+        return False  # a probe under a name this deployment does not answer to
     if not (settings.auth_password or identity_service.requires_identity() or settings.private_collections):
         return True  # an open appliance has nothing to withhold
     verifier = identity_service.get_identity_verifier()
+    credentialed = _presents_credential(request, verifier)
+    # The detail is an answer to "was that password right?", so it obeys the
+    # same failed-sign-in budget as every other route.
+    if credentialed and failed_auth_limiter.retry_after(_client_key(request)) is not None:
+        return False
     if verifier is not None and verifier.has_candidate(request.headers):
         who = await asyncio.to_thread(verifier.verify_request, request.headers, _client_ip(request))
         if who:
             request.state.auth_identity = who
             return True
-    if settings.auth_password and not identity_service.requires_identity():
-        return _password_matches(_password_from_auth_header(request.headers.get("authorization", "")))
+    if (settings.auth_password and not identity_service.requires_identity()
+            and _password_matches(_password_from_auth_header(request.headers.get("authorization", "")))):
+        return True
+    if credentialed:
+        failed_auth_limiter.record_failure(_client_key(request), "health detail", request.url.path)
     return False
 
 
@@ -534,14 +577,14 @@ async def _serve_registered_app(request, call_next, presented: str):
         app_record = await asyncio.to_thread(api_apps.verify_jwt, token) if token else None
         via = "app_oidc"
     if app_record is None:
-        return JSONResponse(
-            {
-                "detail": "This API takes a registered app's key or IdP token. See /api/v1/docs.",
-                "code": "unauthenticated",
-            },
-            status_code=401,
-            headers={"WWW-Authenticate": 'Bearer realm="Clio App API"'},
-        )
+        body = {
+            "detail": "This API takes a registered app's key or IdP token. See /api/v1/docs.",
+            "code": "unauthenticated",
+        }
+        challenge = 'Bearer realm="Clio App API"'
+        if presented:  # a key or token that did not verify, not just a missing one
+            return _refuse_credential(request, "app credential", body, challenge)
+        return JSONResponse(body, status_code=401, headers={"WWW-Authenticate": challenge})
     request.state.api_app = app_record
     request.state.auth_identity = app_record["actor"]
     request.state.auth_via = via
@@ -563,6 +606,17 @@ async def require_auth(request, call_next):
     # preflight can be answered; the actual request still authenticates.
     if request.method == "OPTIONS":
         return await call_next(request)
+
+    from services.identity import InsufficientScope, get_identity_verifier, is_mcp_path
+    verifier = get_identity_verifier(request.url.path)
+    # Failed sign-ins are budgeted per address before any credential is
+    # checked (middleware/auth_failures.py); the request rate limiter runs
+    # after auth and never sees a refused one.
+    credentialed = _presents_credential(request, verifier)
+    if credentialed:
+        wait = failed_auth_limiter.retry_after(_client_key(request))
+        if wait is not None:
+            return too_many_failures(request, wait)
 
     presented = _password_from_auth_header(request.headers.get("authorization", ""))
     app_credential = await _carries_app_credential(request, presented)
@@ -587,8 +641,6 @@ async def require_auth(request, call_next):
     # threadpool slot to discover it has no assertion.
     # On /mcp the verifier also covers OAuth bearer tokens from the
     # authorization server the endpoint advertises (services/mcp_oauth.py).
-    from services.identity import InsufficientScope, get_identity_verifier, is_mcp_path
-    verifier = get_identity_verifier(request.url.path)
     if not app_credential and verifier is not None and verifier.has_candidate(request.headers):
         try:
             who = await asyncio.to_thread(
@@ -665,6 +717,16 @@ async def require_auth(request, call_next):
         www_authenticate = challenge(request, error="invalid_token" if presented else None)
     else:
         www_authenticate = 'Basic realm="Clio"'
+    if credentialed:
+        if presented.startswith("asy_mcp_"):
+            kind = "MCP token"
+        elif app_credential:
+            kind = "app credential outside /api/v1"
+        elif verifier is not None and verifier.has_candidate(request.headers):
+            kind = "identity assertion"
+        else:
+            kind = "password"
+        return _refuse_credential(request, kind, {"detail": "Not authenticated"}, www_authenticate)
     return JSONResponse(
         {"detail": "Not authenticated"},
         status_code=401,
@@ -701,6 +763,15 @@ for module in (system, documents, search, chat, artifacts, collections, custom_f
 @app.get("/docs", include_in_schema=False)
 async def api_reference():
     return api_docs.docs_page(app.title, app.openapi_url)
+
+
+# ── Host allowlist and cross-site writes (middleware/boundary.py) ──────────
+# Outside auth, so a request under a foreign Host name or a write from another
+# site is refused before any credential is tried or counted; inside the
+# request metadata below, so the refusal is logged and carries the headers.
+from middleware.boundary import enforce_boundary as _enforce_boundary
+
+app.middleware("http")(_enforce_boundary)
 
 
 # ── Request metadata (ids, access log, in-flight counters) ─────────────────

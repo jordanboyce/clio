@@ -241,8 +241,8 @@ wrong one for a multi-tenant service. Pick one:
 The embedded MCP endpoint at `/mcp` lets internal agents search and read the
 corpus. On-prem, mint personal tokens in Settings → MCP (read-only unless you
 allow writes), and if you serve the app under a hostname rather than
-localhost, list it in `MCP_ALLOWED_HOSTS` — the MCP SDK's DNS-rebinding
-protection trusts only localhost otherwise.
+localhost, list it in `ALLOWED_HOSTS` (formerly `MCP_ALLOWED_HOSTS`) — the
+DNS-rebinding protection on `/mcp` trusts only localhost otherwise.
 
 A token carries the identity of whoever minted it, so under
 `PRIVATE_COLLECTIONS` an agent sees exactly that person's collections. Set
