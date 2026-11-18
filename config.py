@@ -46,13 +46,21 @@ RENAMED_SETTINGS = {
     "ALLOWED_HOSTS": "MCP_ALLOWED_HOSTS",
 }
 
+# The env file Settings reads, made absolute when this module is imported.
+# Saving in the Settings tab mirrors values back into this same file
+# (services/config_manager.py), so a change of working directory, or a second
+# instance started in the same folder with its own CLIO_ENV_FILE, never
+# rewrites another deployment's file. The variable exists so the test suite
+# can run against the shipped defaults; it is not a documented knob.
+ENV_FILE = Path(os.environ.get("CLIO_ENV_FILE") or os.environ.get("ASYMPTOTE_ENV_FILE") or ".env").absolute()
+
 
 def legacy_setting_names(env_file: str | os.PathLike | None = None) -> list[tuple[str, str]]:
     """(old, new) for every renamed setting set only under its old name, in
     the process environment or the env file. Names compare case-insensitively,
     as the settings themselves do."""
     present = {k.upper() for k in os.environ}
-    path = Path(env_file if env_file is not None else Settings.model_config.get("env_file") or ".env")
+    path = Path(env_file if env_file is not None else ENV_FILE)
     try:
         from dotenv import dotenv_values
         if path.is_file():
@@ -967,7 +975,7 @@ class Settings(BaseSettings):
     # shipped defaults instead of whatever .env sits next to the checkout
     # (a developer's real deployment posture). Not a documented knob.
     model_config = SettingsConfigDict(
-        env_file=os.environ.get("CLIO_ENV_FILE") or os.environ.get("ASYMPTOTE_ENV_FILE", ".env"),
+        env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
