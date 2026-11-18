@@ -8,9 +8,10 @@ closure for its lifetime and is never written down.
 The worker runs in a copy of the request's context, because the chat loop reads
 the caller's identity from a contextvar for access checks and usage records.
 
-Like research jobs, these do not survive a restart. A row left active by an
-earlier process is reported failed by ``effective_state``; reading it writes
-nothing. Deleting an artifact while its job runs is allowed: the model call
+Like research jobs, these do not survive a restart: the key they need is
+held only in memory. At start ``fail_interrupted`` marks every row an
+earlier process left active as failed with RESTART_REASON, so the row says
+so for good; ``effective_state`` covers the moment before that runs. Deleting an artifact while its job runs is allowed: the model call
 finishes and its result is dropped.
 """
 
@@ -43,6 +44,34 @@ class JobQueueFull(RuntimeError):
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def fail_interrupted(collections_dir) -> int:
+    """Mark reports a previous process left queued or running as failed.
+
+    Called once at start, before any job can be live. Returns how many."""
+    import sqlite3
+    from pathlib import Path
+
+    from services.sqlite_utils import sqlite_connect
+
+    marked = 0
+    for db_path in sorted(Path(collections_dir).glob("*/indexes/metadata.db")):
+        try:
+            with sqlite_connect(db_path) as conn:
+                if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'artifacts'").fetchone():
+                    continue
+                marked += conn.execute(
+                    f"UPDATE artifacts SET status = 'failed', error = ?, finished_at = ? "
+                    f"WHERE status IN ({', '.join('?' * len(ACTIVE_STATUSES))})",
+                    (RESTART_REASON, _now(), *ACTIVE_STATUSES),
+                ).rowcount or 0
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.warning(f"Could not mark interrupted reports in {db_path.parent.parent.name}: {e}")
+    if marked:
+        logger.warning(f"Marked {marked} report(s) interrupted by the restart as failed")
+    return marked
 
 
 def is_live(artifact_id: str) -> bool:

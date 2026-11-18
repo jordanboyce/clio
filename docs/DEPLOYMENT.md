@@ -714,6 +714,8 @@ What protects the deployment when many people share it:
 | `SEARCH_HISTORY_RETENTION_DAYS` | 30 | Search log (stores result snippets) |
 | `USAGE_RETENTION_DAYS` | 180 | Per-turn chat usage rows |
 
+Jobs across a restart. An index job (upload, folder, repository or link) keeps on its row what it needs to run again. One still waiting for its turn when the server stopped is queued again at start; one that was running is listed as interrupted with **Run again**, which starts a new job for the files that are still there and not yet indexed (`POST /documents/upload/{job_id}/rerun`). Browser uploads staged for either are kept for a day for that. A running job that reports no progress for `JOB_STALL_TIMEOUT_SECONDS` (default 3600, 0 = never) is stopped the same way, so its collection's queue moves on. Reports being generated are marked failed at start: they need the model key the browser sent, which is never stored, so generate them again.
+
 Identity for the limits is the verified identity when there is one, else the
 client IP — which behind a reverse proxy is the address uvicorn reports, so
 set `FORWARDED_ALLOW_IPS` to the proxy (see shape **C**). A

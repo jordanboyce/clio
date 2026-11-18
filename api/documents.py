@@ -529,6 +529,7 @@ def _job_row_to_response(job: dict, with_summary: bool = False) -> UploadJobResp
         job_type=job.get("job_type") or "upload",
         queue_position=upload_service.queue_position(job["id"]),
         cancel_requested=upload_service.cancel_requested(job["id"]),
+        can_rerun=upload_service.can_rerun(job),
     )
 
 
@@ -758,6 +759,30 @@ async def stream_upload_progress(job_id: int):
             "X-Accel-Buffering": "no",  # Disable nginx buffering
         },
     )
+
+
+@router.post(
+    "/documents/upload/{job_id}/rerun",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Run a job again that a restart, a stall or a cancel stopped",
+    tags=["documents"],
+)
+def rerun_upload_job(job_id: int):
+    """Start a new job for what ``job_id`` did not finish: files already
+    indexed are skipped. 404 for an unknown job or one the caller cannot
+    see, 403 for a read-only share, 409 when there is nothing to run again.
+    """
+    job = _require_job_access(upload_service.get_job_status(job_id), job_id, write=True)
+    _require_ingest(job["collection_id"])
+    # Reading a server folder again is the same call as naming it: an
+    # operator's while LOCAL_SOURCE_ROOTS is unset.
+    for path in upload_service.server_paths_of(job_id):
+        _require_allowed_path(path)
+    try:
+        new_id = upload_service.rerun_job(job_id)
+    except (ValueError, RuntimeError) as e:  # nothing left, or the waiting list is full
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    return {"job_id": new_id, "rerun_of": job_id, "status": "pending"}
 
 
 @router.post(

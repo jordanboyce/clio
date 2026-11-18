@@ -106,6 +106,8 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
         // Queue + cancellation
         queuePosition: job.queuePosition,
         cancelRequested: job.cancelRequested || false,
+        // Interrupted by a restart or a stall, with its inputs still there
+        canRerun: job.canRerun || false,
         // Outcome, kept for finished jobs
         indexedFiles: job.resultSummary?.documents_processed ?? null,
         failedFiles: failed,
@@ -235,6 +237,7 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
       jobType: jobData.job_type || 'upload',
       queuePosition: jobData.queue_position ?? null,
       cancelRequested: jobData.cancel_requested || false,
+      canRerun: jobData.can_rerun || false,
       skippedFiles: jobData.skipped_files || [],
       // What a delete job is removing. Only this tab's own request says.
       deletingIds: jobData.deleting_ids || null,
@@ -307,6 +310,7 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     if (jobData.job_type !== undefined) job.jobType = jobData.job_type
     if (jobData.queue_position !== undefined) job.queuePosition = jobData.queue_position
     if (jobData.cancel_requested !== undefined) job.cancelRequested = jobData.cancel_requested
+    if (jobData.can_rerun !== undefined) job.canRerun = jobData.can_rerun
 
     maybeSignalDataRefresh(job.jobId, job.status, job.collectionId, job.processedFiles)
     if (isActiveStatus(previousStatus) && !isActiveStatus(job.status)) onJobFinished(job)
@@ -687,6 +691,17 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     await checkActiveJobs()
   }
 
+  // "Run again": a new job for what an interrupted one did not finish.
+  async function rerunUploadJob(jobId) {
+    const response = await http.post(`/documents/upload/${jobId}/rerun`)
+    const old = uploadJobs.value.find(j => j.jobId === jobId)
+    if (old) old.canRerun = false
+    addUploadJob({ job_id: response.data.job_id, collection_id: old?.collectionId, status: 'pending',
+      total_files: 0, processed_files: 0, job_type: old?.jobType })
+    startPolling()
+    return response.data
+  }
+
   return {
     // State
     uploadJobs,
@@ -713,6 +728,7 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     removeUploadJob,
     clearFinishedJobs,
     cancelUploadJob,
+    rerunUploadJob,
     setReindexJob,
     clearReindexJob,
     pollAllJobs,

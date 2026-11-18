@@ -38,6 +38,15 @@ logger = logging.getLogger(__name__)
 # Long enough for a large transfer, whose job is only submitted when it ends.
 STAGED_UPLOAD_MAX_AGE_SECONDS = 24 * 60 * 60
 
+# What a job needs to run again after a restart is kept on its row (E7): the
+# kind and the arguments. A job over this many files keeps none, rather than
+# a multi-megabyte row; it can still be started again from its source.
+RERUN_SPEC_MAX_ITEMS = 20_000
+INTERRUPTED_REASON = ("Interrupted - the server restarted while this job was running. "
+                      "What it finished is kept; run it again to do the rest.")
+STALLED_REASON = ("Stopped: this job made no progress for {minutes} minutes. What it finished "
+                  "is kept; run it again to do the rest.")
+
 
 def new_staged_path(collection_id: str, filename: str) -> Path:
     """A private place for a file to wait until it is indexed, under its real name.
@@ -250,6 +259,10 @@ class UploadService:
         self._queues_lock = threading.Lock()
         # Cancellation flags
         self._cancel_flags: Dict[int, bool] = {}
+        # job_id -> monotonic time of its last progress, for running jobs:
+        # the stall watchdog stops one that goes quiet (check_stalled_jobs).
+        self._last_progress: Dict[int, float] = {}
+        self._watchdog: Optional[threading.Thread] = None
 
     def active_job_count(self) -> int:
         with self._lock:
@@ -289,7 +302,170 @@ class UploadService:
         with self._lock:
             self._cancel_flags.setdefault(job.job_id, False)
             self._queue.append(job)
+        self._start_watchdog()
         self._dispatch()
+
+    # ── Stalled jobs (E7) ────────────────────────────────────────────────
+
+    def _start_watchdog(self) -> None:
+        if not settings.job_stall_timeout_seconds:
+            return
+        with self._lock:
+            if self._watchdog is not None and self._watchdog.is_alive():
+                return
+            # Not "index-job-...": that prefix names the job threads themselves.
+            self._watchdog = threading.Thread(target=self._watch_for_stalls, name="clio-stall-watchdog",
+                                              daemon=True)
+            self._watchdog.start()
+
+    def _watch_for_stalls(self) -> None:
+        while True:
+            timeout = int(settings.job_stall_timeout_seconds or 0)
+            if not timeout:
+                return
+            time.sleep(max(5.0, min(60.0, timeout / 4)))
+            try:
+                self.check_stalled_jobs()
+            except Exception as e:  # noqa: BLE001 - the watchdog must keep watching
+                logger.warning(f"Could not check for stalled index jobs: {e}")
+
+    def _note_progress(self, job_id: int) -> None:
+        with self._lock:
+            if job_id in self._active_threads:
+                self._last_progress[job_id] = time.monotonic()
+
+    def check_stalled_jobs(self, now: Optional[float] = None) -> List[int]:
+        """Stop each running job quiet for longer than JOB_STALL_TIMEOUT_SECONDS.
+
+        A thread cannot be killed, so the job is asked to stop (it does at
+        its next file boundary, if it ever gets there), marked failed with
+        what to do, and its place given up so its collection's queue moves.
+        Returns the jobs it stopped.
+        """
+        timeout = int(settings.job_stall_timeout_seconds or 0)
+        if not timeout:
+            return []
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            stalled = [jid for jid in self._active_threads
+                       if now - self._last_progress.get(jid, now) > timeout]
+            for jid in stalled:
+                self._cancel_flags[jid] = True
+                self._active_threads.pop(jid, None)
+                self._active_collections.pop(jid, None)
+                self._active_light.discard(jid)
+                self._last_progress.pop(jid, None)
+        reason = STALLED_REASON.format(minutes=max(1, round(timeout / 60)))
+        for jid in stalled:
+            logger.warning(f"Index job {jid} made no progress for {timeout}s; stopping it")
+            ops_counters.incr("jobs_failed", "index")
+            try:
+                app_db.update_upload_job(jid, status="failed", error=reason, current_file=None)
+            except Exception:
+                logger.exception(f"Could not mark stalled job {jid} failed")
+            self._broadcast_event(ProgressEvent(job_id=jid, event_type="job_error",
+                                                phase=UploadPhase.FAILED.value, error=reason))
+        if stalled:
+            self._dispatch()
+        return stalled
+
+    # ── Running a job again (E7) ─────────────────────────────────────────
+
+    @staticmethod
+    def _save_rerun_spec(job_id: int, kind: str, collection_id: str, items: List[str],
+                         uploaded_by: Optional[str], **options: Any) -> None:
+        """Keep what it takes to run this job again on its row."""
+        if len(items) > RERUN_SPEC_MAX_ITEMS:
+            return
+        spec = {"kind": kind, "collection_id": collection_id, "items": list(items),
+                "uploaded_by": uploaded_by, **options}
+        try:
+            app_db.update_upload_job(job_id, rerun_spec=json.dumps(spec))
+        except Exception as e:  # noqa: BLE001 - the job runs either way
+            logger.warning(f"Could not record how to run job {job_id} again: {e}")
+
+    @staticmethod
+    def _rerun_spec(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        raw = job.get("rerun_spec")
+        if not raw:
+            return None
+        try:
+            spec = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return spec if isinstance(spec, dict) and spec.get("kind") in ("local", "repo", "link") else None
+
+    @staticmethod
+    def _remaining_items(spec: Dict[str, Any]) -> List[str]:
+        """The inputs still there: links always, files only while they exist."""
+        items = [str(i) for i in spec.get("items") or []]
+        if spec["kind"] == "link":
+            return items
+        return [i for i in items if Path(i).is_file()]
+
+    def can_rerun(self, job: Dict[str, Any]) -> bool:
+        """Offer "Run again"? Only for a finished job that did not complete,
+        whose inputs are (at least partly) still there."""
+        if job.get("status") not in ("failed", "cancelled"):
+            return False
+        spec = self._rerun_spec(job)
+        if spec is None:
+            return False
+        if spec["kind"] == "link":
+            return bool(spec.get("items"))
+        return any(Path(str(i)).is_file() for i in spec.get("items") or [])
+
+    def _queued_job_from_spec(self, job_id: int, spec: Dict[str, Any], items: List[str]) -> _QueuedJob:
+        collection_id = spec["collection_id"]
+        uploaded_by = spec.get("uploaded_by")
+        if spec["kind"] == "local":
+            return _QueuedJob(job_id=job_id, collection_id=collection_id, target=self._run_local_index,
+                              args=(job_id, items, collection_id, bool(spec.get("copy_to_library")), uploaded_by),
+                              on_cancel=lambda: _remove_staged(collection_id, items))
+        if spec["kind"] == "repo":
+            return _QueuedJob(job_id=job_id, collection_id=collection_id, target=self._run_repo_index,
+                              args=(job_id, items, spec.get("repo_path") or "", collection_id, uploaded_by))
+        return _QueuedJob(job_id=job_id, collection_id=collection_id, target=self._run_link_index,
+                          args=(job_id, items, collection_id, uploaded_by))
+
+    def server_paths_of(self, job_id: int) -> List[str]:
+        """The server paths running ``job_id`` again would read, other than
+        browser uploads waiting in a collection's staging folder."""
+        job = app_db.get_upload_job(job_id)
+        spec = self._rerun_spec(job) if job else None
+        if spec is None or spec["kind"] == "link":
+            return []
+        if spec["kind"] == "repo":
+            return [spec.get("repo_path") or ""]
+        return [i for i in self._remaining_items(spec) if not _is_staged(spec["collection_id"], Path(i))]
+
+    def rerun_job(self, job_id: int) -> int:
+        """Start a new job that does what ``job_id`` did not finish.
+
+        Files already indexed are skipped (by their bytes), so only the rest
+        is extracted and embedded. Raises ValueError when there is nothing to
+        run again.
+        """
+        job = app_db.get_upload_job(job_id)
+        if not job or not self.can_rerun(job):
+            raise ValueError("This job cannot be run again: what it read is no longer there.")
+        spec = self._rerun_spec(job)
+        items = self._remaining_items(spec)
+        if spec["kind"] != "link":
+            items, _unchanged, _ = self._split_unchanged(items, spec["collection_id"])
+            if not items:
+                raise ValueError("Nothing left to run: every file of that job is already in the collection.")
+        self._check_queue_capacity()
+        new_id = app_db.create_upload_job(spec["collection_id"], len(items),
+                                          job_type=job.get("job_type") or "index")
+        audit.record("document.index_job", actor=spec.get("uploaded_by"), collection_id=spec["collection_id"],
+                     target=str(new_id), detail={"kind": spec["kind"], "files": len(items), "rerun_of": job_id})
+        self._save_rerun_spec(new_id, spec["kind"], spec["collection_id"], items, spec.get("uploaded_by"),
+                              **{k: v for k, v in spec.items()
+                                 if k not in ("kind", "collection_id", "items", "uploaded_by")})
+        self._submit(self._queued_job_from_spec(new_id, spec, items))
+        logger.info(f"Running job {job_id} again as job {new_id}: {len(items)} item(s)")
+        return new_id
 
     def _next_job(self) -> Optional[_QueuedJob]:
         """The first waiting job allowed to start. Call with the lock held.
@@ -342,6 +518,7 @@ class UploadService:
         job which dies before the pipeline starts (a missing documents
         directory, say) cannot strand its collection permanently.
         """
+        self._note_progress(job.job_id)
         try:
             job.target(*job.args)
         except Exception as e:
@@ -365,6 +542,7 @@ class UploadService:
                 self._active_collections.pop(job.job_id, None)
                 self._active_light.discard(job.job_id)
                 self._cancel_flags.pop(job.job_id, None)
+                self._last_progress.pop(job.job_id, None)
             self._dispatch()
 
     def recover_orphaned_jobs(self) -> Dict[str, int]:
@@ -374,26 +552,45 @@ class UploadService:
         neither survives a restart, but their rows do. Until this ran, a
         restart mid-index left a job that showed as running forever in the
         drawer, and the guard that keeps one job per collection refused
-        every future job for that collection. The uploads staged for those
-        jobs go too: nothing will index them now.
+        every future job for that collection.
+        Since E7 a job keeps what it takes to run again. One that was still
+        waiting for its turn is queued again as it was; one that was running
+        is marked interrupted and offered "Run again", and the uploads staged
+        for either are kept for that.
         """
-        self.sweep_staged_uploads(max_age=0)
         try:
-            counts = app_db.fail_interrupted_jobs(
-                "Interrupted - the server restarted while this job was running. "
-                "What it finished is kept; run it again to do the rest."
-            )
+            active = app_db.get_all_active_upload_jobs()
+        except Exception as e:
+            logger.error(f"Could not read the jobs the last process left: {e}")
+            active = []
+        requeue, keep_staged = [], set()
+        for job in active:
+            spec = self._rerun_spec(job)
+            if spec is None:
+                continue
+            items = self._remaining_items(spec)
+            if spec["kind"] == "local":
+                keep_staged |= {Path(i).parent for i in items if _is_staged(spec["collection_id"], Path(i))}
+            if job["status"] == "pending" and items:
+                requeue.append((job["id"], spec, items))
+        self.sweep_staged_uploads(max_age=0, keep=keep_staged)
+        try:
+            counts = app_db.fail_interrupted_jobs(INTERRUPTED_REASON, keep_job_ids=[j for j, _, _ in requeue])
         except Exception as e:
             logger.error(f"Could not reconcile interrupted jobs: {e}")
-            return {"upload_jobs": 0, "reindex_jobs": 0}
-        if counts.get("upload_jobs") or counts.get("reindex_jobs"):
+            return {"upload_jobs": 0, "reindex_jobs": 0, "requeued": 0}
+        for job_id, spec, items in requeue:
+            self._submit(self._queued_job_from_spec(job_id, spec, items))
+        counts["requeued"] = len(requeue)
+        if counts.get("upload_jobs") or counts.get("reindex_jobs") or requeue:
             logger.warning(
                 f"Marked {counts['upload_jobs']} interrupted index job(s) and "
-                f"{counts['reindex_jobs']} interrupted re-index job(s) as failed"
+                f"{counts['reindex_jobs']} interrupted re-index job(s) as failed; "
+                f"queued {len(requeue)} waiting job(s) again"
             )
         return counts
 
-    def sweep_staged_uploads(self, max_age: float = STAGED_UPLOAD_MAX_AGE_SECONDS) -> None:
+    def sweep_staged_uploads(self, max_age: float = STAGED_UPLOAD_MAX_AGE_SECONDS, keep=()) -> None:
         """Remove uploads no job came for: the browser closed after the transfer, say.
 
         A collection with a job waiting or running is left alone, because a long
@@ -402,8 +599,11 @@ class UploadService:
         cutoff = time.time() - max_age
         with self._lock:
             busy = set(self._active_collections.values()) | {q.collection_id for q in self._queue}
+        kept = {Path(k).resolve() for k in keep}
         for staged in collection_service.base_dir.glob("*/.staged/*"):
             try:
+                if kept and staged.resolve() in kept:
+                    continue
                 if staged.parent.parent.name not in busy and staged.stat().st_mtime <= cutoff:
                     shutil.rmtree(staged, ignore_errors=True)
             except OSError as e:
@@ -434,6 +634,7 @@ class UploadService:
 
     def _broadcast_event(self, event: ProgressEvent):
         """Broadcast progress event to all subscribers."""
+        self._note_progress(event.job_id)
         with self._queues_lock:
             queues = self._event_queues.get(event.job_id, [])
             for q in queues:
@@ -573,6 +774,8 @@ class UploadService:
             "job_type": job.get("job_type", "upload"),
             # Place in line while waiting for a slot (None once running)
             "queue_position": self.queue_position(job["id"]),
+            # Interrupted or stopped with its inputs still there (E7)
+            "can_rerun": self.can_rerun(job),
             # A running job that has been asked to stop
             "cancel_requested": self.cancel_requested(job["id"]),
         }
@@ -711,6 +914,8 @@ class UploadService:
                              "copy_to_library": copy_to_library,
                              "sample": [Path(p).name for p in file_paths[:10]]})
 
+        self._save_rerun_spec(job_id, "local", collection_id, list(file_paths), uploaded_by,
+                              copy_to_library=bool(copy_to_library))
         # Queued, not started: the dispatcher runs it as soon as this
         # collection is free and a slot is open.
         self._submit(_QueuedJob(
@@ -799,6 +1004,7 @@ class UploadService:
         audit.record("document.index_job", actor=uploaded_by, collection_id=collection_id,
                      target=str(job_id),
                      detail={"kind": "link", "files": len(urls), "sample": urls[:10]})
+        self._save_rerun_spec(job_id, "link", collection_id, list(urls), uploaded_by)
         self._submit(_QueuedJob(
             job_id=job_id,
             collection_id=collection_id,
@@ -1132,6 +1338,8 @@ class UploadService:
         job_id = app_db.create_upload_job(collection_id, len(files_to_index), job_type="index")
         audit.record("document.index_job", actor=uploaded_by, collection_id=collection_id,
                      target=str(job_id), detail={"kind": "repo", "path": repo_path, **audit_detail})
+        self._save_rerun_spec(job_id, "repo", collection_id, list(files_to_index), uploaded_by,
+                              repo_path=str(repo_path))
         self._submit(_QueuedJob(
             job_id=job_id,
             collection_id=collection_id,

@@ -1259,6 +1259,15 @@
                     >
                       <XCircle :size="16" />
                     </button>
+                    <button
+                      v-if="job.canRerun"
+                      @click="rerunJob(job.id)"
+                      class="btn btn-ghost btn-xs"
+                      data-testid="job-rerun"
+                      :aria-label="`Run ${job.type} job again`"
+                    >
+                      Run again
+                    </button>
                   </div>
                 </div>
 
@@ -2434,6 +2443,15 @@ const refreshJobsOnReturn = () => {
   if (now - lastJobsRefresh < 15000) return
   lastJobsRefresh = now
   backgroundJobsStore.checkActiveJobs()
+}
+
+// Run an interrupted job again (it skips what is already indexed)
+const rerunJob = async (jobId) => {
+  try {
+    await backgroundJobsStore.rerunUploadJob(jobId)
+  } catch (err) {
+    ui.toastError(err, 'Could not run the job again')
+  }
 }
 
 // Cancel an active upload job

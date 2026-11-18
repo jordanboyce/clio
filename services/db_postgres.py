@@ -266,9 +266,11 @@ class PostgresBackend(DatabaseBackend):
                         phase_detail TEXT,
                         chunks_processed INTEGER DEFAULT 0,
                         chunks_total INTEGER DEFAULT 0,
-                        job_type TEXT DEFAULT 'upload'
+                        job_type TEXT DEFAULT 'upload',
+                        rerun_spec TEXT
                     )
                 """)
+                cur.execute("ALTER TABLE upload_jobs ADD COLUMN IF NOT EXISTS rerun_spec TEXT")  # E7
                 # Active-job lookups filter on status, then collection.
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_upload_jobs_status_collection ON upload_jobs(status, collection_id)")
                 cur.execute("""
@@ -863,7 +865,8 @@ class PostgresBackend(DatabaseBackend):
     def update_upload_job(self, job_id: int, **kwargs):
         updates, params = [], []
         for field in ["status", "processed_files", "current_file", "error", "result_summary",
-                       "phase", "phase_progress", "phase_detail", "chunks_processed", "chunks_total"]:
+                       "phase", "phase_progress", "phase_detail", "chunks_processed", "chunks_total",
+                       "rerun_spec"]:
             if field not in kwargs:
                 continue
             if kwargs[field] is None and field not in self.NULLABLE_UPLOAD_JOB_FIELDS:
@@ -887,7 +890,8 @@ class PostgresBackend(DatabaseBackend):
     def _upload_job_query(self):
         return """SELECT id, collection_id, status, total_files, processed_files,
                          current_file, error, started_at, completed_at, result_summary,
-                         phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                         phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type,
+                         rerun_spec
                   FROM upload_jobs"""
 
     def get_upload_job(self, job_id: int) -> Optional[Dict[str, Any]]:
@@ -937,17 +941,19 @@ class PostgresBackend(DatabaseBackend):
         finally:
             self._put(conn)
 
-    def fail_interrupted_jobs(self, reason: str) -> Dict[str, int]:
+    def fail_interrupted_jobs(self, reason: str, keep_job_ids=()) -> Dict[str, int]:
         """Close out jobs left mid-flight by a process exit (see the SQLite backend)."""
         ts = utcnow().isoformat()
+        keep = [int(i) for i in keep_job_ids]
+        skip = f" AND id NOT IN ({', '.join(['%s'] * len(keep))})" if keep else ""
         conn = self._conn()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """UPDATE upload_jobs SET status = 'failed', error = %s, completed_at = %s,
-                                              current_file = NULL
-                       WHERE status IN ('pending', 'running')""",
-                    (reason, ts),
+                    f"""UPDATE upload_jobs SET status = 'failed', error = %s, completed_at = %s,
+                                               current_file = NULL
+                        WHERE status IN ('pending', 'running'){skip}""",
+                    (reason, ts, *keep),
                 )
                 uploads = cur.rowcount
                 cur.execute(

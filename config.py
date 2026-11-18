@@ -101,6 +101,7 @@ SETTING_RANGES: dict[str, tuple] = {
     "deep_search_queue_timeout_seconds": (0, 3600),
     "chat_daily_token_budget": (0, _UNBOUNDED),
     "max_concurrent_index_jobs": (1, 64),
+    "job_stall_timeout_seconds": (0, _UNBOUNDED),
     "collection_storage_limit_bytes": (0, _UNBOUNDED),
     "min_free_disk_mb": (0, _UNBOUNDED),
     "search_history_retention_days": (0, _UNBOUNDED),
@@ -784,6 +785,11 @@ class Settings(BaseSettings):
     # job funnels through one process-wide embedding lock anyway, so more
     # parallel jobs mostly shuffle the queue while starving live search.
     max_concurrent_index_jobs: int = 2
+    # A running index job that reports no progress for this long is stopped
+    # and marked failed with "Run again", so a hung job stops holding its
+    # collection's place in the queue until a restart. Progress is reported
+    # at least once per file and while a large file embeds. 0 turns it off.
+    job_stall_timeout_seconds: int = 3600
 
     # Storage a single collection may hold, in bytes, measured as the sum of
     # its indexed source files (uploads, staged copies, in-place references

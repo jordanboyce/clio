@@ -237,9 +237,16 @@ class SQLiteBackend(DatabaseBackend):
                     phase_detail TEXT,
                     chunks_processed INTEGER DEFAULT 0,
                     chunks_total INTEGER DEFAULT 0,
-                    job_type TEXT DEFAULT 'upload'
+                    job_type TEXT DEFAULT 'upload',
+                    rerun_spec TEXT
                 )
             """)
+            # What it takes to run a job again after a restart (E7):
+            # services/upload_service.py writes it, JSON.
+            try:
+                conn.execute("ALTER TABLE upload_jobs ADD COLUMN rerun_spec TEXT")
+            except sqlite3.OperationalError:
+                pass
             # Active-job lookups filter on status, then collection.
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_upload_jobs_status_collection
@@ -1023,6 +1030,7 @@ class SQLiteBackend(DatabaseBackend):
             "error": "error", "result_summary": "result_summary", "phase": "phase",
             "phase_progress": "phase_progress", "phase_detail": "phase_detail",
             "chunks_processed": "chunks_processed", "chunks_total": "chunks_total",
+            "rerun_spec": "rerun_spec",
         }
         for kwarg, col in field_map.items():
             if kwarg not in kwargs:
@@ -1050,7 +1058,7 @@ class SQLiteBackend(DatabaseBackend):
             row = conn.execute(
                 """SELECT id, collection_id, status, total_files, processed_files,
                           current_file, error, started_at, completed_at, result_summary,
-                          phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                          phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type, rerun_spec
                    FROM upload_jobs WHERE id = ?""", (job_id,)
             ).fetchone()
             return dict(row) if row else None
@@ -1062,7 +1070,7 @@ class SQLiteBackend(DatabaseBackend):
                 row = conn.execute(
                     """SELECT id, collection_id, status, total_files, processed_files,
                               current_file, error, started_at, completed_at, result_summary,
-                              phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                              phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type, rerun_spec
                        FROM upload_jobs WHERE status IN ('pending', 'running') AND collection_id = ?
                        ORDER BY id DESC LIMIT 1""", (collection_id,)
                 ).fetchone()
@@ -1070,7 +1078,7 @@ class SQLiteBackend(DatabaseBackend):
                 row = conn.execute(
                     """SELECT id, collection_id, status, total_files, processed_files,
                               current_file, error, started_at, completed_at, result_summary,
-                              phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                              phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type, rerun_spec
                        FROM upload_jobs WHERE status IN ('pending', 'running')
                        ORDER BY id DESC LIMIT 1"""
                 ).fetchone()
@@ -1082,7 +1090,7 @@ class SQLiteBackend(DatabaseBackend):
             return [dict(r) for r in conn.execute(
                 """SELECT id, collection_id, status, total_files, processed_files,
                           current_file, error, started_at, completed_at, result_summary,
-                          phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                          phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type, rerun_spec
                    FROM upload_jobs WHERE status IN ('pending', 'running') ORDER BY id DESC"""
             ).fetchall()]
 
@@ -1103,11 +1111,11 @@ class SQLiteBackend(DatabaseBackend):
                 f"""SELECT id, collection_id, status, total_files, processed_files,
                            current_file, error, started_at, completed_at, result_summary,
                            phase, phase_progress, phase_detail, chunks_processed,
-                           chunks_total, job_type
+                           chunks_total, job_type, rerun_spec
                     FROM upload_jobs {where} ORDER BY id DESC LIMIT ?""", params
             ).fetchall()]
 
-    def fail_interrupted_jobs(self, reason: str) -> Dict[str, int]:
+    def fail_interrupted_jobs(self, reason: str, keep_job_ids=()) -> Dict[str, int]:
         """Close out jobs left mid-flight by a process exit.
 
         Upload jobs run in threads and reindex jobs in asyncio tasks, so
@@ -1115,14 +1123,17 @@ class SQLiteBackend(DatabaseBackend):
         rows make the UI show a job that will never move, and the
         per-collection guard refuses every new job for that collection
         forever. Called once at startup, before anything can enqueue work.
+        ``keep_job_ids`` are upload jobs being queued again instead.
         """
         timestamp = utcnow().isoformat()
+        keep = [int(i) for i in keep_job_ids]
+        skip = f" AND id NOT IN ({', '.join('?' * len(keep))})" if keep else ""
         with sqlite_connect(self.db_path) as conn:
             uploads = conn.execute(
-                """UPDATE upload_jobs SET status = 'failed', error = ?, completed_at = ?,
-                                          current_file = NULL
-                   WHERE status IN ('pending', 'running')""",
-                (reason, timestamp),
+                f"""UPDATE upload_jobs SET status = 'failed', error = ?, completed_at = ?,
+                                           current_file = NULL
+                    WHERE status IN ('pending', 'running'){skip}""",
+                (reason, timestamp, *keep),
             ).rowcount
             reindexes = conn.execute(
                 """UPDATE reindex_jobs SET status = 'failed', error = ?, completed_at = ?,

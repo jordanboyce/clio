@@ -253,6 +253,10 @@ async def lifespan(app: FastAPI):
         # collection it was indexing into.
         from services.upload_service import upload_service
         upload_service.recover_orphaned_jobs()
+        # Reports being written when the process stopped (E7).
+        from services import artifact_jobs
+        from services.collection_service import collection_service
+        artifact_jobs.fail_interrupted(collection_service.base_dir)
 
         # Credentials saved by a version that stored them in plain text.
         from services.app_database import app_db
