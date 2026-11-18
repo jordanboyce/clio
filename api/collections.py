@@ -216,6 +216,21 @@ async def start_extension_reindex(
     }
 
 
+def _may_see_reindex_job(collection_id: Optional[str]) -> bool:
+    """Read access to the collection being rebuilt; admin for a global job."""
+    from api.deps import require_admin, require_collection_access
+    from middleware.user_context import get_request_user
+
+    try:
+        if collection_id:
+            require_collection_access(collection_id, get_request_user())
+        else:
+            require_admin("see a deployment-wide re-index")
+    except HTTPException:
+        return False
+    return True
+
+
 @router.get(
     "/api/reindex/status",
     summary="Get re-indexing job status",
@@ -227,7 +242,11 @@ def get_reindex_status(job_id: int = None):
 
     Args:
         job_id: Optional job ID. If not provided, returns latest job
-            (null when none has run). 404 for an unknown job_id.
+            (null when none has run, or when the caller may not see it).
+            404 for an unknown job_id or one the caller may not see.
+
+    A job that rebuilds one collection is visible to whoever can read that
+    collection; a deployment-wide re-index only to an admin.
 
     Returns:
         Job details including:
@@ -257,12 +276,6 @@ def get_reindex_status(job_id: int = None):
         # No job has ever run: nothing to report, but not an error.
         return None
 
-    # Calculate progress percentage
-    if job["total_documents"] > 0:
-        progress = (job["processed_documents"] / job["total_documents"]) * 100
-    else:
-        progress = 0
-
     # Which collection this job is rebuilding lives in the config snapshot.
     # Surface it: the sidebar refreshes mid-job only when the job names the
     # collection on screen, so without this a re-index never refreshed
@@ -276,6 +289,20 @@ def get_reindex_status(job_id: int = None):
             collection_id = (parsed or {}).get("collection_id")
         except (json.JSONDecodeError, TypeError, AttributeError):
             collection_id = None
+
+    if not _may_see_reindex_job(collection_id):
+        if job_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Re-index job {job_id} not found",
+            )
+        return None
+
+    # Calculate progress percentage
+    if job["total_documents"] > 0:
+        progress = (job["processed_documents"] / job["total_documents"]) * 100
+    else:
+        progress = 0
 
     return {
         **job,
@@ -546,7 +573,8 @@ def update_collection(collection_id: str, updates: dict, user_id: str = Depends(
         if published:
             from services.governance import is_restricted
 
-            if is_restricted(collection_row):
+            label = sensitivity or collection_row.get("sensitivity")
+            if is_restricted({"sensitivity": label}):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=(
@@ -568,6 +596,14 @@ def update_collection(collection_id: str, updates: dict, user_id: str = Depends(
             from services import audit
             audit.record("collection.published", actor=user_id, collection_id=collection_id,
                          detail={"published": published})
+
+    # Labelling a collection restricted withdraws what it had already
+    # released: publication now, its shares once the label is saved.
+    if sensitivity == "restricted" and published is None and prior.get("published"):
+        from services import audit
+        published = False
+        audit.record("collection.published", actor=user_id, collection_id=collection_id,
+                     detail={"published": False, "reason": "restricted"})
 
     collection = collection_service.update_collection(
         collection_id=collection_id,
@@ -594,6 +630,15 @@ def update_collection(collection_id: str, updates: dict, user_id: str = Depends(
             detail=f"Collection '{collection_id}' not found"
         )
 
+    if sensitivity == "restricted":
+        from services import audit
+        from services.sharing_service import sharing_service
+
+        for share in sharing_service.revoke_all_shares(collection_id):
+            audit.record("share.revoke", actor=user_id, collection_id=collection_id,
+                         target=share.get("invited_email"),
+                         detail={"share_id": share.get("id"), "reason": "restricted"})
+
     # The guide, name and description are delivered to other people's agents
     # and prompts (see services/authored_text.py). Record that they changed,
     # by size and fingerprint rather than text, and tell the author when the
@@ -616,6 +661,10 @@ def update_collection(collection_id: str, updates: dict, user_id: str = Depends(
     if meta_changed:
         audit.record("collection.metadata", actor=user_id, collection_id=collection_id,
                      detail={"fields": meta_changed})
+    new_model = updates.get("embedding_model")
+    if new_model is not None and (prior.get("embedding_model") or None) != new_model:
+        audit.record("collection.embedding", actor=user_id, collection_id=collection_id,
+                     detail={"from": prior.get("embedding_model"), "to": new_model})
 
     guide_warning = (
         authored_text.warning_for_author(collection.get("guide_flag"), "guide")
@@ -953,6 +1002,7 @@ def delete_collection(collection_id: str, user_id: str = Depends(get_current_use
             detail="Cannot delete the default collection"
         )
 
+    row = collection_service.get_collection(collection_id) or {}
     try:
         # Remove cached indexer first (before files are deleted)
         indexer_manager.remove_indexer(collection_id)
@@ -964,6 +1014,10 @@ def delete_collection(collection_id: str, user_id: str = Depends(get_current_use
                 detail=f"Collection '{collection_id}' not found"
             )
 
+        audit.record("collection.delete", actor=user_id, collection_id=collection_id, detail={
+            "team": (row.get("owner_id") or "").strip() in ("", settings.default_user_id),
+            "sensitivity": row.get("sensitivity"),
+        })
         return {"message": f"Collection '{collection_id}' deleted", "success": True}
     except HTTPException:
         raise

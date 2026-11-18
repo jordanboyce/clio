@@ -49,6 +49,9 @@ personal or small-team install leave it `false`.
 `ADMIN_EMAILS` names administrators only when the identity comes from `oidc`
 or `trusted_header` (or from an MCP token's owner). On an open appliance with
 `ADMIN_EMAILS` empty, the Admin tab is open to everyone who can reach the app.
+Under private collections the admins also hold the owner tier of *team*
+collections (delete, relabel, re-index, export); everyone else contributes
+sources to them. See [DEPLOYMENT.md](DEPLOYMENT.md#private-collections).
 
 The app also **refuses to start** on any identity configuration it cannot
 enforce. That is deliberate: a boundary that is advertised but not enforced is

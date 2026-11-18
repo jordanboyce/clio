@@ -5,9 +5,10 @@ The three questions this module answers, and where each is enforced:
 - **How sensitive is this?** A collection carries a label (public,
   internal, confidential, restricted); a document may override it. The
   label is informational everywhere except *restricted*, which is a real
-  boundary: restricted collections cannot be shared, and MCP clients only
-  see them through a personal token explicitly scoped to that collection.
-  Enforced in ``sharing_service.create_share`` and
+  boundary: restricted collections cannot be shared or published, reach
+  nobody but their owner, and MCP clients only see them through a personal
+  token explicitly scoped to that collection. Enforced in
+  ``sharing_service.create_share`` / ``check_collection_access`` and
   ``mcp_server._resolve_collection_id`` / ``_visible_collections``.
 
 - **May this document be served?** The content-policy scanner sets a

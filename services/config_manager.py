@@ -208,6 +208,8 @@ class ConfigManager:
                 - requires_restart (bool): Whether server restart is needed
                 - requires_reindex (bool): Whether re-indexing is needed
                 - updated_fields (list): List of fields that were updated
+                - changed_fields (list): Those whose value actually changed
+                  (what the audit trail records)
                 - errors (list): List of error messages if any
         """
         result = {
@@ -215,6 +217,7 @@ class ConfigManager:
             "requires_restart": False,
             "requires_reindex": False,
             "updated_fields": [],
+            "changed_fields": [],
             "errors": [],
         }
 
@@ -369,10 +372,13 @@ class ConfigManager:
         for key, value in updates.items():
             if key in restart_fields:
                 result["requires_restart"] = True
-            if key in reindex_fields and _changed(key, value):
+            changed = _changed(key, value)
+            if key in reindex_fields and changed:
                 result["requires_reindex"] = True
 
             result["updated_fields"].append(key)
+            if changed:
+                result["changed_fields"].append(key)
 
             # Update runtime settings if no restart required
             if key not in restart_fields:

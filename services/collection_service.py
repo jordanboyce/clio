@@ -234,15 +234,24 @@ class CollectionService:
             from middleware.user_context import get_request_user
             user_id = get_request_user()
 
+        from services.governance import is_restricted
+        from services.sharing_service import team_permission
+
         visible: List[Dict[str, Any]] = []
         seen: set = set()
+        restricted: set = set()
         for c in app_db.get_all_collections():
             owner = (c.get('owner_id') or '').strip()
             if owner in ('', settings.default_user_id):
-                c['permission'] = 'owner'
+                c['permission'] = team_permission(user_id)
                 c['team'] = True
             elif user_id and owner == user_id:
                 c['permission'] = 'owner'
+            elif is_restricted(c):
+                # Same rule as sharing_service.check_collection_access: a
+                # restricted collection reaches nobody but its owner.
+                restricted.add(c['id'])
+                continue
             elif c.get('published'):
                 # Reviewed and released: everyone may read it and reach it
                 # over MCP, nobody but its owner may change how it is built.
@@ -254,6 +263,8 @@ class CollectionService:
 
         if user_id:
             for c in app_db.get_shared_collections(user_id):
+                if c['id'] in restricted:
+                    continue
                 if c['id'] not in seen:
                     c['permission'] = c.get('permission', 'read')
                     visible.append(c)

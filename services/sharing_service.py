@@ -40,6 +40,22 @@ class ShareOwnCollection(ShareError):
     pass
 
 
+def team_permission(user_id: Optional[str]) -> str:
+    """What a caller may do with a team collection (one with no single owner).
+
+    Once an admin list is in force (ADMIN_EMAILS with an identity provider),
+    the owner-tier actions — delete, relabel, reindex, export with sources,
+    change how it is built — belong to the admins; everyone else contributes
+    sources. Without one (a one-person install, a shared password) there is
+    nobody to hand them to, so every caller keeps them.
+    """
+    from services.admins import admin_gate_active, is_admin
+
+    if not admin_gate_active() or is_admin(user_id):
+        return "owner"
+    return "readwrite"
+
+
 class SharingService:
     """Manages collection sharing between users."""
 
@@ -181,6 +197,20 @@ class SharingService:
         logger.info(f"Revoked share {share_id}")
         return share
 
+    def revoke_all_shares(self, collection_id: str) -> List[Dict[str, Any]]:
+        """Revoke every active share of a collection; return the revoked ones.
+
+        For a collection labelled restricted: the access check already stops
+        honouring its shares, and revoking them keeps a later relabel from
+        quietly bringing them back. The caller has checked ownership.
+        """
+        shares = app_db.get_shares_for_collection(collection_id)
+        for share in shares:
+            app_db.revoke_share(share["id"])
+        if shares:
+            logger.info(f"Revoked {len(shares)} share(s) of restricted collection {collection_id}")
+        return shares
+
     def check_collection_access(self, collection_id: str, user_id: Optional[str]) -> Optional[str]:
         """Check if a user has access to a collection.
 
@@ -191,8 +221,12 @@ class SharingService:
         With private collections on:
           - Team collections (owner_id empty or "default" — everything created
             before the mode existed, plus anything created by anonymous
-            password callers) grant 'owner' to every authenticated caller.
+            password callers) grant every caller ``team_permission``: 'owner'
+            when no admin list is in force, otherwise 'owner' for an admin and
+            'readwrite' (contributor) for everyone else.
           - The recorded owner gets 'owner'.
+          - A collection labelled restricted grants nothing else: shares and
+            publication stop counting (see governance.is_restricted).
           - A published collection grants 'read' to everyone else: it has been
             reviewed and released, so the whole deployment can search it and
             reach it over MCP, but only its owner decides how it is built.
@@ -223,10 +257,17 @@ class SharingService:
 
         owner = (collection.get("owner_id") or "").strip()
         if owner in ("", settings.default_user_id):
-            return "owner"
+            return team_permission(user_id)
 
         if user_id and owner == user_id:
             return "owner"
+
+        # Restricted never leaves its owner: an existing share or an earlier
+        # publication stops granting anything the moment the label is set.
+        from services.governance import is_restricted
+
+        if is_restricted(collection):
+            return None
 
         # A share is the stronger grant (it can carry write), so it wins over
         # the blanket read that publishing gives everyone.

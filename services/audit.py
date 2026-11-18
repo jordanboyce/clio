@@ -45,6 +45,8 @@ ACTIONS: List[str] = [
     "collection.classification",  # collection classification marking changed
     "classification.blocked",   # a local-only marking stopped data going to an outside service
     "collection.published",
+    "collection.delete",        # collection and its documents removed (team flag, label)
+    "collection.embedding",     # collection's embedding model changed (from/to model id)
     "collection.exported",      # bundle downloaded (with/without originals)
     "collection.static_export",  # exported for a public website (counts, model, who confirmed)
     "collection.imported",      # collection created from a bundle
@@ -70,6 +72,10 @@ ACTIONS: List[str] = [
     "api_app.revoke",
     "api.call",                 # one read by a registered app (MCP_AUDIT_TOOL_CALLS)
     "aup.accept",
+    "config.update",            # deployment settings saved (changed field names, never values)
+    "embedding.change",         # deployment embedding provider/model changed (ids only)
+    "ai_key.store",             # team AI key stored or replaced (provider only)
+    "ai_key.remove",            # team AI key removed (provider only)
     "admin.block_hash",
     "admin.unblock_hash",
     "admin.suspend_user",

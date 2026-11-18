@@ -398,6 +398,53 @@ def stage_uploads(  # sync: disk writes run in FastAPI's threadpool
     return {"staged": staged, "failed": failed, "collection_id": collection_id}
 
 
+def _may_see_job(collection_id: Optional[str]) -> bool:
+    """Whether the caller may see jobs that work on this collection.
+
+    The same read gate as the collection itself. A job tied to no collection
+    is an operator's (require_admin, a no-op on a one-person install).
+    """
+    if not collection_id:
+        try:
+            require_admin("see a job that belongs to no collection")
+        except HTTPException:
+            return False
+        return True
+    from services.sharing_service import sharing_service
+
+    return sharing_service.check_collection_access(collection_id, get_request_user()) is not None
+
+
+def _require_job_access(job: Optional[dict], job_id: int, write: bool = False) -> dict:
+    """Return the job, or 404 when it is unknown or the caller may not see it.
+
+    Job ids are sequential, so a job in someone else's private collection
+    answers exactly like a missing one. ``write`` is for cancelling, a
+    contributor's act: a read-only share may watch the job but gets 403.
+    """
+    if not job or not _may_see_job(job.get("collection_id")):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Upload job {job_id} not found",
+        )
+    if write and job.get("collection_id"):
+        require_collection_access(job["collection_id"], get_request_user(), write=True)
+    return job
+
+
+def _visible_jobs(jobs: List[dict]) -> List[dict]:
+    """Drop the jobs whose collection the caller may not see."""
+    allowed: Dict[Optional[str], bool] = {}
+    visible = []
+    for job in jobs:
+        cid = job.get("collection_id")
+        if cid not in allowed:
+            allowed[cid] = _may_see_job(cid)
+        if allowed[cid]:
+            visible.append(job)
+    return visible
+
+
 def _job_row_to_response(job: dict, with_summary: bool = False) -> UploadJobResponse:
     """One shape for a job row, wherever it is listed.
 
@@ -463,13 +510,7 @@ def get_upload_status(job_id: int) -> UploadJobResponse:
     Returns:
         Current job status including progress percentage
     """
-    job_status = upload_service.get_job_status(job_id)
-
-    if not job_status:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Upload job {job_id} not found",
-        )
+    job_status = _require_job_access(upload_service.get_job_status(job_id), job_id)
 
     return UploadJobResponse(
         job_id=job_status["job_id"],
@@ -508,11 +549,11 @@ def get_active_upload_jobs() -> List[UploadJobResponse]:
     Use this endpoint on page load to restore the notification bell state.
 
     Returns:
-        List of active upload jobs
+        List of active upload jobs in collections the caller can see
     """
     from services.app_database import app_db
 
-    return [_job_row_to_response(job) for job in app_db.get_all_active_upload_jobs()]
+    return [_job_row_to_response(job) for job in _visible_jobs(app_db.get_all_active_upload_jobs())]
 
 
 @router.get(
@@ -532,14 +573,23 @@ def list_recent_jobs(limit: int = 20, collection_id: Optional[str] = None) -> Li
 
     Args:
         limit: How many jobs to return (1-200, default 20)
-        collection_id: Restrict to one collection
+        collection_id: Restrict to one collection (404 if the caller cannot
+            see it)
 
     Returns:
-        Jobs newest first, each with its result summary parsed
+        Jobs newest first, each with its result summary parsed. Without a
+        collection_id, only jobs in collections the caller can see.
     """
     from services.app_database import app_db
 
-    jobs = app_db.get_recent_upload_jobs(limit=limit, collection_id=collection_id)
+    if collection_id:
+        require_collection_access(collection_id, get_request_user())
+        jobs = app_db.get_recent_upload_jobs(limit=limit, collection_id=collection_id)
+    else:
+        # Filter a wider window so other people's jobs do not crowd out the
+        # caller's own.
+        wanted = max(1, min(int(limit or 20), 200))
+        jobs = _visible_jobs(app_db.get_recent_upload_jobs(limit=200))[:wanted]
     return [_job_row_to_response(job, with_summary=True) for job in jobs]
 
 
@@ -583,6 +633,9 @@ async def stream_upload_progress(job_id: int):
         SSE stream of progress events
     """
     import queue
+
+    # Access first, so a stream nobody may watch is never subscribed to.
+    _require_job_access(upload_service.get_job_status(job_id), job_id)
 
     # Subscribe before reading the status. The other way round, a job that
     # finished between the two looked unfinished and its last event was never
@@ -683,16 +736,12 @@ def cancel_upload_job(job_id: int):
         job_id: The job ID to cancel
 
     Returns:
-        Cancellation status. 404 for an unknown job, 409 when it has
+        Cancellation status. 404 for an unknown job or one in a collection
+        the caller cannot see, 403 for a read-only share, 409 when it has
         already finished.
     """
-    # Check job exists and is active
-    job_status = upload_service.get_job_status(job_id)
-    if not job_status:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Upload job {job_id} not found",
-        )
+    # Check job exists, the caller may change its collection, and it is active
+    job_status = _require_job_access(upload_service.get_job_status(job_id), job_id, write=True)
 
     if job_status["status"] not in ("pending", "running"):
         # The job exists but is already finished: a state conflict, not a
@@ -2343,6 +2392,11 @@ def delete_document(  # sync: FAISS rebuild on delete runs in the threadpool
 
         _require_write(collection_id)
 
+        # A document held for review looks absent to everyone but an admin,
+        # here as in /api/v1: only the reviewer may remove it.
+        governance.assert_document_servable(
+            indexer.vector_store.metadata_store.get_document_info(document_id))
+
         # Index, collection tracking, file on disk, answer cache, audit —
         # one implementation shared with the admin "remove and block" action.
         try:
@@ -2366,6 +2420,21 @@ def delete_document(  # sync: FAISS rebuild on delete runs in the threadpool
 
 
 MAX_BULK_DELETE_DOCUMENTS = 200_000
+
+
+def _held_from_caller(indexer) -> set:
+    """Ids of documents this caller may not remove: the ones held for review,
+    unless the caller is an admin (the same rule as assert_document_servable)."""
+    from services import data_controls
+
+    hidden = indexer.vector_store.metadata_store.get_hidden_document_ids()
+    if not hidden or data_controls.current_outside_consumer():
+        return hidden
+    try:
+        require_admin("remove a document held for review")
+    except HTTPException:
+        return hidden
+    return set()
 
 
 class BulkDeleteRequest(BaseModel):
@@ -2393,7 +2462,8 @@ def bulk_delete_documents(body: BulkDeleteRequest, response: Response) -> dict: 
     Args:
         body: ``document_ids`` to delete, or ``everything: true``. Unknown ids
             are counted in the job's summary rather than refused, since they
-            are what a repeated request would find.
+            are what a repeated request would find. Documents held for review
+            are left out unless the caller is an admin.
     """
     from services import removal_jobs
     from services.reindex_service import is_reindexing
@@ -2419,6 +2489,12 @@ def bulk_delete_documents(body: BulkDeleteRequest, response: Response) -> dict: 
         )
 
     wanted = None if body.everything else body.document_ids
+    held = _held_from_caller(indexer)
+    if held:
+        # Documents held for review stay for the admin to decide on; to
+        # anyone else they look absent, so they are left out silently.
+        store = indexer.vector_store.metadata_store
+        wanted = [d for d in (store.list_document_ids() if wanted is None else wanted) if d not in held]
     if wanted == [] or (wanted is None and not indexer.count_documents()):
         return {"job_id": None, "collection_id": collection_id, "status": "completed",
                 "total_files": 0, "processed_files": 0, "job_type": removal_jobs.JOB_TYPE}

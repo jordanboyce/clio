@@ -409,6 +409,38 @@ def scan_folder(request: ScanFolderRequest):  # sync: filesystem walk runs in th
         "total": len(files_found)
     }
 
+# The deployment settings that decide which vectors every index holds.
+_EMBEDDING_CONFIG_FIELDS = ("embedding_provider", "embedding_model", "remote_embedding_model",
+                            "embedding_base_url")
+
+
+def _audit_config_change(result: dict) -> None:
+    """Record a saved deployment-settings change: field names, never values.
+
+    A change to the embedding provider or model gets its own event as well,
+    with the provider and model ids (configuration, not secrets): it is the
+    one change that leaves every existing index on the old model.
+    """
+    from services import audit
+
+    changed = sorted(result.get("changed_fields") or [])
+    if not changed:
+        return
+    audit.record("config.update", detail={
+        "fields": changed,
+        "requires_reindex": bool(result.get("requires_reindex")),
+        "requires_restart": bool(result.get("requires_restart")),
+    })
+    embedding = [f for f in changed if f in _EMBEDDING_CONFIG_FIELDS]
+    if embedding:
+        provider = settings.embedding_provider or "local"
+        audit.record("embedding.change", detail={
+            "fields": embedding,
+            "provider": provider,
+            "model": settings.embedding_model if provider == "local" else settings.remote_embedding_model,
+        })
+
+
 @router.get(
     "/api/config",
     summary="Get current configuration",
@@ -457,6 +489,7 @@ async def update_config(updates: dict):
             status_code=422,
             detail="; ".join(result.get("errors") or ["could not save"]),
         )
+    _audit_config_change(result)
     return result
 
 
@@ -894,6 +927,7 @@ async def select_embedding(req: EmbeddingSelectRequest):
     result = config_manager.update_config(updates)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail="; ".join(result.get("errors") or ["could not save"]))
+    _audit_config_change(result)
 
     if req.warm:
         status = embedding_status.warm(force=True)

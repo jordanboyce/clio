@@ -337,12 +337,20 @@ What changes when it is on:
   collection is visible only to its owner until shared: the collection list,
   search, chat retrieval (including "search all collections"), document
   serving, and every `/mcp` tool all enforce it. An inaccessible collection
-  id answers exactly like a missing one, so ids cannot be probed.
+  id answers exactly like a missing one, so ids cannot be probed. Indexing
+  jobs follow their collection: job status, the progress stream, the jobs
+  list and `/api/reindex/status` show only jobs in collections the caller
+  can see, cancelling needs write access, and a deployment-wide re-index is
+  visible to admins only.
 - **Everything that existed before stays shared.** Collections owned by
   `default` — all pre-existing data, including the default collection — form
   a *team* tier that everyone can see and write. Flipping the flag on changes
   nothing about existing data; new collections are simply private to their
-  creators.
+  creators. A team collection has no single owner, so once `ADMIN_EMAILS` is
+  set its owner-tier actions (deleting, relabelling, re-indexing, exporting,
+  changing how it is built) belong to the admins, and everyone else is a
+  contributor who adds and removes sources. With no admin list, everyone
+  keeps the owner tier, as before.
 - **Sharing is built in.** An owner creates a share link (read or readwrite,
   optional expiry) from the collection's ⋮ menu, or shares directly with an
   email address; the recipient accepts in the same dialog. Shares are
@@ -401,9 +409,12 @@ it applies to any corpus.
 - **Attribution.** Every document row records the verified identity that
   added it (`uploaded_by`); the sidebar shows it under private collections.
   Background index jobs capture the identity that started them.
-- **Audit trail.** Uploads, index jobs, deletions, shares (create, accept,
-  revoke), MCP tokens (create, revoke), policy decisions, reports, label
-  changes, policy acknowledgements and every admin action land in an
+- **Audit trail.** Uploads, index jobs, deletions (documents and whole
+  collections), shares (create, accept, revoke), MCP tokens (create, revoke),
+  policy decisions, reports, label changes, policy acknowledgements,
+  deployment settings and embedding model changes (field names and model ids,
+  never values), the team AI key being stored or removed (provider only) and
+  every admin action land in an
   append-only `audit_events` table. Admin tab → *Audit trail* filters it and
   exports CSV; `AUDIT_RETENTION_DAYS` (default 365, `0` = forever) is the
   only knob, and it is separate from the search-history sweep.
@@ -418,8 +429,10 @@ it applies to any corpus.
   (default), `confidential` or `restricted`; a document can override it.
   The label travels on every search result, chat citation and MCP result.
   `restricted` is the one label that is a boundary: the collection cannot be
-  shared, and MCP clients see it only through a personal token explicitly
-  scoped to it (MCP tab → token generator).
+  shared or published, and MCP clients see it only through a personal token
+  explicitly scoped to it (MCP tab → token generator). Labelling a shared or
+  published collection `restricted` revokes its shares and withdraws the
+  publication (both audited); from then on only its owner reaches it.
 
 **The scanner** (`CONTENT_POLICY_ACTION`, default `flag`)
 
@@ -433,7 +446,9 @@ what a finding does: `flag` indexes with a badge, `quarantine` indexes but
 hides the document from search, chat and MCP until an admin approves it,
 `reject` refuses it, `off` skips the scan. Findings in the two critical
 categories are always at least quarantined. Secrets never flag on their own
-but make the document default to `confidential`.
+but make the document default to `confidential`. A quarantined document can
+be removed only by an admin (Admin tab, or a delete as an admin); to anyone
+else it answers like a missing document, and a bulk delete leaves it in place.
 
 Set `CONTENT_POLICY_LLM_REVIEW=true` to add a second opinion from the chat
 LLM on a sample of pages. It can escalate a document; it never clears a

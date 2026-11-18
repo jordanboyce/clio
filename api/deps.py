@@ -142,6 +142,21 @@ def require_collection_access(
             status_code=404, detail=f"Collection '{collection_id}' not found"
         )
     if owner and access != "owner":
+        from config import settings
+        from middleware.user_context import get_request_app
+        from services.app_database import app_db
+
+        row = app_db.get_collection(collection_id) or {}
+        team = (row.get("owner_id") or "").strip() in ("", settings.default_user_id)
+        if team and get_request_app() is None:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "This is a team collection: only an admin (ADMIN_EMAILS) can "
+                    "change how it is set up, relabel or delete it. You can add "
+                    "and remove sources."
+                ),
+            )
         raise HTTPException(
             status_code=403,
             detail=(

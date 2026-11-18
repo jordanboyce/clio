@@ -1800,7 +1800,12 @@ async def set_agent_config(
             detail=f"API key validation failed: {e}",
         )
 
+    from services import audit
+
+    replaced = bool(app_db.get_agent_api_key(provider))
     app_db.set_agent_api_key(provider, api_key)
+    # The provider only; the key never enters the trail.
+    audit.record("ai_key.store", detail={"provider": provider, "replaced": replaced})
     return {"success": True, "message": f"API key configured for {provider}"}
 
 
@@ -1827,5 +1832,10 @@ async def delete_agent_config(provider: str):
             detail=f"Invalid provider: {provider}",
         )
 
+    from services import audit
+
+    had_key = bool(app_db.get_agent_api_key(provider))
     app_db.delete_agent_api_key(provider)
+    if had_key:
+        audit.record("ai_key.remove", detail={"provider": provider})
     return {"success": True, "message": f"API key removed for {provider}"}

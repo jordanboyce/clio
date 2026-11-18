@@ -804,3 +804,48 @@ def test_bulk_resolve_endpoint(open_client, policy):
 def test_summary_endpoint_is_admin_only(private_client):
     assert private_client.get("/api/admin/review/summary", headers=_as(USER)).status_code == 403
     assert private_client.get("/api/admin/review/summary", headers=_as(ADMIN)).status_code == 200
+
+
+def test_held_document_can_only_be_removed_by_an_admin(private_client, policy):
+    policy("quarantine")
+    app_db.record_aup_acknowledgement(USER, "1")
+    r = private_client.post("/documents/upload", files={"files": ("e.txt", DRUG_SALE.encode(), "text/plain")},
+                            headers=_as(USER))
+    doc_id = r.json()["document_ids"][0]
+
+    # Even its uploader, a contributor, cannot remove what an admin has yet to
+    # review; it answers like a document that is not there, as /api/v1 does.
+    d = private_client.delete(f"/documents/{doc_id}", headers=_as(USER))
+    assert d.status_code == 404
+    assert "e.txt" not in d.text
+    assert any(x["document_id"] == doc_id
+               for x in private_client.get("/documents", headers=_as(ADMIN)).json()["documents"])
+
+    assert private_client.delete(f"/documents/{doc_id}", headers=_as(ADMIN)).status_code == 200
+
+
+def test_bulk_delete_leaves_held_documents_to_an_admin(private_client, policy, monkeypatch):
+    from services import removal_jobs
+
+    policy("quarantine")
+    app_db.record_aup_acknowledgement(USER, "1")
+    held = private_client.post("/documents/upload", files={"files": ("e.txt", DRUG_SALE.encode(), "text/plain")},
+                               headers=_as(USER)).json()["document_ids"][0]
+    policy("flag")
+    clear = private_client.post("/documents/upload", files={"files": ("h.txt", BENIGN.encode(), "text/plain")},
+                                headers=_as(USER)).json()["document_ids"][0]
+
+    submitted = []
+    monkeypatch.setattr(removal_jobs, "submit",
+                        lambda cid, ids, actor: submitted.append(ids) or app_db.create_upload_job(cid, 0))
+    for body in ({"everything": True}, {"document_ids": [held, clear]}):
+        private_client.post("/documents/bulk-delete", json=body, headers=_as(USER))
+    assert submitted == [[clear], [clear]]
+
+    # Only held documents asked for: nothing to do.
+    r = private_client.post("/documents/bulk-delete", json={"document_ids": [held]}, headers=_as(USER))
+    assert r.status_code == 200 and r.json()["job_id"] is None
+
+    submitted.clear()
+    private_client.post("/documents/bulk-delete", json={"everything": True}, headers=_as(ADMIN))
+    assert submitted == [None]
