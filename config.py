@@ -55,6 +55,144 @@ RENAMED_SETTINGS = {
 ENV_FILE = Path(os.environ.get("CLIO_ENV_FILE") or os.environ.get("ASYMPTOTE_ENV_FILE") or ".env").absolute()
 
 
+# The values each numeric setting can take, as (lowest, highest); None is
+# open-ended. A value outside its range used to be accepted and fail only when
+# it was used (a zero chunk size at the first upload, a zero worker pool at
+# the first request). Settings.__init__ refuses to start with one, and a save
+# in Settings (services/config_manager.py) refuses one, each with a message
+# that names the setting and the range. Where 0 means "off" or "no limit"
+# (the setting's comment says so), 0 is in range.
+_UNBOUNDED = None
+SETTING_RANGES: dict[str, tuple] = {
+    "chat_model_timeout_seconds": (1, 86_400),
+    "answer_cache_threshold": (0.0, 1.0),
+    "answer_cache_max_per_scope": (0, _UNBOUNDED),
+    "chunk_size": (50, 100_000),
+    "chunk_overlap": (0, 100_000),
+    "default_top_k": (1, 1000),
+    "max_top_k": (1, 1000),
+    "reranker_candidate_multiplier": (1, 100),
+    "rerank_max_concurrent": (0, 1024),
+    "rerank_queue_timeout_seconds": (0, 3600),
+    "scan_max_concurrent": (0, 1024),
+    "entity_boost_weight": (0.0, 10.0),
+    "entity_boost_max_candidates": (0, 10_000),
+    "chunk_boost_weight": (0.0, 10.0),
+    "superseded_penalty": (0.0, 1.0),
+    "duplicate_similarity_threshold": (0.0, 1.0),
+    "port": (1, 65_535),
+    "mcp_top_k": (1, 1000),
+    "mcp_semantic_weight": (0.0, 1.0),
+    "mcp_max_source_length": (0, _UNBOUNDED),
+    "mcp_token_max_days": (0, 36_500),
+    "postgres_pool_max": (1, 10_000),
+    "postgres_pool_timeout_seconds": (0, 3600),
+    "hsts_max_age_seconds": (0, _UNBOUNDED),
+    "index_idle_unload_seconds": (0, _UNBOUNDED),
+    "rate_limit_chat_per_minute": (0, _UNBOUNDED),
+    "rate_limit_search_per_minute": (0, _UNBOUNDED),
+    "rate_limit_default_per_minute": (0, _UNBOUNDED),
+    "rate_limit_documents_per_minute": (0, _UNBOUNDED),
+    "rate_limit_mcp_per_minute": (0, _UNBOUNDED),
+    "auth_failure_limit": (0, _UNBOUNDED),
+    "auth_failure_window_seconds": (1, 86_400),
+    "worker_threads": (1, 4096),
+    "deep_search_max_concurrent": (0, 1024),
+    "deep_search_queue_timeout_seconds": (0, 3600),
+    "chat_daily_token_budget": (0, _UNBOUNDED),
+    "max_concurrent_index_jobs": (1, 64),
+    "collection_storage_limit_bytes": (0, _UNBOUNDED),
+    "search_history_retention_days": (0, _UNBOUNDED),
+    "usage_retention_days": (0, _UNBOUNDED),
+    "pii_flag_threshold": (1, 1000),
+    "content_policy_llm_sample_pages": (1, 1000),
+    "audit_retention_days": (0, _UNBOUNDED),
+    "ocr_max_pages": (0, _UNBOUNDED),
+    "ocr_max_file_mb": (0, _UNBOUNDED),
+    "ollama_num_ctx": (0, 10_000_000),
+    "llm_schema_inference_threshold": (0.0, 1.0),
+    "bulk_flush_chunks": (1, 100_000),
+    "bulk_extract_workers": (1, 256),
+    "max_upload_file_mb": (0, _UNBOUNDED),
+    "archive_max_uncompressed_mb": (0, _UNBOUNDED),
+    "archive_max_members": (0, _UNBOUNDED),
+    "archive_max_compression_ratio": (0, _UNBOUNDED),
+    "archive_max_xml_elements": (0, _UNBOUNDED),
+    "bundle_max_members": (0, _UNBOUNDED),
+    "bundle_max_uncompressed_mb": (0, _UNBOUNDED),
+    "bundle_max_manifest_mb": (0, _UNBOUNDED),
+    "pra_max_file_mb": (0, _UNBOUNDED),
+    "pra_max_elements": (0, _UNBOUNDED),
+    "extract_timeout_seconds": (1, 86_400),
+    "extract_memory_limit_mb": (0, _UNBOUNDED),
+    "ocr_timeout_seconds": (1, 86_400),
+    "ocr_memory_limit_mb": (0, _UNBOUNDED),
+    "transcribe_timeout_seconds": (1, 86_400),
+    "transcribe_memory_limit_mb": (0, _UNBOUNDED),
+    "git_timeout_seconds": (1, 86_400),
+    "source_watch_tick_seconds": (0, 86_400),
+    "source_watch_default_minutes": (1, 525_600),
+    "link_max_bytes": (1, _UNBOUNDED),
+    "link_fetch_timeout_seconds": (1, 3600),
+    "research_lookup_timeout_seconds": (1, 600),
+    "library_max_job_documents": (1, 100_000),
+    "library_max_concurrent_jobs": (1, 64),
+}
+
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+def _range_text(low, high) -> str:
+    if high is None:
+        return f"at least {low}"
+    return f"between {low} and {high}"
+
+
+def setting_problems(values, *, env_names: bool = True) -> list[str]:
+    """What is wrong with ``values`` (setting name -> value), one sentence each.
+
+    Only the names present are checked, so a save can pass just what it
+    changes merged over what is in force. ``env_names`` names a setting the
+    way the environment spells it (CHUNK_SIZE), for the startup error;
+    otherwise as the Settings API does (chunk_size).
+    """
+    def label(name: str) -> str:
+        return name.upper() if env_names else name
+
+    problems = []
+    for name, (low, high) in SETTING_RANGES.items():
+        if name not in values or values[name] is None:
+            continue
+        value = values[name]
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            problems.append(f"{label(name)} must be a number {_range_text(low, high)} (it is {value!r}).")
+            continue
+        if number < low or (high is not None and number > high):
+            problems.append(f"{label(name)} must be {_range_text(low, high)} (it is {value}).")
+    try:
+        if "chunk_size" in values and "chunk_overlap" in values \
+                and int(values["chunk_overlap"]) >= int(values["chunk_size"]):
+            problems.append(
+                f"{label('chunk_overlap')} must be smaller than {label('chunk_size')} "
+                f"(they are {values['chunk_overlap']} and {values['chunk_size']})."
+            )
+        if "default_top_k" in values and "max_top_k" in values \
+                and int(values["default_top_k"]) > int(values["max_top_k"]):
+            problems.append(
+                f"{label('default_top_k')} must not be larger than {label('max_top_k')} "
+                f"(they are {values['default_top_k']} and {values['max_top_k']})."
+            )
+    except (TypeError, ValueError):
+        pass  # already reported as not a number
+    if "log_level" in values and str(values["log_level"]).upper() not in LOG_LEVELS:
+        problems.append(f"{label('log_level')} must be one of {', '.join(LOG_LEVELS)} (it is {values['log_level']!r}).")
+    if values.get("db_backend") == "postgresql" and not str(values.get("postgres_url") or "").strip():
+        problems.append(f"{label('postgres_url')} is required when {label('db_backend')} is postgresql.")
+    return problems
+
+
 def legacy_setting_names(env_file: str | os.PathLike | None = None) -> list[tuple[str, str]]:
     """(old, new) for every renamed setting set only under its old name, in
     the process environment or the env file. Names compare case-insensitively,
@@ -404,8 +542,9 @@ class Settings(BaseSettings):
     mcp_semantic_weight: float = 0.7
     mcp_include_sources: bool = True
     mcp_max_source_length: int = 500
-    mcp_ai_provider: str = "none"   # AI provider for MCP synthesis: "none" | "anthropic" | "openai" | "ollama"
-    mcp_ollama_model: str = ""      # Ollama model to use when mcp_ai_provider = "ollama"
+    # Ollama model ask_documents uses when the deployment's model is Ollama
+    # and none is named (services/ai_service.py).
+    mcp_ollama_model: str = ""
 
     # Record every MCP tool call in the audit trail, not just writes. Off by
     # default: on a personal or small-team appliance it is noise that grows
@@ -456,6 +595,9 @@ class Settings(BaseSettings):
 
     # "json" writes one JSON object per log line, for a log shipper or SIEM.
     log_format: Literal["text", "json"] = "text"
+    # The least severe line the app writes: DEBUG, INFO, WARNING, ERROR or
+    # CRITICAL. uvicorn's own access and error lines follow its --log-level.
+    log_level: str = "INFO"
 
     # Response hardening (middleware/security_headers.py). Blank CSP sends none,
     # for a site whose proxy sets its own. HSTS is only ever sent on a request
@@ -809,7 +951,8 @@ class Settings(BaseSettings):
     # LLM-assisted column role inference (P0.5)
     # When enabled, columns that can't be mapped by vendor profiles or regex
     # heuristics are sent (with column names and sample values) to an LLM
-    # for role assignment.  Requires mcp_ai_provider != "none" and a valid key.
+    # for role assignment. Read only by column-role plugins (the fintech
+    # branch); on its own this build has no reader for either setting.
     enable_llm_schema_inference: bool = False
     llm_schema_inference_threshold: float = 0.5  # Trigger when ≥ this fraction of columns are unmapped
 
@@ -970,9 +1113,6 @@ class Settings(BaseSettings):
     whisper_compute_type: str = "int8"   # "int8" (fast, CPU) | "float16" (GPU) | "float32"
     whisper_language: str = ""           # "" = auto-detect, else ISO code like "en"
 
-    # v3.0: Schema version (for data persistence)
-    schema_version: str = "3.0"
-
     # The env file is overridable so the test suite can run against the
     # shipped defaults instead of whatever .env sits next to the checkout
     # (a developer's real deployment posture). Not a documented knob.
@@ -997,6 +1137,11 @@ class Settings(BaseSettings):
                 f"EMBEDDING_PROVIDER={self.embedding_provider!r} is not one of "
                 f"{', '.join(PROVIDER_IDS)}"
             )
+        # Out-of-range numbers fail here, by name, not at first use (E5).
+        problems = setting_problems({name: getattr(self, name) for name in
+                                     (*SETTING_RANGES, "log_level", "db_backend", "postgres_url")})
+        if problems:
+            raise ValueError("Settings out of range:\n  - " + "\n  - ".join(problems))
         # Ensure data directories exist
         self.data_dir.mkdir(parents=True, exist_ok=True)
         (self.data_dir / "documents").mkdir(exist_ok=True)

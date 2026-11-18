@@ -34,8 +34,12 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(entry, default=str)
 
 
-def configure(log_format: str) -> None:
-    logging.basicConfig(level=logging.INFO, format=_TEXT_FORMAT)
+def configure(log_format: str, log_level: str = "INFO") -> None:
+    level = getattr(logging, str(log_level or "INFO").upper(), logging.INFO)
+    logging.basicConfig(level=level, format=_TEXT_FORMAT)
+    # basicConfig does nothing once the root logger has handlers (uvicorn may
+    # have added one), so the level is set on its own as well.
+    logging.getLogger().setLevel(level)
     if log_format != "json":
         return
     formatter = JsonFormatter()

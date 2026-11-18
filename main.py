@@ -47,7 +47,7 @@ from api import (
     system,
 )
 
-log_format.configure(settings.log_format)
+log_format.configure(settings.log_format, settings.log_level)
 logger = logging.getLogger(__name__)
 
 

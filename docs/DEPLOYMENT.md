@@ -915,7 +915,14 @@ scrape_configs:
 
 For load balancers and orchestrators, `/livez` and `/readyz` need no credential
 and never open a collection; see [ENTERPRISE.md](ENTERPRISE.md#health-probes).
-`LOG_FORMAT=json` writes one JSON object per log line for a log shipper.
+`LOG_FORMAT=json` writes one JSON object per log line for a log shipper;
+`LOG_LEVEL` (default `INFO`) sets the least severe line the app writes.
+
+Numeric settings are checked at start: a value outside the range that works
+(a zero `WORKER_THREADS`, a `CHUNK_OVERLAP` as large as `CHUNK_SIZE`) stops the
+server with a line naming each setting and its range, instead of failing at
+first use. The ranges are `SETTING_RANGES` in `config.py`; a save in Settings is
+checked against the same table.
 
 Metrics carry no identities, queries or document names, and routes are labelled
 by template (`/api/collections/{collection_id}/stats`), never by the raw path.

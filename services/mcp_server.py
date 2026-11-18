@@ -754,7 +754,7 @@ def health_check() -> dict[str, Any]:
     return _tool_response({
         "status": "ok",
         "server_id": settings.mcp_server_id or "clio",
-        "version": settings.schema_version,
+        "version": _provenance.version(),
         "origin": _provenance.origin(),
         "embedding": embedding_info,
         "reranker": reranker_info,
