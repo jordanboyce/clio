@@ -10,11 +10,19 @@ A bundle is a zip:
     artifacts/<id>/<name>   files of saved artifacts, such as audio
 
 The chunk text is the valuable part. Extraction - vision OCR above all - is
-what takes hours; embedding chunk text takes minutes. So an importer whose
-embedding model matches the manifest's signature exactly reuses the vectors
-as they are, and any other importer re-embeds from the chunk text without
-redoing extraction. The keyword (BM25) index is always rebuilt on import
-from the same text rather than shipped.
+what takes hours; embedding chunk text takes minutes. So an importer embeds
+the chunk text again without redoing extraction. The shipped vectors are for
+older importers only: this one never loads them, since a FAISS file is parsed
+by native code and vectors need not match the text they claim to stand for.
+The keyword (BM25) index is always rebuilt on import from the same text
+rather than shipped.
+
+On import, what the bundle says about its documents is decided again here:
+the content-policy, personal-data and injection scans run over the imported
+text, reviews and holds from elsewhere are dropped, the importer is recorded
+as who added each document, hashes and sizes come from the files actually
+unpacked, and the storage limit counts those bytes. The shipped metadata.db
+keeps its data and loses its code (triggers, foreign views).
 
 Quarantined documents never leave: they are stripped from the exported
 database and vectors, and so is what was derived from them: research whose
@@ -27,12 +35,15 @@ from it, reports included, stays behind.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 import shutil
 import sqlite3
 import uuid
 import zipfile
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -152,7 +163,7 @@ def _strip_documents(db_path: Path, document_ids: Iterable[str]) -> List[int]:
     """
     ids = sorted(set(document_ids))
     marks = ",".join("?" * len(ids))
-    conn = sqlite3.connect(db_path)
+    conn = _connect_untrusted(db_path, write=True)
     try:
         rowids: List[int] = []
         if ids:
@@ -168,8 +179,8 @@ def _strip_documents(db_path: Path, document_ids: Iterable[str]) -> List[int]:
                 tables = [r[0] for r in conn.execute(
                     f"SELECT table_name FROM csv_schemas WHERE document_id IN ({marks})", ids)]
                 for table in tables:
-                    conn.execute(f'DROP VIEW IF EXISTS "{table}__by_symbol"')
-                    conn.execute(f'DROP TABLE IF EXISTS "{table}"')
+                    conn.execute(f"DROP VIEW IF EXISTS {_quote_identifier(f'{table}__by_symbol')}")
+                    conn.execute(f"DROP TABLE IF EXISTS {_quote_identifier(table)}")
                 conn.execute(f"DELETE FROM csv_schemas WHERE document_id IN ({marks})", ids)
             except sqlite3.OperationalError:
                 pass  # no structured tables in this collection
@@ -183,7 +194,7 @@ def _strip_documents(db_path: Path, document_ids: Iterable[str]) -> List[int]:
 
 
 def _documents(db_path: Path) -> List[Dict[str, Any]]:
-    conn = sqlite3.connect(db_path)
+    conn = _connect_untrusted(db_path)
     conn.row_factory = sqlite3.Row
     try:
         return [dict(r) for r in conn.execute("SELECT * FROM documents ORDER BY filename")]
@@ -193,7 +204,7 @@ def _documents(db_path: Path) -> List[Dict[str, Any]]:
 
 def _figure_rows(db_path: Path) -> List[Dict[str, Any]]:
     """The document_figures rows, or [] for a database from before them."""
-    conn = sqlite3.connect(db_path)
+    conn = _connect_untrusted(db_path)
     conn.row_factory = sqlite3.Row
     try:
         return [dict(r) for r in conn.execute(
@@ -206,7 +217,7 @@ def _figure_rows(db_path: Path) -> List[Dict[str, Any]]:
 
 
 def _chunk_count(db_path: Path) -> int:
-    conn = sqlite3.connect(db_path)
+    conn = _connect_untrusted(db_path)
     try:
         return conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     finally:
@@ -214,7 +225,7 @@ def _chunk_count(db_path: Path) -> int:
 
 
 def _index_info(db_path: Path) -> Dict[str, Any]:
-    conn = sqlite3.connect(db_path)
+    conn = _connect_untrusted(db_path)
     try:
         rows = conn.execute("SELECT key, value FROM index_info").fetchall()
     except sqlite3.OperationalError:
@@ -475,56 +486,312 @@ def _check_member(name: str) -> None:
     raise BundleError(f"The bundle contains an unexpected file: {name}")
 
 
-def _restore_figure_files(zf: zipfile.ZipFile, rows: List[dict], kept: Dict[str, Any], figures_root: Path) -> int:
-    """Unpack the figures recorded for kept documents, each under its document's
-    folder; a member the database does not name is left in the zip."""
+def _figure_members(zf: zipfile.ZipFile, rows: List[dict], kept: Dict[str, Any]) -> List[zipfile.ZipInfo]:
+    """The figure files recorded for kept documents; a member the database
+    does not name is left in the zip."""
     wanted = {(row["document_id"], PurePosixPath(str(row["path"])).name)
               for row in rows if row["document_id"] in kept}
-    restored = 0
+    members = []
     for info in zf.infolist():
         if not info.filename.startswith(_FIGURES) or info.filename.endswith("/"):
             continue
         _, document_id, filename = PurePosixPath(info.filename).parts
-        if (document_id, filename) not in wanted:
-            continue
+        if (document_id, filename) in wanted:
+            members.append(info)
+    return members
+
+
+def _restore_figure_files(zf: zipfile.ZipFile, members: List[zipfile.ZipInfo], figures_root: Path) -> int:
+    """Unpack the planned figures, each under its document's folder."""
+    for info in members:
+        _, document_id, filename = PurePosixPath(info.filename).parts
         target = figures_root / document_id / filename
         target.parent.mkdir(parents=True, exist_ok=True)
-        with zf.open(info) as src, open(target, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-        restored += 1
-    return restored
+        _copy_member(zf, info, target)
+    return len(members)
 
 
-def _restore_artifact_files(zf: zipfile.ZipFile, artifacts: List[dict], db_path: Path, files_dir: Path) -> None:
-    """Unpack the files of the artifacts that were kept, each to its own folder."""
-    store = artifact_store.ArtifactStore(db_path, files_dir)
+def _artifact_members(zf: zipfile.ZipFile, artifacts: List[dict]) -> List[Tuple[zipfile.ZipInfo, dict]]:
+    """The files of the artifacts that were kept, with their rows."""
     by_id = {row["id"]: row for row in artifacts}
+    members = []
     for info in zf.infolist():
         if not info.filename.startswith(_ARTIFACT_FILES) or info.filename.endswith("/"):
             continue
         _, artifact_id, filename = PurePosixPath(info.filename).parts
         row = by_id.get(artifact_id)
-        target = store.file_target(row) if row and row.get("file_name") == filename else None
+        if row and row.get("file_name") == filename:
+            members.append((info, row))
+    return members
+
+
+def _restore_artifact_files(zf: zipfile.ZipFile, members: List[Tuple[zipfile.ZipInfo, dict]],
+                            db_path: Path, files_dir: Path) -> None:
+    """Unpack the planned artifact files, each to its own folder."""
+    store = artifact_store.ArtifactStore(db_path, files_dir)
+    for info, row in members:
+        target = store.file_target(row)
         if target is None:
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
+        _copy_member(zf, info, target)
+
+
+# ── Import: the shipped metadata.db is someone else's file ──────────────────
+#
+# Everything in a bundle was written by whoever made it. What this server
+# keeps from it is the data (chunk text, pages, tables, figures); what the
+# file says about that data is decided again here: its code (triggers, views),
+# its verdicts (content policy, injection warnings, reviews), who added each
+# document, each document's hash and size, and its vectors.
+
+_STRUCTURED_TABLE = re.compile(r"csv_data_[A-Za-z0-9_]{1,200}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+# Rows of each structured table the policy scan reads, as at ingest.
+_SCAN_ROWS = 500
+# A declared size past this is nonsense (and past SQLite's integers).
+_MAX_DECLARED_SIZE = 1 << 53
+
+
+def _quote_identifier(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _connect_untrusted(db_path: Path, *, write: bool = False) -> sqlite3.Connection:
+    """A connection to a metadata.db that may have come from elsewhere.
+
+    ``trusted_schema=OFF`` stops the file's own schema (views, triggers,
+    defaults, generated columns) from calling anything but innocuous
+    functions, and the connection is read-only unless the caller changes it.
+    """
+    uri = f"{Path(db_path).resolve().as_uri()}?mode={'rw' if write else 'ro'}"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.execute("PRAGMA trusted_schema = OFF")
+    return conn
+
+
+def _copy_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo, target: Path) -> Tuple[int, str]:
+    """Unpack one member, never past the size its entry declares (the size the
+    storage check counted). Returns (bytes written, sha256 of them)."""
+    hasher = hashlib.sha256()
+    written = 0
+    try:
         with zf.open(info) as src, open(target, "wb") as dst:
-            shutil.copyfileobj(src, dst)
+            while True:
+                block = src.read(1 << 16)
+                if not block:
+                    break
+                written += len(block)
+                if written > info.file_size:
+                    raise BundleError(f"The bundle is damaged: {info.filename} is larger than it says.")
+                hasher.update(block)
+                dst.write(block)
+    except (zipfile.BadZipFile, zlib.error, EOFError) as e:
+        target.unlink(missing_ok=True)
+        raise BundleError(f"The bundle is damaged: {info.filename} cannot be read ({e}).") from e
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
+    return written, hasher.hexdigest()
+
+
+def _sanitise_imported_db(db_path: Path) -> None:
+    """Keep a shipped metadata.db's data and none of its code.
+
+    A trigger would run inside this server on every later write (an admin's
+    hold could be undone as it is made), so every trigger goes, and every view
+    but the by-symbol rollups the structured store makes for its own tables.
+    The SQL tool lets a model read exactly the registered ``csv_data_*``
+    tables, so a table nobody registered is dropped and a registration that
+    names anything else is removed. Chunks that belong to no document go too:
+    nothing would govern them. Virtual tables are refused: Clio makes none here.
+    """
+    try:
+        conn = _connect_untrusted(db_path, write=True)
+    except sqlite3.Error as e:
+        raise BundleError("The bundle's metadata.db is not a readable Clio index.") from e
+    try:
+        if (conn.execute("PRAGMA quick_check").fetchone() or ("",))[0] != "ok":
+            raise BundleError("The bundle's metadata.db is damaged.")
+        objects = conn.execute("SELECT type, name, sql FROM sqlite_master").fetchall()
+        if any(kind == "table" and str(sql or "").lstrip().upper().startswith("CREATE VIRTUAL")
+               for kind, _, sql in objects):
+            raise BundleError("The bundle's metadata.db holds tables Clio does not make.")
+        tables = {name for kind, name, _ in objects if kind == "table"}
+        registered = set()
+        if "csv_schemas" in tables:
+            for row_id, table in conn.execute("SELECT id, table_name FROM csv_schemas").fetchall():
+                if isinstance(table, str) and _STRUCTURED_TABLE.fullmatch(table) and table in tables:
+                    registered.add(table)
+                else:
+                    conn.execute("DELETE FROM csv_schemas WHERE id = ?", (row_id,))
+        rollups = {f"{table}__by_symbol" for table in registered}
+        for kind, name, _ in objects:
+            if kind == "trigger" or (kind == "view" and name not in rollups):
+                conn.execute(f"DROP {kind.upper()} IF EXISTS {_quote_identifier(name)}")
+            elif kind == "table" and name.lower().startswith("csv_data_") and name not in registered:
+                conn.execute(f"DROP TABLE IF EXISTS {_quote_identifier(name)}")
+        conn.execute("DELETE FROM chunks WHERE document_id NOT IN (SELECT document_id FROM documents)")
+        conn.commit()
+    except sqlite3.DatabaseError as e:
+        raise BundleError("The bundle's metadata.db is not a readable Clio index.") from e
+    finally:
+        conn.close()
+
+
+def _structured_tables(conn: sqlite3.Connection, document_id: str) -> List[str]:
+    try:
+        rows = conn.execute("SELECT table_name FROM csv_schemas WHERE document_id = ? ORDER BY id",
+                            (document_id,)).fetchall()
+    except sqlite3.OperationalError:
+        return []  # no structured tables in this collection
+    return [r[0] for r in rows if isinstance(r[0], str) and _STRUCTURED_TABLE.fullmatch(r[0])]
+
+
+def _scan_pages_of(conn: sqlite3.Connection, document_id: str) -> Dict[Any, str]:
+    """The document's text as the policy scans read it: chunk text by page,
+    and for a spreadsheet the first rows of each sheet (as at ingest)."""
+    pages: Dict[Any, List[str]] = {}
+    for page, text in conn.execute(
+            "SELECT page_number, text FROM chunks WHERE document_id = ? ORDER BY page_number, chunk_index",
+            (document_id,)):
+        pages.setdefault(page, []).append(str(text or ""))
+    texts = {page: "\n".join(parts) for page, parts in pages.items()}
+    for n, table in enumerate(_structured_tables(conn, document_id), start=len(texts) + 1):
+        rows = conn.execute(f"SELECT * FROM {_quote_identifier(table)} LIMIT {_SCAN_ROWS}").fetchall()
+        texts[n] = "\n".join(", ".join(str(v) for v in row) for row in rows)
+    return texts
+
+
+def _stored_bytes(conn: sqlite3.Connection, document_id: str) -> int:
+    """Bytes of what a document brings with it in metadata.db: chunk text and
+    structured rows. The floor for a document that arrives without its file."""
+    total = conn.execute("SELECT COALESCE(SUM(LENGTH(CAST(text AS BLOB))), 0) FROM chunks "
+                         "WHERE document_id = ?", (document_id,)).fetchone()[0]
+    for table in _structured_tables(conn, document_id):
+        columns = [r[1] for r in conn.execute(f"PRAGMA table_info({_quote_identifier(table)})")]
+        if columns:
+            sums = ", ".join(f"COALESCE(SUM(LENGTH(CAST({_quote_identifier(c)} AS BLOB))), 0)"
+                             for c in columns)
+            total += sum(conn.execute(f"SELECT {sums} FROM {_quote_identifier(table)}").fetchone())
+    return int(total)
+
+
+def _declared_size(value: Any) -> int:
+    try:
+        return max(0, min(int(value or 0), _MAX_DECLARED_SIZE))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _plan_sources(zf: zipfile.ZipFile, kept: Dict[str, Any]) -> Dict[str, zipfile.ZipInfo]:
+    """The original each kept document gets: its own member, the first one per
+    stored filename (two documents sharing a name keep the first)."""
+    plan: Dict[str, zipfile.ZipInfo] = {}
+    names = set()
+    for info in zf.infolist():
+        if not info.filename.startswith(_SOURCES) or info.filename.endswith("/"):
+            continue
+        _, document_id, filename = PurePosixPath(info.filename).parts
+        doc = kept.get(document_id)
+        stored = Path(doc["filename"]).name if doc else ""
+        if not stored or Path(filename).name != stored or document_id in plan or stored in names:
+            continue
+        plan[document_id] = info
+        names.add(stored)
+    return plan
+
+
+def _stricter_label(*labels: Any) -> Optional[str]:
+    from services.governance import SENSITIVITY_LEVELS
+
+    known = [label for label in labels if label in SENSITIVITY_LEVELS]
+    return max(known, key=SENSITIVITY_LEVELS.index) if known else None
+
+
+def _rescan(conn: sqlite3.Connection, doc: Dict[str, Any]) -> Dict[str, Any]:
+    """The content-policy decision and injection warnings for an imported
+    document, made here from its text exactly as ingest makes them."""
+    from services import content_policy
+    from services.code_extractor import is_code_file
+    from services.indexing.indexer import policy_decision
+    from services.prompt_injection_detector import PromptInjectionDetector
+    from services.prompt_injection_detector import scanning_enabled as injection_scanning_enabled
+
+    filename = str(doc.get("filename") or "")
+    pages = _scan_pages_of(conn, doc["document_id"])
+    code = is_code_file(filename)
+    results = (content_policy.scan_pages(pages, filename=filename, code=code)
+               if pages and content_policy.scanning_enabled() else {})
+    status, flags, suggested = policy_decision(results, pages, filename=filename)
+    injection = None
+    if pages and not code and injection_scanning_enabled():
+        scans = PromptInjectionDetector().scan_pages(pages, filename=filename)
+        injection = {str(page): scan.to_dict() for page, scan in scans.items() if scan.is_flagged} or None
+    return {"status": status, "flags": flags, "suggested": suggested, "injection": injection}
+
+
+def _govern_imported(db_path: Path, kept: Dict[str, Any], sources: Dict[str, Tuple[int, str]],
+                     actor: Optional[str]) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+    """Decide again everything the bundle said about its documents.
+
+    Each document is scanned (content policy, personal data, injection) from
+    its own text; an earlier review, approval or hold from elsewhere does not
+    carry over. The importer is who added it. A document that came with its
+    file gets that file's hash and size; one that did not keeps a declared
+    hash only when it is the hash its id was cut from, and counts at least
+    the bytes its text and tables take here. Returns the documents the policy
+    rejects (to be stripped) and every kept document's decision.
+    """
+    rejected: List[str] = []
+    decisions: Dict[str, Dict[str, Any]] = {}
+    conn = _connect_untrusted(db_path, write=True)
+    try:
+        for document_id, doc in kept.items():
+            decision = _rescan(conn, doc)
+            if decision["status"] == "rejected":
+                rejected.append(document_id)
+                decisions[document_id] = decision
+                continue
+            if document_id in sources:
+                file_size, content_hash = sources[document_id]
+            else:
+                declared = str(doc.get("content_hash") or "")
+                content_hash = declared if (_SHA256.fullmatch(declared)
+                                            and declared[:16] == document_id) else None
+                file_size = max(_declared_size(doc.get("file_size")), _stored_bytes(conn, document_id))
+            decision["file_size"] = file_size
+            decisions[document_id] = decision
+            flags, injection = decision["flags"], decision["injection"]
+            conn.execute(
+                "UPDATE documents SET content_hash = ?, file_size = ?, policy_status = ?, "
+                "policy_flags = ?, injection_warnings = ?, injection_review = NULL, "
+                "uploaded_by = ?, sensitivity = ? WHERE document_id = ?",
+                (content_hash, file_size, decision["status"],
+                 json.dumps(flags) if flags else None, json.dumps(injection) if injection else None,
+                 actor, _stricter_label(doc.get("sensitivity"), decision["suggested"]), document_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return rejected, decisions
 
 
 def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
                       actor: Optional[str] = None) -> Dict[str, Any]:
     """Create a collection from a bundle and queue the job that finishes it.
 
-    Returns the new collection plus `job_id` and `vectors` ("reused" or
-    "re-embed"). Raises BundleError for a bad bundle, StorageLimitExceeded
-    when it does not fit, RuntimeError when the job queue is full.
+    Returns the new collection plus `job_id` and `vectors` (always
+    "re-embed": a bundle's vectors are never loaded). Raises BundleError for a
+    bad bundle, StorageLimitExceeded when it does not fit, RuntimeError when
+    the job queue is full.
     """
-    from services import audit, content_policy, storage_quota
+    from services import audit, content_policy, data_controls, storage_quota
     from services.collection_service import collection_service
-    from services.embedder import service_signature
     from services.governance import normalize_sensitivity
     from services.indexer_manager import indexer_manager
+    from services.indexing.indexer import record_policy_decision
+    from services.metadata_store import MetadataStore
     from services.upload_service import upload_service
 
     manifest = read_manifest(zip_path)
@@ -533,128 +800,168 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
     signature = embedding.get("signature") or ""
 
     # A local model travels as the collection's own model setting, so a
-    # local-provider importer loads exactly that model and can reuse vectors.
+    # local-provider importer embeds the text again with that same model.
     collection_model = (signature[len("local::"):] if signature.startswith("local::")
                         else settings.embedding_model)
 
-    # Prepare the database in a scratch folder first: the storage check and
-    # the blocklist both need its contents, and the new collection must not
-    # be opened (which creates an empty index with its own SQLite side files)
-    # before the real database is in place.
+    # Prepare everything in a scratch folder first: the storage check, the
+    # blocklist and the policy scan all need the bundle's contents, and the new
+    # collection must not be opened (which creates an empty index with its own
+    # SQLite side files) before the real database is in place.
     work = _work_dir() / f"import-{uuid.uuid4().hex}"
     work.mkdir()
     cid = None
+    limit = storage_quota.limit_bytes()
     try:
-        db_tmp = work / "metadata.db"
-        with zipfile.ZipFile(zip_path) as zf, zf.open(_METADATA) as src, open(db_tmp, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-        try:
-            docs = _documents(db_tmp)
-        except sqlite3.DatabaseError:
-            raise BundleError("The bundle's metadata.db is not a readable Clio index.")
-
-        # This deployment's blocklist applies to imported documents too.
-        blocked = [d["document_id"] for d in docs
-                   if d.get("content_hash") and content_policy.is_hash_blocked(d["content_hash"])]
-        removed_rowids = _strip_documents(db_tmp, blocked)
-        artifacts = artifact_store.prune_for_bundle(db_tmp, artifact_store.load_blocked_hashes())
-        kept = {d["document_id"]: d for d in docs if d["document_id"] not in blocked}
-        conn = sqlite3.connect(db_tmp)
-        try:
-            try:
-                conn.execute("UPDATE documents SET source_type = 'upload', source_path = NULL")
-                conn.commit()
-            except sqlite3.OperationalError:
-                pass  # pre-3.1 database without the source columns
-            # Deleted rows stay readable in free pages until this rewrites the file.
-            conn.execute("VACUUM")
-        finally:
-            conn.close()
-
-        # Storage counts documents' recorded sizes, as it does for uploads,
-        # plus their figures; a new collection starts empty, so the whole
-        # bundle must fit.
-        figure_rows = _figure_rows(db_tmp)
-        limit = storage_quota.limit_bytes()
-        incoming = sum(int(d.get("file_size") or 0) for d in kept.values()) + sum(
-            int(row.get("byte_size") or 0) for row in figure_rows if row["document_id"] in kept
-        )
-        if limit and incoming > limit:
-            raise storage_quota.StorageLimitExceeded("new", incoming, 0, limit,
-                                                     meta.get("name") or "this bundle")
-
-        collection = collection_service.create_collection(
-            name=(name or meta.get("name") or "Imported collection")[: authored_text.MAX_NAME_CHARS],
-            description=(meta.get("description") or "")[: authored_text.MAX_DESCRIPTION_CHARS],
-            color=meta.get("color") or "#3b82f6",
-            chunk_size=int(meta.get("chunk_size") or 500),
-            chunk_overlap=int(meta.get("chunk_overlap") or 50),
-            embedding_model=collection_model,
-            owner_id=owner_id,
-        )
-        cid = collection["id"]
-        updates = {"guide": (meta.get("guide") or "")[: authored_text.MAX_GUIDE_CHARS]}
-        try:
-            updates["sensitivity"] = normalize_sensitivity(meta.get("sensitivity"))
-        except Exception:
-            pass
-        marking = str(meta.get("classification") or "").strip().lower()[:40]
-        if marking:
-            # Kept as it came, known here or not, and set before anything is embedded.
-            updates["classification"] = marking
-        collection_service.update_collection(cid, **{k: v for k, v in updates.items() if v})
-
-        indexes_dir = collection_service.get_indexes_path(cid)
-        documents_dir = collection_service.get_documents_path(cid)
-        shutil.move(str(db_tmp), str(indexes_dir / "metadata.db"))
-
         with zipfile.ZipFile(zip_path) as zf:
-            target_signature = service_signature(collection_model=collection_model)
-            reuse = bool(signature) and signature == target_signature and _VECTORS in zf.namelist()
-            if reuse:
-                vectors = indexes_dir / "faiss.index"
-                with zf.open(_VECTORS) as src, open(vectors, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                if removed_rowids:
-                    index = faiss.read_index(str(vectors))
-                    index.remove_ids(np.asarray(removed_rowids, dtype=np.int64))
-                    faiss.write_index(index, str(vectors))
+            db_tmp = work / "metadata.db"
+            db_info = zf.getinfo(_METADATA)
+            if limit and db_info.file_size > limit:
+                raise storage_quota.StorageLimitExceeded("new", db_info.file_size, 0, limit,
+                                                         "the bundle's index (metadata.db)")
+            _copy_member(zf, db_info, db_tmp)
+            _sanitise_imported_db(db_tmp)
+            try:
+                MetadataStore(db_tmp)  # the columns this version governs with, on an older file
+                docs = _documents(db_tmp)
+            except sqlite3.DatabaseError:
+                raise BundleError("The bundle's metadata.db is not a readable Clio index.")
+
+            # This deployment's blocklist applies to imported documents too,
+            # first by the hash the bundle declares and then by the real one.
+            blocked = {d["document_id"] for d in docs
+                       if d.get("content_hash") and content_policy.is_hash_blocked(d["content_hash"])}
+            _strip_documents(db_tmp, blocked)
+            kept = {d["document_id"]: d for d in docs if d["document_id"] not in blocked}
+            artifacts = artifact_store.prune_for_bundle(db_tmp, artifact_store.load_blocked_hashes())
+
+            # Storage counts the bytes this import will really write: each
+            # member as its zip entry measures it (unpacking never passes
+            # that), plus, for a document without its file, the larger of its
+            # declared size and its text. A new collection starts empty, so
+            # the whole bundle must fit.
+            plan = _plan_sources(zf, kept)
+            figure_rows = _figure_rows(db_tmp)
+            figure_members = _figure_members(zf, figure_rows, kept)
+            artifact_members = _artifact_members(zf, artifacts)
+            conn = _connect_untrusted(db_tmp)
+            try:
+                without_file = sum(max(_declared_size(d.get("file_size")), _stored_bytes(conn, i))
+                                   for i, d in kept.items() if i not in plan)
+            finally:
+                conn.close()
+            incoming = without_file + sum(info.file_size for info in plan.values()) + sum(
+                info.file_size for info in figure_members) + sum(info.file_size for info, _ in artifact_members)
+            if limit and incoming > limit:
+                raise storage_quota.StorageLimitExceeded("new", incoming, 0, limit,
+                                                         meta.get("name") or "this bundle")
+
+            sources_dir = work / "sources"
+            sources_dir.mkdir()
+            sources: Dict[str, Tuple[int, str]] = {}
+            for document_id, info in plan.items():
+                sources[document_id] = _copy_member(zf, info, sources_dir / document_id)
+            really_blocked = {i for i, (_, digest) in sources.items() if content_policy.is_hash_blocked(digest)}
+
+            # A model review of the text must not go outside for local-only
+            # data, as at ingest: the collection's marking or any document's.
+            local_only = data_controls.is_local_only(str(meta.get("classification") or "").strip().lower()
+                                                     or None) or any(
+                data_controls.is_local_only(d.get("classification")) for d in kept.values())
+            with data_controls.processing_locally(local_only):
+                rejected, decisions = _govern_imported(db_tmp, {i: d for i, d in kept.items()
+                                                                if i not in really_blocked}, sources, actor)
+            withdrawn = really_blocked | set(rejected)
+            if withdrawn:
+                blocked |= really_blocked
+                _strip_documents(db_tmp, withdrawn)
+                kept = {i: d for i, d in kept.items() if i not in withdrawn}
+                artifacts = artifact_store.prune_for_bundle(db_tmp, artifact_store.load_blocked_hashes())
+                artifact_members = _artifact_members(zf, artifacts)
+                figure_members = _figure_members(zf, figure_rows, kept)
+
+            conn = sqlite3.connect(db_tmp)
+            try:
+                try:
+                    conn.execute("UPDATE documents SET source_type = 'upload', source_path = NULL")
+                    conn.commit()
+                except sqlite3.OperationalError:
+                    pass  # pre-3.1 database without the source columns
+                # Deleted rows stay readable in free pages until this rewrites the file.
+                conn.execute("VACUUM")
+            finally:
+                conn.close()
+
+            collection = collection_service.create_collection(
+                name=(name or meta.get("name") or "Imported collection")[: authored_text.MAX_NAME_CHARS],
+                description=(meta.get("description") or "")[: authored_text.MAX_DESCRIPTION_CHARS],
+                color=meta.get("color") or "#3b82f6",
+                chunk_size=int(meta.get("chunk_size") or 500),
+                chunk_overlap=int(meta.get("chunk_overlap") or 50),
+                embedding_model=collection_model,
+                owner_id=owner_id,
+            )
+            cid = collection["id"]
+            updates = {"guide": (meta.get("guide") or "")[: authored_text.MAX_GUIDE_CHARS]}
+            try:
+                updates["sensitivity"] = normalize_sensitivity(meta.get("sensitivity"))
+            except Exception:
+                pass
+            marking = str(meta.get("classification") or "").strip().lower()[:40]
+            if marking:
+                # Kept as it came, known here or not, and set before anything is embedded.
+                updates["classification"] = marking
+            collection_service.update_collection(cid, **{k: v for k, v in updates.items() if v})
+
+            indexes_dir = collection_service.get_indexes_path(cid)
+            documents_dir = collection_service.get_documents_path(cid)
+            # Copied through SQLite rather than moved: the scratch file has a
+            # write-ahead log beside it that a plain move would leave behind.
+            src, dst = sqlite3.connect(db_tmp), sqlite3.connect(indexes_dir / "metadata.db")
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+                src.close()
 
             # Originals land in this collection's library; paths from the
-            # exporting machine mean nothing here.
+            # exporting machine mean nothing here. The shipped vectors are
+            # never read: a FAISS file is parsed by native code, and vectors
+            # need not match the text they claim to stand for.
             extracted = set()
-            for info in zf.infolist():
-                if not info.filename.startswith(_SOURCES) or info.filename.endswith("/"):
-                    continue
-                _, document_id, filename = PurePosixPath(info.filename).parts
-                doc = kept.get(document_id)
-                if doc is None or Path(filename).name != Path(doc["filename"]).name:
-                    continue
-                target = documents_dir / Path(doc["filename"]).name
-                if target.exists():
-                    continue  # two documents sharing a filename: keep the first
-                with zf.open(info) as src, open(target, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                extracted.add(document_id)
-            _restore_artifact_files(zf, artifacts, indexes_dir / "metadata.db",
+            for document_id in kept:
+                if document_id in sources:
+                    shutil.move(str(sources_dir / document_id),
+                                str(documents_dir / Path(kept[document_id]["filename"]).name))
+                    extracted.add(document_id)
+            _restore_artifact_files(zf, artifact_members, indexes_dir / "metadata.db",
                                     collection_service.get_artifacts_path(cid))
-            _restore_figure_files(zf, figure_rows, kept, collection_service.get_figures_path(cid))
-    except Exception:
+            _restore_figure_files(zf, figure_members, collection_service.get_figures_path(cid))
+    except Exception as e:
         if cid:
             indexer_manager.close_indexer(cid)
             collection_service.delete_collection(cid)
+        if isinstance(e, sqlite3.DatabaseError):
+            # A file shaped to look like an index but not one: the client's mistake, not a 500.
+            raise BundleError("The bundle's metadata.db is not a readable Clio index.") from e
         raise
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
+    for document_id, decision in decisions.items():
+        doc = next((d for d in docs if d["document_id"] == document_id), {})
+        record_policy_decision(decision["status"], decision["flags"], filename=doc.get("filename") or "",
+                               document_id=document_id, collection_id=cid, actor=actor)
+    held = sum(1 for i in kept if decisions.get(i, {}).get("status") == "quarantined")
     job_id = upload_service.submit_job(
-        cid, "import", 1, _run_import, args=(cid, reuse, embedding.get("model")),
+        cid, "import", 1, _run_import, args=(cid, embedding.get("model")),
     )
     audit.record(
         "collection.imported", actor=actor, collection_id=cid, target=str(job_id),
         detail={
             "from": meta.get("name"), "documents": len(kept), "blocked": len(blocked),
-            "sources": len(extracted), "vectors": "reused" if reuse else "re-embed",
+            "rejected": len(rejected), "held": held,
+            "sources": len(extracted), "vectors": "re-embed",
             "signature": signature or None,
             # The bundle's guide is text from another deployment: record that
             # it arrived (size + fingerprint, never the text) and what the
@@ -667,16 +974,18 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
     return {
         **collection_service.get_collection(cid),
         "job_id": job_id,
-        "vectors": "reused" if reuse else "re-embed",
+        "vectors": "re-embed",
         "documents_imported": len(kept),
         "documents_blocked": len(blocked),
+        "documents_rejected": len(rejected),
+        "documents_held": held,
         "sources_imported": len(extracted),
         "permission": "owner",
     }
 
 
-def _run_import(job_id: int, collection_id: str, reuse: bool, source_model: Optional[str]) -> None:
-    """Job body: rebuild keyword search, then reuse or re-embed the vectors."""
+def _run_import(job_id: int, collection_id: str, source_model: Optional[str]) -> None:
+    """Job body: rebuild keyword search, then embed the chunk text here."""
     from services.bm25_service import BM25Index
     from services.collection_service import collection_service
     from services.embedder import EmbeddingDimensionMismatch, EmbeddingUnavailable
@@ -703,12 +1012,8 @@ def _run_import(job_id: int, collection_id: str, reuse: bool, source_model: Opti
 
     indexer = indexer_manager.get_indexer(collection_id)
     store = indexer.vector_store
-    if reuse and store.index.ntotal == total:
-        upload_service.finish_job(job_id, {"chunks": total, "vectors": "reused",
-                                           "model": source_model})
-        return
 
-    # Re-embed from the stored chunk text: no extraction, no OCR.
+    # Embed from the stored chunk text: no extraction, no OCR.
     service = indexer.embedding_service
     with store._index_lock:
         store.index = store._new_index()
@@ -791,38 +1096,22 @@ def export_preview(collection_id: str) -> Dict[str, Any]:
 def inspect_bundle(zip_path: Path) -> Dict[str, Any]:
     """Summarise a bundle for the Import dialog and say how it will land here.
 
-    ``action`` is "reuse" when this server embeds with exactly the model the
-    bundle records (instant), otherwise "re-embed" (chunk text is embedded
-    again here; extraction and OCR are never redone).
+    ``action`` is always "re-embed": the chunk text is embedded again here
+    (extraction and OCR are never redone), because a bundle's vectors are
+    never loaded.
     """
     from services import content_policy
-    from services.embedder import service_signature
 
     manifest = read_manifest(zip_path)
     meta = manifest.get("collection") or {}
     embedding = manifest.get("embedding") or {}
     contents = manifest.get("contents") or {}
-    signature = embedding.get("signature") or ""
     docs = manifest.get("documents") or []
 
-    collection_model = (signature[len("local::"):] if signature.startswith("local::")
-                        else settings.embedding_model)
-    target = service_signature(collection_model=collection_model)
-    with zipfile.ZipFile(zip_path) as zf:
-        has_vectors = _VECTORS in zf.namelist()
-    reuse = bool(signature) and signature == target and has_vectors
-
-    if reuse:
-        reason = "This server embeds with the same model, so the vectors are reused as they are."
-    elif not signature:
-        reason = "The bundle does not record its embedding model, so its text is embedded again here."
-    elif not has_vectors:
-        reason = "The bundle carries no vectors, so its text is embedded again here."
-    else:
-        reason = (f"This server uses a different model ({settings.embedding_model}), so the "
-                  "bundle's text is embedded again here. Extraction and OCR are not redone.")
-    if not reuse:
-        reason += " If no embedding model can be reached, it is searchable by keyword until one is."
+    reason = ("This server embeds the bundle's text again with its own model; vectors made "
+              "elsewhere are not loaded. Extraction and OCR are not redone, and the text is "
+              "checked against this server's content policy as it lands. If no embedding model "
+              "can be reached, it is searchable by keyword until one is.")
 
     blocked = sum(1 for d in docs if d.get("content_hash") and content_policy.is_hash_blocked(d["content_hash"]))
     name = meta.get("name") or "Imported collection"
@@ -838,7 +1127,7 @@ def inspect_bundle(zip_path: Path) -> Dict[str, Any]:
         "exported_by": manifest.get("exported_by"),
         "clio_version": manifest.get("clio_version") or None,
         "embedding": describe_model(embedding),
-        "action": "reuse" if reuse else "re-embed",
+        "action": "re-embed",
         "reason": reason,
         "this_server": {"model": settings.embedding_model, "provider": settings.embedding_provider},
         "bytes": zip_path.stat().st_size,

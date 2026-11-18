@@ -102,6 +102,35 @@ class ChunkBatcher:
         return batch
 
 
+def policy_decision(page_results: dict, page_texts: dict, *,
+                    filename: str) -> tuple[str, Optional[dict], Optional[str]]:
+    """The content-policy decision for one document's per-page scan, with the
+    optional model review: ``(policy_status, policy_flags, suggested_sensitivity)``.
+    Shared by ingest and by bundle import, which re-scans what it is handed."""
+    if not content_policy.scanning_enabled():
+        return "clear", None, None
+    llm = content_policy.llm_review(page_texts, filename) if settings.content_policy_llm_review else None
+    return content_policy.decide(page_results or {}, llm=llm)
+
+
+def record_policy_decision(status: str, flags: Optional[dict], *, filename: str, document_id: str,
+                           collection_id: str | None, actor: str | None) -> None:
+    """Write a non-clear policy decision to the audit trail."""
+    if status == "clear":
+        return
+    audit.record(
+        f"document.{status}", actor=actor, collection_id=collection_id,
+        document_id=document_id,
+        detail={
+            "filename": filename,
+            "categories": (flags or {}).get("categories"),
+            "max_score": (flags or {}).get("max_score"),
+            "critical": (flags or {}).get("critical"),
+            "llm": ((flags or {}).get("llm") or {}).get("categories"),
+        },
+    )
+
+
 def _without_outside_help(method):
     """Run an indexing step so that, for a collection holding local-only data,
     nothing it does calls a service outside this network: no vision model for
@@ -316,22 +345,9 @@ class DocumentIndexer:
         ContentRejectedError under CONTENT_POLICY_ACTION=reject so the file
         never reaches the embedder or the metadata store.
         """
-        if not content_policy.scanning_enabled():
-            return "clear", None, None
-        llm = content_policy.llm_review(page_texts, filename) if settings.content_policy_llm_review else None
-        status, flags, suggested = content_policy.decide(page_results or {}, llm=llm)
-        if status != "clear":
-            audit.record(
-                f"document.{status}", actor=uploaded_by, collection_id=collection_id,
-                document_id=document_id,
-                detail={
-                    "filename": filename,
-                    "categories": (flags or {}).get("categories"),
-                    "max_score": (flags or {}).get("max_score"),
-                    "critical": (flags or {}).get("critical"),
-                    "llm": ((flags or {}).get("llm") or {}).get("categories"),
-                },
-            )
+        status, flags, suggested = policy_decision(page_results, page_texts, filename=filename)
+        record_policy_decision(status, flags, filename=filename, document_id=document_id,
+                               collection_id=collection_id, actor=uploaded_by)
         if status == "rejected":
             cats = ", ".join(sorted((flags or {}).get("categories") or {})) or "policy"
             raise ContentRejectedError(

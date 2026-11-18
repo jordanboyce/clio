@@ -324,10 +324,11 @@ connection takes a moment. Nothing waits for it: a model that is not on disk is
 fetched in the background, one attempt at a time, while the collection works by
 keyword.
 
-**Importing a collection bundle.** When a bundle's vectors can be reused, no
-model is needed at all. When they cannot and no model can be reached, the import
-still completes: its job reports `vectors: pending`, the collection is searchable
-by keyword, and the vectors arrive the same way as for any other source.
+**Importing a collection bundle.** A bundle's vectors are never loaded: the
+import embeds the chunk text again here. When no model can be reached, the
+import still completes: its job reports `vectors: pending`, the collection is
+searchable by keyword, and the vectors arrive the same way as for any other
+source.
 
 The full image turns OCR on unless `ENABLE_OCR` is set or OCR was switched off
 in Settings. Elsewhere it is off until turned on. While it is off, a PDF that is
