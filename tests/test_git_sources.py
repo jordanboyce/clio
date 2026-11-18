@@ -304,6 +304,47 @@ def test_private_hosts_need_the_allowlist(monkeypatch):
         git_source.validate_remote("https://127.0.0.1/r.git")
 
 
+def test_git_does_not_follow_a_redirect_off_the_checked_host(monkeypatch):
+    """The address passed the private-network check; a redirect from it to
+    another host (an internal one) must not be followed (S10)."""
+    hits = {"checked": 0, "elsewhere": 0}
+
+    def handler_for(name, location=None):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits[name] += 1
+                if location:
+                    self.send_response(302)
+                    self.send_header("Location", location + self.path)
+                else:
+                    self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+        return Handler
+
+    elsewhere = HTTPServer(("127.0.0.1", 0), handler_for("elsewhere"))
+    checked = HTTPServer(("127.0.0.1", 0),
+                         handler_for("checked", f"http://127.0.0.1:{elsewhere.server_port}"))
+    for server in (elsewhere, checked):
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(git_source, "ALLOW_PROTOCOL", "http")
+    monkeypatch.setattr(git_source, "validate_remote",
+                        lambda u, b=None: {"url": u, "host": "127.0.0.1", "branch": ""})
+    try:
+        with pytest.raises(git_source.GitError):
+            git_source.remote_head(f"http://127.0.0.1:{checked.server_port}/r.git")
+    finally:
+        checked.shutdown()
+        elsewhere.shutdown()
+    assert hits["checked"] >= 1
+    assert hits["elsewhere"] == 0
+
+
 # ── Clones ───────────────────────────────────────────────────────────────
 
 @pytest.fixture

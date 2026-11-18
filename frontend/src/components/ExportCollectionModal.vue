@@ -77,8 +77,8 @@
 
         <p class="text-xs text-base-content/65">
           <template v-if="preview.vectors_included">
-            A Clio that embeds with the same model reuses the vectors as they are. Any other Clio embeds the
-            text again with its own model.
+            The vectors are included for older versions of Clio. A current Clio embeds the text again with its
+            own model and never redoes extraction or OCR.
           </template>
           <template v-else>
             The vectors can't be vouched for, so they are left out and the importer embeds the text with its own model.

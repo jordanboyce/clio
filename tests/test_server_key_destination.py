@@ -189,3 +189,65 @@ def test_create_provider_refuses_a_server_key_however_it_got_there(deployment, t
     # The configured endpoint itself is fine with the same key.
     endpoint, _ = deployment
     create_provider("openai_compatible", DEPLOYMENT_KEY, base_url=f"{endpoint}/v1/", model="m")
+
+
+# ── AI_ALLOWED_BASE_URLS (S10) ──────────────────────────────────────────────
+# A caller's own key to a caller's own endpoint leaks nothing of the server's,
+# but the server still makes the request: an open choice is a way to make it
+# call into its own network. The operator can close it.
+
+def test_base_url_allowlist_rule(monkeypatch):
+    from config import settings
+    from services.ai_service import base_url_allowed
+
+    monkeypatch.setattr(settings, "ai_base_url", "http://gateway.corp:8000/v1")
+    monkeypatch.setattr(settings, "ollama_base_url", "http://localhost:11434")
+    monkeypatch.setattr(settings, "ai_allowed_base_urls", "")
+    assert base_url_allowed("openai_compatible", "http://169.254.169.254/latest")   # empty: any
+
+    monkeypatch.setattr(settings, "ai_allowed_base_urls", "none")
+    assert base_url_allowed("openai_compatible", "")                               # nothing chosen
+    assert base_url_allowed("openai_compatible", "http://gateway.corp:8000")       # AI_BASE_URL
+    assert base_url_allowed("ollama", "http://localhost:11434/")                   # OLLAMA_BASE_URL
+    assert not base_url_allowed("openai_compatible", "http://100.100.100.200/v1")
+    assert base_url_allowed("anthropic", "http://ignored.example")                 # fixed endpoint
+
+    monkeypatch.setattr(settings, "ai_allowed_base_urls", "https://llm.corp.example, http://vllm:8000/v1")
+    assert base_url_allowed("openai", "https://llm.corp.example/team-a/v1")
+    assert base_url_allowed("openai_compatible", "http://vllm:8000")
+    assert not base_url_allowed("openai_compatible", "https://llm.corp.example.evil.example")
+    assert not base_url_allowed("openai_compatible", "http://vllm:8001")
+    assert base_url_allowed("openai_compatible", "http://gateway.corp:8000")       # own endpoint stays
+
+
+def test_a_caller_endpoint_outside_the_allowlist_is_never_called(deployment, attacker, monkeypatch):
+    from config import settings
+
+    url, seen = attacker
+    monkeypatch.setattr(settings, "ai_allowed_base_urls", "none")
+    with pytest.raises(ValueError, match="AI_ALLOWED_BASE_URLS"):
+        create_provider("openai_compatible", "sk-mine", base_url=f"{url}/v1", model="m")
+    with pytest.raises(HTTPException) as refused:
+        chat._build_provider("openai", "sk-mine", None, None, None, None, f"{url}/v1")
+    assert refused.value.status_code == 400
+    with pytest.raises(ValueError, match="AI_ALLOWED_BASE_URLS"):
+        create_provider("ollama", base_url=url)
+    assert seen == []
+    # The operator's own endpoint still works, and so does a listed one.
+    endpoint, _ = deployment
+    create_provider("openai_compatible", None, base_url=f"{endpoint}/v1/", model="m").list_models()
+    monkeypatch.setattr(settings, "ai_allowed_base_urls", url)
+    create_provider("openai_compatible", "sk-mine", base_url=f"{url}/v1", model="m").list_models()
+    assert _keys(seen) == {"Bearer sk-mine"}
+
+
+def test_secure_profile_allows_only_the_operators_endpoint(monkeypatch):
+    import config
+
+    monkeypatch.setenv("CLIO_PROFILE", "secure")
+    assert config.Settings().ai_allowed_base_urls == "none"
+    monkeypatch.setenv("AI_ALLOWED_BASE_URLS", "https://llm.corp.example")
+    assert config.Settings().ai_allowed_base_urls == "https://llm.corp.example"
+    monkeypatch.delenv("CLIO_PROFILE")
+    monkeypatch.delenv("AI_ALLOWED_BASE_URLS")
+    assert config.Settings().ai_allowed_base_urls == ""

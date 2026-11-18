@@ -52,6 +52,16 @@ was found and deliberately left for later.
   an authorizer that permits reads of the structured-data tables only (not
   `documents`, `chunks` or `sqlite_master`), and a five-second progress-handler
   deadline.
+- **A server-side fetch connects to the address it checked.** Link fetching
+  refuses anything not `is_global`, resolves once and pins the connection to
+  that address, and re-checks every redirect; git follows no redirects; a
+  request-chosen model endpoint passes `AI_ALLOWED_BASE_URLS`.
+- **An imported bundle is data, not code.** Its `metadata.db` is opened with
+  `trusted_schema=OFF` and loses its triggers and foreign views; policy,
+  injection and personal-data verdicts, hashes, sizes and attribution are
+  decided again here; its vectors are never loaded.
+- **A CSV cell is never a formula.** Every CSV export goes through
+  `services/csv_safety.py`.
 - **Secrets never reach the log.** Share tokens are logged as a six-character
   prefix.
 - **Indexes cover the hot predicates**: `documents(content_hash)` for upload
@@ -103,18 +113,14 @@ was found and deliberately left for later.
 Found in the same review and not applied, because each is a larger change
 than a convention fix. In rough order of value:
 
-1. **Bundle import hardening.** An imported `metadata.db` keeps its triggers,
-   views and policy verdicts; drop the former and re-scan the latter.
-2. **Link fetcher DNS pinning.** The host is validated, then resolved again by
-   the HTTP client; pin the connection to the validated address.
-3. **One error envelope** (`{"detail", "code", ...}`) across the main API, as
+1. **One error envelope** (`{"detail", "code", ...}`) across the main API, as
    `/api/v1` already has; a global request-body size limit in middleware.
-4. **Refactors**: `execute_tool_calls` to a dispatch table, `create_provider`
+2. **Refactors**: `execute_tool_calls` to a dispatch table, `create_provider`
    to a registry like `embedding_providers.py`, `_run_turn` and
    `DocumentIndexer.search` split along their stage markers, then
    `UploadService`, `mcp_server.py`, `MetadataStore` and `CodeExtractor`
    split by the sections they already have.
-5. **Judgement calls**: PATCH for the partial updates that use PUT; PUT for
+3. **Judgement calls**: PATCH for the partial updates that use PUT; PUT for
    the settings endpoints that use POST; 503 or 429 instead of 409 for a full
    queue; 401 with a challenge from `require_admin` when there is no identity
    at all; 204 for the delete acknowledgements the frontend does not read.

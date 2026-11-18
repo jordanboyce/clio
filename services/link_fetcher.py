@@ -11,6 +11,12 @@ becomes a proxy into its own network. validate_link() therefore refuses
 URLs whose host resolves to a private, loopback, or link-local address
 unless LINK_ALLOW_PRIVATE_NETWORKS is set, and every redirect hop is
 checked the same way. OFFLINE_MODE refuses the feature entirely.
+
+A host is resolved once, and the connection is made to the address that was
+checked (the TLS handshake and Host header still name the host), so a DNS
+answer that changes between the check and the connect cannot move the
+request onto an internal address. Through an outbound proxy (HTTPS_PROXY)
+the proxy does the resolving and its own policy applies.
 """
 
 from __future__ import annotations
@@ -19,10 +25,12 @@ import ipaddress
 import logging
 import re
 import socket
+import urllib.request
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlsplit, urlunsplit, unquote
 
+import httpcore
 import httpx
 
 import config
@@ -126,14 +134,26 @@ def _resolve_host(host: str) -> List[str]:
 
 
 def _is_public_address(addr: str) -> bool:
-    ip = ipaddress.ip_address(addr)
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    if isinstance(ip, ipaddress.IPv6Address) and ip.is_site_local:
+    """True only for a globally routable unicast address.
+
+    ``is_global`` rather than ``not is_private``: shared address space
+    (100.64.0.0/10: carrier NAT, Tailscale, some clouds' metadata service)
+    is neither private nor public, and the IANA special-purpose blocks are
+    excluded as a whole. Multicast and the old IPv6 site-local range count as
+    global to Python, so they are refused separately.
+    """
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
         return False
-    return not (
-        ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast
-        or ip.is_reserved or ip.is_unspecified
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif ip.is_site_local:
+            return False
+    return ip.is_global and not (
+        ip.is_multicast or ip.is_reserved or ip.is_unspecified
+        or ip.is_loopback or ip.is_link_local
     )
 
 
@@ -144,6 +164,12 @@ def validate_link(url: str) -> str:
     Raises LinkError for a malformed or unresolvable URL and LinkRefused for
     one that policy forbids.
     """
+    return _validate(url)[0]
+
+
+def _validate(url: str) -> Tuple[str, List[str]]:
+    """validate_link(), plus the addresses the host resolved to, so the
+    fetch can connect to exactly the addresses that were checked."""
     if not link_indexing_available():
         if config.settings.offline_mode:
             raise LinkRefused("link indexing is unavailable in offline mode")
@@ -176,22 +202,87 @@ def validate_link(url: str) -> str:
     if not config.settings.link_allow_private_networks:
         if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
             raise LinkRefused(f"{host!r} is not a public host")
-        for addr in _resolve_host(host):
+        addresses = _resolve_host(host)
+        for addr in addresses:
             if not _is_public_address(addr):
                 raise LinkRefused(
                     f"{host!r} resolves to a private or local address; "
                     "the server only fetches public links"
                 )
     else:
-        _resolve_host(host)  # still has to exist
+        addresses = _resolve_host(host)  # still has to exist
 
     try:
         port = parts.port  # raises for a non-numeric port
     except ValueError:
         raise LinkError("link has an invalid port")
     netloc = host if port is None else f"{host}:{port}"
+    if ":" in host:  # an IPv6 literal keeps its brackets
+        netloc = f"[{host}]" if port is None else f"[{host}]:{port}"
     path = parts.path or "/"
-    return urlunsplit((scheme, netloc, path, parts.query, ""))
+    return urlunsplit((scheme, netloc, path, parts.query, "")), addresses
+
+
+# ── Connecting to the checked address ─────────────────────────────────
+
+
+class _PinnedBackend(httpcore.SyncBackend):
+    """Connects a host only to the addresses validate_link() approved.
+
+    httpcore hands the URL's host to connect_tcp; TLS (SNI and certificate
+    checks) and the Host header keep using the name, so only the address
+    lookup is replaced. A host nobody validated is refused outright.
+    """
+
+    def __init__(self, pins: Dict[str, List[str]]):
+        self._pins = pins
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        addresses = self._pins.get(host.strip("[]").lower())
+        if not addresses:
+            raise httpcore.ConnectError(f"{host!r} was not validated for fetching")
+        last: Optional[Exception] = None
+        for addr in addresses:
+            try:
+                return super().connect_tcp(addr, port, timeout=timeout,
+                                           local_address=local_address,
+                                           socket_options=socket_options)
+            except httpcore.ConnectError as e:
+                last = e
+        raise last
+
+
+class _PinnedTransport(httpx.HTTPTransport):
+    """httpx's own transport over a connection pool that uses _PinnedBackend."""
+
+    def __init__(self, pins: Dict[str, List[str]]):
+        super().__init__()
+        self._pool = httpcore.ConnectionPool(
+            ssl_context=httpx.create_ssl_context(),
+            network_backend=_PinnedBackend(pins),
+        )
+
+
+def _pin_key(url: str) -> str:
+    """The host as httpcore will pass it to connect_tcp (IDNA-encoded)."""
+    return httpx.URL(url).raw_host.decode("ascii").strip("[]").lower()
+
+
+def _env_proxy(url: str) -> Optional[str]:
+    """The outbound proxy the environment names for this URL, if any."""
+    proxies = urllib.request.getproxies_environment()
+    parts = urlsplit(url)
+    proxy = proxies.get(parts.scheme) or proxies.get("all")
+    if not proxy or urllib.request.proxy_bypass_environment(parts.hostname or "", proxies):
+        return None
+    return proxy
+
+
+def _transport_for(url: str, pins: Dict[str, List[str]]) -> httpx.BaseTransport:
+    proxy = _env_proxy(url)
+    if proxy:
+        return httpx.HTTPTransport(proxy=proxy)
+    return _PinnedTransport(pins)
 
 
 # ── Fetching ──────────────────────────────────────────────────────────
@@ -339,23 +430,28 @@ def fetch_link(url: str, *, max_bytes: Optional[int] = None,
     """
     max_bytes = max_bytes or config.settings.link_max_bytes
     timeout = timeout or config.settings.link_fetch_timeout_seconds
-    url = validate_link(url)
+    url, addresses = _validate(url)
     current = url
+    pins: Dict[str, List[str]] = {_pin_key(url): addresses}
     headers = {
         "User-Agent": (config.settings.link_user_agent or "").strip() or USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/pdf,text/plain,"
                   "text/markdown,application/json,*/*;q=0.5",
     }
 
-    with httpx.Client(follow_redirects=False, timeout=timeout, headers=headers) as client:
-        for _ in range(MAX_REDIRECTS + 1):
+    # One client per hop: the next hop may need the proxy where this one did
+    # not, and its host's pinned addresses are only known once it is checked.
+    for _ in range(MAX_REDIRECTS + 1):
+        with httpx.Client(follow_redirects=False, timeout=timeout, headers=headers,
+                          transport=_transport_for(current, pins)) as client:
             try:
                 with client.stream("GET", current) as response:
                     if response.is_redirect:
                         location = response.headers.get("location")
                         if not location:
                             raise LinkError(f"redirect from {current} carries no Location")
-                        current = validate_link(urljoin(current, location))
+                        current, addresses = _validate(urljoin(current, location))
+                        pins[_pin_key(current)] = addresses
                         continue
                     if response.status_code >= 400:
                         raise LinkError(_http_error_message(response.status_code, current))

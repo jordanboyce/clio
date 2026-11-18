@@ -477,7 +477,15 @@ def _record_block(row: Optional[Dict[str, Any]], service: str, **detail: Any) ->
 def local_processing(collection_id: Optional[str]):
     """Index a source without outside help when its collection holds anything
     local only. Read by ``allow_outside_processing`` further down the same call."""
-    if not holds_local_only(collection_id):
+    with processing_locally(holds_local_only(collection_id)) as local:
+        yield local
+
+
+@contextmanager
+def processing_locally(local_only: bool):
+    """``local_processing`` for data that has no collection yet (a bundle
+    being imported): the caller says whether any of it is local only."""
+    if not local_only:
         yield False
         return
     token = _local_processing.set(True)

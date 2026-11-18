@@ -131,6 +131,7 @@ def transport(monkeypatch):
         return entry(request) if callable(entry) else entry
 
     def client(**kwargs):
+        kwargs.pop("transport", None)  # the pinned transport would really connect
         return real_client(transport=httpx.MockTransport(handler), **kwargs)
 
     monkeypatch.setattr(link_fetcher.httpx, "Client", client)
@@ -495,8 +496,96 @@ def test_user_agent_carries_a_contact_url_and_can_be_overridden(monkeypatch):
 
     real = httpx.Client
     monkeypatch.setattr(link_fetcher.httpx, "Client",
-                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+                        lambda transport=None, **kw: real(transport=httpx.MockTransport(handler), **kw))
     fetch_link("https://example.com/a")
     monkeypatch.setattr(config.settings, "link_user_agent", "AcmeBot/2 (+https://acme.test)")
     fetch_link("https://example.com/a")
     assert seen == [link_fetcher.USER_AGENT, "AcmeBot/2 (+https://acme.test)"]
+
+
+# ── Address checks and pinning (S10) ──────────────────────────────────
+
+
+@pytest.mark.parametrize("addr", [
+    "100.64.0.1",          # shared address space: carrier NAT, Tailscale
+    "100.100.100.200",     # a cloud metadata service inside 100.64.0.0/10
+    "0.0.0.0", "224.0.0.1", "240.0.0.1", "255.255.255.255", "198.18.0.1", "192.0.0.8",
+    "::", "::1", "fe80::1", "fec0::1", "fc00::1", "ff02::1", "2001:db8::1",
+    "::ffff:100.64.0.1", "::ffff:10.0.0.1", "64:ff9b::a00:1",
+    "not-an-address",
+])
+def test_non_global_addresses_are_not_public(addr):
+    assert not link_fetcher._is_public_address(addr)
+
+
+@pytest.mark.parametrize("addr", ["93.184.216.34", "8.8.8.8", "2606:2800:220:1:248:1893:25c8:1946",
+                                  "::ffff:93.184.216.34"])
+def test_global_unicast_addresses_are_public(addr):
+    assert link_fetcher._is_public_address(addr)
+
+
+def test_shared_address_space_host_is_refused(monkeypatch):
+    monkeypatch.setattr(link_fetcher, "_resolve_host",
+                        lambda host: ["100.100.100.200"] if host == "meta.example.com" else ["93.184.216.34"])
+    with pytest.raises(LinkRefused):
+        validate_link("http://meta.example.com/latest/meta-data/")
+
+
+def _no_env_proxy(monkeypatch):
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
+                 "https_proxy", "http_proxy", "all_proxy", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_the_connection_goes_to_the_address_that_was_checked(monkeypatch):
+    """A DNS answer that changes after the check (rebinding) is never used:
+    the host is resolved once and the socket opens to that address."""
+    import httpcore
+
+    _no_env_proxy(monkeypatch)
+    answers = iter([["93.184.216.34"], ["127.0.0.1"]])
+    lookups = []
+
+    def resolve(host):
+        lookups.append(host)
+        return next(answers)
+
+    monkeypatch.setattr(link_fetcher, "_resolve_host", resolve)
+    monkeypatch.setattr(link_fetcher.socket, "getaddrinfo",
+                        lambda *a, **k: [(2, 1, 6, "", ("127.0.0.1", 0))])
+    connected = []
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        connected.append((host, port))
+        raise httpcore.ConnectError("no network in tests")
+
+    monkeypatch.setattr(httpcore.SyncBackend, "connect_tcp", connect_tcp)
+    with pytest.raises(LinkError, match="could not fetch"):
+        fetch_link("https://rebind.example.com/page")
+    assert connected == [("93.184.216.34", 443)]
+    assert lookups == ["rebind.example.com"]
+
+
+def test_a_host_that_was_not_validated_is_not_connected():
+    import httpcore
+
+    backend = link_fetcher._PinnedBackend({"example.com": ["93.184.216.34"]})
+    with pytest.raises(httpcore.ConnectError, match="not validated"):
+        backend.connect_tcp("other.example.com", 443)
+
+
+def test_an_outbound_proxy_is_still_used_when_the_environment_names_one(monkeypatch):
+    _no_env_proxy(monkeypatch)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp.example:3128")
+    monkeypatch.setenv("NO_PROXY", "intranet.corp.example")
+    assert link_fetcher._env_proxy("https://example.com/") == "http://proxy.corp.example:3128"
+    assert link_fetcher._env_proxy("https://intranet.corp.example/") is None
+    assert not isinstance(link_fetcher._transport_for("https://example.com/", {}), link_fetcher._PinnedTransport)
+    assert isinstance(link_fetcher._transport_for("https://intranet.corp.example/", {}),
+                      link_fetcher._PinnedTransport)
+
+
+def test_ipv6_literal_links_keep_their_brackets(monkeypatch):
+    monkeypatch.setattr(link_fetcher, "_resolve_host", lambda host: [host])
+    assert validate_link("https://[2606:2800:220:1:248:1893:25c8:1946]:8443/x") == \
+        "https://[2606:2800:220:1:248:1893:25c8:1946]:8443/x"

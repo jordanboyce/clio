@@ -34,7 +34,7 @@ describe('Export dialog', () => {
     expect(text).toContain('bge-small · on this machine · 384 dimensions')
     expect(text).toContain('2 sources')
     expect(text).toContain('1 held source left out')
-    expect(text).toContain('reuses the vectors')
+    expect(text).toContain('embeds the text again')
     expect(text).toContain('5 MB')
 
     const link = wrapper.get('a.btn-primary')

@@ -1225,6 +1225,40 @@ def server_key_allowed(provider_name: str, base_url) -> bool:
     return bool(approved) and _endpoint_identity(base_url) == _endpoint_identity(approved)
 
 
+# Providers whose requests go to the base URL they are given. The rest have a
+# fixed endpoint and ignore one.
+_BASE_URL_PROVIDERS = ("openai", "openai_compatible", "ollama")
+
+
+def _under(url_identity: str, entry_identity: str) -> bool:
+    return bool(entry_identity) and (
+        url_identity == entry_identity or url_identity.startswith(entry_identity + "/")
+    )
+
+
+def base_url_allowed(provider_name: str, base_url) -> bool:
+    """May a request send model calls to ``base_url``?
+
+    The call is made by the server, so a request that picks the endpoint
+    (X-AI-Base-URL, even with its own key) can make this server send
+    requests into its own network. AI_ALLOWED_BASE_URLS lets an operator
+    close that: empty allows any endpoint, "none" only the operator's own
+    AI_BASE_URL and OLLAMA_BASE_URL (always allowed), and a list those plus
+    each entry and any path beneath it.
+    """
+    if not (base_url or "").strip() or provider_name not in _BASE_URL_PROVIDERS:
+        return True
+    from config import settings
+
+    raw = (settings.ai_allowed_base_urls or "").strip()
+    if not raw:
+        return True
+    wanted = _endpoint_identity(base_url)
+    own = [settings.ai_base_url, settings.ollama_base_url]
+    entries = [] if raw.lower() == "none" else [e for e in raw.split(",") if e.strip()]
+    return any(_under(wanted, _endpoint_identity(e)) for e in own + entries)
+
+
 def _is_server_held_key(api_key: str) -> bool:
     """True when ``api_key`` is AI_API_KEY or one of the stored team keys."""
     import hmac
@@ -1296,6 +1330,11 @@ def create_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProv
         raise ValueError(
             "A key stored on this server is only sent to the endpoint it was configured for; "
             "pass your own key (X-AI-Key) to use another base URL."
+        )
+    if not base_url_allowed(provider_name, base_url):
+        raise ValueError(
+            "This server only sends model requests to the endpoints its operator "
+            "allowed (AI_ALLOWED_BASE_URLS); that base URL is not one of them."
         )
     provider = _build_provider(provider_name, api_key, **kwargs)
     _, resolved = apply_deployment_defaults(provider_name, api_key, kwargs)
