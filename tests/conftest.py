@@ -80,6 +80,20 @@ def _settings_saves_stay_out_of_the_real_env_file(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_index_job_outlives_its_test(monkeypatch):
+    """Wait for the index jobs a test started before its patches are undone
+    (see tests/job_threads.py). Asking for `monkeypatch` makes this tear down
+    first, while the test's own database path and indexers still apply. A
+    job still running after a minute is a hung test, reported as such."""
+    from tests.job_threads import drain_index_jobs
+
+    yield
+    stuck = drain_index_jobs(timeout=60.0)
+    if stuck:
+        pytest.fail(f"index job threads still running after the test: {stuck}")
+
+
+@pytest.fixture(autouse=True)
 def _failed_sign_ins_are_not_shared_between_tests():
     """Every TestClient call comes from one address; one test's wrong
     passwords must not spend the next test's failed sign-in budget."""
@@ -99,3 +113,15 @@ def _model_listings_are_not_shared_between_tests():
     model_catalog.clear_cache()
     yield
     model_catalog.clear_cache()
+
+
+@pytest.fixture(autouse=True)
+def _review_badge_counts_are_not_shared_between_tests():
+    """The review badge summary is cached process-wide for 30 seconds
+    (services/governance.py), so a test that read it would otherwise hand its
+    count to the next test in the same worker."""
+    from services import governance
+
+    governance.invalidate_review_summary()
+    yield
+    governance.invalidate_review_summary()
