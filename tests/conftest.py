@@ -54,6 +54,10 @@ os.environ["ENABLE_RERANKER"] = "false"
 # tests (tests/test_trust_no_one.py) set it both ways.
 os.environ["TRUST_NO_ONE"] = "true"
 
+# PRA models are off by default; the PRA tests are about them. The switch's
+# own tests (tests/test_pra_switch.py) turn it off.
+os.environ["ENABLE_PRA"] = "true"
+
 
 import pytest  # noqa: E402
 

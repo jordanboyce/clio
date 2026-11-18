@@ -81,6 +81,10 @@ class IndexerManager:
                         setattr(settings, key, db_config[key])
                     except Exception:
                         pass
+            if "enable_pra" in db_config:
+                from services.mcp_server import sync_pra_tools
+
+                sync_pra_tools()  # a choice saved in Settings outlives a restart
         except Exception as e:
             logger.debug(f"Could not apply DB config on startup: {e}")
 

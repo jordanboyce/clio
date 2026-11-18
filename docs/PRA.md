@@ -16,6 +16,17 @@ Clio does not quantify a model on its own: probabilities, frequencies and cut
 sets are the ones the model carries. What a reader cannot represent is listed
 as a warning on the model's first page, never dropped silently.
 
+## Turning it on
+
+PRA models are off unless an administrator turns them on: Settings, Features,
+**PRA models**, or `ENABLE_PRA=true`. Off, nobody sees them. A SAPHIRE or
+Open-PSA file indexes as the plain text it is (a zip export is refused), no
+model is built, `/api/pra` answers 404, the `pra_*` MCP tools are not listed
+and the server instructions do not mention them, and the app offers no model
+viewer. Switching it on or off takes effect at once, without a restart. A
+file added while it was off becomes a model only when it is indexed again
+(re-add it, or re-index the collection).
+
 ## Which tools
 
 | Tool | How to bring the model | Status |

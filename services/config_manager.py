@@ -49,7 +49,7 @@ VALID_CONFIG_FIELDS = {
     "aup_required", "aup_version", "aup_text",
     # The rest of what the footer reports (Settings → Features), so every
     # feature shown there can be changed without editing the environment.
-    "enable_reranker", "extract_figures", "enable_transcription", "whisper_model",
+    "enable_reranker", "extract_figures", "enable_transcription", "whisper_model", "enable_pra",
     "research_lookup_enabled", "research_contact_email",
     "link_indexing_enabled", "git_allowed_hosts",
     # Classification markings (Admin → Policy)
@@ -64,6 +64,7 @@ DATABASE_ONLY_FIELDS = {"data_classifications"}
 # .env and stop the next start.
 BOOLEAN_CONFIG_FIELDS = {
     "extract_figures", "enable_transcription", "research_lookup_enabled", "link_indexing_enabled",
+    "enable_pra",
 }
 # Whisper models by name. WHISPER_MODEL may also be a folder, but only from the
 # environment: a path typed in a browser would probe the server's disk.
@@ -148,6 +149,7 @@ class ConfigManager:
             "llm_schema_inference_threshold": settings.llm_schema_inference_threshold,
             # UI feature flags
             "enable_chat_tab": settings.enable_chat_tab,
+            "enable_pra": settings.enable_pra,
             # Content governance
             "trust_no_one": settings.trust_no_one,
             "content_policy_action": settings.content_policy_action,
@@ -405,6 +407,11 @@ class ConfigManager:
                 indexer_manager.reload_document_extractor()
             except Exception as e:
                 logger.warning(f"Failed to reload document extractor after OCR settings change: {e}")
+
+        if "enable_pra" in updates:
+            from services.mcp_server import sync_pra_tools
+
+            sync_pra_tools()  # the pra_* tools appear or go without a restart
 
         if embedding_settings_changed:
             try:

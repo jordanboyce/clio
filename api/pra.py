@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Literal, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from api.deps import get_indexer
 from services import governance
@@ -27,7 +27,15 @@ from services.pra.model import PraModel
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/pra", tags=["pra"])
+def _pra_on() -> None:
+    """With PRA models off (ENABLE_PRA) these routes are not there."""
+    from config import settings
+
+    if not settings.enable_pra:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+router = APIRouter(prefix="/api/pra", tags=["pra"], dependencies=[Depends(_pra_on)])
 
 MAX_LIMIT = 1000
 MAX_DEPTH = 10

@@ -453,7 +453,7 @@ def test_mcp_pra_tools_are_read_only_and_short():
     for name in ("pra_models", "pra_fault_tree", "pra_event_tree", "pra_cut_sets", "pra_importance", "pra_event"):
         assert tools[name].annotations.readOnlyHint is True
         assert len(tools[name].description) < 400
-    assert "pra_models" in mcp._SERVER_INSTRUCTIONS
+    assert "pra_models" in mcp._clio_mcp.instructions
 
 
 # Fixtures shared with the private-collections tests.

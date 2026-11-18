@@ -58,7 +58,7 @@ docker run -d --name "$NAME" \
     --tmpfs /tmp:size=512m,mode=1777 \
     -v "$VOLUME:/app/data" \
     -e PYTHONDONTWRITEBYTECODE=1 -e HOME=/tmp \
-    -e HF_HUB_OFFLINE=1 \
+    -e HF_HUB_OFFLINE=1 -e ENABLE_PRA=true \
     --network none \
     "$IMAGE" >/dev/null
 

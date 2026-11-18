@@ -1,3 +1,4 @@
+import { praOn } from '../utils/praFormat'
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 
@@ -32,7 +33,7 @@ export const useUiStore = defineStore('ui', () => {
   // current tab, which keeps its state underneath.
   const praViewer = ref(null)
   function openPra({ documentId, collectionId = 'default', filename = '', focus = null }) {
-    if (!documentId) return
+    if (!documentId || !praOn.value) return  // PRA models are off on this server
     praViewer.value = { documentId, collectionId, filename, focus, openedAt: Date.now() }
   }
   function closePra() {

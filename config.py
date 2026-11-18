@@ -842,6 +842,13 @@ class Settings(BaseSettings):
     bundle_max_members: int = 100_000
     bundle_max_uncompressed_mb: int = 51_200
     bundle_max_manifest_mb: int = 64
+    # PRA models (docs/PRA.md): a niche, so off unless someone turns it on.
+    # Off, nobody sees them: a SAPHIRE or Open-PSA file indexes as the plain
+    # text it is (a zip export is refused), no model is built, /api/pra
+    # answers 404, the pra_* MCP tools are not listed and the app shows no
+    # model viewer. A file added while it was off is read as a model only
+    # after it is turned on and the file is indexed again.
+    enable_pra: bool = False
     # PRA models (Open-PSA MEF, SAPHIRE MAR-D; docs/PRA.md): the most one
     # model may hold, as file size in MB (a zip export: its files unpacked,
     # together) and as elements (XML elements of an MEF file, lines of the

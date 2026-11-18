@@ -1380,7 +1380,7 @@ import WorkspaceNav from './components/WorkspaceNav.vue'
 import AppRibbon from './components/AppRibbon.vue'
 import RibbonCustomizeDialog from './components/RibbonCustomizeDialog.vue'
 import { RIBBON_ITEMS, resolveTab, ribbonItems, visibleItems } from './utils/ribbon.js'
-import { parsePraHref } from './utils/praFormat'
+import { parsePraHref, praOn, setPraEnabled } from './utils/praFormat'
 import { useLayoutStore } from './stores/layoutStore'
 import ReviewBell from './components/ReviewBell.vue'
 import FeatureStatus from './components/FeatureStatus.vue'
@@ -2494,6 +2494,8 @@ onMounted(async () => {
   try {
     const cfgResp = await http.get('/api/config')
     chatTabEnabled.value = cfgResp.data.enable_chat_tab ?? true
+    setPraEnabled(cfgResp.data.enable_pra ?? false)
+    if (!praOn.value) ui.closePra()  // a ?pra= link opened before this was known
     if (!chatTabEnabled.value) showOnboarding.value = false
     if (!chatTabEnabled.value && activeTab.value === 'chat') {
       activeTab.value = 'search'

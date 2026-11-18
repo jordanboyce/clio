@@ -646,6 +646,13 @@ class DocumentExtractor:
             self._scan_policy(result, file_path)
             return result
 
+        if file_ext in self.PRA_EXTENSIONS:
+            # A MAR-D or Open-PSA file while PRA models are off: the text it is.
+            result = ExtractionResult(text_pages(file_path), method="text")
+            result.injection_warnings = self._scan_injection(result, file_path)
+            self._scan_policy(result, file_path)
+            return result
+
         if file_ext in AUDIO_EXTENSIONS:
             result = self._extract_audio(file_path)
             self._scan_policy(result, file_path)
@@ -1976,6 +1983,13 @@ def is_supported_filename(name: Union[str, Path]) -> bool:
     return custom_types.lookup(path.name) is not None
 
 
+def pra_enabled() -> bool:
+    """Whether PRA models are on (ENABLE_PRA). Off, PRA files are plain files."""
+    from config import settings
+
+    return bool(getattr(settings, "enable_pra", False))
+
+
 def is_pra_document(path: Union[str, Path]) -> bool:
     """Whether a file goes to the PRA reader: a MAR-D/MEF name, or content that says so.
 
@@ -1985,6 +1999,8 @@ def is_pra_document(path: Union[str, Path]) -> bool:
     .xml, .sql and .zip do only when their content is a PRA model, and are
     otherwise what they were.
     """
+    if not pra_enabled():
+        return False
     path = Path(str(path))
     ext = path.suffix.lower()
     if ext in pra_readers.NAMED_EXTENSIONS:
@@ -2001,7 +2017,8 @@ def is_supported_file(path: Union[str, Path]) -> bool:
     path = Path(str(path))
     if is_supported_filename(path.name):
         return True
-    return path.suffix.lower() in pra_readers.SNIFFED_EXTENSIONS and pra_readers.is_pra_file(path)
+    return (pra_enabled() and path.suffix.lower() in pra_readers.SNIFFED_EXTENSIONS
+            and pra_readers.is_pra_file(path))
 
 
 def is_supported_upload(filename: str, fileobj) -> bool:
@@ -2009,4 +2026,5 @@ def is_supported_upload(filename: str, fileobj) -> bool:
     if is_supported_filename(filename):
         return True
     ext = Path(str(filename)).suffix.lower()
-    return ext in pra_readers.SNIFFED_EXTENSIONS and pra_readers.is_pra_upload(filename, fileobj)
+    return (pra_enabled() and ext in pra_readers.SNIFFED_EXTENSIONS
+            and pra_readers.is_pra_upload(filename, fileobj))

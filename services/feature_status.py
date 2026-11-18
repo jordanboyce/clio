@@ -237,7 +237,17 @@ def _pii() -> Dict[str, Any]:
                     "Build the image with WITH_PII=1 for full detection.")
 
 
-_CHECKS = (_semantic, _reranker, _ocr, _transcription, _figures, _ai, _research, _links, _git, _mcp, _pii)
+def _pra() -> Dict[str, Any]:
+    label = "PRA models"
+    if not settings.enable_pra:
+        return _feature("pra", label, OFF,
+                        "Off. SAPHIRE and Open-PSA files are indexed as plain text, with no model viewer.",
+                        "Turn it on in Settings, Features, then index those files again.")
+    return _feature("pra", label, ON,
+                    "SAPHIRE and Open-PSA models are read as fault trees, event trees and cut sets.")
+
+
+_CHECKS = (_semantic, _reranker, _ocr, _transcription, _figures, _ai, _research, _links, _git, _mcp, _pii, _pra)
 
 
 def feature_status() -> List[Dict[str, Any]]:

@@ -4,10 +4,21 @@
 // probability, frequency and Birnbaum value goes through sci(); ratios that
 // read as "times" (RAW, RRW) stay plain until they grow large.
 
+import { ref } from 'vue'
+
 const EM_DASH = '—'
 
+// Whether PRA models are on for this server (ENABLE_PRA, from /api/config).
+// Off, nobody sees them: no "open the model" anywhere and no viewer. A ref,
+// so everything drawn before the config arrives follows it.
+export const praOn = ref(true)
+
+export function setPraEnabled(on) {
+  praOn.value = Boolean(on)
+}
+
 export function isPraDoc(doc) {
-  return String(doc?.source_format || '').toLowerCase().startsWith('pra-')
+  return praOn.value && String(doc?.source_format || '').toLowerCase().startsWith('pra-')
 }
 
 // 1.57e-5 → "1.57E-5". Null and non-numbers are "—": a missing value is

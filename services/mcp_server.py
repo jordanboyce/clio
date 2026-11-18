@@ -207,10 +207,7 @@ _SERVER_INSTRUCTIONS = (
     "search_collection for one quick lookup, find_in_documents for exact strings, "
     "and get_document_context to read the surrounding text before quoting. For "
     "counts, sums, filters, or rankings over CSV/XLSX data use list_tables and the "
-    "table tools, never passage search. For PRA models (SAPHIRE or Open-PSA fault "
-    "and event trees) start with pra_models, then pra_fault_tree, pra_event_tree, "
-    "pra_cut_sets, pra_importance and pra_event; their numbers are a screening estimate from the "
-    "cut sets and the PRA tool's own quantification governs. "
+    "table tools, never passage search. "
     "Cite filename and page from the results "
     "and say what the sources do not establish. Responses carry a corpus_version "
     "per collection; if it changes between calls, evidence fetched earlier may be "
@@ -229,6 +226,14 @@ if _ASK_AVAILABLE:
         "returns the answer with numbered sources; depth=\"deep\" for multi-part questions "
         "(depth=\"research\" is the old spelling and still works)."
     )
+
+# Said only while PRA models are on (ENABLE_PRA); see sync_pra_tools.
+_PRA_INSTRUCTIONS = (
+    " For PRA models (SAPHIRE or Open-PSA fault and event trees) start with pra_models, "
+    "then pra_fault_tree, pra_event_tree, pra_cut_sets, pra_importance and pra_event; their "
+    "numbers are a screening estimate from the cut sets and the PRA tool's own quantification "
+    "governs."
+)
 
 _clio_mcp = FastMCP(
     "Clio",
@@ -3331,6 +3336,32 @@ def pra_event(document_id: str, name: str, collection_id: str | None = None) -> 
 
     return _pra_payload("pra_event", collection_id, document_id,
                         lambda _doc, model: pra_queries.event_view(model, name))
+
+
+PRA_TOOLS = ("pra_models", "pra_fault_tree", "pra_event_tree", "pra_cut_sets", "pra_importance", "pra_event")
+_pra_tool_objects = {name: _clio_mcp._tool_manager.get_tool(name) for name in PRA_TOOLS}
+_BASE_INSTRUCTIONS = _clio_mcp._mcp_server.instructions or ""
+
+
+def sync_pra_tools() -> None:
+    """List the pra_* tools and say how to use them only while PRA models are on.
+
+    Run at import and whenever ENABLE_PRA changes (services/config_manager),
+    so turning it on or off needs no restart. With it off, a client sees
+    neither the tools nor a word about them.
+    """
+    manager = _clio_mcp._tool_manager
+    on = bool(getattr(settings, "enable_pra", False))
+    for name, tool in _pra_tool_objects.items():
+        listed = manager.get_tool(name) is not None
+        if on and not listed and tool is not None:
+            manager._tools[name] = tool
+        elif not on and listed:
+            _clio_mcp.remove_tool(name)
+    _clio_mcp._mcp_server.instructions = _BASE_INSTRUCTIONS + (_PRA_INSTRUCTIONS if on else "")
+
+
+sync_pra_tools()
 
 
 # ---------------------------------------------------------------------------
