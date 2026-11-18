@@ -764,6 +764,28 @@ async def require_auth(request, call_next):
         headers={"WWW-Authenticate": www_authenticate},
     )
 
+async def _refuse_if_suspended(request, identity: str):
+    from services import governance
+
+    try:
+        suspended = await asyncio.to_thread(governance.is_suspended, identity)
+    except Exception:  # noqa: BLE001 - fail closed: an unknown state is not a pass
+        logger.exception("Could not check whether %s is suspended", identity)
+        return JSONResponse(
+            {"detail": "Your account could not be checked just now. Try again in a moment.",
+             "code": "account_check_failed"},
+            status_code=503, headers={"Retry-After": "5"},
+        )
+    if not suspended:
+        return None
+    logger.info("Refused %s %s: %s is suspended", request.method, request.url.path, identity)
+    return JSONResponse(
+        {"detail": "This account is suspended. Ask an administrator to reinstate it.",
+         "code": "account_suspended"},
+        status_code=403,
+    )
+
+
 async def _call_with_user_context(request, call_next):
     """Bind the verified identity and collection scope to this request.
 
@@ -778,6 +800,13 @@ async def _call_with_user_context(request, call_next):
         reset_request_user,
     )
     identity = getattr(request.state, "auth_identity", None)
+    # A suspended identity is refused here, where every verified credential
+    # (IdP token, proxy header, MCP token) lands, not only by revoking its
+    # MCP tokens (services/governance.suspend_user).
+    if identity:
+        refused = await _refuse_if_suspended(request, identity)
+        if refused is not None:
+            return refused
     identity_token = set_request_identity(identity)
     user_token = set_request_user(identity) if settings.private_collections else None
     try:

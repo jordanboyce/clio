@@ -382,6 +382,14 @@ class PostgresBackend(DatabaseBackend):
                         filename TEXT
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS suspended_identities (
+                        identity TEXT PRIMARY KEY,
+                        suspended_by TEXT,
+                        suspended_at TEXT NOT NULL,
+                        reason TEXT
+                    )
+                """)
                 # Ensure default user
                 cur.execute("SELECT id FROM users WHERE id = 'default'")
                 if not cur.fetchone():
@@ -1577,6 +1585,56 @@ class PostgresBackend(DatabaseBackend):
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM blocked_hashes ORDER BY blocked_at DESC")
+                return self._fetchall_dict(cur)
+        finally:
+            self._put(conn)
+
+    # ── Suspended identities ─────────────────────────────────
+
+    def suspend_identity(self, identity: str, suspended_by: Optional[str], reason: str = "") -> Dict[str, Any]:
+        ts = utcnow().isoformat()
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO suspended_identities (identity, suspended_by, suspended_at, reason)
+                       VALUES (%s, %s, %s, %s)
+                       ON CONFLICT (identity) DO UPDATE SET
+                         suspended_by = EXCLUDED.suspended_by, suspended_at = EXCLUDED.suspended_at,
+                         reason = EXCLUDED.reason""",
+                    (identity, suspended_by, ts, reason or ""),
+                )
+            conn.commit()
+            return {"identity": identity, "suspended_by": suspended_by,
+                    "suspended_at": ts, "reason": reason or ""}
+        finally:
+            self._put(conn)
+
+    def reinstate_identity(self, identity: str) -> bool:
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM suspended_identities WHERE identity = %s", (identity,))
+                affected = cur.rowcount
+            conn.commit()
+            return affected > 0
+        finally:
+            self._put(conn)
+
+    def is_identity_suspended(self, identity: str) -> bool:
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM suspended_identities WHERE identity = %s", (identity,))
+                return cur.fetchone() is not None
+        finally:
+            self._put(conn)
+
+    def list_suspended_identities(self) -> List[Dict[str, Any]]:
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM suspended_identities ORDER BY suspended_at DESC")
                 return self._fetchall_dict(cur)
         finally:
             self._put(conn)

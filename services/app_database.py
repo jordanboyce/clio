@@ -403,6 +403,15 @@ class SQLiteBackend(DatabaseBackend):
                 )
             """)
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS suspended_identities (
+                    identity TEXT PRIMARY KEY,
+                    suspended_by TEXT,
+                    suspended_at TEXT NOT NULL,
+                    reason TEXT
+                )
+            """)
+
             # ── Migrations for existing databases ────────────
             # Add owner_id to collections if missing
             try:
@@ -1553,6 +1562,41 @@ class SQLiteBackend(DatabaseBackend):
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM blocked_hashes ORDER BY blocked_at DESC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Suspended identities ─────────────────────────────────
+
+    def suspend_identity(self, identity: str, suspended_by: Optional[str], reason: str = "") -> Dict[str, Any]:
+        timestamp = utcnow().isoformat()
+        with sqlite_connect(self.db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO suspended_identities (identity, suspended_by, suspended_at, reason)
+                   VALUES (?, ?, ?, ?)""",
+                (identity, suspended_by, timestamp, reason or ""),
+            )
+            conn.commit()
+        return {"identity": identity, "suspended_by": suspended_by,
+                "suspended_at": timestamp, "reason": reason or ""}
+
+    def reinstate_identity(self, identity: str) -> bool:
+        with sqlite_connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM suspended_identities WHERE identity = ?", (identity,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def is_identity_suspended(self, identity: str) -> bool:
+        with sqlite_connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM suspended_identities WHERE identity = ?", (identity,)
+            ).fetchone()
+            return row is not None
+
+    def list_suspended_identities(self) -> List[Dict[str, Any]]:
+        with sqlite_connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM suspended_identities ORDER BY suspended_at DESC"
             ).fetchall()
             return [dict(r) for r in rows]
 

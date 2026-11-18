@@ -629,12 +629,19 @@
         <div class="space-y-4">
           <div class="rounded-lg border border-base-300/60 bg-base-100 p-4 space-y-2">
             <div class="text-xs font-medium">Suspend an identity</div>
-            <p class="text-[11px] text-base-content/50">Revokes every MCP token they hold. Their sources stay until you remove them.</p>
+            <p class="text-[11px] text-base-content/50">They can no longer sign in, and every MCP token they hold is revoked. Their sources stay until you remove them.</p>
             <div class="flex flex-wrap gap-2">
               <input v-model="suspendEmail" type="email" class="input input-bordered input-xs flex-1 min-w-[10rem]" placeholder="person@example.com" aria-label="Identity to suspend" />
               <input v-model="suspendReason" class="input input-bordered input-xs w-32" placeholder="reason" aria-label="Reason" />
-              <button class="btn btn-xs btn-error btn-outline" :disabled="!suspendEmail.trim()" @click="suspend">Suspend</button>
+              <button class="btn btn-xs btn-error btn-outline" :disabled="!suspendEmail.trim()" @click="suspendAndList">Suspend</button>
             </div>
+            <ul v-if="suspendedUsers.length" class="space-y-0.5 max-h-40 overflow-y-auto text-xs" aria-label="Suspended identities">
+              <li v-for="s in suspendedUsers" :key="s.identity" class="flex items-center gap-2">
+                <span class="truncate flex-1" :title="s.reason || ''">{{ s.identity }}</span>
+                <span class="text-base-content/45 whitespace-nowrap">{{ formatDay(s.suspended_at) }}</span>
+                <button class="btn btn-ghost btn-xs" @click="reinstate(s.identity)">Reinstate</button>
+              </li>
+            </ul>
           </div>
           <div class="rounded-lg border border-base-300/60 bg-base-100 p-4 space-y-2">
             <div class="text-xs font-medium">Policy acknowledgements <span class="text-base-content/45 font-normal">(version {{ aupAcks.version }})</span></div>
@@ -1003,6 +1010,30 @@ const suspend = async () => {
   }
 }
 
+// Who is suspended, with a way back (E2).
+const suspendedUsers = ref([])
+
+const loadSuspended = async () => {
+  try {
+    suspendedUsers.value = (await http.get('/api/admin/users/suspended')).data.suspended || []
+  } catch { suspendedUsers.value = [] }
+}
+
+const suspendAndList = async () => {
+  await suspend()
+  await loadSuspended()
+}
+
+const reinstate = async (identity) => {
+  try {
+    await http.post(`/api/admin/users/${encodeURIComponent(identity)}/reinstate`)
+    ui.notify(`${identity} can sign in again. Their old MCP tokens stay revoked.`, 'success')
+    await Promise.all([loadSuspended(), loadAudit()])
+  } catch (err) {
+    ui.toastError(err, 'Could not reinstate that identity')
+  }
+}
+
 const loadAcks = async () => {
   try {
     aupAcks.value = (await http.get('/api/admin/aup-acknowledgements')).data
@@ -1072,7 +1103,7 @@ const loadAll = async () => {
   loading.value = true
   try {
     await Promise.all([
-      loadStats(), loadUsage(), loadReview(), loadPolicy(), loadAudit(), loadBlocked(), loadAcks(),
+      loadStats(), loadUsage(), loadReview(), loadPolicy(), loadAudit(), loadBlocked(), loadAcks(), loadSuspended(),
     ])
   } finally {
     loading.value = false

@@ -612,6 +612,45 @@ def test_admin_governance_endpoints_are_admin_only(private_client):
     assert app_db.list_audit_events(action="admin.suspend_user")[0]["target"] == USER
 
 
+def test_a_suspended_identity_cannot_sign_in_until_reinstated(private_client):
+    """E2: suspension used to revoke MCP tokens only, so the person still
+    signed in through the browser."""
+    assert private_client.get("/api/user/me", headers=_as(USER)).status_code == 200
+    assert private_client.post(f"/api/admin/users/{USER.upper()}/suspend", json={"reason": "left"},
+                               headers=_as(ADMIN)).status_code == 200
+
+    refused = private_client.get("/api/user/me", headers=_as(USER))
+    assert refused.status_code == 403
+    assert refused.json()["code"] == "account_suspended"
+    assert "suspended" in refused.json()["detail"]
+    assert private_client.get("/api/user/me", headers=_as(ADMIN)).status_code == 200
+    listed = private_client.get("/api/admin/users/suspended", headers=_as(ADMIN)).json()["suspended"]
+    assert [row["identity"] for row in listed] == [USER]
+    assert listed[0]["reason"] == "left" and listed[0]["suspended_by"] == ADMIN
+
+    assert private_client.get("/api/admin/users/suspended", headers=_as(USER)).status_code == 403
+    assert private_client.post(f"/api/admin/users/{USER}/reinstate", headers=_as(USER)).status_code == 403
+    r = private_client.post(f"/api/admin/users/{USER}/reinstate", headers=_as(ADMIN))
+    assert r.status_code == 200 and r.json()["reinstated"] is True
+    assert private_client.get("/api/user/me", headers=_as(USER)).status_code == 200
+    assert app_db.list_audit_events(action="admin.reinstate_user")[0]["target"] == USER
+    assert private_client.post(f"/api/admin/users/{USER}/reinstate", headers=_as(ADMIN)).json()["reinstated"] is False
+
+
+def test_a_suspended_identity_cannot_use_a_token_minted_later(private_client, monkeypatch):
+    """A token row that survived (or was created behind the admin's back)
+    still resolves to a suspended person, and is refused."""
+    from services.mcp_tokens import generate_token
+
+    governance.suspend_user(USER, actor=ADMIN)
+    token = generate_token(USER, "agent")["token"]
+
+    r = private_client.post("/mcp", headers={"Authorization": f"Bearer {token}"},
+                            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert r.status_code == 403
+    assert r.json()["code"] == "account_suspended"
+
+
 def test_quarantined_document_is_404_for_non_admin(private_client, policy):
     policy("quarantine")
     app_db.record_aup_acknowledgement(USER, "1")

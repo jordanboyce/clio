@@ -79,6 +79,7 @@ ACTIONS: List[str] = [
     "admin.block_hash",
     "admin.unblock_hash",
     "admin.suspend_user",
+    "admin.reinstate_user",     # a suspension lifted
     "admin.remove_document",    # admin removal (optionally with hash block)
 ]
 

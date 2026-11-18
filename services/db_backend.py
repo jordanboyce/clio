@@ -409,6 +409,26 @@ class DatabaseBackend(ABC):
     def list_blocked_hashes(self) -> List[Dict[str, Any]]:
         ...
 
+    # ── Suspended identities ─────────────────────────────────
+    # An admin's "Suspend" (services/governance.py): the identity is refused
+    # wherever it is resolved (main.py) until an admin reinstates it.
+
+    @abstractmethod
+    def suspend_identity(self, identity: str, suspended_by: Optional[str], reason: str = "") -> Dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def reinstate_identity(self, identity: str) -> bool:
+        ...
+
+    @abstractmethod
+    def is_identity_suspended(self, identity: str) -> bool:
+        ...
+
+    @abstractmethod
+    def list_suspended_identities(self) -> List[Dict[str, Any]]:
+        ...
+
     # ── Upload Jobs ──────────────────────────────────────────
 
     @abstractmethod

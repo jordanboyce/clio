@@ -581,9 +581,13 @@ recorded per identity, so this only takes effect under
 **Admin actions** (Admin tab → *Content review*)
 
 Approve a held or flagged document, remove it with or without blocking its
-hash, act on user reports, and suspend an identity — which revokes every
-MCP token it holds. Suspension leaves the person's documents in place; removal
-is a separate, reviewable decision.
+hash, act on user reports, and suspend an identity. A suspended identity is
+refused (403, `account_suspended`) on every request, however it signs in
+(identity provider, proxy header or MCP token), and every MCP token it holds
+is revoked. **Reinstate** in the same panel lets it back in; its old tokens
+stay revoked. Suspension leaves the person's documents in place; removal is a
+separate, reviewable decision. Password and open deployments have no
+identity to suspend.
 
 Decisions can be made in bulk: check rows (or *Select all shown* under the
 current filter) and **Approve selected**, **Remove & block selected** or

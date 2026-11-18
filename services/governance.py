@@ -815,8 +815,10 @@ def review_summary(*, max_age: float = _SUMMARY_TTL) -> Dict[str, Any]:
 
 
 def suspend_user(email: str, *, actor: Any = _UNSET, reason: str = "") -> Dict[str, Any]:
-    """Cut an identity off: revoke every MCP token they hold. Their documents
-    are left in place - removal is a separate, reviewable decision."""
+    """Cut an identity off: every request it makes is refused wherever the
+    identity is resolved (main.py), until an admin reinstates it, and every
+    MCP token it holds is revoked. Their documents are left in place -
+    removal is a separate, reviewable decision."""
     from services.app_database import app_db
 
     target = (email or "").strip().lower()
@@ -827,11 +829,40 @@ def suspend_user(email: str, *, actor: Any = _UNSET, reason: str = "") -> Dict[s
 
         actor = get_request_user()
 
-    result: Dict[str, Any] = {"email": target, "tokens_revoked": 0}
+    app_db.suspend_identity(target, actor, reason or "")
+    result: Dict[str, Any] = {"email": target, "suspended": True, "tokens_revoked": 0}
     result["tokens_revoked"] = app_db.revoke_all_mcp_tokens_for_user(target)
     audit.record("admin.suspend_user", actor=actor, target=target,
-                 detail={"reason": reason or None, **{k: v for k, v in result.items() if k != "email"}})
+                 detail={"reason": reason or None, "tokens_revoked": result["tokens_revoked"]})
     return result
+
+
+def reinstate_user(email: str, *, actor: Any = _UNSET) -> Dict[str, Any]:
+    """Lift a suspension. Revoked MCP tokens stay revoked; the person mints
+    new ones."""
+    from services.app_database import app_db
+
+    target = (email or "").strip().lower()
+    if not target:
+        raise ValueError("An email address is required")
+    if actor is _UNSET:
+        from middleware.user_context import get_request_user
+
+        actor = get_request_user()
+    lifted = app_db.reinstate_identity(target)
+    if lifted:
+        audit.record("admin.reinstate_user", actor=actor, target=target)
+    return {"email": target, "reinstated": lifted}
+
+
+def is_suspended(identity: Optional[str]) -> bool:
+    """Is this resolved identity suspended? None (no identity) never is."""
+    target = (identity or "").strip().lower()
+    if not target:
+        return False
+    from services.app_database import app_db
+
+    return app_db.is_identity_suspended(target)
 
 
 # ── Reporting ─────────────────────────────────────────────────────────────
