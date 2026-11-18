@@ -32,6 +32,7 @@ from api import (
     admin,
     apps,
     artifacts,
+    bootstrap,
     chat,
     collections,
     custom_file_types,
@@ -779,7 +780,7 @@ async def _call_with_user_context(request, call_next):
             reset_request_user(user_token)
         reset_request_identity(identity_token)
 
-for module in (system, documents, search, chat, artifacts, collections, custom_file_types, mcp, sharing, expertise, admin, apps, governance, research, pra):
+for module in (system, documents, search, chat, artifacts, collections, custom_file_types, mcp, sharing, expertise, admin, apps, governance, research, pra, bootstrap):
     app.include_router(module.router)
 
 

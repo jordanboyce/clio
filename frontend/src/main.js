@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import './style.css'
 import { migrateBrowserStorage } from './utils/storageMigration'
+import { startBootstrap } from './utils/http'
 
 import App from './App.vue'
 
@@ -20,5 +21,11 @@ document.documentElement.dataset.clioBuild = `${build.version}+${build.commit.sl
 const app = createApp(App)
 
 app.use(createPinia())
+
+// One request for the reads every store makes on startup (utils/bootstrap.js).
+// Sent after Pinia is active: the http client's interceptors use the ui store.
+let openingCollection = 'default'
+try { openingCollection = localStorage.getItem('clio_current_collection') || 'default' } catch { /* private mode */ }
+startBootstrap(openingCollection)
 
 app.mount('#app')

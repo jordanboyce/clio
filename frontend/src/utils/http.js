@@ -19,8 +19,38 @@ import axios from 'axios'
 // handles 429/network in ChatTab.vue directly.
 
 import { useUiStore } from '../stores/uiStore'
+import { beginBootstrap, clearBootstrap, lookupBootstrap } from './bootstrap'
 
 export const http = axios.create({ timeout: 30000 })
+
+// Startup reads come from one GET /api/bootstrap when they can (utils/bootstrap.js).
+// The adapter is the last step before the network, so interceptors, timeouts
+// and error handling all behave as for a real response.
+const networkAdapter = axios.getAdapter(axios.defaults.adapter)
+http.defaults.adapter = async (config) => {
+  if ((config.method || 'get').toLowerCase() !== 'get') {
+    clearBootstrap()
+    return networkAdapter(config)
+  }
+  if (!config.skipBootstrap) {
+    const hit = await lookupBootstrap(config.url, config.params)
+    if (hit) {
+      return { data: hit.body, status: hit.status, statusText: 'OK', headers: {}, config, request: null }
+    }
+  }
+  return networkAdapter(config)
+}
+
+/** Fetch the startup reads for the collection the app opens on. Call once, before mounting. */
+export function startBootstrap(collectionId) {
+  return beginBootstrap(() => http
+    .get('/api/bootstrap', {
+      params: collectionId ? { collection_id: collectionId } : {},
+      skipBootstrap: true,
+      quiet: true,
+    })
+    .then((r) => r.data))
+}
 
 // Deduplicate the rate-limit toast: a burst of limited requests should not
 // stack N identical toasts.

@@ -109,8 +109,9 @@ let _serverProviderIds = []
 /** Fetch which providers have a server-stored team key. Cached per page load. */
 export async function fetchServerProviderIds() {
   try {
-    const { default: axios } = await import('axios')
-    const resp = await axios.get('/api/agent/config')
+    // Through the app's client, so the startup bootstrap can answer it (utils/bootstrap.js).
+    const { default: http } = await import('./http')
+    const resp = await http.get('/api/agent/config', { quiet: true })
     _serverProviderIds = Object.entries(resp.data?.providers || {})
       .filter(([, v]) => v?.configured)
       .map(([id]) => id)
@@ -136,8 +137,9 @@ let _deploymentDefault = { configured: false }
 /** Fetch the deployment's own provider. Cached per page load. */
 export async function fetchDeploymentDefault() {
   try {
-    const { default: axios } = await import('axios')
-    const resp = await axios.get('/api/ai/deployment')
+    // Through the app's client, so the startup bootstrap can answer it (utils/bootstrap.js).
+    const { default: http } = await import('./http')
+    const resp = await http.get('/api/ai/deployment', { quiet: true })
     _deploymentDefault = resp.data?.configured ? resp.data : { configured: false }
   } catch {
     _deploymentDefault = { configured: false }

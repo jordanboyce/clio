@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const get = vi.fn()
 vi.mock('axios', () => ({ default: { get, post: vi.fn() } }))
+// The team-key and deployment lookups go through the app's http client.
+vi.mock('../http', () => ({ default: { get, post: vi.fn() } }))
 
 import {
   describeOtherJobs,

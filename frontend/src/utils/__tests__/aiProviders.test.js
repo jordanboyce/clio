@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // to be in place before those imports resolve.
 const get = vi.fn()
 vi.mock('axios', () => ({ default: { get } }))
+// The team-key and deployment lookups go through the app's http client.
+vi.mock('../http', () => ({ default: { get, post: vi.fn() } }))
 
 import {
   buildProviderHeaders,
