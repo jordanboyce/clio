@@ -822,6 +822,16 @@ class Settings(BaseSettings):
     archive_max_members: int = 10000
     archive_max_compression_ratio: int = 100
     archive_max_xml_elements: int = 5_000_000
+    # Collection bundles (.clio.zip) are checked before the import preview or
+    # the import reads anything from them: number of entries (counted from
+    # the zip's end record, before its directory is parsed), total unpacked
+    # size, the compression ratio of any entry over 1 MB
+    # (archive_max_compression_ratio above), and the size of manifest.json,
+    # the one entry read into memory. A bundle with its originals can run to
+    # gigabytes, so these sit above the document limits.
+    bundle_max_members: int = 100_000
+    bundle_max_uncompressed_mb: int = 51_200
+    bundle_max_manifest_mb: int = 64
     # PRA models (Open-PSA MEF, SAPHIRE MAR-D; docs/PRA.md): the most one
     # model may hold, as file size in MB (a zip export: its files unpacked,
     # together) and as elements (XML elements of an MEF file, lines of the

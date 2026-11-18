@@ -450,20 +450,114 @@ def export_collection(collection_id: str, include_sources: bool = False,
 # ── Import ───────────────────────────────────────────────────────────────────
 
 
+_MB = 1024 * 1024
+# An entry smaller than this cannot hurt however well it compresses (the
+# same floor as services/format_readers.check_zip_container).
+_RATIO_FLOOR_BYTES = _MB
+# Room in the zip's central directory per allowed entry: the fixed 46-byte
+# header plus a long file name and a zip64 extra field, with margin.
+_DIRECTORY_BYTES_PER_ENTRY = 512
+
+
+def _bundle_limits() -> Dict[str, int]:
+    return {
+        "members": max(0, int(settings.bundle_max_members or 0)),
+        "total": max(0, int(settings.bundle_max_uncompressed_mb or 0)) * _MB,
+        "ratio": max(0, int(settings.archive_max_compression_ratio or 0)),
+        "manifest": max(0, int(settings.bundle_max_manifest_mb or 0)) * _MB,
+    }
+
+
+def _check_directory_size(zip_path: Path, limits: Dict[str, int]) -> None:
+    """Refuse a bundle with too many entries before zipfile parses its directory.
+
+    ``zipfile.ZipFile`` reads the whole central directory and builds an
+    object per entry, so a forged end record can cost memory before any
+    entry is looked at. The end record says how many entries there are and
+    how large the directory is; both are checked first. ``_EndRecData`` is
+    the standard library's own reader of that record (zip64 included).
+    """
+    if not limits["members"]:
+        return
+    with open(zip_path, "rb") as fp:
+        try:
+            end = zipfile._EndRecData(fp)
+        except OSError:
+            end = None
+    if not end:
+        raise BundleError("That file is not a Clio collection export (.clio.zip).")
+    entries, directory_bytes = end[zipfile._ECD_ENTRIES_TOTAL], end[zipfile._ECD_SIZE]
+    if entries > limits["members"] or directory_bytes > limits["members"] * _DIRECTORY_BYTES_PER_ENTRY:
+        raise BundleError(
+            f"The bundle holds more than {limits['members']:,} entries, more than this server "
+            f"imports (BUNDLE_MAX_MEMBERS)."
+        )
+
+
+def _check_entry_sizes(infos: List[zipfile.ZipInfo], limits: Dict[str, int]) -> None:
+    """Declared sizes only (``zipfile`` and ``_copy_member`` hold every entry to its own)."""
+    total = 0
+    for info in infos:
+        total += info.file_size
+        if limits["total"] and total > limits["total"]:
+            raise BundleError(
+                f"The bundle unpacks to more than {limits['total'] // _MB:,} MB, more than this "
+                f"server imports (BUNDLE_MAX_UNCOMPRESSED_MB)."
+            )
+        ratio = info.file_size / max(info.compress_size, 1)
+        if limits["ratio"] and info.file_size >= _RATIO_FLOOR_BYTES and ratio > limits["ratio"]:
+            raise BundleError(
+                f"{info.filename} in the bundle is compressed {ratio:.0f} to 1, which only a file "
+                f"built to exhaust memory does; this server refuses above {limits['ratio']} to 1 "
+                f"(ARCHIVE_MAX_COMPRESSION_RATIO)."
+            )
+
+
+def _read_manifest_bytes(zf: zipfile.ZipFile, limit: int) -> bytes:
+    """manifest.json, never more of it than the limit, whatever its entry declares."""
+    info = zf.getinfo(_MANIFEST)
+    too_big = BundleError(
+        f"The bundle's manifest.json is larger than {limit // _MB} MB, more than this server "
+        f"reads (BUNDLE_MAX_MANIFEST_MB)."
+    )
+    if limit and info.file_size > limit:
+        raise too_big
+    try:
+        with zf.open(info) as member:
+            data = member.read(limit + 1) if limit else member.read()
+    except (zipfile.BadZipFile, zlib.error, EOFError) as e:
+        raise BundleError(f"The bundle is damaged: manifest.json cannot be read ({e}).") from e
+    if limit and len(data) > limit:
+        raise too_big
+    return data
+
+
 def read_manifest(zip_path: Path) -> Dict[str, Any]:
-    """Validate a bundle's shape and return its manifest. Raises BundleError."""
+    """Validate a bundle's shape and return its manifest. Raises BundleError.
+
+    The preview and the import both start here, so the bundle limits
+    (BUNDLE_MAX_*, ARCHIVE_MAX_COMPRESSION_RATIO) are checked before
+    anything is read from the bundle or unpacked.
+    """
     if not zipfile.is_zipfile(zip_path):
         raise BundleError("That file is not a Clio collection export (.clio.zip).")
+    limits = _bundle_limits()
+    _check_directory_size(zip_path, limits)
     with zipfile.ZipFile(zip_path) as zf:
-        names = zf.namelist()
+        infos = zf.infolist()
+        names = [info.filename for info in infos]
         if _MANIFEST not in names or _METADATA not in names:
             raise BundleError("That zip is not a Clio collection export: manifest.json or metadata.db is missing.")
         for name in names:
             _check_member(name)
-        try:
-            manifest = json.loads(zf.read(_MANIFEST))
-        except ValueError:
-            raise BundleError("The bundle's manifest.json is not valid JSON.")
+        _check_entry_sizes(infos, limits)
+        raw = _read_manifest_bytes(zf, limits["manifest"])
+    try:
+        manifest = json.loads(raw)
+    except ValueError:
+        raise BundleError("The bundle's manifest.json is not valid JSON.")
+    if not isinstance(manifest, dict):
+        raise BundleError("That zip is not a Clio collection export.")
     if manifest.get("format") != BUNDLE_FORMAT:
         raise BundleError("That zip is not a Clio collection export.")
     if int(manifest.get("version") or 0) > BUNDLE_VERSION:
