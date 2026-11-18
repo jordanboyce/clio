@@ -642,7 +642,7 @@ async def list_embedding_providers():
     Keys themselves are never returned.
     """
     from services.embedding_providers import EMBEDDING_PROVIDERS, CLOUD_EMBEDDING_PROVIDERS
-    from services.embedder import embedding_signature
+    from services.embedder import embedding_signature, retrieval_prompts
 
     current = settings.embedding_provider
     out = []
@@ -654,6 +654,19 @@ async def list_embedding_providers():
         entry["key_configured"] = key_source is not None
         entry["key_source"] = key_source
         entry["blocked_offline"] = bool(settings.offline_mode and p["id"] in CLOUD_EMBEDDING_PROVIDERS)
+        # Where the text goes: "hosted" sends it to a company; the others
+        # stay on this server or on a machine the operator runs.
+        entry["hosted"] = p["id"] in CLOUD_EMBEDDING_PROVIDERS
+        models = []
+        for m in p.get("models") or []:
+            m = dict(m)
+            m["recommended"] = m["id"] == p.get("default_model")
+            if p["id"] == "local":
+                # The built-in runtimes add each model's query/passage
+                # prefixes themselves (services.embedder.retrieval_prompts).
+                m["adds_prefixes"] = any(retrieval_prompts(m["id"]))
+            models.append(m)
+        entry["models"] = models
         out.append(entry)
 
     return {
@@ -664,6 +677,59 @@ async def list_embedding_providers():
             "offline_mode": settings.offline_mode,
         },
     }
+
+
+def _index_totals() -> dict:
+    """Collections, sources and passages across every collection on disk.
+
+    Read straight from each collection's metadata.db (SQL counts, no index
+    load), so it stays cheap however many collections there are.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    from services.sqlite_utils import sqlite_connect
+
+    totals = {"collections": 0, "sources": 0, "passages": 0}
+    root = Path(settings.data_dir) / "collections"
+    if not root.is_dir():
+        return totals
+    for db in sorted(root.glob("*/indexes/metadata.db")):
+        try:
+            with closing(sqlite_connect(db)) as conn:
+                passages = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+                try:
+                    sources = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+                except sqlite3.OperationalError:
+                    sources = conn.execute("SELECT COUNT(DISTINCT document_id) FROM chunks").fetchone()[0]
+        except Exception as e:
+            logger.warning(f"Could not count {db}: {e}")
+            continue
+        if passages:
+            totals["collections"] += 1
+            totals["sources"] += int(sources or 0)
+            totals["passages"] += int(passages)
+    return totals
+
+
+@router.get(
+    "/api/embedding/switch-cost",
+    summary="What changing the embedding model would mean re-indexing",
+    tags=["config"],
+)
+async def embedding_switch_cost():
+    """
+    How much is indexed now: `collections` (those with anything in them),
+    `sources` and `passages` (chunks), across the whole deployment. Every one
+    of them is embedded again after a model change, so Settings can state the
+    cost before the switch rather than after. Counts only, never names.
+    Admin-gated like the setting itself, since it spans everyone's
+    collections.
+    """
+    import asyncio
+
+    require_admin("see what an embedding change would cost")
+    return await asyncio.to_thread(_index_totals)
 
 
 @router.post(

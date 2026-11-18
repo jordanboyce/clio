@@ -52,6 +52,7 @@ from models.schemas import (
 )
 
 from fastapi import APIRouter
+from config import RETIRED_AI_PROVIDERS
 from api.deps import (
     ALL_AI_PROVIDERS,
     CLOUD_AI_PROVIDERS,
@@ -1519,6 +1520,8 @@ def validate_api_key(  # sync: provider round-trip runs in the threadpool
     """
     x_ai_provider = x_ai_provider or default_ai_provider()
     try:
+        if x_ai_provider in RETIRED_AI_PROVIDERS:
+            return {"valid": False, "error": RETIRED_AI_PROVIDERS[x_ai_provider]}
         if x_ai_provider not in ALL_AI_PROVIDERS:
             return {
                 "valid": False,
@@ -1619,9 +1622,10 @@ def list_provider_models(  # sync: provider round-trip runs in the threadpool
 
     x_ai_provider = x_ai_provider or default_ai_provider()
     if x_ai_provider not in ALL_AI_PROVIDERS:
+        error = RETIRED_AI_PROVIDERS.get(x_ai_provider) or f"Invalid provider: {x_ai_provider}"
         return {"models": [], "records": [], "defaults": {"model": None, "fast": None, "vision": None},
                 "suggested": {"embedding": None, "vision": None},
-                "listed": False, "error": f"Invalid provider: {x_ai_provider}"}
+                "listed": False, "error": error}
 
     api_key = x_ai_key
     # A team key is listed against its own provider's endpoint only, never a
@@ -1677,12 +1681,21 @@ async def get_deployment_ai_default():
     provider = (settings.ai_provider or "").strip()
     if not provider:
         return {"configured": False, "offline_mode": settings.offline_mode}
+    if provider in RETIRED_AI_PROVIDERS:
+        # A provider that no longer exists is not one anybody can use.
+        return {"configured": False, "offline_mode": settings.offline_mode,
+                "error": RETIRED_AI_PROVIDERS[provider]}
+
+    from services.data_controls import model_is_external
 
     base_url = settings.ai_base_url or (
         settings.ollama_base_url if provider == "ollama" else ""
     )
     return {
         "configured": True,
+        # Whether questions sent to it leave this network: the UI files it
+        # under "on your network" or "hosted" by this, not by its name.
+        "external": model_is_external(provider, base_url),
         "provider": provider,
         "label": settings.ai_provider_label or _DEFAULT_PROVIDER_LABELS.get(provider, provider),
         "model": settings.ai_model,
@@ -1702,7 +1715,6 @@ _DEFAULT_PROVIDER_LABELS = {
     "openai": "OpenAI",
     "google": "Google Gemini",
     "grok": "Grok (xAI)",
-    "github": "GitHub Models",
     "openrouter": "OpenRouter",
     "ollama_cloud": "Ollama Cloud",
 }

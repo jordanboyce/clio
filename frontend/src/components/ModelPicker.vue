@@ -21,7 +21,7 @@
         :title="pillTitle"
         :aria-label="`${pillTitle}. Click to change.`"
         aria-haspopup="menu"
-        @click="loadModels"
+        @focus="loadModels"
       >
         <Feather :size="11" class="text-primary flex-shrink-0" aria-hidden="true" />
         <span class="text-xs max-w-52 truncate">
@@ -32,7 +32,7 @@
 
       <div tabindex="0" class="dropdown-content z-[60] mt-1 bg-base-100 border border-base-300 rounded-box shadow-lg w-80 p-3 space-y-3">
         <div>
-          <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50 mb-1.5">AI provider</div>
+          <div class="text-xs font-semibold text-base-content/70 mb-1.5">AI provider</div>
           <ul class="space-y-0.5" role="radiogroup" aria-label="AI provider">
             <li v-for="pid in configured" :key="pid">
               <button
@@ -45,15 +45,14 @@
                 <Check v-if="pid === activeId" :size="13" class="text-primary flex-shrink-0" aria-hidden="true" />
                 <span v-else class="w-[13px] flex-shrink-0" aria-hidden="true"></span>
                 <span class="flex-1 truncate">{{ getProviderDisplayName(pid) }}</span>
-                <span v-if="teamIds.includes(pid)" class="badge badge-success badge-xs">Team key</span>
-                <span class="badge badge-ghost badge-xs">{{ isLocalProvider(pid) ? 'local' : 'cloud' }}</span>
+                <span class="text-xs font-normal text-base-content/60">{{ teamIds.includes(pid) ? 'team key · ' : '' }}{{ isLocalProvider(pid) ? 'your network' : 'hosted' }}</span>
               </button>
             </li>
           </ul>
         </div>
 
         <div v-if="activeId">
-          <label class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50 mb-1.5 block" for="model-picker-model">Model</label>
+          <label class="text-xs font-semibold text-base-content/70 mb-1.5 block" for="model-picker-model">Model for answers</label>
           <select
             id="model-picker-model"
             class="select select-bordered select-sm w-full"
@@ -63,23 +62,24 @@
           >
             <option value="">{{ deployment ? 'Chosen by your administrator' : 'Provider default' }}</option>
             <option v-if="missingModel" :value="missingModel">{{ missingModel }}</option>
-            <optgroup v-if="recommended.length" label="Recommended">
-              <option v-for="m in recommended" :key="m.id" :value="m.id">{{ m.display }}</option>
+            <optgroup v-if="groups.recommended.length" label="Recommended">
+              <option v-for="m in groups.recommended" :key="m.id" :value="m.id">{{ m.display }}</option>
             </optgroup>
-            <optgroup v-if="others.length" label="All models">
-              <option v-for="m in others" :key="m.id" :value="m.id">{{ m.display }}</option>
+            <optgroup v-if="groups.fits.length" :label="groups.recommended.length ? 'Other chat models' : 'Chat models'">
+              <option v-for="m in groups.fits" :key="m.id" :value="m.id">{{ m.display }}</option>
+            </optgroup>
+            <optgroup v-if="groups.unknown.length" label="Not known to answer">
+              <option v-for="m in groups.unknown" :key="m.id" :value="m.id">{{ m.display }}</option>
             </optgroup>
           </select>
-          <p v-if="loadingModels" class="text-[11px] text-base-content/45 mt-1">Loading models…</p>
-          <div v-else-if="currentRecord?.badges.length" class="flex gap-1 mt-1.5" data-testid="model-badges">
-            <span v-for="b in currentRecord.badges" :key="b" class="badge badge-ghost badge-xs">{{ BADGE_TEXT[b] }}</span>
-          </div>
+          <p v-if="loadingModels" class="text-xs text-base-content/60 mt-1">Loading models…</p>
+          <p v-else-if="abilities.length" class="text-xs text-base-content/70 mt-1.5" data-testid="model-badges">{{ abilities.join(' · ') }}</p>
         </div>
 
-        <p class="text-[11px] leading-snug text-base-content/55">
+        <p class="text-xs leading-snug text-base-content/60">
           Used for Ask, Find answers and Reports.
           <template v-if="activeId && !isLocalProvider(activeId)">
-            Cloud providers receive the text they process.
+            Hosted providers receive the text they process.
           </template>
         </p>
         <button class="btn btn-xs btn-ghost w-full justify-start gap-1.5" @click="$emit('connect')">
@@ -100,6 +100,8 @@ import {
   getServerProviderIds,
   isDeploymentProvider,
   isLocalProvider,
+  modelAbilities,
+  modelsForJob,
   setActiveProviderLS,
   setProviderModel,
 } from '../utils/aiProviders'
@@ -122,10 +124,11 @@ const pillTitle = computed(() => `AI: ${name.value}${modelLabel.value ? ', ' + m
 const models = ref([])
 const loadingModels = ref(false)
 let seq = 0
-const recommended = computed(() => models.value.filter(m => m.recommended))
-const others = computed(() => models.value.filter(m => !m.recommended))
-const BADGE_TEXT = { vision: 'Reads images', tools: 'Uses tools' }
+// Only models that can write answers: an embedding or speech model a key
+// also lists is not offered here (the server's capability records say which).
+const groups = computed(() => modelsForJob(models.value, 'answers'))
 const currentRecord = computed(() => models.value.find(m => m.id === currentModel.value) || null)
+const abilities = computed(() => modelAbilities(currentRecord.value))
 const missingModel = computed(() => {
   const cur = currentModel.value
   return cur && !models.value.some(m => m.id === cur) ? cur : ''

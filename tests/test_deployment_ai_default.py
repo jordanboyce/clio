@@ -243,6 +243,49 @@ def test_unlabelled_private_endpoint_gets_a_neutral_name(client, ai_settings):
     assert client.get("/api/ai/deployment").json()["label"] == "Private endpoint"
 
 
+def test_deployment_endpoint_says_whether_questions_leave_the_network(client, ai_settings):
+    ai_settings(ai_provider="openai_compatible", ai_base_url="http://10.0.4.7:8000/v1")
+    assert client.get("/api/ai/deployment").json()["external"] is False
+
+    # A dotted name counts as outside unless the operator lists it
+    # (services.data_controls.host_is_internal), so the UI never calls a
+    # public endpoint private.
+    ai_settings(ai_provider="openai_compatible", ai_base_url="http://vllm.internal:8000/v1")
+    assert client.get("/api/ai/deployment").json()["external"] is True
+
+    ai_settings(ai_provider="anthropic", ai_base_url="")
+    assert client.get("/api/ai/deployment").json()["external"] is True
+
+
+# ── a retired provider (GitHub Models, 2026-07-30) ────────────────────────
+
+
+def test_a_retired_deployment_provider_is_not_offered(client, ai_settings):
+    ai_settings(ai_provider="github")
+
+    body = client.get("/api/ai/deployment").json()
+
+    assert body["configured"] is False
+    assert "retired" in body["error"]
+
+
+def test_a_retired_provider_says_so_instead_of_calling_a_dead_endpoint(client):
+    with pytest.raises(ValueError, match="retired"):
+        create_provider("github", api_key="ghp_old")
+
+    headers = {"X-AI-Provider": "github", "X-AI-Key": "ghp_old"}
+    checked = client.post("/api/ai/validate-key", headers=headers).json()
+    assert checked["valid"] is False and "retired" in checked["error"]
+
+    listed = client.post("/api/ai/models", headers=headers).json()
+    assert listed["records"] == [] and "retired" in listed["error"]
+
+
+def test_a_retired_provider_cannot_be_saved(client):
+    result = config_manager.update_config({"ai_provider": "github"})
+    assert result["success"] is False
+
+
 # ── runtime configuration (survives a container recreated without .env) ────
 
 

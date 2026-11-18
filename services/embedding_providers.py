@@ -24,6 +24,13 @@ Provider `kind` decides the transport:
 when no embedding-specific key is set, so someone who already added a Google,
 OpenAI or OpenRouter key for chat doesn't have to paste it twice.
 
+Each model may carry `max_input_tokens`: the most tokens one input can
+hold, from the model card or API docs. Longer passages are cut off (local
+models) or rejected (hosted ones), so Settings warns when a collection's
+chunk size is past it. Left out where not known for sure.
+
+The default model is the recommendation; labels do not say so themselves.
+
 `cost` is a coarse, honest label for non-engineers, not a price list:
   - "free"        nothing to pay, ever (runs on your own hardware)
   - "free_tier"   the vendor offers a no-cost allowance; heavy use may bill
@@ -65,17 +72,17 @@ EMBEDDING_PROVIDERS: List[Dict[str, Any]] = [
             # model: "fastembed" (ONNX, no PyTorch) and/or
             # "sentence-transformers" (PyTorch). Both produce the same vectors
             # for a given model, so the choice never forces a re-index.
-            {"id": "all-MiniLM-L6-v2", "label": "MiniLM L6 — fast, small (default)", "dimensions": 384, "size_mb": 90, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
-            {"id": "BAAI/bge-small-en-v1.5", "label": "BGE small — stronger than MiniLM, same size class", "dimensions": 384, "size_mb": 130, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
-            {"id": "all-MiniLM-L12-v2", "label": "MiniLM L12 — balanced", "dimensions": 384, "size_mb": 120, "language": "English", "backends": ["sentence-transformers"]},
-            {"id": "BAAI/bge-base-en-v1.5", "label": "BGE base — stronger English search", "dimensions": 768, "size_mb": 420, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
-            {"id": "nomic-ai/nomic-embed-text-v1.5", "label": "Nomic Embed v1.5 — 8k context, good for code and long passages", "dimensions": 768, "size_mb": 270, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
-            {"id": "jinaai/jina-embeddings-v2-base-code", "label": "Jina Code v2 — source code", "dimensions": 768, "size_mb": 320, "language": "Code", "backends": ["fastembed", "sentence-transformers"]},
-            {"id": "all-mpnet-base-v2", "label": "MPNet base — high quality, slower", "dimensions": 768, "size_mb": 420, "language": "English", "backends": ["sentence-transformers"]},
-            {"id": "paraphrase-multilingual-MiniLM-L12-v2", "label": "Multilingual MiniLM — 50+ languages", "dimensions": 384, "size_mb": 470, "language": "Multilingual", "backends": ["fastembed", "sentence-transformers"]},
-            {"id": "intfloat/multilingual-e5-small", "label": "Multilingual E5 small — 100 languages", "dimensions": 384, "size_mb": 470, "language": "Multilingual", "backends": ["sentence-transformers"]},
-            {"id": "Qwen/Qwen3-Embedding-0.6B", "label": "Qwen3 Embedding 0.6B — best quality, heavy", "dimensions": 1024, "size_mb": 1300, "language": "Multilingual", "backends": ["fastembed", "sentence-transformers"]},
-            {"id": "paraphrase-MiniLM-L3-v2", "label": "MiniLM L3 — fastest, lower quality", "dimensions": 384, "size_mb": 60, "language": "English", "backends": ["sentence-transformers"]},
+            {"id": "all-MiniLM-L6-v2", "label": "MiniLM L6 — fast, small", "dimensions": 384, "max_input_tokens": 256, "size_mb": 90, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "BAAI/bge-small-en-v1.5", "label": "BGE small — stronger than MiniLM, same size class", "dimensions": 384, "max_input_tokens": 512, "size_mb": 130, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "all-MiniLM-L12-v2", "label": "MiniLM L12 — balanced", "dimensions": 384, "max_input_tokens": 256, "size_mb": 120, "language": "English", "backends": ["sentence-transformers"]},
+            {"id": "BAAI/bge-base-en-v1.5", "label": "BGE base — stronger English search", "dimensions": 768, "max_input_tokens": 512, "size_mb": 420, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "nomic-ai/nomic-embed-text-v1.5", "label": "Nomic Embed v1.5 — 8k context, good for code and long passages", "dimensions": 768, "max_input_tokens": 8192, "size_mb": 270, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "jinaai/jina-embeddings-v2-base-code", "label": "Jina Code v2 — source code", "dimensions": 768, "max_input_tokens": 8192, "size_mb": 320, "language": "Code", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "all-mpnet-base-v2", "label": "MPNet base — high quality, slower", "dimensions": 768, "max_input_tokens": 384, "size_mb": 420, "language": "English", "backends": ["sentence-transformers"]},
+            {"id": "paraphrase-multilingual-MiniLM-L12-v2", "label": "Multilingual MiniLM — 50+ languages", "dimensions": 384, "max_input_tokens": 128, "size_mb": 470, "language": "Multilingual", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "intfloat/multilingual-e5-small", "label": "Multilingual E5 small — 100 languages", "dimensions": 384, "max_input_tokens": 512, "size_mb": 470, "language": "Multilingual", "backends": ["sentence-transformers"]},
+            {"id": "Qwen/Qwen3-Embedding-0.6B", "label": "Qwen3 Embedding 0.6B — best quality, heavy", "dimensions": 1024, "max_input_tokens": 32768, "size_mb": 1300, "language": "Multilingual", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "paraphrase-MiniLM-L3-v2", "label": "MiniLM L3 — fastest, lower quality", "dimensions": 384, "max_input_tokens": 128, "size_mb": 60, "language": "English", "backends": ["sentence-transformers"]},
         ],
     },
     {
@@ -96,7 +103,7 @@ EMBEDDING_PROVIDERS: List[Dict[str, Any]] = [
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "default_model": "gemini-embedding-001",
         "models": [
-            {"id": "gemini-embedding-001", "label": "Gemini Embedding 001 (recommended)", "dimensions": 3072, "language": "Multilingual"},
+            {"id": "gemini-embedding-001", "label": "Gemini Embedding 001", "dimensions": 3072, "max_input_tokens": 2048, "language": "Multilingual"},
         ],
     },
     {
@@ -117,8 +124,8 @@ EMBEDDING_PROVIDERS: List[Dict[str, Any]] = [
         "base_url": "https://api.mistral.ai/v1",
         "default_model": "mistral-embed",
         "models": [
-            {"id": "mistral-embed", "label": "Mistral Embed (recommended)", "dimensions": 1024, "language": "Multilingual"},
-            {"id": "codestral-embed", "label": "Codestral Embed — for source code", "dimensions": 1536, "language": "Code"},
+            {"id": "mistral-embed", "label": "Mistral Embed", "dimensions": 1024, "max_input_tokens": 8192, "language": "Multilingual"},
+            {"id": "codestral-embed", "label": "Codestral Embed — for source code", "dimensions": 1536, "max_input_tokens": 8192, "language": "Code"},
         ],
     },
     {
@@ -139,9 +146,9 @@ EMBEDDING_PROVIDERS: List[Dict[str, Any]] = [
         "base_url": "https://api.voyageai.com/v1",
         "default_model": "voyage-3.5-lite",
         "models": [
-            {"id": "voyage-3.5-lite", "label": "Voyage 3.5 Lite — fast (recommended)", "dimensions": 1024, "language": "Multilingual"},
-            {"id": "voyage-3.5", "label": "Voyage 3.5 — higher quality", "dimensions": 1024, "language": "Multilingual"},
-            {"id": "voyage-code-3", "label": "Voyage Code 3 — for source code", "dimensions": 1024, "language": "Code"},
+            {"id": "voyage-3.5-lite", "label": "Voyage 3.5 Lite — fast", "dimensions": 1024, "max_input_tokens": 32000, "language": "Multilingual"},
+            {"id": "voyage-3.5", "label": "Voyage 3.5 — higher quality", "dimensions": 1024, "max_input_tokens": 32000, "language": "Multilingual"},
+            {"id": "voyage-code-3", "label": "Voyage Code 3 — for source code", "dimensions": 1024, "max_input_tokens": 32000, "language": "Code"},
         ],
     },
     {
@@ -159,7 +166,7 @@ EMBEDDING_PROVIDERS: List[Dict[str, Any]] = [
         "base_url": "https://api.jina.ai/v1",
         "default_model": "jina-embeddings-v3",
         "models": [
-            {"id": "jina-embeddings-v3", "label": "Jina Embeddings v3 (recommended)", "dimensions": 1024, "language": "Multilingual"},
+            {"id": "jina-embeddings-v3", "label": "Jina Embeddings v3", "dimensions": 1024, "max_input_tokens": 8192, "language": "Multilingual"},
         ],
     },
     {
@@ -187,12 +194,12 @@ EMBEDDING_PROVIDERS: List[Dict[str, Any]] = [
         "base_url": "https://openrouter.ai/api/v1",
         "default_model": "nvidia/nemotron-3-embed-1b:free",
         "models": [
-            {"id": "nvidia/nemotron-3-embed-1b:free", "label": "Nemotron 3 Embed 1B — free (recommended)", "dimensions": 2048, "language": "Multilingual"},
+            {"id": "nvidia/nemotron-3-embed-1b:free", "label": "Nemotron 3 Embed 1B — free", "dimensions": 2048, "language": "Multilingual"},
             {"id": "nvidia/llama-nemotron-embed-vl-1b-v2:free", "label": "Llama Nemotron Embed VL 1B — free, very long inputs", "dimensions": 2048, "language": "Multilingual"},
             {"id": "liquid/lfm-2.5-embedding-350m:free", "label": "LFM2.5 Embedding 350M — free, small; host may train on your text", "dimensions": 1024, "language": "Multilingual"},
-            {"id": "qwen/qwen3-embedding-8b", "label": "Qwen3 Embedding 8B — paid, about $0.01 per million tokens", "dimensions": 4096, "language": "Multilingual"},
-            {"id": "baai/bge-m3", "label": "BGE-M3 — paid, about $0.01 per million tokens", "dimensions": 1024, "language": "Multilingual"},
-            {"id": "openai/text-embedding-3-small", "label": "OpenAI text-embedding-3-small — paid, about $0.02 per million tokens", "dimensions": 1536, "language": "Multilingual"},
+            {"id": "qwen/qwen3-embedding-8b", "label": "Qwen3 Embedding 8B — paid, about $0.01 per million tokens", "dimensions": 4096, "max_input_tokens": 32768, "language": "Multilingual"},
+            {"id": "baai/bge-m3", "label": "BGE-M3 — paid, about $0.01 per million tokens", "dimensions": 1024, "max_input_tokens": 8192, "language": "Multilingual"},
+            {"id": "openai/text-embedding-3-small", "label": "OpenAI text-embedding-3-small — paid, about $0.02 per million tokens", "dimensions": 1536, "max_input_tokens": 8191, "language": "Multilingual"},
         ],
     },
     {
@@ -213,8 +220,8 @@ EMBEDDING_PROVIDERS: List[Dict[str, Any]] = [
         "base_url": "https://api.openai.com/v1",
         "default_model": "text-embedding-3-small",
         "models": [
-            {"id": "text-embedding-3-small", "label": "text-embedding-3-small (recommended)", "dimensions": 1536, "language": "Multilingual"},
-            {"id": "text-embedding-3-large", "label": "text-embedding-3-large — higher quality", "dimensions": 3072, "language": "Multilingual"},
+            {"id": "text-embedding-3-small", "label": "text-embedding-3-small", "dimensions": 1536, "max_input_tokens": 8191, "language": "Multilingual"},
+            {"id": "text-embedding-3-large", "label": "text-embedding-3-large — higher quality", "dimensions": 3072, "max_input_tokens": 8191, "language": "Multilingual"},
         ],
     },
     {
@@ -234,12 +241,12 @@ EMBEDDING_PROVIDERS: List[Dict[str, Any]] = [
         "base_url": None,  # settings.ollama_base_url
         "default_model": "nomic-embed-text",
         "models": [
-            {"id": "nomic-embed-text", "label": "nomic-embed-text (recommended)", "dimensions": 768, "language": "English"},
-            {"id": "embeddinggemma", "label": "embeddinggemma — Google, multilingual", "dimensions": 768, "language": "Multilingual"},
-            {"id": "mxbai-embed-large", "label": "mxbai-embed-large — higher quality", "dimensions": 1024, "language": "English"},
-            {"id": "bge-m3", "label": "bge-m3 — multilingual", "dimensions": 1024, "language": "Multilingual"},
+            {"id": "nomic-embed-text", "label": "nomic-embed-text", "dimensions": 768, "language": "English"},
+            {"id": "embeddinggemma", "label": "embeddinggemma — Google, multilingual", "dimensions": 768, "max_input_tokens": 2048, "language": "Multilingual"},
+            {"id": "mxbai-embed-large", "label": "mxbai-embed-large — higher quality", "dimensions": 1024, "max_input_tokens": 512, "language": "English"},
+            {"id": "bge-m3", "label": "bge-m3 — multilingual", "dimensions": 1024, "max_input_tokens": 8192, "language": "Multilingual"},
             {"id": "qwen3-embedding:0.6b", "label": "qwen3-embedding 0.6B — multilingual", "dimensions": 1024, "language": "Multilingual"},
-            {"id": "all-minilm", "label": "all-minilm — small and fast", "dimensions": 384, "language": "English"},
+            {"id": "all-minilm", "label": "all-minilm — small and fast", "dimensions": 384, "max_input_tokens": 256, "language": "English"},
         ],
     },
     {

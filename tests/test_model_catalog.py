@@ -100,7 +100,7 @@ def test_provider_classes_take_their_defaults_from_the_table():
     pairs = {
         "anthropic": ai_service.AnthropicProvider, "openai": ai_service.OpenAIProvider,
         "google": ai_service.GoogleProvider, "grok": ai_service.GrokProvider,
-        "openrouter": ai_service.OpenRouterProvider, "github": ai_service.GitHubProvider,
+        "openrouter": ai_service.OpenRouterProvider,
         "ollama_cloud": ai_service.OllamaCloudProvider, "bedrock": ai_service.BedrockProvider,
     }
     for name, cls in pairs.items():

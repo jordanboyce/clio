@@ -604,7 +604,7 @@ class OpenAIProvider(AIProvider):
     def list_model_records(self) -> Optional[List[dict]]:
         """List models via the OpenAI-style /models endpoint, sorted by id.
 
-        Inherited by every OpenAI-compatible subclass (Grok, Google, GitHub,
+        Inherited by every OpenAI-compatible subclass (Grok, Google,
         Ollama Cloud, OpenRouter, custom endpoints) — vLLM, LM Studio, and
         LiteLLM all implement /models too. Whatever extra fields a server
         adds are read by openai_style_record.
@@ -703,7 +703,7 @@ class OpenAIProvider(AIProvider):
         }
 
     def validate(self) -> bool:
-        # Shared by every OpenAI-compatible subclass (Grok, Google, GitHub,
+        # Shared by every OpenAI-compatible subclass (Grok, Google,
         # Ollama Cloud, OpenRouter, custom endpoints). Pings FAST_MODEL, which
         # __init__ overrides with the user's selected model when one is chosen —
         # so validation exercises the model that chat will actually use.
@@ -987,32 +987,6 @@ class GoogleProvider(OpenAIProvider):
             if "chat" in kinds:
                 rec["context_tokens"] = m["inputTokenLimit"]
         return rec
-
-
-class GitHubProvider(OpenAIProvider):
-    """GitHub Models provider — OpenAI-compatible API.
-
-    Lets users access models hosted on the GitHub Models marketplace
-    (gpt-4o, Llama, Phi, Mistral, DeepSeek, etc.) via a GitHub Personal
-    Access Token. Available to anyone with a GitHub account; rate limits
-    are higher for paid Copilot subscribers.
-
-    Auth: GitHub PAT with the `models:read` scope.
-    Endpoint: https://models.github.ai/inference (OpenAI-compatible).
-    Model IDs are namespaced like `openai/gpt-4o`, `meta/Llama-3.3-70B-Instruct`.
-    """
-
-    PROVIDER_LABEL = "GitHub Models"
-    KEY_HINT = "https://github.com/settings/tokens"
-    FAST_MODEL = model_catalog.fast_model("github")
-    QUALITY_MODEL = model_catalog.default_model("github")
-
-    def __init__(self, api_key: str, model: Optional[str] = None):
-        super().__init__(
-            api_key,
-            model=model,
-            base_url="https://models.github.ai/inference",
-        )
 
 
 class OllamaCloudProvider(OpenAIProvider):
@@ -1334,7 +1308,7 @@ def _build_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProv
     """Create an AI provider instance.
 
     Args:
-        provider_name: Provider name — anthropic, openai, grok, google, github, openrouter, bedrock, openai_compatible, ollama, ollama_cloud
+        provider_name: Provider name — anthropic, openai, grok, google, openrouter, bedrock, openai_compatible, ollama, ollama_cloud
         api_key: API key for cloud providers (not needed for local Ollama, Bedrock's AWS chain, or key-less endpoints)
         **kwargs:
             model         – model name override
@@ -1351,7 +1325,9 @@ def _build_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProv
     # connection tests). In offline mode only providers that stay on the
     # user's own network are allowed — local Ollama and self-hosted
     # OpenAI-compatible endpoints (vLLM, LM Studio, llama.cpp, …).
-    from config import settings
+    from config import RETIRED_AI_PROVIDERS, settings
+    if provider_name in RETIRED_AI_PROVIDERS:
+        raise ValueError(RETIRED_AI_PROVIDERS[provider_name])
     if settings.offline_mode and provider_name not in ("ollama", "openai_compatible"):
         raise ValueError(
             f"Provider '{provider_name}' is disabled: this deployment runs in "
@@ -1381,10 +1357,6 @@ def _build_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProv
         if not api_key:
             raise ValueError("API key required for Google")
         return GoogleProvider(api_key, model=kwargs.get("model"))
-    elif provider_name == "github":
-        if not api_key:
-            raise ValueError("API key required for GitHub Models (GitHub PAT with models:read scope)")
-        return GitHubProvider(api_key, model=kwargs.get("model"))
     elif provider_name == "openai_compatible":
         base_url = kwargs.get("base_url")
         if not base_url:

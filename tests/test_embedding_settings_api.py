@@ -163,3 +163,71 @@ def test_embedding_key_is_masked_and_round_trips(client):
     assert client.get("/api/config").json()["embedding_api_key_set"] is True
     client.post("/api/config", json={"embedding_api_key": ""})
     assert client.get("/api/config").json()["embedding_api_key_set"] is False
+
+
+def test_catalog_says_where_text_goes_and_what_each_model_holds(client):
+    by_id = {p["id"]: p for p in client.get("/api/embedding/providers").json()["providers"]}
+
+    assert by_id["local"]["hosted"] is False
+    assert by_id["ollama"]["hosted"] is False
+    assert by_id["openai_compatible"]["hosted"] is False
+    assert by_id["google"]["hosted"] is True and by_id["openai"]["hosted"] is True
+
+    # The default model is the one marked recommended, and only it.
+    for p in by_id.values():
+        marked = [m["id"] for m in p["models"] if m["recommended"]]
+        assert marked == ([p["default_model"]] if p["models"] else [])
+
+    local = {m["id"]: m for m in by_id["local"]["models"]}
+    assert local["all-MiniLM-L6-v2"]["max_input_tokens"] == 256
+    # Built-in runtimes frame queries for the models that expect it.
+    assert local["BAAI/bge-small-en-v1.5"]["adds_prefixes"] is True
+    assert local["all-MiniLM-L6-v2"]["adds_prefixes"] is False
+
+
+def test_every_listed_input_limit_is_a_positive_int():
+    from services.embedding_providers import EMBEDDING_PROVIDERS
+
+    for p in EMBEDDING_PROVIDERS:
+        for m in p["models"]:
+            if "max_input_tokens" in m:
+                assert isinstance(m["max_input_tokens"], int) and m["max_input_tokens"] > 0
+            assert "recommended" not in m["label"].lower()
+
+
+def _collection_db(root, cid, docs, chunks, with_documents=True):
+    import sqlite3
+
+    d = root / "collections" / cid / "indexes"
+    d.mkdir(parents=True)
+    conn = sqlite3.connect(d / "metadata.db")
+    conn.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY, document_id TEXT)")
+    if with_documents:
+        conn.execute("CREATE TABLE documents (id TEXT PRIMARY KEY)")
+        conn.executemany("INSERT INTO documents VALUES (?)", [(f"d{i}",) for i in range(docs)])
+    conn.executemany(
+        "INSERT INTO chunks (document_id) VALUES (?)",
+        [(f"d{i % max(docs, 1)}",) for i in range(chunks)],
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_switch_cost_counts_what_would_be_reindexed(client, monkeypatch, tmp_path):
+    from api import system
+
+    monkeypatch.setattr(system.settings, "data_dir", tmp_path)
+    _collection_db(tmp_path, "a", docs=3, chunks=40)
+    _collection_db(tmp_path, "b", docs=2, chunks=5, with_documents=False)  # legacy layout
+    _collection_db(tmp_path, "empty", docs=0, chunks=0)
+
+    body = client.get("/api/embedding/switch-cost").json()
+
+    assert body == {"collections": 2, "sources": 5, "passages": 45}
+
+
+def test_switch_cost_is_zero_on_a_new_install(client, monkeypatch, tmp_path):
+    from api import system
+
+    monkeypatch.setattr(system.settings, "data_dir", tmp_path / "nothing-here")
+    assert client.get("/api/embedding/switch-cost").json() == {"collections": 0, "sources": 0, "passages": 0}
