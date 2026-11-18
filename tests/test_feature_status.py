@@ -72,11 +72,45 @@ def test_a_hosted_vision_model_offline_falls_back_to_the_local_engine(monkeypatc
     assert _state(fs._ocr) == fs.UNAVAILABLE
 
 
-def test_figures_are_limited_without_a_usable_vision_model(monkeypatch):
+def test_figures_without_a_vision_model_are_a_choice_not_a_fault(monkeypatch):
+    """B6: a default install has no vision model; its pictures still work."""
     monkeypatch.setattr(settings, "extract_figures", True)
     monkeypatch.setattr(settings, "vision_ocr_provider", "none")
 
-    assert _state(fs._figures) == fs.LIMITED
+    assert _state(fs._figures) == fs.ON
+    assert "vision model" in fs._figures()["detail"]
+
+
+# ── B7: the search model's failure says what failed and how to fix it ──
+
+def _embedding(monkeypatch, **state):
+    from services.embedding_status import embedding_status
+
+    monkeypatch.setattr(embedding_status, "status", lambda: {"provider": "local", "error": None, **state})
+
+
+@pytest.mark.parametrize("state, provider, error, env, says, fix", [
+    ("missing", "local", None, {"CLIO_VERSION": "1.6.1"}, "set not to download", "image that includes"),
+    ("missing", "local", None, {}, "set not to download", "Copy the model"),
+    ("error", "local", "Could not download model from HuggingFace: timed out", {}, "huggingface.co", "mirror"),
+    ("error", "local", "ConnectTimeout", {"HF_ENDPOINT": "http://mirror.internal:8080"}, "download mirror",
+     "mirror is reachable"),
+    ("error", "ollama", "connection refused", {}, "Ollama did not answer", "Ollama is running"),
+    ("error", "openai_compatible", "502", {}, "embedding server did not answer", "embedding server is running"),
+    ("unconfigured", "local", None, {}, "No search model has been chosen", "Choose where"),
+])
+def test_the_search_model_failure_names_its_own_fix(monkeypatch, state, provider, error, env, says, fix):
+    for name in ("CLIO_VERSION", "HF_ENDPOINT"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    _embedding(monkeypatch, status=state, provider=provider, error=error)
+    feature = fs._semantic()
+    assert feature["state"] == fs.LIMITED
+    assert says in feature["detail"] and fix in feature["fix"]
+    # Never a path, an address or a setting name.
+    text = feature["detail"] + feature["fix"]
+    assert "mirror.internal" not in text and "HF_ENDPOINT" not in text and "/" not in text.replace("huggingface.co", "")
 
 
 @pytest.mark.parametrize("on_disk, offline, expected", [

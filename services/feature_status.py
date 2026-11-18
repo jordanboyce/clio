@@ -49,23 +49,79 @@ def _vision_usable() -> bool:
     ).vision_ocr_usable()
 
 
+_KEYWORDS_ONLY = ("Search uses keywords only. New sources still index, and get search by meaning by "
+                  "themselves once a model is there.")
+_OTHER_PROVIDERS = "or choose Ollama or your own embedding server in Settings"
+
+
+def _in_image() -> bool:
+    """Running from the published image (it sets CLIO_VERSION), not a checkout."""
+    import os
+    return bool(os.environ.get("CLIO_VERSION", "").strip())
+
+
+def _download_failed(error: str) -> bool:
+    text = (error or "").lower()
+    return any(w in text for w in ("timed out", "timeout", "connect", "could not download", "resolve",
+                                   "network", "unreachable", "huggingface", "hub", "ssl", "proxy"))
+
+
 def _semantic() -> Dict[str, Any]:
+    """B7: what failed and the fix that matches it, from the status and the
+    provider. Names the public model hub when it is the source; never a
+    mirror's or an embedding server's address, which are internal."""
+    import os
+
+    from services.embedding_providers import get_provider
     from services.embedding_status import embedding_status
 
     status = embedding_status.status()
     state = status.get("status")
+    provider = status.get("provider") or settings.embedding_provider or "local"
     label = "Semantic search"
     if state == "ready":
         return _feature("semantic", label, ON, "Search finds passages by meaning as well as by keyword.")
     if state in ("loading", "downloading"):
         return _feature("semantic", label, LIMITED, "The search model is being prepared. Search uses keywords until then.")
-    return _feature(
-        "semantic", label, LIMITED,
-        "No search model is available, so search uses keywords only. New sources still index, and "
-        "get search by meaning by themselves once a model is there.",
-        "Use the full or slim image, which include a model, pre-seed one, or choose your own "
-        "embedding server in Settings.",
-    )
+
+    def limited(what: str, fix: str) -> Dict[str, Any]:
+        return _feature("semantic", label, LIMITED, f"{what} {_KEYWORDS_ONLY}", fix)
+
+    if state == "unconfigured":
+        return limited("No search model has been chosen yet.",
+                       "Choose where the search index runs in Settings, Indexing.")
+    if provider != "local":
+        name = {"ollama": "Ollama", "openai_compatible": "Your embedding server"}.get(
+            provider, (get_provider(provider) or {}).get("label") or provider)
+        if provider == "ollama":
+            fix = "Check that Ollama is running and has the model, then use Check again in Settings, Indexing."
+        elif provider == "openai_compatible":
+            fix = ("Check that the embedding server is running and that this server can reach it, then use "
+                   "Check again in Settings, Indexing.")
+        else:
+            fix = "Check the provider's key and that this server can reach it, in Settings, Indexing."
+        return limited(f"{name} did not answer when the search model was tried.", fix)
+
+    error = status.get("error") or ""
+    mirror = bool(os.environ.get("HF_ENDPOINT", "").strip())
+    if state == "missing":
+        what = "The search model is not on this server, and this server is set not to download models."
+        fix = (f"Use an image that includes the model, or pre-seed it into the data folder, {_OTHER_PROVIDERS}."
+               if _in_image() else
+               f"Copy the model into the data folder's models folder from a machine that has it, {_OTHER_PROVIDERS}.")
+        return limited(what, fix)
+    if "backend" in error.lower() and "install" in error.lower():
+        return limited("No local runtime for search models is installed on this server.",
+                       f"Install fastembed on this server, {_OTHER_PROVIDERS}.")
+    if _download_failed(error):
+        if mirror:
+            return limited("The search model could not be downloaded from the download mirror this server uses.",
+                           f"Check that the mirror is reachable from this server, pre-seed the model, {_OTHER_PROVIDERS}.")
+        return limited("The search model could not be downloaded: this server cannot reach huggingface.co.",
+                       f"Pre-seed the model, point the server at a download mirror your network allows, "
+                       f"{_OTHER_PROVIDERS}.")
+    return limited("The search model could not be loaded.",
+                   f"See the server log for the reason, then retry from Settings, Indexing, {_OTHER_PROVIDERS}.")
 
 
 def _reranker() -> Dict[str, Any]:
@@ -138,9 +194,10 @@ def _figures() -> Dict[str, Any]:
         return _feature("figures", label, OFF, "Turned off. Only the text of a source is indexed.",
                         "Turn it on in Settings, Features.")
     if not _vision_usable():
-        return _feature("figures", label, LIMITED,
-                        "Pictures are kept and shown beside results, but cannot be found by what they show.",
-                        "Choose a vision model in Settings to have each one described.")
+        # B6: no vision model is a choice, not a fault; the pictures work.
+        return _feature("figures", label, ON,
+                        "Pictures are kept and shown beside results. Choose a vision model in Settings to have "
+                        "each one described, so they can also be found by what they show.")
     return _feature("figures", label, ON,
                     f"Pictures are kept, and described by a vision model ({_vision_provider()}) so they can be "
                     "found. The connection is tested when a picture is read.")

@@ -821,6 +821,16 @@ async def warm_embedding():
     return embedding_status.warm(force=True)
 
 
+def _caller_is_operator() -> bool:
+    """Whether the caller may see deployment addresses (an admin, or anyone
+    on an open one-person install)."""
+    try:
+        require_admin("see the embedding servers' addresses")
+        return True
+    except HTTPException:
+        return False
+
+
 @router.get(
     "/api/embedding/options",
     summary="What the first-run picker can offer on this host",
@@ -898,6 +908,10 @@ async def embedding_options():
         })
 
     ollama_reachable = tags is not None
+    installed_embedding = [r["id"] for r in (tags or []) if "embedding" in r["kinds"]]
+    # B2: "nomic-embed-text" is installed when "nomic-embed-text:latest" is.
+    ollama_suggested = model_catalog.same_ollama_model_in(
+        model_catalog.suggested("ollama", "embedding"), installed_embedding)
     if available and (cached or hf_reachable):
         recommended = "local"
     elif ollama_reachable:
@@ -908,6 +922,16 @@ async def embedding_options():
         recommended = "local"
 
     status_backend = embedding_status.status().get("backend")
+    operator = _caller_is_operator()
+    # B5: the site's own embedding server (OpenAI-compatible: vLLM, TEI, a
+    # gateway). Offered in offline mode too: it is on the site's network.
+    custom_configured = bool((settings.embedding_base_url or "").strip())
+    custom = {
+        "configured": custom_configured,
+        "model": settings.remote_embedding_model if current_provider == "openai_compatible" else "",
+        # An internal address: only for whoever may change it.
+        "base_url": (settings.embedding_base_url or "") if operator else "",
+    }
     return {
         "current": {
             "provider": current_provider,
@@ -925,18 +949,20 @@ async def embedding_options():
             "cached": cached,
             # Named for the default; true for whichever source model_source is.
             "huggingface_reachable": hf_reachable,
-            "model_source": hub_host(),
+            # A mirror's host is an internal address: named to operators only.
+            "model_source": hub_host() if operator or hub_host() == "huggingface.co" else "the download mirror",
             "install_hint": install_hint,
         },
         "ollama": {
             "reachable": ollama_reachable,
-            "base_url": settings.ollama_base_url,
+            "base_url": settings.ollama_base_url if operator else "this site's Ollama server",
             # Ollama's own "embedding" capability decides; the name patterns
             # only stand in for Ollama too old to report one.
-            "embedding_models": [r["id"] for r in (tags or []) if "embedding" in r["kinds"]],
-            "suggested": model_catalog.suggested("ollama", "embedding"),
+            "embedding_models": installed_embedding,
+            "suggested": ollama_suggested,
         },
         "hosted": hosted,
+        "custom": custom,
     }
 
 
@@ -948,6 +974,9 @@ class EmbeddingSelectRequest(BaseModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     warm: bool = True
+    # Ollama only: the model is not on the Ollama server yet; pull it, and
+    # warm up when the pull ends (B3).
+    pull: bool = False
 
 
 @router.post(
@@ -995,7 +1024,9 @@ async def select_embedding(req: EmbeddingSelectRequest):
         raise HTTPException(status_code=400, detail="; ".join(result.get("errors") or ["could not save"]))
     _audit_config_change(result)
 
-    if req.warm:
+    if req.provider == "ollama" and req.pull and req.model:
+        status = embedding_status.select_and_pull_ollama(req.model.strip())
+    elif req.warm:
         status = embedding_status.warm(force=True)
     else:
         embedding_status.reset()

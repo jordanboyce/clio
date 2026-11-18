@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { ollamaBaseName, sameOllamaModel } from '../embeddingChoice'
 import {
   approxTokens,
   chunkFit,

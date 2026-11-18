@@ -290,6 +290,11 @@ async def lifespan(app: FastAPI):
         from services.indexer_manager import index_unload_loop
         index_unload_task = asyncio.create_task(index_unload_loop())
 
+        # B11: pay the first request's one-time costs (route state, the
+        # native file picker check) here, before anyone is waiting on them.
+        from api.bootstrap import warm_startup_paths
+        await asyncio.to_thread(warm_startup_paths, app)
+
         logger.info("Clio API ready")
         logger.info(f"Data directory: {settings.data_dir}")
         logger.info(f"Embedded MCP server: {'enabled' if settings.enable_mcp else 'disabled'}")

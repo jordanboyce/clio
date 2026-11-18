@@ -270,6 +270,25 @@ def suggested(provider: str, what: str) -> Optional[str]:
     return provider_entry(provider).get(f"suggested_{what}")
 
 
+def ollama_base_name(name: Optional[str]) -> str:
+    """Ollama's own equivalence: ``nomic-embed-text`` is
+    ``nomic-embed-text:latest``."""
+    name = (name or "").strip()
+    return name[: -len(":latest")] if name.endswith(":latest") else name
+
+
+def same_ollama_model_in(name: Optional[str], installed) -> Optional[str]:
+    """``name`` as Ollama lists it when it is installed under either
+    spelling, else ``name`` unchanged."""
+    if not name:
+        return name
+    base = ollama_base_name(name)
+    for item in installed or []:
+        if ollama_base_name(item) == base:
+            return item
+    return name
+
+
 def empty_record(model_id: str, label: Optional[str] = None) -> dict:
     return {
         "id": model_id,

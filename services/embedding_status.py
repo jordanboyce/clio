@@ -160,7 +160,16 @@ class EmbeddingStatus:
 
     def _set(self, **fields: Any) -> None:
         with self._lock:
+            if self._superseded():
+                return
             self._state.update(fields)
+
+    def _superseded(self) -> bool:
+        """True in a warm-up thread that a newer warm-up has replaced (a
+        download still timing out behind a firewall when the person picked
+        Ollama instead): its late writes must not undo the newer status."""
+        current = threading.current_thread()
+        return current.name == "embedding-warmup" and current is not self._thread
 
     def is_running(self) -> bool:
         t = self._thread
@@ -191,8 +200,10 @@ class EmbeddingStatus:
 
         Idempotent: while a job runs, or once the provider is ready, another
         call is a no-op unless ``force`` asks for a fresh run (after the
-        settings changed, or to retry a download). ``service_factory``
-        (provider, model) → service lets tests substitute the model load.
+        settings changed, or to retry a download). A forced run replaces a
+        job still running: the old thread cannot be stopped, but nothing it
+        writes afterwards reaches the status. ``service_factory`` (provider,
+        model) → service lets tests substitute the model load.
         """
         from config import settings
         from services.embedder import (
@@ -211,7 +222,7 @@ class EmbeddingStatus:
             model = settings.remote_embedding_model or entry.get("default_model", "")
 
         with self._lock:
-            if self.is_running():
+            if self.is_running() and not force:
                 return self.status()
             current = self._state
             same_target = current["provider"] == provider and current["model"] == model
@@ -293,6 +304,8 @@ class EmbeddingStatus:
         else:
             total = local_model_download_bytes(model, backend)
             target = local_model_download_dir(model, backend)
+            # B9: every signed-in person reads this status, so it names the
+            # model, never the directory it is written to.
             self._set(
                 status="downloading",
                 can_download=True,
@@ -300,13 +313,13 @@ class EmbeddingStatus:
                     "downloaded_bytes": 0,
                     "total_bytes": total,
                     "percent": 0 if total else None,
-                    "file": str(target) if target else None,
+                    "file": model,
                 },
             )
             if target is not None:
                 watcher = threading.Thread(
                     target=self._watch_download,
-                    args=(target, total, stop),
+                    args=(target, total, stop, model, threading.current_thread()),
                     name="embedding-download-watch",
                     daemon=True,
                 )
@@ -328,7 +341,8 @@ class EmbeddingStatus:
         )
         self._after_ready()
 
-    def _watch_download(self, target: Path, total: Optional[int], stop: threading.Event) -> None:
+    def _watch_download(self, target: Path, total: Optional[int], stop: threading.Event,
+                        model: str = "", owner: Optional[threading.Thread] = None) -> None:
         """Sample the cache directory's size until the load finishes."""
         while not stop.is_set():
             done = _dir_size(target)
@@ -336,13 +350,13 @@ class EmbeddingStatus:
             if total:
                 percent = min(99, int(done * 100 / total))
             with self._lock:
-                if self._state["status"] != "downloading":
+                if self._state["status"] != "downloading" or (owner is not None and owner is not self._thread):
                     return
                 self._state["progress"] = {
                     "downloaded_bytes": done,
                     "total_bytes": total,
                     "percent": percent,
-                    "file": str(target),
+                    "file": model,
                 }
             stop.wait(WATCH_INTERVAL_SECONDS)
 
@@ -409,6 +423,18 @@ class EmbeddingStatus:
             logger.warning(f"Could not load default indexer after embedding warm-up: {e}")
 
     # ── Ollama pull ────────────────────────────────────────────────────
+
+    def select_and_pull_ollama(self, model: str, base_url: Optional[str] = None) -> Dict[str, Any]:
+        """B3: after the choice of an Ollama model it does not have yet is
+        saved, pull it with the status following the pull, and warm up when
+        the pull ends. One call, so the pull can never start before the
+        choice is saved (when it would not be tracked) and the warm-up can
+        never probe a model that has not arrived."""
+        with self._lock:
+            # Whatever was warming (a local download timing out, say) is
+            # replaced; its late writes are ignored.
+            self._thread = None
+        return self.pull_ollama_model(model, base_url)
 
     def pull_ollama_model(self, model: str, base_url: Optional[str] = None) -> Dict[str, Any]:
         """Pull an embedding model on the Ollama server in the background.

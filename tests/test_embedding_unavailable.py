@@ -155,3 +155,62 @@ def test_a_failed_download_names_the_hub_but_not_the_server_path(monkeypatch, tm
     assert "huggingface.co" in message
     assert str(tmp_path) not in message
     assert ".." not in message
+
+
+# ── B11: the first page load does not wait on a model being prepared ────
+
+def test_opening_a_collection_while_the_warm_up_runs_does_not_wait_or_download_twice(monkeypatch):
+    import time
+
+    from services import indexer_manager as im
+    from services.embedding_status import embedding_status
+
+    started = []
+    monkeypatch.setattr(embedding_status, "is_running", lambda: True)
+    monkeypatch.setattr(im, "local_model_cached", lambda name: False)
+    monkeypatch.setattr(im.indexer_manager, "_get_embedding_service",
+                        lambda model: started.append(model) or time.sleep(10))
+    t = time.perf_counter()
+    with pytest.raises(RuntimeError, match="still being prepared"):
+        im.indexer_manager._reach_embedding_service("all-MiniLM-L6-v2")
+    assert time.perf_counter() - t < 0.5
+    assert started == []          # no second download beside the warm-up's
+
+
+def test_a_local_model_that_must_be_downloaded_is_not_waited_for(monkeypatch):
+    import threading
+    import time
+
+    from services import indexer_manager as im
+    from services.embedding_status import embedding_status
+
+    gate = threading.Event()
+    monkeypatch.setattr(embedding_status, "is_running", lambda: False)
+    monkeypatch.setattr(im, "local_model_cached", lambda name: False)
+    monkeypatch.setattr(im.indexer_manager, "_get_embedding_service", lambda model: gate.wait(5))
+    monkeypatch.setattr(im.indexer_manager, "_builds", {})
+    t = time.perf_counter()
+    with pytest.raises(RuntimeError, match="Still trying"):
+        im.indexer_manager._reach_embedding_service("all-MiniLM-L6-v2")
+    assert time.perf_counter() - t < 0.5
+    gate.set()
+
+
+def test_a_collection_with_no_vectors_reopens_under_a_newly_chosen_model(monkeypatch):
+    """First run: the empty default collection opened while the default model
+    could not be downloaded; choosing Ollama's 768-dimension model must not
+    read as a mismatch asking for a re-index of nothing."""
+    from types import SimpleNamespace
+
+    from services import indexer_manager as im
+
+    closed = []
+
+    def indexer(n):
+        store = SimpleNamespace(index=SimpleNamespace(ntotal=n), close=lambda: closed.append(n))
+        return SimpleNamespace(vector_store=store)
+
+    monkeypatch.setattr(im.indexer_manager, "_indexers", {"empty": indexer(0), "full": indexer(12)})
+    im.indexer_manager.reset_embedding_services()
+    assert set(im.indexer_manager._indexers) == {"full"}   # vectors keep their model
+    assert closed == [0]

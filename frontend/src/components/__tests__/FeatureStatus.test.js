@@ -28,23 +28,46 @@ describe('FeatureStatus', () => {
     http.get.mockReset()
   })
 
-  it('shows every feature with its state', async () => {
+  it('names only what needs attention; what is switched off is not a fault (B6)', async () => {
     const wrapper = await mountStatus()
     const state = (id) => wrapper.find(`[data-feature="${id}"]`).attributes('data-state')
     expect(state('semantic')).toBe('limited')
-    expect(state('ocr')).toBe('off')
     expect(state('transcription')).toBe('unavailable')
-    expect(state('mcp')).toBe('on')
     expect(wrapper.find('[data-feature="transcription"]').text()).toBe('Speech')
+    expect(wrapper.find('[data-feature="ocr"]').exists()).toBe(false)
+    expect(wrapper.find('[data-feature="mcp"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="feature-summary"]').text()).toBe('2 need attention')
+    wrapper.unmount()
+  })
+
+  it('reads All working with no warning colour when nothing is wrong, however much is off', async () => {
+    const wrapper = await mountStatus([
+      { id: 'semantic', label: 'Semantic search', state: 'on', detail: '', fix: '' },
+      { id: 'ocr', label: 'OCR', state: 'off', detail: 'Turned off.', fix: 'Turn it on.' },
+      { id: 'reranker', label: 'Reranker', state: 'off', detail: 'Turned off.', fix: '' },
+      { id: 'pra', label: 'PRA models', state: 'off', detail: 'Off.', fix: '' },
+    ])
+    const summary = wrapper.get('[data-testid="feature-summary"]')
+    expect(summary.text()).toBe('All working')
+    expect(wrapper.get('[data-testid="feature-strip"]').html()).not.toMatch(/text-(warning|error)/)
+    wrapper.unmount()
+  })
+
+  it('groups the panel as needs attention, on and switched off', async () => {
+    const wrapper = await mountStatus()
+    await wrapper.get('[data-testid="feature-strip"]').trigger('click')
+    expect(wrapper.get('[data-testid="feature-group-attention"]').text()).toContain('Transcription')
+    expect(wrapper.get('[data-testid="feature-group-on"]').text()).toContain('MCP')
+    expect(wrapper.get('[data-testid="feature-group-off"]').text()).toContain('OCR')
     wrapper.unmount()
   })
 
   it('says what each state is for a screen reader, not only by colour', async () => {
     const wrapper = await mountStatus()
     const label = wrapper.get('[data-testid="feature-strip"]').attributes('aria-label')
-    expect(label).toContain('1 of 5 fully working')
+    expect(label).toContain('2 need attention')
     expect(label).toContain('Transcription: Unavailable')
-    expect(label).toContain('OCR: Off')
+    expect(label).toContain('Semantic search: Limited')
     wrapper.unmount()
   })
 
@@ -65,8 +88,10 @@ describe('FeatureStatus', () => {
   })
 
   it('counts a model connected in this browser as AI answers being on', async () => {
-    const wrapper = await mountStatus()
-    expect(wrapper.find('[data-feature="ai"]').attributes('data-state')).toBe('off')
+    const aiOnly = [{ id: 'ai', label: 'AI answers', state: 'off', detail: 'No model.', fix: 'Connect one.' }]
+    const wrapper = await mountStatus(aiOnly)
+    await wrapper.get('[data-testid="feature-strip"]').trigger('click')
+    expect(wrapper.get('[data-testid="feature-group-off"]').text()).toContain('AI answers')
     wrapper.unmount()
 
     const store = useProviderStore()
@@ -74,8 +99,9 @@ describe('FeatureStatus', () => {
     localStorage.setItem('ai_settings', JSON.stringify({ provider: 'ollama' }))
     store.touch()
     expect(store.activeProviderId).toBe('ollama')
-    const connected = await mountStatus()
-    expect(connected.find('[data-feature="ai"]').attributes('data-state')).toBe('on')
+    const connected = await mountStatus(aiOnly)
+    await connected.get('[data-testid="feature-strip"]').trigger('click')
+    expect(connected.get('[data-testid="feature-group-on"]').text()).toContain('AI answers')
     connected.unmount()
     localStorage.clear()
   })

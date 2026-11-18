@@ -9,22 +9,29 @@
       data-testid="feature-strip"
       @click="open = !open"
     >
-      <!-- Every feature by name on a wide window, a count on a narrower one. -->
-      <span
-        v-for="f in features"
-        :key="f.id"
-        class="hidden xl:flex items-center gap-1 flex-shrink-0"
-        :class="STATES[f.state].text"
-        :data-feature="f.id"
-        :data-state="f.state"
-      >
-        <component :is="STATES[f.state].icon" :size="10" aria-hidden="true" />
-        {{ f.short }}
+      <!-- B6: only what is wrong is named and coloured. A feature switched
+           off is a choice, not a fault, and is listed in the panel. -->
+      <span v-if="!attention.length" class="flex items-center gap-1 flex-shrink-0" data-testid="feature-summary">
+        <component :is="STATES.on.icon" :size="11" class="text-base-content/45" aria-hidden="true" />
+        All working
       </span>
-      <span class="xl:hidden flex items-center gap-1 flex-shrink-0">
-        <component :is="STATES[worst].icon" :size="11" :class="STATES[worst].text" aria-hidden="true" />
-        Features {{ onCount }}/{{ features.length }}
-      </span>
+      <template v-else>
+        <span
+          v-for="f in attention"
+          :key="f.id"
+          class="hidden xl:flex items-center gap-1 flex-shrink-0"
+          :class="STATES[f.state].text"
+          :data-feature="f.id"
+          :data-state="f.state"
+        >
+          <component :is="STATES[f.state].icon" :size="10" aria-hidden="true" />
+          {{ f.short }}
+        </span>
+        <span class="xl:hidden flex items-center gap-1 flex-shrink-0" data-testid="feature-summary">
+          <component :is="STATES[worst].icon" :size="11" :class="STATES[worst].text" aria-hidden="true" />
+          {{ attentionLabel }}
+        </span>
+      </template>
     </button>
 
     <div
@@ -36,7 +43,7 @@
     >
       <div class="flex items-baseline justify-between gap-3 mb-2">
         <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/55">Feature status</h2>
-        <span class="text-xs text-base-content/55 tabular-nums">{{ onCount }} of {{ features.length }} fully working</span>
+        <span class="text-xs text-base-content/55 tabular-nums">{{ attention.length ? attentionLabel : 'All working' }}</span>
       </div>
       <button
         type="button"
@@ -47,19 +54,22 @@
         <Settings :size="11" aria-hidden="true" />
         Change these in Settings
       </button>
-      <ul class="space-y-2.5">
-        <li v-for="f in features" :key="f.id" class="flex gap-2">
-          <component :is="STATES[f.state].icon" :size="14" class="mt-0.5 flex-shrink-0" :class="STATES[f.state].text" aria-hidden="true" />
-          <div class="min-w-0">
-            <div class="flex items-baseline gap-2">
-              <span class="font-medium">{{ f.label }}</span>
-              <span class="text-xs" :class="STATES[f.state].text">{{ STATES[f.state].name }}</span>
+      <section v-for="group in groups" :key="group.id" class="mb-3 last:mb-0" :data-testid="`feature-group-${group.id}`">
+        <h3 class="text-[11px] font-semibold uppercase tracking-wider text-base-content/50 mb-1.5">{{ group.title }}</h3>
+        <ul class="space-y-2.5">
+          <li v-for="f in group.items" :key="f.id" class="flex gap-2">
+            <component :is="STATES[f.state].icon" :size="14" class="mt-0.5 flex-shrink-0" :class="STATES[f.state].text" aria-hidden="true" />
+            <div class="min-w-0">
+              <div class="flex items-baseline gap-2">
+                <span class="font-medium">{{ f.label }}</span>
+                <span class="text-xs" :class="STATES[f.state].text">{{ STATES[f.state].name }}</span>
+              </div>
+              <p class="text-xs text-base-content/65">{{ f.detail }}</p>
+              <p v-if="f.fix" class="text-xs text-base-content/65 mt-0.5"><span class="font-medium">{{ f.state === 'off' ? 'To turn on:' : 'To fix:' }}</span> {{ f.fix }}</p>
             </div>
-            <p class="text-xs text-base-content/65">{{ f.detail }}</p>
-            <p v-if="f.fix" class="text-xs text-base-content/65 mt-0.5"><span class="font-medium">To fix:</span> {{ f.fix }}</p>
-          </div>
-        </li>
-      </ul>
+          </li>
+        </ul>
+      </section>
     </div>
   </div>
 </template>
@@ -82,7 +92,7 @@ const STATES = {
 // Short enough that all of them fit in the footer at 1280 px.
 const SHORT = {
   semantic: 'Semantic', reranker: 'Rerank', ocr: 'OCR', transcription: 'Speech', figures: 'Figures',
-  ai: 'AI', research: 'Catalogues', links: 'Links', git: 'Git', mcp: 'MCP', pii: 'PII',
+  ai: 'AI', research: 'Catalogues', links: 'Links', git: 'Git', mcp: 'MCP', pii: 'Trust no one', pra: 'PRA',
 }
 const REFRESH_MS = 60000
 
@@ -108,12 +118,21 @@ const features = computed(() => server.value.map((f) => {
   }
 }))
 
-const onCount = computed(() => features.value.filter((f) => f.state === 'on').length)
-const worst = computed(() => ['unavailable', 'limited', 'off']
+// What is wrong: limited or unavailable. Off is a choice and never counts.
+const attention = computed(() => features.value.filter((f) => f.state === 'limited' || f.state === 'unavailable'))
+const attentionLabel = computed(() => `${attention.value.length} need${attention.value.length === 1 ? 's' : ''} attention`)
+const worst = computed(() => ['unavailable', 'limited']
   .find((state) => features.value.some((f) => f.state === state)) || 'on')
+const groups = computed(() => [
+  { id: 'attention', title: 'Needs attention', items: attention.value },
+  { id: 'on', title: 'On', items: features.value.filter((f) => f.state === 'on') },
+  { id: 'off', title: 'Switched off', items: features.value.filter((f) => f.state === 'off') },
+].filter((g) => g.items.length))
 const summary = computed(() => {
-  const line = features.value.map((f) => `${f.label}: ${STATES[f.state].name}`).join(', ')
-  return `Feature status. ${onCount.value} of ${features.value.length} fully working. ${line}. Click for details.`
+  const line = attention.value.map((f) => `${f.label}: ${STATES[f.state].name}`).join(', ')
+  return attention.value.length
+    ? `Feature status: ${attentionLabel.value}. ${line}. Click for details.`
+    : 'Feature status: all working. Click for details.'
 })
 
 async function refresh() {

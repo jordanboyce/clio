@@ -120,6 +120,45 @@ async def _run_get(request: Request, path: str, params: Dict[str, Any]) -> Dict[
         return {"status": 500}
 
 
+def warm_startup_paths(app) -> None:
+    """Do at startup what the first page load would otherwise wait for (B11).
+
+    FastAPI builds each included router's route state the first time a
+    request is matched against it, and the capabilities section checks once
+    for a native file picker (a Tk window on a desktop). Both are one-time
+    costs that made the very first /api/bootstrap after a start take about a
+    second. Best effort: the route walk uses FastAPI internals, and anything
+    that does not work here is simply left for the first request.
+    """
+    try:
+        from services.file_picker import is_native_picker_available
+
+        is_native_picker_available()
+    except Exception:  # noqa: BLE001
+        pass
+
+    def walk(routes, depth=0):
+        if depth > 8:
+            return
+        for route in routes:
+            build = getattr(route, "effective_candidates", None)
+            if not callable(build):
+                continue
+            try:
+                children = build()
+                low = getattr(route, "effective_low_priority_routes", None)
+                if callable(low):
+                    low()
+            except Exception:  # noqa: BLE001
+                continue
+            walk(children, depth + 1)
+
+    try:
+        walk(app.router.routes)
+    except Exception:  # noqa: BLE001
+        logger.debug("Route warm-up skipped", exc_info=True)
+
+
 @router.get("/api/bootstrap", summary="Everything the app reads when it opens, in one response")
 async def bootstrap(request: Request, collection_id: Optional[str] = None) -> Dict[str, Any]:
     """The app's startup reads, each as ``{status, body}`` under its key.

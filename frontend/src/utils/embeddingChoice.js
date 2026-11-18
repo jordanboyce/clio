@@ -95,3 +95,13 @@ export function switchCostSentence(cost, { kind, dimensions } = {}) {
     + `(${plural(cost.passages, 'passage', 'passages')}). Embedding them with this model takes ${describeMinutes(minutes)}, `
     + 'plus the time to read the files again. Search keeps using the current index until each collection is re-indexed.'
 }
+
+/** Ollama's own rule: "nomic-embed-text" is "nomic-embed-text:latest" (B2). */
+export function ollamaBaseName(name) {
+  const s = String(name || '').trim()
+  return s.endsWith(':latest') ? s.slice(0, -':latest'.length) : s
+}
+
+export function sameOllamaModel(a, b) {
+  return Boolean(a) && Boolean(b) && ollamaBaseName(a) === ollamaBaseName(b)
+}

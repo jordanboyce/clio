@@ -377,7 +377,7 @@ def test_uncached_model_reports_download_progress_then_ready(local_settings, mon
     assert st["progress"]["total_bytes"] == 1000
     assert st["progress"]["downloaded_bytes"] >= 1500
     assert st["progress"]["percent"] == 99  # capped until the load completes
-    assert st["progress"]["file"] == str(target)
+    assert st["progress"]["file"] == "all-MiniLM-L6-v2"  # B9: a name, never a path
     assert st["can_download"] is True
 
     release.set()
@@ -577,7 +577,9 @@ def test_options_recommends_local_when_available(client, monkeypatch):
         "reachable": True,
         "base_url": settings.ollama_base_url,
         "embedding_models": ["nomic-embed-text:latest", "house-vectors:latest", "bge-m3"],
-        "suggested": "nomic-embed-text",
+        # B2: the suggestion is the installed one, so it is never offered
+        # again as "will be pulled".
+        "suggested": "nomic-embed-text:latest",
     }
     hosted = {h["id"]: h for h in body["hosted"]}
     assert set(hosted) == {"google", "mistral", "voyage", "jina", "openrouter", "openai"}
@@ -776,6 +778,84 @@ def test_ollama_pull_failure_is_an_error(client, monkeypatch, fake_httpx):
 
     resp = client.post("/api/embedding/ollama/pull", json={"model": "  "})
     assert resp.status_code == 400
+
+
+def test_choosing_an_ollama_model_to_pull_is_one_call_that_tracks_and_warms(client, monkeypatch, fake_httpx):
+    """B3: the choice is saved before the pull starts, so the pull's bytes
+    reach the status and its end warms up, with no second click; and a local
+    warm-up still timing out behind a firewall cannot overwrite it."""
+    gate = threading.Event()
+    stuck = threading.Event()
+
+    def slow_local(provider, model):
+        if provider == "local":
+            stuck.set()
+            gate.wait(5)  # a download timing out behind a firewall
+            return FakeService(model)
+        return FakeService(model)
+    monkeypatch.setattr(status_mod, "_default_service_factory", slow_local)
+    monkeypatch.setattr(embedder, "local_model_cached", lambda name, backend=None: True)
+    embedding_status.warm(force=True)
+    assert stuck.wait(2)
+
+    fake_httpx.lines = [json.dumps({"status": "pulling abc", "digest": "sha256:abc", "total": 1000, "completed": 400}),
+                        json.dumps({"status": "success"})]
+    body = client.post("/api/embedding/select", json={"provider": "ollama", "model": "nomic-embed-text",
+                                                     "pull": True}).json()
+    assert body["saved"] is True
+    assert body["status"]["status"] == "downloading" and body["status"]["provider"] == "ollama"
+    assert wait_for(lambda: embedding_status.status()["status"] == "ready")
+    assert embedding_status.status()["provider"] == "ollama"
+    gate.set()  # the old local warm-up finishes late ...
+    time.sleep(0.2)
+    st = embedding_status.status()
+    assert st["provider"] == "ollama" and st["status"] == "ready"   # ... and changes nothing
+    assert fake_httpx.calls and fake_httpx.calls[0][2]["model"] == "nomic-embed-text"
+
+
+def test_download_progress_names_the_model_not_a_path(monkeypatch, local_settings, tmp_path):
+    """B9: the status anyone signed in reads carries no filesystem path."""
+    target = tmp_path / "models--Qdrant--all-MiniLM-L6-v2-onnx"
+    target.mkdir()
+    gate = threading.Event()
+    monkeypatch.setattr(embedder, "local_model_cached", lambda name, backend=None: False)
+    monkeypatch.setattr(embedder, "hub_offline", lambda: False)
+    monkeypatch.setattr(embedder, "local_model_download_dir", lambda name, backend=None: target)
+    monkeypatch.setattr(embedder, "local_model_download_bytes", lambda name, backend=None: 1000)
+    monkeypatch.setattr(status_mod, "WATCH_INTERVAL_SECONDS", 0.02)
+    embedding_status.reset()
+    embedding_status.warm(force=True, service_factory=lambda p, m: (gate.wait(2), FakeService(m))[1])
+    assert wait_for(lambda: embedding_status.status()["status"] == "downloading")
+    time.sleep(0.1)
+    progress = embedding_status.status()["progress"]
+    assert progress["file"] == "all-MiniLM-L6-v2"
+    assert str(tmp_path) not in json.dumps(embedding_status.status())
+    gate.set()
+    assert wait_settled()
+
+
+def test_options_offer_the_sites_own_embedding_server(client, monkeypatch):
+    """B5: offered in offline mode too, since it is on the site's network."""
+    set_setting(monkeypatch, "offline_mode", True)
+    set_setting(monkeypatch, "embedding_base_url", "http://tei.internal:8080/v1")
+    body = client.get("/api/embedding/options").json()
+    assert body["custom"]["configured"] is True
+    assert body["custom"]["base_url"] == "http://tei.internal:8080/v1"   # one-person install: the operator
+
+
+def test_options_hide_internal_addresses_from_non_operators(client, monkeypatch):
+    from api import system
+
+    def not_admin(action="x"):
+        raise system.HTTPException(status_code=403, detail="no")
+    monkeypatch.setattr(system, "require_admin", not_admin)
+    set_setting(monkeypatch, "embedding_base_url", "http://tei.internal:8080/v1")
+    monkeypatch.setenv("HF_ENDPOINT", "http://mirror.internal:81")
+    body = client.get("/api/embedding/options").json()
+    text = json.dumps(body)
+    assert "tei.internal" not in text and "mirror.internal" not in text
+    from config import settings
+    assert settings.ollama_base_url not in text
 
 
 def test_ollama_pull_leaves_status_alone_for_other_providers(client, fake_httpx):

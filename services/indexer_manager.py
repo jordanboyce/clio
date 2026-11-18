@@ -35,6 +35,15 @@ _UNLOAD_SWEEP_INTERVAL_S = 60
 EMBEDDING_BUILD_WAIT_SECONDS = 5.0
 
 
+def _holds_no_vectors(indexer) -> bool:
+    """True when a collection's index has no vectors to keep matching (empty,
+    or indexed for keyword search only)."""
+    try:
+        return int(indexer.vector_store.index.ntotal) == 0
+    except Exception:  # noqa: BLE001 - when unsure, keep it open as it is
+        return False
+
+
 class IndexerManager:
     """Manages DocumentIndexer instances for multiple collections."""
 
@@ -183,6 +192,18 @@ class IndexerManager:
         with self._builds_lock:
             if key in self._embedding_services:
                 return self._embedding_services[key]
+        # B11: while the warm-up is preparing the model (a download, a remote
+        # probe), opening a collection neither waits for it nor starts a
+        # second attempt: the collection opens for keyword search at once,
+        # and its deferred service picks the model up once the warm-up has
+        # put it in the cache. The first page load no longer waits seconds
+        # on a download that a firewall is quietly dropping.
+        from services.embedding_status import embedding_status
+
+        if embedding_status.is_running():
+            name = model if local else (settings.remote_embedding_model or model)
+            raise RuntimeError(f"The search model '{name}' is still being prepared.")
+        with self._builds_lock:
             build = self._builds.get(key)
             started_here = build is None
             if started_here:
@@ -194,7 +215,10 @@ class IndexerManager:
         try:
             # Only the first caller waits, so opening many collections does not
             # add up to minutes while one attempt is under way.
-            return build.result(timeout=EMBEDDING_BUILD_WAIT_SECONDS if started_here else 0)
+            # A local model that is not on disk is a download, which a short
+            # wait cannot see through; only a remote endpoint gets one.
+            wait = EMBEDDING_BUILD_WAIT_SECONDS if started_here and not local else 0
+            return build.result(timeout=wait)
         except FutureTimeout:
             name = model if local else (settings.remote_embedding_model or model)
             raise RuntimeError(
@@ -222,7 +246,21 @@ class IndexerManager:
         """
         with self._creation_lock:
             self._embedding_services = {}
-        logger.info("Embedding services reset; new settings apply to re-indexes and newly opened collections")
+            # A collection with no vectors yet has nothing to keep matching:
+            # it reopens under the new model. Otherwise the first-run screen
+            # leaves the empty default collection at the size of the model
+            # that could not be downloaded, and the model just chosen reads
+            # as a mismatch that asks for a re-index of nothing.
+            empty = [cid for cid, indexer in self._indexers.items() if _holds_no_vectors(indexer)]
+            for cid in empty:
+                old = self._indexers.pop(cid)
+                try:
+                    if hasattr(old.vector_store, "close"):
+                        old.vector_store.close()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Could not close the index of '{cid}': {e}")
+        logger.info("Embedding services reset; new settings apply to re-indexes and newly opened collections"
+                    + (f"; reopening {len(empty)} collection(s) with no vectors yet" if empty else ""))
 
     def rebuild_indexer(self, collection_id: str = "default") -> DocumentIndexer:
         """Close a cached indexer and construct it again from current settings.
