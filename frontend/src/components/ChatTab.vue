@@ -1,5 +1,5 @@
 <template>
-  <div class="flex flex-col h-full min-h-0">
+  <div class="flex flex-col h-full min-h-0" @dragover="onFilesOver" @drop="onFilesDropped">
 
       <!-- Header row -->
       <div class="flex items-center justify-between flex-shrink-0 py-1.5 mb-1 border-b border-base-300/60">
@@ -1315,6 +1315,19 @@ const copyMessage = async (msg, index) => {
 const citationStyle = useCitationStyle()
 const citedMessageIndex = ref(null)
 let citedResetTimer = null
+
+// C6: files dropped on Ask go to the Sources panel, which adds them.
+const onFilesOver = (event) => {
+  if (Array.from(event.dataTransfer?.types || []).includes('Files')) event.preventDefault()
+}
+const onFilesDropped = (event) => {
+  const files = Array.from(event.dataTransfer?.files || [])
+  if (!files.length) return
+  event.preventDefault()
+  const detail = { files, handled: false }
+  window.dispatchEvent(new CustomEvent('clio:files-dropped', { detail }))
+  if (!detail.handled) ui.notify('Open the Sources panel, then drop the files on it to add them.', 'info')
+}
 
 const FEEDBACK_PROBLEMS = [
   { value: 'wrong_answer', label: 'Wrong answer' },

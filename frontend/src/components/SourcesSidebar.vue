@@ -1,5 +1,11 @@
 <template>
-  <div class="flex flex-col h-full">
+  <div class="flex flex-col h-full relative"
+    @dragenter.prevent="onDragEnter" @dragover.prevent="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop">
+    <!-- C6: files dropped anywhere on the panel are added to the collection. -->
+    <div v-if="dropActive" class="absolute inset-0 z-30 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-base-100/90 pointer-events-none"
+      data-testid="sources-drop-target">
+      <span class="text-sm font-medium text-primary">Drop files to add them to this collection</span>
+    </div>
 
     <!-- Control rail. Bare icon buttons, no heading bar: the panel names
          itself through the section labels below, the way every other
@@ -504,9 +510,14 @@
             <!-- Progress -->
             <div v-if="indexing" class="space-y-1">
               <template v-if="uploading">
+                <progress class="progress progress-primary w-full h-1.5" data-testid="upload-progress"
+                  :value="uploadBytes.total ? uploadBytes.sent : null" :max="uploadBytes.total || 100"></progress>
                 <div class="flex items-center gap-2 text-xs text-base-content/60">
-                  <span class="loading loading-spinner loading-xs"></span>
-                  Uploading {{ uploadingCount }} file{{ uploadingCount !== 1 ? 's' : '' }}…
+                  <span class="flex-1 min-w-0 truncate">
+                    Uploading {{ uploadingCount }} file{{ uploadingCount !== 1 ? 's' : '' }}<template v-if="uploadBytes.total">
+                      · {{ formatBytes(uploadBytes.sent) }} of {{ formatBytes(uploadBytes.total) }}</template>
+                  </span>
+                  <button type="button" class="btn btn-ghost btn-xs" data-testid="upload-cancel" @click="cancelUpload">Cancel</button>
                 </div>
               </template>
               <template v-else>
@@ -1358,6 +1369,55 @@ const indexError = ref('')
 const indexResult = ref({ count: 0, chunks: 0 })
 const uploading = ref(false)
 const uploadingCount = ref(0)
+// C6: bytes sent of the transfer in progress, and a way to stop it.
+const uploadBytes = ref({ sent: 0, total: 0 })
+let uploadController = null
+const uploadCancelled = ref(false)
+const cancelUpload = () => {
+  uploadCancelled.value = true
+  uploadController?.abort()
+}
+
+// C6: a drop target. Files dropped on the panel (or on Ask, which passes them
+// here) are added at once, as if picked and added.
+const dropActive = ref(false)
+let dragDepth = 0
+const carriesFiles = (event) => Array.from(event.dataTransfer?.types || []).includes('Files')
+const onDragEnter = (event) => {
+  if (!carriesFiles(event) || !collectionStore.canEditCurrent) return
+  dragDepth += 1
+  dropActive.value = true
+}
+const onDragOver = (event) => {
+  if (carriesFiles(event) && event.dataTransfer) event.dataTransfer.dropEffect = collectionStore.canEditCurrent ? 'copy' : 'none'
+}
+const onDragLeave = () => {
+  dragDepth = Math.max(0, dragDepth - 1)
+  if (!dragDepth) dropActive.value = false
+}
+const addDroppedFiles = (files) => {
+  if (!files.length) return false
+  if (!collectionStore.canEditCurrent) {
+    ui.notify('You cannot add sources to this collection.', 'warning')
+    return true
+  }
+  if (indexing.value) {
+    ui.notify('Wait for the files being added to finish, then drop these again.', 'info')
+    return true
+  }
+  _appendBrowserSelection(files, (f) => f.name)
+  addSectionOpen.value = true
+  indexFiles()
+  return true
+}
+const onDrop = (event) => {
+  dragDepth = 0
+  dropActive.value = false
+  addDroppedFiles(Array.from(event.dataTransfer?.files || []))
+}
+const onFilesDroppedElsewhere = (event) => {
+  if (addDroppedFiles(event.detail?.files || [])) event.detail.handled = true
+}
 const justIndexed = ref(false)
 
 // Link panel: URLs pasted one per line (any whitespace separates them —
@@ -1956,9 +2016,15 @@ const indexFiles = async () => {
 
       uploading.value = true
       uploadingCount.value = browserItems.length
+      uploadCancelled.value = false
+      uploadController = new AbortController()
+      const sizeOf = (item) => item.size || item.file.size || 0
+      uploadBytes.value = { sent: 0, total: browserItems.reduce((n, item) => n + sizeOf(item), 0) }
       let uploaded = 0
+      let sentBefore = 0
       try {
         for (const group of batches) {
+          if (uploadCancelled.value) break
           const formData = new FormData()
           for (const item of group) formData.append('files', item.file, item.name)
           formData.append('collection_id', collectionId)
@@ -1966,14 +2032,21 @@ const indexFiles = async () => {
             const response = await http.post('/documents/upload-staged', formData, {
               headers: { 'Content-Type': 'multipart/form-data' },
               timeout: 0, // large batches stream for as long as they need
+              signal: uploadController.signal,
+              onUploadProgress: (e) => {
+                uploadBytes.value = { ...uploadBytes.value, sent: Math.min(uploadBytes.value.total, sentBefore + (e.loaded || 0)) }
+              },
             })
             for (const staged of response.data.staged || []) stagedPaths.push(staged.path)
             for (const f of response.data.failed || []) errors.push(`${f.filename}: ${f.error}`)
           } catch (err) {
+            if (uploadCancelled.value) break
             errors.push(`Upload of ${group.length} file(s) starting with ${group[0].name}: ` +
                         describe(err, 'transfer failed'))
           }
           uploaded += group.length
+          sentBefore += group.reduce((n, item) => n + sizeOf(item), 0)
+          uploadBytes.value = { ...uploadBytes.value, sent: sentBefore }
           uploadingCount.value = browserItems.length - uploaded
           indexProgressPercent.value = (uploaded / browserItems.length) * 100
           currentIndexingFile.value = group[group.length - 1].name
@@ -1981,6 +2054,12 @@ const indexFiles = async () => {
       } finally {
         uploading.value = false
         uploadingCount.value = 0
+        uploadController = null
+      }
+      if (uploadCancelled.value) {
+        // Batches already sent are staged, not indexed: nothing is added.
+        indexError.value = 'Upload cancelled. Nothing was added; the files are still listed if you want to try again.'
+        return
       }
     }
 
@@ -2857,6 +2936,7 @@ onMounted(async () => {
   window.addEventListener('beforeunload', beforeUnloadHandler)
   window.addEventListener('keydown', onSidebarKeydown)
   window.addEventListener('clio:add-sources', openAddSources)
+  window.addEventListener('clio:files-dropped', onFilesDroppedElsewhere)
   try {
     const resp = await http.get('/api/capabilities')
     capabilities.value = resp.data
@@ -2869,6 +2949,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', beforeUnloadHandler)
   window.removeEventListener('keydown', onSidebarKeydown)
   window.removeEventListener('clio:add-sources', openAddSources)
+  window.removeEventListener('clio:files-dropped', onFilesDroppedElsewhere)
   if (isRecording.value) {
     cancelled = true
     try { mediaRecorder?.stop() } catch (_) { /* ignore */ }
