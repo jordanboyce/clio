@@ -289,6 +289,7 @@ an outbound path.
 | `RESEARCH_LOOKUP_TIMEOUT_SECONDS` | `15` | Per catalogue request |
 | `LIBRARY_MAX_JOB_DOCUMENTS` | `200` | Sources one background job may cover (`RESEARCH_MAX_JOB_DOCUMENTS` before R9, still read) |
 | `LIBRARY_MAX_CONCURRENT_JOBS` | `1` | Review/screening jobs running at once; the rest wait (`RESEARCH_MAX_CONCURRENT_JOBS` before R9, still read) |
+| `LIBRARY_AUTO_ANALYZE` | `true` | Read each new paper's record as soon as it is indexed (a Library job; no model). `false` leaves it to Analyze |
 
 A setting set only under its old name still works, and the server log names it at startup so it can be renamed.
 

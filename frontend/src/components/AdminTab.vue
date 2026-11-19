@@ -79,7 +79,7 @@
             v-if="selectedShown.length"
             class="mb-3 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 flex flex-wrap items-center gap-2 text-xs"
             role="toolbar"
-            aria-label="Bulk actions for the selected documents"
+            aria-label="Bulk actions for the selected sources"
             data-testid="bulk-bar"
           >
             <span class="font-medium tabular-nums">{{ selectedShown.length }} selected</span>
@@ -767,7 +767,11 @@ const refs = (rows) => rows.map((d) => ({ collection_id: d.collection_id, docume
 const bulkApprove = async (rows, label) => {
   const items = refs(rows)
   if (!items.length) return
-  if (!window.confirm(`Mark ${items.length === 1 ? 'this document' : `these ${items.length} documents`} as reviewed and fine? Held documents become visible again.`)) return
+  if (!(await ui.confirm({
+    title: `Mark ${items.length === 1 ? 'this document' : `these ${items.length} documents`} as reviewed?`,
+    message: 'Held documents become visible to everyone who can read the collection again.',
+    confirmLabel: 'Mark reviewed',
+  }))) return
   bulkBusy.value = label
   try {
     const resp = await http.post('/api/admin/review/resolve', { items, note: '' })
@@ -789,9 +793,12 @@ const removeSelected = async (block) => {
   const items = refs(selectedShown.value)
   if (!items.length) return
   const what = items.length === 1 ? `"${selectedShown.value[0].filename}"` : `these ${items.length} documents`
-  if (!window.confirm(block
-    ? `Remove ${what} and block the file${items.length === 1 ? '' : 's'} from being re-added?`
-    : `Remove ${what}?`)) return
+  if (!(await ui.confirm({
+    title: block ? `Remove ${what} and block ${items.length === 1 ? 'it' : 'them'}?` : `Remove ${what}?`,
+    message: block ? 'They are removed, and the same files cannot be added again.' : 'They are removed from their collections.',
+    confirmLabel: block ? 'Remove and block' : 'Remove',
+    danger: true,
+  }))) return
   bulkBusy.value = block ? 'remove-block' : 'remove'
   try {
     const resp = await http.post('/api/admin/review/remove', { items, block, reason: '' })
@@ -865,7 +872,12 @@ const addAllowPhrase = async () => {
 
 const remove = async (d, block) => {
   const what = d.filename || d.document_id
-  if (!window.confirm(block ? `Remove "${what}" and block the file from being re-added?` : `Remove "${what}"?`)) return
+  if (!(await ui.confirm({
+    title: block ? `Remove "${what}" and block it?` : `Remove "${what}"?`,
+    message: block ? 'It is removed, and the same file cannot be added again.' : 'It is removed from its collection.',
+    confirmLabel: block ? 'Remove and block' : 'Remove',
+    danger: true,
+  }))) return
   busy.value = key(d)
   try {
     await http.post(`/api/admin/documents/${d.collection_id}/${d.document_id}/remove`, { block, reason: '' })
@@ -1025,7 +1037,12 @@ const unblockHash = async (h) => {
 
 const suspend = async () => {
   const email = suspendEmail.value.trim()
-  if (!window.confirm(`Suspend ${email}? Their MCP tokens are revoked immediately.`)) return
+  if (!(await ui.confirm({
+    title: `Suspend ${email}?`,
+    message: 'They can no longer sign in or use the API, and their MCP tokens are revoked at once.',
+    confirmLabel: 'Suspend',
+    danger: true,
+  }))) return
   try {
     const resp = await http.post(`/api/admin/users/${encodeURIComponent(email)}/suspend`, { reason: suspendReason.value })
     const r = resp.data

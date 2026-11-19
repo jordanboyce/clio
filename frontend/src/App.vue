@@ -1580,9 +1580,14 @@ const me = ref({ authenticated_via: null, identity: null })
 // Everything this browser kept (provider keys, chat and search history,
 // notes, every person's), then the deployment's sign-out page if it has one.
 const signOutLabel = computed(() => (me.value.sign_out_url ? 'Sign out and clear this browser' : 'Clear this browser'))
-const signOutAndClear = () => {
-  if (!window.confirm('Remove everything Clio kept in this browser, including saved provider keys and chat history? '
-    + 'What is stored on the server is not affected.')) return
+const signOutAndClear = async () => {
+  if (!(await ui.confirm({
+    title: 'Clear this browser?',
+    message: 'Everything Clio kept in this browser goes, including saved provider keys and chat history. '
+      + 'What is stored on the server is not affected.',
+    confirmLabel: 'Clear',
+    danger: true,
+  }))) return
   clearThisBrowser()
   if (me.value.sign_out_url) window.location.assign(me.value.sign_out_url)
   else window.location.reload()

@@ -6,6 +6,7 @@ vi.mock('../../utils/http', () => ({ default: { get: vi.fn(), post: vi.fn(), del
 
 import http from '../../utils/http'
 import AdminTab from '../AdminTab.vue'
+import { useUiStore } from '../../stores/uiStore'
 
 const item = (id, over = {}) => ({
   collection_id: 'default', document_id: id, filename: `${id}.pdf`, collection_name: 'Default',
@@ -47,10 +48,16 @@ function wireHttp(items) {
   })
 }
 
+// D5: Admin asks through the app's one confirm dialog (ui.confirm).
+let answer = true
+let asked = []
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
-  window.confirm = vi.fn(() => true)
+  answer = true
+  asked = []
+  const ui = useUiStore()
+  ui.confirm = vi.fn((request) => { asked.push(request); return Promise.resolve(answer) })
 })
 
 const mountAdmin = async (items) => {
@@ -77,7 +84,7 @@ describe('review queue bulk decisions', () => {
     await flushPromises()
     const [body] = postsTo('/api/admin/review/resolve')
     expect(body.items.map((i) => i.document_id)).toEqual(['a', 'c'])
-    expect(window.confirm).toHaveBeenCalled()
+    expect(asked).toHaveLength(1)
   })
 
   it('"select all shown" follows the filter and removes with the block flag', async () => {
@@ -90,18 +97,18 @@ describe('review queue bulk decisions', () => {
     const [body] = postsTo('/api/admin/review/remove')
     expect(body.block).toBe(true)
     expect(body.items.map((i) => i.document_id)).toEqual(['a', 'b'])
-    expect(window.confirm.mock.calls[0][0]).toContain('block')
+    expect(asked[0].title).toContain('block')
   })
 
   it('"remove selected" without blocking passes block=false and respects a cancelled confirm', async () => {
     const w = await mountAdmin([item('a'), item('b')])
     await w.get('[data-testid="select-all-shown"]').setValue(true)
-    window.confirm = vi.fn(() => false)
+    answer = false
     await w.get('[data-testid="bulk-remove"]').trigger('click')
     await flushPromises()
     expect(postsTo('/api/admin/review/remove')).toHaveLength(0)
 
-    window.confirm = vi.fn(() => true)
+    answer = true
     await w.get('[data-testid="bulk-remove"]').trigger('click')
     await flushPromises()
     expect(postsTo('/api/admin/review/remove')[0].block).toBe(false)
