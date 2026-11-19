@@ -717,6 +717,27 @@ def _limit_calls(provider) -> None:
         limit(max(10, int(settings.chat_model_timeout_seconds)))
 
 
+# Matrix row 4: an OpenAI-compatible server (Ollama's /v1, vLLM, a gateway)
+# answers 400 when the model has no tool support. Such a model is asked again
+# in the written <tool_call> protocol, and remembered for this process so the
+# next question does not make the failing call first.
+_TOOLS_REFUSED_RE = re.compile(
+    r"(does not|doesn't|do not|not) supports? (native )?(tools|tool use|tool calling|tool calls|function calling)"
+    r"|tools? (are|is) not supported|tool_choice is not supported",
+    re.IGNORECASE,
+)
+_MODELS_WITHOUT_TOOLS: set = set()
+
+
+def _tools_key(provider, model_name: str) -> tuple:
+    client = getattr(provider, "client", None)
+    return (type(provider).__name__, str(getattr(client, "base_url", "") or ""), model_name or "")
+
+
+def _refuses_tools(exc: Exception) -> bool:
+    return bool(_TOOLS_REFUSED_RE.search(str(exc)))
+
+
 def _model_call(provider, model_name: str, fn, *args, **kwargs):
     """Make one provider call inside a turn: ``result = yield from _model_call(...)``.
 
@@ -959,8 +980,10 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
             return results
 
         answer = ""
+        native = (provider.supports_native_tools()
+                  and _tools_key(provider, ai_service.quality_model) not in _MODELS_WITHOUT_TOOLS)
         # ---------- agent loop: native tool calling ------------------------
-        if provider.supports_native_tools():
+        if native:
             is_anthropic = isinstance(provider, AnthropicProvider)
             tools_spec = _tools_for_depth(
                 chat_request, anthropic_tools() if is_anthropic else openai_tools(), tool_tables,
@@ -974,11 +997,19 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
             messages = [{"role": m.role, "content": m.content} for m in chat_request.messages]
 
             for iteration in range(max_iterations):
-                turn = yield from _model_call(
-                    provider, ai_service.quality_model, provider.complete_with_tools,
-                    messages=messages, tools=tools_spec, max_tokens=chat_request.max_output_tokens or 4096,
-                    model=ai_service.quality_model, system=system_text,
-                )
+                try:
+                    turn = yield from _model_call(
+                        provider, ai_service.quality_model, provider.complete_with_tools,
+                        messages=messages, tools=tools_spec, max_tokens=chat_request.max_output_tokens or 4096,
+                        model=ai_service.quality_model, system=system_text,
+                    )
+                except Exception as exc:
+                    if iteration == 0 and tools_spec and _refuses_tools(exc):
+                        logger.info(f"{ai_service.quality_model} refused native tools; using the written protocol: {exc}")
+                        _MODELS_WITHOUT_TOOLS.add(_tools_key(provider, ai_service.quality_model))
+                        native = False
+                        break
+                    raise
                 account(turn.get("usage"))
                 tool_calls = turn.get("tool_calls") or []
                 narration = turn.get("text") or ""
@@ -996,7 +1027,7 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
                     yield {"type": "tool_end", "tool": tc["name"], "result": res}
                 messages.extend(_tool_result_messages(tool_calls, results, is_anthropic))
 
-            if not answer:
+            if native and not answer:
                 # Iteration cap hit mid-research: one more pass with no tools
                 # so the turn always ends in an answer.
                 try:
@@ -1012,8 +1043,9 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
                     logger.warning(f"Agent final-answer pass failed: {e}")
                 answer = answer or _FINAL_ANSWER_FALLBACK
 
-        # ---------- agent loop: prose <tool_call> protocol (Ollama) ---------
-        else:
+        # ---------- agent loop: prose <tool_call> protocol (Ollama, and a
+        # model that refused native tools) ----------------------------------
+        if not native:
             tools_block = "" if (_is_quick(chat_request) and not tool_tables) else build_tool_use_instructions()
             history_text = "\n\n".join(
                 f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}" for m in chat_request.messages[:-1]

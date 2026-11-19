@@ -163,6 +163,29 @@ def test_a_bad_request_is_not_retried_and_keeps_its_message(monkeypatch):
     assert not [s for s in statuses(events) if s[0] == "retry"]
 
 
+def test_a_model_that_refuses_tools_answers_in_the_written_protocol(monkeypatch):
+    """Matrix row 4: gemma3:4b behind Ollama's OpenAI-compatible /v1 answered
+    "does not support tools" with a 400, and the turn ended "Chat failed". It
+    is asked again in the written protocol, and the next question goes
+    straight there."""
+    monkeypatch.setattr(chat, "_MODELS_WITHOUT_TOOLS", set())
+    refused = openai.BadRequestError(
+        "Error code: 400 - {'error': {'message': 'registry.ollama.ai/library/gemma3:4b does not support tools'}}",
+        response=httpx.Response(400, request=REQUEST), body=None)
+    provider = native([refused])
+    provider.complete.return_value = {"text": "Five days.", "usage": {}}
+    question = {**QUESTION, "depth": "deep"}
+
+    for _ in range(2):
+        _wire(monkeypatch, provider)
+        with _client() as client:
+            events = _events(client.post("/api/chat/stream", json=question))
+        assert events[-1]["type"] == "done", events[-1]
+        assert "".join(e.get("delta", "") for e in events) == "Five days."
+    assert provider.complete_with_tools.call_count == 1   # the second question skips it
+    assert provider.complete.call_count == 2
+
+
 def test_a_slow_local_model_is_not_asked_twice(monkeypatch):
     provider = OllamaProvider()
     provider.supports_native_tools = lambda: False
