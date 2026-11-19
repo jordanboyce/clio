@@ -190,10 +190,93 @@ def test_a_local_model_that_must_be_downloaded_is_not_waited_for(monkeypatch):
     monkeypatch.setattr(im.indexer_manager, "_get_embedding_service", lambda model: gate.wait(5))
     monkeypatch.setattr(im.indexer_manager, "_builds", {})
     t = time.perf_counter()
-    with pytest.raises(RuntimeError, match="Still trying"):
+    with pytest.raises(RuntimeError, match="is being downloaded"):
         im.indexer_manager._reach_embedding_service("all-MiniLM-L6-v2")
     assert time.perf_counter() - t < 0.5
     gate.set()
+
+
+def test_after_a_failed_download_every_surface_says_it_failed(monkeypatch):
+    """Matrix row 3 (hub black-holed, model not baked): the warm-up gave up,
+    the footer said so, but readiness said "it will download on first use" and
+    a search by meaning said "still trying ... minutes to fail"."""
+    import threading
+
+    from services import indexer_manager as im
+    from services import readiness
+    from services.embedding_status import embedding_status
+
+    model = "BAAI/bge-small-en-v1.5"
+    monkeypatch.setattr(im.settings, "embedding_provider", "local")
+    monkeypatch.setattr(im.settings, "embedding_model", model)
+    monkeypatch.setattr(embedding_status, "_state", {
+        **embedding_status._blank(), "provider": "local", "model": model, "status": "error",
+        "error": f"Could not download embedding model '{model}' from 10.255.255.1:81.",
+    })
+    monkeypatch.setattr(embedding_status, "is_running", lambda: False)
+    monkeypatch.setattr(im, "local_model_cached", lambda name: False)
+    from services import embedder
+
+    monkeypatch.setattr(embedder, "local_model_cached", lambda name, backend=None: False)
+    monkeypatch.setattr(embedder, "resolve_local_backend", lambda name: "fastembed")
+    gate = threading.Event()
+    monkeypatch.setattr(im.indexer_manager, "_get_embedding_service", lambda m: gate.wait(5))
+    monkeypatch.setattr(im.indexer_manager, "_builds", {})
+
+    check = readiness._embedding_check()
+    assert "downloading it failed" in check["detail"] and "10.255.255.1:81" in check["detail"]
+    assert "will download on first use" not in check["detail"]
+
+    with pytest.raises(RuntimeError, match="could not be downloaded") as e:
+        im.indexer_manager._reach_embedding_service(model)
+    assert "Still trying" not in str(e.value)
+    gate.set()
+
+    # A different model's failure says nothing about this one.
+    assert embedding_status.failure_for("all-MiniLM-L6-v2") is None
+
+
+def test_readiness_does_not_pass_a_site_embedding_server_that_did_not_answer(monkeypatch):
+    """Matrix row 6: EMBEDDING_PROVIDER=openai_compatible with the server down
+    at start; the footer said keyword-only while readiness passed."""
+    from services import readiness
+    from services.embedding_status import embedding_status
+
+    monkeypatch.setattr(readiness.settings, "embedding_provider", "openai_compatible")
+    monkeypatch.setattr(readiness.settings, "embedding_base_url", "http://embed.internal:8080/v1")
+    monkeypatch.setattr(readiness.settings, "remote_embedding_model", "site-embedder")
+    monkeypatch.setattr(embedding_status, "_state", {
+        **embedding_status._blank(), "provider": "openai_compatible", "model": "site-embedder",
+        "status": "error", "error": "Connection refused.",
+    })
+    check = readiness._embedding_check()
+    assert check["status"] == readiness.WARN
+    assert "did not answer" in check["detail"] and "keyword only" in check["detail"]
+
+    monkeypatch.setattr(embedding_status, "_state", {
+        **embedding_status._blank(), "provider": "openai_compatible", "model": "site-embedder", "status": "ready"})
+    assert readiness._embedding_check()["status"] == readiness.PASS
+
+
+def test_in_offline_mode_a_missing_model_is_not_still_being_tried(monkeypatch):
+    """Matrix row 4: a :bge image on a volume indexed with MiniLM, OFFLINE_MODE=1.
+    Searching the MiniLM collection said "Still trying ... minutes to fail";
+    the model cannot arrive, so nothing is tried and the reason says why."""
+    from services import indexer_manager as im
+    from services.embedding_status import embedding_status
+
+    started = []
+    monkeypatch.setattr(im.settings, "embedding_provider", "local")
+    monkeypatch.setattr(im.settings, "offline_mode", True)
+    monkeypatch.setattr(embedding_status, "is_running", lambda: False)
+    monkeypatch.setattr(im, "local_model_cached", lambda name: False)
+    monkeypatch.setattr(im.indexer_manager, "_get_embedding_service", lambda m: started.append(m))
+    monkeypatch.setattr(im.indexer_manager, "_builds", {})
+
+    with pytest.raises(RuntimeError, match="offline mode cannot download it") as e:
+        im.indexer_manager._reach_embedding_service("all-MiniLM-L6-v2")
+    assert "Still trying" not in str(e.value)
+    assert started == []
 
 
 def test_a_collection_with_no_vectors_reopens_under_a_newly_chosen_model(monkeypatch):

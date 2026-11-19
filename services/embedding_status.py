@@ -134,6 +134,17 @@ class EmbeddingStatus:
         with self._lock:
             return copy.deepcopy(self._state)
 
+    def failure_for(self, model: str) -> Optional[str]:
+        """Why the last attempt at this model failed, or None.
+
+        Readiness and the search path read it, so they say what the first-run
+        screen and the footer already say instead of "it will download".
+        """
+        with self._lock:
+            if self._state["status"] == "error" and self._state["model"] == model:
+                return self._state["error"] or "The last attempt failed."
+        return None
+
     def model_arrived(self, service) -> None:
         """A model out of reach at startup has since been built for a collection.
 

@@ -298,7 +298,7 @@ def test_one_attempt_at_a_time_however_many_callers_ask(site, black_hole):
 
     manager = im.IndexerManager()
     for _ in range(5):
-        with pytest.raises(RuntimeError, match="Still trying"):
+        with pytest.raises(RuntimeError, match="is being downloaded"):
             manager._reach_embedding_service(CUSTOM)
 
     assert len(black_hole.builds) == 1

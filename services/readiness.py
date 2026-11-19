@@ -246,8 +246,20 @@ def _embedding_check() -> Dict[str, Any]:
                           FAIL if (settings.offline_mode or is_secure_profile()) else WARN,
                           f"Provider '{provider}' is a hosted service: chunk text and queries leave the machine.",
                           "Use EMBEDDING_PROVIDER=local (default) or your own endpoint.")
+        endpoint = settings.embedding_base_url or settings.ollama_base_url
+        from services.embedding_status import embedding_status
+
+        failed = embedding_status.failure_for(settings.remote_embedding_model)
+        if failed:
+            # Matrix row 6: a site embedding server that was down at start
+            # passed here while the footer said search is keyword-only.
+            return _check("embedding", "models", "Embedding model", WARN,
+                          f"{provider} at your own endpoint ({endpoint}) did not answer: {failed} "
+                          "Until it does, sources still index and search works by keyword only.",
+                          "Start the embedding server or make it reachable from this one, then use Check again "
+                          "in Settings, Indexing.")
         return _check("embedding", "models", "Embedding model", PASS,
-                      f"{provider} at your own endpoint ({settings.embedding_base_url or settings.ollama_base_url}).")
+                      f"{provider} at your own endpoint ({endpoint}).")
 
     model = settings.embedding_model
     try:
@@ -258,6 +270,17 @@ def _embedding_check() -> Dict[str, Any]:
     if embedder.local_model_cached(model, backend):
         return _check("embedding", "models", "Embedding model", PASS,
                       f"{model} is in the local cache ({backend}); nothing is downloaded at run time.")
+    from services.embedding_status import embedding_status
+
+    failed = embedding_status.failure_for(model)
+    if failed:
+        # Matrix row 3: the download was tried and failed; "it will download
+        # on first use" contradicted the first-run screen and the footer.
+        return _check("embedding", "models", "Embedding model", WARN,
+                      f"{model} is not in the local cache, and downloading it failed: {failed} "
+                      "Until it is there, sources still index and search works by keyword only.",
+                      "Make the download host reachable from this server, pre-seed the cache (docs/AIRGAP.md), "
+                      "or choose Ollama or your own embedding server in Settings.")
     return _check("embedding", "models", "Embedding model", FAIL if embedder.hub_offline() else WARN,
                   f"{model} is not in the local cache" + ("; offline mode cannot download it." if embedder.hub_offline()
                                                           else "; it will download on first use.")

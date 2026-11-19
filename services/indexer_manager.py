@@ -20,7 +20,7 @@ from services.chunker import TextChunker
 from services.embedder import (
     DeferredEmbeddingService, EmbeddingModelMismatch, create_embedding_service, describe_embedding,
     index_dimension,
-    embedding_signature, known_embedding_dim, local_model_cached,
+    embedding_signature, hub_offline, known_embedding_dim, local_model_cached,
 )
 from services.vector_store import VectorStore
 from services.indexing import DocumentIndexer
@@ -231,6 +231,14 @@ class IndexerManager:
         local = settings.embedding_provider == "local"
         if local and local_model_cached(model):
             return self._get_embedding_service(model)
+        if local and hub_offline():
+            # Matrix row 4 (a :bge image on a MiniLM volume, OFFLINE_MODE=1):
+            # the model can never arrive, so no attempt starts and the reason
+            # is not "still trying". The collection's notice offers the way
+            # out (re-index with this server's model).
+            raise RuntimeError(
+                f"The search model '{model}' is not on this server, and offline mode cannot download it."
+            )
 
         key = f"local::{model}" if local else embedding_signature()
         with self._builds_lock:
@@ -264,7 +272,17 @@ class IndexerManager:
             wait = EMBEDDING_BUILD_WAIT_SECONDS if started_here and not local else 0
             return build.result(timeout=wait)
         except FutureTimeout:
-            name = model if local else (settings.remote_embedding_model or model)
+            if local:
+                # Matrix row 3: a local model is a download, never waited for
+                # here. Say so, and if the last attempt already failed, say
+                # that rather than "still trying"; another attempt is under way.
+                if embedding_status.failure_for(model):
+                    raise RuntimeError(
+                        f"The search model '{model}' could not be downloaded to this server. "
+                        f"It is being tried again."
+                    ) from None
+                raise RuntimeError(f"The search model '{model}' is being downloaded.") from None
+            name = settings.remote_embedding_model or model
             raise RuntimeError(
                 f"Still trying to reach embedding model '{name}'. "
                 f"Behind a firewall this can take minutes to fail."
