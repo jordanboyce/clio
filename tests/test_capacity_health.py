@@ -123,6 +123,32 @@ def test_a_line_logged_during_a_request_carries_its_id():
     assert TextFormatter("%(message)s%(rid_suffix)s").format(record) == "indexed 3 files rid=abc123def456"
 
 
+def test_a_root_handler_set_up_before_configure_gets_the_id_too():
+    """Something imported before main.configure() can already have given the
+    root logger a plain handler; its lines must carry the id as well."""
+    import io
+
+    from middleware import request_context
+    from services import log_format
+
+    root = logging.getLogger()
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(handler)
+    level = root.level
+    token = request_context._scope.set({"type": "http", "state": {"request_id": "feedbeef0001"}})
+    try:
+        log_format.configure("text", "INFO")
+        logging.getLogger("services.anything").warning("upload refused")
+    finally:
+        request_context._scope.reset(token)
+        root.removeHandler(handler)
+        root.setLevel(level)
+
+    assert stream.getvalue() == "upload refused rid=feedbeef0001\n"
+
+
 def test_a_line_outside_a_request_has_no_id():
     from services.log_format import RequestIdFilter, TextFormatter
 

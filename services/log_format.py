@@ -81,6 +81,14 @@ def configure(log_format: str, log_level: str = "INFO") -> None:
         for handler in logger.handlers:
             if _request_id_filter not in handler.filters:
                 handler.addFilter(_request_id_filter)
+    # A handler something imported earlier put on the root logger keeps its
+    # own layout, with the request id added at the end of each line.
+    for handler in root.handlers:
+        current = handler.formatter
+        if isinstance(current, (TextFormatter, JsonFormatter)):
+            continue
+        fmt = getattr(current, "_fmt", None) or "%(message)s"
+        handler.setFormatter(TextFormatter(fmt + "%(rid_suffix)s", getattr(current, "datefmt", None)))
     if log_format != "json":
         return
     formatter = JsonFormatter()
