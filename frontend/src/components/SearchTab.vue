@@ -173,7 +173,7 @@
       <div class="flex flex-wrap items-baseline justify-between gap-2 border-b border-base-300 pb-3">
         <h3 class="text-base font-semibold">{{ searchStore.results.length }} matching passage{{ searchStore.results.length === 1 ? '' : 's' }}</h3>
         <span class="text-sm text-base-content/75">{{ sourceCount }} source{{ sourceCount === 1 ? '' : 's' }}<span v-if="resultsRankedByAI"> · Ordered by {{ getProviderDisplayNameLocal(resultsRankedByAI) }}</span></span>
-        <p class="w-full text-sm text-base-content/75 break-words">Results for “{{ searchStore.lastQuery }}”</p>
+        <p class="w-full text-sm text-base-content/75 break-words">Results for “{{ searchStore.lastQuery }}”<template v-if="searchedSelection"> · only in the {{ searchedSelection }} selected source{{ searchedSelection === 1 ? '' : 's' }}</template></p>
       </div>
       <div class="divide-y divide-base-300">
         <SearchResult v-for="(result, index) in searchStore.results" :key="result.chunk_id ?? index" :result="result" :index="index" :query="searchStore.lastQuery" />
@@ -254,6 +254,7 @@ import SearchResult from './SearchResult.vue'
 import { storeToRefs } from 'pinia'
 import { useSearchStore } from '../stores/searchStore'
 import { useCollectionStore } from '../stores/collectionStore'
+import { useSelectionStore } from '../stores/selectionStore'
 import { useUiStore } from '../stores/uiStore'
 import { SAMPLE_QUESTIONS, isSampleSet } from '../utils/sampleSources'
 import { suggestionsFromSources } from '../utils/searchPresentation'
@@ -626,8 +627,15 @@ const search = async () => {
   await executeSearch()
 }
 
+// Find stays inside the sources ticked in the Sources panel, as Ask does (C7).
+const selectionStore = useSelectionStore()
+const selectedIds = () => (selectionStore.active ? [...selectionStore.currentIds].sort() : null)
+// How many selected sources the results on screen were limited to.
+const searchedSelection = computed(() => searchStore.lastOptions?.documentIds?.length || 0)
+
 // Include every result-affecting setting in the cache identity, never API keys.
 const currentOptions = () => ({
+  documentIds: selectedIds(),
   mode: searchMode.value,
   semanticWeight: semanticWeight.value,
   rerank: localRerank.value,
@@ -666,7 +674,8 @@ const executeSearch = async () => {
   const collectionId = collectionStore.currentCollectionId
   const options = currentOptions()
   const isCurrent = () => !signal.aborted && abortController === controller && collectionStore.currentCollectionId === collectionId
-  const body = { query, top_k: topK, mode: options.mode, semantic_weight: options.semanticWeight }
+  const body = { query, top_k: topK, mode: options.mode, semantic_weight: options.semanticWeight,
+    ...(options.documentIds ? { filters: { document_ids: options.documentIds } } : {}) }
   const endpoint = `/search?collection_id=${encodeURIComponent(collectionId)}`
 
   loading.value = true
