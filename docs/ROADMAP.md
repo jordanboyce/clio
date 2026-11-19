@@ -4,6 +4,8 @@ Forward-looking work for the general-purpose (`master`) Clio tool. Shipped items
 
 This version was rewritten on 2026-11-16 after a full pass over the product: the MCP surface, the Research tab, the web UI, and model selection. The plan comes first; the backlog that was already here is kept unchanged at the end.
 
+On 2026-11-18 the hardening work order ([docs/prompts/HARDENING_PROMPT.md](prompts/HARDENING_PROMPT.md)) shipped R2, R3, R5, R6, R7, R8b, R11, P2, P4, P5, U2, U4 and U8, most of U5 and U10, the confirm part of U9 and the settings part of M10, each marked below. It also covered first-run model setup with hubs blocked, visible failures and an enterprise pass (audit, suspension, settings checks, upgrades, restarts, disk). The decisions that work left for the owner are listed under [Decisions waiting for the owner](#decisions-waiting-for-the-owner).
+
 ## Guiding frame
 
 Clio owns the trustworthy data layer; the intelligence layer lives upstream in whatever LLM the user trusts. Our job: make a user's own documents and tabular data faithfully agent-queryable, and never be silently wrong.
@@ -134,6 +136,8 @@ Today an open deployment and the shared password both get full write access, whi
 **M10 — Remove dead and duplicate settings. (S)**
 `MCP_AI_PROVIDER` appears to have no reader. `ask_documents` is registered at import, so changing `AI_PROVIDER` needs a restart; register it always and answer "no model configured" when there is none.
 
+*`MCP_AI_PROVIDER` (and the dead `SCHEMA_VERSION`) removed 2026-11-18.* The `ask_documents` registration is still open.
+
 ---
 
 ## Phase 2 — A Library you can depend on
@@ -168,7 +172,20 @@ Same idea as the retrieval benchmark: 40-60 real papers and books with known tit
 | arXiv id / DOI / ISBN found | 32/32 · 10/22 · 2/2 | 32/32 · 15/22 · 2/2 |
 | Identifiers invented | 0 | 0 |
 
-The offline misses, most common first: no authors read (15; HyDE); some authors missing (13; RAG keeps 1 of 12); a DOI known but not printed (11, the ACL PDFs); the wrong people (9: BERT's second title line, "Microsoft Research", a Commerce Secretary); part of the title only (8). These are R2's targets. Two notes for R2: OpenAlex answered 12 of 26 requests with 429 when no contact email is sent; and the benchmark found every arXiv id and year, while the live check above found 7 of 10 missing. Find out what differed in that setup before relying on either.
+*Re-measured 2026-11-18, after R2 and R3 (offline; catalogues not re-run):*
+
+| Field | Offline, 2026-11-16 | Offline, 2026-11-18 |
+|---|---|---|
+| Title, exact after normalising | 64% (38/59) | 85% (50/59) |
+| Authors, mean F1 over family names | 0.36 | 0.52 |
+| Authors, whole list right | 17% (10/59) | 39% (23/59) |
+| Year | 81% (48/59) | 86% (51/59) |
+| Confidently wrong (a wrong title, author list or year not marked "needs checking") | not measured | 0 |
+| Identifiers invented | 0 | 0 (one DOI found is wrong) |
+
+The new row is the one R3 is judged by: every remaining miss is shown as "needs checking", not as fact (13 titles, 33 author lists and 2 years are marked). The benchmark prints it; it does not fail a run on it.
+
+The 2026-11-16 offline misses, most common first: no authors read (15; HyDE); some authors missing (13; RAG keeps 1 of 12); a DOI known but not printed (11, the ACL PDFs); the wrong people (9: BERT's second title line, "Microsoft Research", a Commerce Secretary); part of the title only (8). These are R2's targets. Two notes for R2: OpenAlex answered 12 of 26 requests with 429 when no contact email is sent; and the benchmark found every arXiv id and year, while the live check above found 7 of 10 missing. Find out what differed in that setup before relying on either.
 
 **R2 — Better extraction without the network. (M)**
 In order of expected gain:
@@ -180,14 +197,20 @@ In order of expected gain:
 
 *Done when:* the benchmark's offline title and author accuracy clears a target you set after seeing R1's baseline.
 
+*Shipped 2026-11-18* (no target was set; the numbers are under R1). Identifiers come from the filename and the PDF's metadata; the title is the largest upright text near the top of page 1 (rotated stamps are skipped, small caps recovered); venue lines, notices, affiliations and organisations are refused as titles or authors; run-together names are split and lost spaces repaired; the year prefers the identifier and a dated line on page 1.
+
 **R3 — "Not sure" beats wrong. (S)**
 Each field carries a confidence. Low-confidence fields show as "needs checking" with the filename as the display title. A record edited by hand (`PATCH /api/research/papers/{id}/record` exists) is never overwritten by a later analysis. The Library gets a "needs checking" filter.
+
+*Shipped 2026-11-18.* Each field is marked high or low with the reason; a doubtful record shows its filename, a *needs checking* badge and why, and the filter exists. Bulk rename lists only the records that are not in doubt and offers *Check these first* for the rest, with *Undo all*.
 
 **R4 — Optional model-assisted reading, verified. (M)**
 Where a model is configured, ask it for title, authors and year from page 1, and accept an answer only when every value appears in the page text. This fits the existing grounding rule and works at sites where catalogues are blocked but a local model is not.
 
 **R5 — Analyze on ingest. (S)**
 Analysis needs no model, yet it runs only when someone presses "Analyze" (`analyze_document` has no caller outside the API). Run it when a PDF is indexed, and after a reference is downloaded.
+
+*Shipped 2026-11-18* (`LIBRARY_AUTO_ANALYZE`, on by default).
 
 ### 2B. Lookups that fail honestly
 
@@ -197,8 +220,12 @@ Analysis needs no model, yet it runs only when someone presses "Analyze" (`analy
 - Honour 429 and `Retry-After`.
 - Add tests for timeout, 429 and blocked hosts.
 
+*Shipped 2026-11-18.* A host that times out rests for five minutes (or its `Retry-After`); the Library shows one *catalogues unreachable* note with *Try again*; connects give up after 5 seconds.
+
 **R7 — Resolve and download as a background job. (M)**
 "Find open copies" is one synchronous request over every reference, up to two calls each at 15 seconds, against a 180-second client timeout. Make it a job with progress and Stop.
+
+*Shipped 2026-11-18* (job kind `resolve`, shown in R8b's strip).
 
 ### 2C. Jobs that survive
 
@@ -209,10 +236,12 @@ Analysis needs no model, yet it runs only when someone presses "Analyze" (`analy
 - Add a per-document timeout.
 - Show scheduled times in local time.
 
-Design decision needed: the provider key is deliberately held in memory only, so a job that resumes after a restart has no key. Options: resume only with a server-side key or deployment model; or pause as "needs a model to continue" until someone opens the tab.
+Design decision needed: the provider key is deliberately held in memory only, so a job that resumes after a restart has no key. The options are under [Decisions waiting for the owner](#decisions-waiting-for-the-owner). Not started until that is decided. Index jobs already survive a restart (2026-11-18); reports left generating are marked failed at start, and re-queueing them waits on the same decision.
 
 **R8b — One job strip for the whole tab. (M)**
 Progress, errors and Stop currently live only under Reviews. Analyze and Screen show a bare spinner in the Library; the paper panel's "Being prepared…" never updates. Put one strip at the top of the tab with n/m and Stop, restored when you come back.
+
+*Shipped 2026-11-18.*
 
 ### 2D. A flow with a beginning and an end
 
@@ -243,6 +272,8 @@ The first visit should read as four steps with their state: *Analyzed 10/10 → 
 
 **R11 — The missing end product: a cited synthesis. (L)**
 Add "Write up" on a selection: a literature summary built only from statements the reviews have already verified, each carrying its quote and page, exported with the reference list. It lands in Reports. This is the natural finish for the tab, and it reuses checks that already exist.
+
+*Shipped 2026-11-18.* *Write up* in Reviews builds the summary from verified statements only, each with its quote and page, plus the reference list, and opens it in Reports. It needs no model.
 
 **R12 — Plain-language map. (S)**
 Replace "betweenness", "constraint" and "modularity" with what they mean ("bridges two groups", "cited by many of your sources"). Keep the honest "too small to rank" warning; it is good.
@@ -293,6 +324,8 @@ Fill it from the best source available, in this order:
 | Search index | embedding models only | dimensions, language, max input, local or hosted |
 | Library reviews | chat models | warn when the context is too small for "thorough" |
 
+*Shipped* in `a4e88a3`, checked against the code on 2026-11-18.
+
 **P3 — Recommendations from what you actually have. (M)**
 Drop the hard-coded names. Recommend from the live list using the capability record: for answers, the newest model in the provider's main family plus a faster one; for Ollama, prefer installed models that have tools and the largest context that fits. If nothing suitable is installed, say what to pull. Replace `DEFAULT_OLLAMA_MODEL = "llama3.2"` with "first suitable installed model".
 
@@ -302,8 +335,12 @@ Drop the hard-coded names. Recommend from the live list using the capability rec
 - Warn when the chunk size exceeds the model's input limit.
 - For a custom endpoint, list its models through `/models` and probe one embedding to read the dimension.
 
+*Shipped* in `a4e88a3`, checked on 2026-11-18, including the chunk-size warning. First-run setup now offers the site's own embedding server as a choice of its own.
+
 **P5 — Test the choice, not only the key. (S)**
 "Test connection" should run the job the model was picked for: one short completion; one tool call for deep search; one small image for vision; one embedding for the index. Report which abilities passed.
+
+*Shipped 2026-11-18.* *Check what the model can do* runs answers, tool calls (native, or the written protocol for providers without native tools) and a small image, and reports each.
 
 ---
 
@@ -353,6 +390,8 @@ The largest gap for a product whose promise is "check the citations". Today a ci
 **U2 — Failures you can see and retry. (M)**
 A failed file appears only inside the job card, and "Dismiss" discards the only record. Show a persistent "N failed" row in Sources with the reason and Retry; add "Re-index" per source.
 
+*Shipped 2026-11-18, except Re-index per source.* Every upload path returns `failed` entries with a reason and a fix; the row survives a reload and Dismiss on the job card. Retry works for a browser upload (the server keeps the failed copy until the stale-upload sweep) and for a file picked from this computer. A blocked file offers no Retry.
+
 **U3 — One "Models" page. (M) Pairs with Phase 3.**
 The answer model is set in seven places, and the embedding model, OCR and reranking in three or four each. Make one page with four rows (answers, search index, scanned pages and figures, result reordering), each showing what is in use, whether it is set for this browser or the whole server, and what it can do. Split the word "rerank": the local cross-encoder is "Result reordering"; the LLM pass in Find is "AI reorder".
 
@@ -363,8 +402,12 @@ The answer model is set in seven places, and the embedding model, OCR and rerank
 - "Connect" (not MCP page, Settings → MCP, MCP Server).
 - Two controls are both called "Answer depth"; rename the drawer one "Context size".
 
+*Shipped 2026-11-18.* The glossary is in [ENGINEERING.md](ENGINEERING.md), and a test fails on a retired word in any template.
+
 **U5 — A quieter default shell. (S)**
 Seen live: about nine unlabeled ribbon icons, an eight-icon rail above Sources, five header controls and a status bar; the review count shows in three places. Default the ribbon to Ask, Find, Library, Connect and "More", with labels. Reduce the status bar to jobs and problems. One "add" entry point in Sources, not three.
+
+*Shipped 2026-11-18, except the Sources panel.* The ribbon defaults to labelled Ask, Find, Library, Connect and More (saved layouts are kept); the footer counts only problems ("All working"). Still open: one "add" entry point in Sources, and the eight-icon rail above it.
 
 **U6 — Drag and drop. (S)**
 There is none. Accept drops on the Sources panel and the chat.
@@ -375,11 +418,17 @@ Ask has an "All" scope; Find does not. Add the scope switch, filters for type, s
 **U8 — Real URLs. (M)**
 There is no router; only `?tab=` is read, then stripped. Add hash routes for view, collection, chat and source so Back, refresh and sharing a link work. This also fixes F11 properly.
 
+*Shipped 2026-11-18* (`#/library`, `#/ask/<chat>` and the like; `?tab=` still works and survives onboarding).
+
 **U9 — Chat history on the server. (M)**
 History lives in the browser (50 sessions of 100 messages), in a 288px dropdown. Store it server-side per user, with a proper list, search and delete-with-undo. Add edit-and-resend. Replace the eight native `confirm()` calls with one confirm component.
 
+*The confirm component shipped 2026-11-18* (every native confirm replaced, and MCP token revoke now asks). Server-side history is still open.
+
 **U10 — Settings you can find. (M)**
 About 105 of 162 settings are environment-only. Add a read-only "Set by environment" list in Settings so an operator can see what is in force without reading `.env.example`. Turn Admin's single long page into sections.
+
+*The "Set by environment" list shipped 2026-11-18* (admins only; a saved value that overrides the environment is logged). Admin sections are still open.
 
 **U11 — Typography and consistency pass. (S)**
 124 uses of 10-11px text against a "reading-first" brief; three different page-heading styles; `btn-xs` in Ask beside 44px controls in Find. Set a 12px floor, one heading style and one control height per context.
@@ -407,7 +456,24 @@ Do each split when a phase first touches the file.
 4. **Then Phase 3**, with U3 (Models page) in the same stretch.
 5. **Then Phase 4** from B2 onward, and **Phase 5** by value: U1, U2, U4/U5/U6, then the rest.
 
-Two decisions are yours before the work reaches them: M9 (should open and password callers be read-only by default) and R8 (how a Library job resumes without a stored key). R9 shipped: the Research tab is now the Library.
+Two decisions are yours before the work reaches them: M9 (should open and password callers be read-only by default) and R8 (how a Library job resumes without a stored key). Three more came out of the 2026-11-18 enterprise pass; all five are below. R9 shipped: the Research tab is now the Library.
+
+---
+
+## Decisions waiting for the owner
+
+Written up by the 2026-11-18 hardening pass; none was made.
+
+1. **M9: who may write over MCP.** Today open and password callers get full write; personal tokens are read-only by default.
+   (a) Read-only by default, with `MCP_ALLOW_WRITE` to opt in (recommended in M9). (b) Keep full write and fix the Connect footer, which says otherwise. (c) Read-only only when the server is reachable from the network, the same split model endpoints now use.
+2. **R8: how a Library job, or a queued report, resumes without a stored key.**
+   (a) Resume only with a server-side key or the deployment's own model. (b) Pause as "needs a model to continue" until someone opens the tab and their browser supplies the key. (c) Keep the key encrypted with the existing secret box for the job's lifetime only, which breaks the "never written down" promise.
+3. **Password-only deployments have one shared credential**, so there is no admin separation and no attribution beyond the source address and sign-in method (now recorded).
+   (a) Require an identity provider for anything called enterprise, and fail the readiness report without one. (b) A separate admin secret for Admin and deployment settings. (c) Keep it, and say so prominently in the docs and the readiness report.
+4. **No browser sign-in of Clio's own.**
+   (a) Make the authenticating-proxy compose file the documented enterprise default (`SIGN_OUT_URL` fits it). (b) A small session layer: OIDC code flow, cookie, idle timeout and logout, at the cost of CSRF handling and session storage.
+5. **Admins by group.** Today `ADMIN_EMAILS` is a static list read at start.
+   (a) Add `ADMIN_GROUPS`, matched against an OIDC or proxy group claim. (b) Re-read `ADMIN_EMAILS` live and make it editable in the app. (c) Keep it static and document the restart.
 
 ---
 
@@ -436,7 +502,7 @@ Items below predate this plan. Where one overlaps a numbered item above, the num
 ### Access & limits
 
 - **Access without accounts** — Clio deliberately has no accounts: it is an open appliance by default, with `AUTH_PASSWORD` as the shared gate and a TLS proxy or private network in front; simplicity is a product requirement. Expiring, collection-limited personal MCP tokens shipped 2026-09-17. Pluggable identity shipped 2026-09-17: `IDENTITY_PROVIDER=oidc` (your own IdP) or `trusted_header` (an authenticating proxy), plus `MCP_AUDIT_TOOL_CALLS` for auditing agent reads. OAuth 2.1 on `/mcp` shipped 2026-09-17: RFC 9728 metadata and the Bearer challenge delegate to the site's IdP, so Claude Desktop, claude.ai, ChatGPT and `claude mcp login` attach with the endpoint URL alone (`MCP_PUBLIC_URL`, optional `MCP_OAUTH_SCOPE`, or `MCP_OAUTH_ISSUER` for a different IdP on `/mcp` only). ChatGPT `search`/`fetch` aliases shipped 2026-10-08. Next: per-tool token scopes, group-derived collection access for OIDC deployments, and an admin token fleet view.
-- **Per-collection storage cap** — shipped 2026-09-12 (5 GiB default, `COLLECTION_STORAGE_LIMIT_BYTES`). Next: per-user totals across collections, and an admin view of storage by collection.
+- **Per-collection storage cap** — shipped 2026-09-12 (5 GiB default, `COLLECTION_STORAGE_LIMIT_BYTES`). Shipped 2026-11-18: ingest stops, and `/readyz` says why, below `MIN_FREE_DISK_MB` free. Next: per-user totals across collections, caps on total storage and on the number of collections, and an admin view of storage by collection.
 
 ### From the September 2026 product assessment
 
@@ -445,7 +511,7 @@ Shipped 2026-09-12: the answer cache keys on the whole request (corpus version, 
 - **Retrieval benchmark** — shipped 2026-10-23: a versioned fixture corpus ([tests/fixtures/retrieval_bench/](../tests/fixtures/retrieval_bench/), 60 documents, 101 chunks, 80 labelled queries: plain questions, exact identifiers, quoted phrases, negation, dates, table lookups and unanswerable cases) and a runner, [scripts/retrieval_bench.py](../scripts/retrieval_bench.py) (`venv/Scripts/python scripts/retrieval_bench.py`, or `CLIO_RETRIEVAL_BENCH=1 pytest tests/benchmark -s`; skipped by default), that indexes the corpus with the real local embedding model and reports recall@5/@10, MRR, per-category breakdowns and p50/p95 latency for no reranker and candidate multipliers 2/3/5, plus throughput and shedding for `RERANK_MAX_CONCURRENT` 0 vs 2 under eight parallel callers. Numbers are comparable only within one corpus version; bump it when a passage or label changes. First run (12-core desktop, ~3 minutes, the cross-encoder passes are the cost): recall@10 is 1.0 in every configuration, 2x/3x/5x rank identically, latency is linear in the pool (p50 22 ms without the reranker, 315/500/792 ms at 2x/3x/5x), and the gate at 2 doubles throughput and cuts p95 from 3.3 s to 1.9 s under load while shedding 60% of searches to retrieval order; the defaults (3x, 2) stay. Still open: cross-user cases, citation correctness and abstention scoring; a corpus large enough that first-stage retrieval misses the top 10, so pool size can show a difference (today it cannot); and the one regression the reranker introduces (an exact-identifier query demoted from rank 2 to 7) points at identifier-aware reranking.
 - **Privacy and authorization review** — exercise every API/tool/resource as owner, reader, outsider, revoked token and anonymous; confirm egress for embeddings, OCR, reranking and chat.
 - **One dependable connector** — watched folder or SharePoint, with incremental sync, deletion propagation, resumable jobs and visible failure state.
-- **Reproducible deployment** — locked dependencies, validated container + Postgres path, backup/restore and upgrade drills. Started 2026-10-16: `CLIO_PROFILE=secure` plus `scripts/preflight.py` / `GET /api/system/readiness` check posture, local model presence and every outbound path against the live configuration ([docs/SECURE_PROFILE.md](SECURE_PROFILE.md)). Shipped 2026-10-27: the container runs as an unprivileged user, `docker-compose.hardened.yml` adds a read-only root, dropped capabilities and `no-new-privileges`, and `scripts/backup.py` backs up (online-safe SQLite snapshots, SHA-256 manifest), verifies and restores the data directory. Shipped 2026-11-04: every push to master runs the backend and frontend suites (`.github/workflows/tests.yml`), including every database method against a real Postgres (`tests/test_postgres_backend.py`). Remaining: locked dependency hashes, an SBOM in the offline bundle, and scheduled backups.
+- **Reproducible deployment** — locked dependencies, validated container + Postgres path, backup/restore and upgrade drills. Started 2026-10-16: `CLIO_PROFILE=secure` plus `scripts/preflight.py` / `GET /api/system/readiness` check posture, local model presence and every outbound path against the live configuration ([docs/SECURE_PROFILE.md](SECURE_PROFILE.md)). Shipped 2026-10-27: the container runs as an unprivileged user, `docker-compose.hardened.yml` adds a read-only root, dropped capabilities and `no-new-privileges`, and `scripts/backup.py` backs up (online-safe SQLite snapshots, SHA-256 manifest), verifies and restores the data directory. Shipped 2026-11-04: every push to master runs the backend and frontend suites (`.github/workflows/tests.yml`), including every database method against a real Postgres (`tests/test_postgres_backend.py`). Shipped 2026-11-18: settings are range-checked at start and on save; a newer database is refused, `app.db` is versioned and copied before a migration, and a backup records versions and refuses to restore over an older app. Remaining: locked dependency hashes, an SBOM in the offline bundle, scheduled backups, and schema versioning for Postgres (today: `pg_dump` before upgrading).
 
 ### Always-on constraints
 
