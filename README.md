@@ -61,8 +61,7 @@ be forgotten. That is the job here too. The record remembers.
 No documents, model or API key needed.
 
 ```bash
-docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 \
-  -v clio-data:/app/data ghcr.io/jordanboyce/clio:slim
+docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 -v clio-data:/app/data ghcr.io/jordanboyce/clio:slim
 ```
 
 1. Open http://localhost:8473 and choose **Explore with sample documents**.
@@ -113,18 +112,39 @@ machine only, with nothing to configure and no sign-in.
 **Docker, prebuilt image** (nothing to build; the models are already inside)
 
 ```bash
-docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 \
-  -v clio-data:/app/data ghcr.io/jordanboyce/clio:latest
+docker pull ghcr.io/jordanboyce/clio:latest
+docker run -d --name clio --restart unless-stopped -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 -v clio-data:/app/data ghcr.io/jordanboyce/clio:latest
 ```
 
-`:latest` is the full image (4.0 GB). `:slim` (1.6 GB) leaves out PyTorch,
-OCR for scanned PDFs and audio transcription, and keeps everything else:
-search, reranking, chat, the Library and every MCP tool. Both carry the version
-tags too (`:1.2.3`, `:1.2.3-slim`). `:bge` and `:bge-slim` (`:1.2.3-bge`,
-`:1.2.3-bge-slim`) are the same two images built around the
-`BAAI/bge-small-en-v1.5` embedding model instead of `all-MiniLM-L6-v2`; see
-[docs/AIRGAP.md](docs/AIRGAP.md#changing-the-embedding-model) before
-switching an existing install.
+Each command is one line, so it pastes the same into a Linux or macOS shell,
+PowerShell or the Windows command prompt. The image is public: no
+`docker login`. Your sources, indexes and settings live in the `clio-data`
+volume, so the container can be replaced at any time without losing them.
+`--restart unless-stopped` starts it again after a reboot.
+
+| Image | Download / on disk | What it is |
+|---|---|---|
+| `ghcr.io/jordanboyce/clio:latest` | 1.3 GB / 4.4 GB | Everything, including OCR for scanned PDFs and audio transcription |
+| `ghcr.io/jordanboyce/clio:slim` | 0.45 GB / 1.5 GB | No PyTorch, OCR or transcription; search, reranking, chat, the Library and every MCP tool |
+| `ghcr.io/jordanboyce/clio:bge`, `:bge-slim` | about the same | The same two, built around `BAAI/bge-small-en-v1.5` instead of `all-MiniLM-L6-v2` |
+
+Every release is also tagged by its version (`:1.7.1`, `:1.7.1-slim`,
+`:1.7.1-bge`, `:1.7.1-bge-slim`); name one to stay on it. Read
+[docs/AIRGAP.md](docs/AIRGAP.md#changing-the-embedding-model) before moving an
+existing install to or from a `bge` image.
+
+To update to a new release, pull it and replace the container (the data stays):
+
+```bash
+docker pull ghcr.io/jordanboyce/clio:latest
+docker rm -f clio
+docker run -d --name clio --restart unless-stopped -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 -v clio-data:/app/data ghcr.io/jordanboyce/clio:latest
+```
+
+Day to day: `docker logs -f clio` shows what it is doing, and `docker stop clio`
+and `docker start clio` stop and start it. Settings such as a model provider's
+key go on the `docker run` line as `-e NAME=value`, or in a file passed with
+`--env-file .env` ([Configuration](#configuration)).
 
 **Docker, built from source**
 
