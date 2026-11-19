@@ -800,6 +800,7 @@ def _model_stream(provider, model_name: str, cancel=None, **kwargs):
         usage: dict = {}
         try:
             with stage_timing.stage("model_call"):
+                asked = time.perf_counter()
                 # A provider that cannot stream answers in one piece.
                 stream = (provider.stream(**kwargs) if getattr(provider, "streams", False) is True
                           else AIProvider.stream(provider, **kwargs))
@@ -813,6 +814,9 @@ def _model_stream(provider, model_name: str, cancel=None, **kwargs):
                                 delta = delta.lstrip()
                                 if not delta:
                                     continue
+                                # The model's own wait: reading the prompt,
+                                # then its first word (C1's measure).
+                                stage_timing.observe("model_first_text", time.perf_counter() - asked)
                             pieces.append(delta)
                             yield {"type": "text", "text": delta, "_whole": True, "_streamed": True}
                         if item.get("usage"):

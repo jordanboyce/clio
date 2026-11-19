@@ -26,14 +26,15 @@ from services.metrics import registry
 
 STAGES = (
     "embed_query", "vector_search", "keyword_search", "rerank",
-    "model_call", "first_text", "answer",
+    "model_call", "model_first_text", "first_text", "answer",
 )
 
 stage_seconds = Histogram(
     "clio_stage_duration_seconds",
     "Time spent in one stage of a search or an answer: embed_query, vector_search, "
-    "keyword_search, rerank, model_call (each provider call), first_text (question "
-    "received to the first answer text) and answer (the whole answer).",
+    "keyword_search, rerank, model_call (each provider call), model_first_text (an "
+    "answer pass's call to its first streamed text), first_text (question received to "
+    "the first answer text) and answer (the whole answer).",
     ["stage"],
     buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300),
     registry=registry,

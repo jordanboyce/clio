@@ -35,6 +35,11 @@ _NUMBER = re.compile(r"(?<![\w.])\d+(?:[.,]\d+)*(?![\w])")
 _IDENTIFIER = re.compile(r"\b(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*\b")
 _QUOTED = re.compile(r"[\"“]([^\"“”\n]{3,200})[\"”]")
 _LIST_MARKER = re.compile(r"^\s*(?:[#>*-]+\s*)?\d+[.)]\s+")
+_LOCATORS = re.compile(
+    r"\b(?:sources?|pages?|pp?\.|sections?|revision|rev\.?)\s+[A-Za-z]?\d+[A-Za-z]?\b"
+    r"|\S+\.(?:pdf|docx?|xlsx?|csv|md|txt|pptx?|html?|json)\b",
+    re.IGNORECASE,
+)
 
 _WORD_NUMBERS = {
     "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
@@ -81,6 +86,9 @@ def _claims(sentence: str) -> Tuple[List[str], List[str], List[str]]:
     """The figures, identifiers and quoted strings a sentence states, with
     its citations and any list numbering taken out first."""
     bare = _LIST_MARKER.sub("", CITATION_GROUP.sub(" ", sentence))
+    # Where the sentence says where it read it ("as stated in Source 4",
+    # "on page 3", "in policy-rev-b.pdf") is not a claim about the passage.
+    bare = _LOCATORS.sub(" ", bare)
     quotes = [q.strip() for q in _QUOTED.findall(bare) if len(q.strip()) >= 3]
     unquoted = _QUOTED.sub(" ", bare)
     identifiers = list(dict.fromkeys(m for m in _IDENTIFIER.findall(unquoted) if not m.isdigit()))

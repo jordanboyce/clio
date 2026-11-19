@@ -46,3 +46,12 @@ def test_fair_restatements_raise_no_false_alarm():
 def test_sentences_without_citations_and_garbage_input_are_left_alone():
     assert check_answer("Seven years, probably.", [POLICY]) == []
     assert check_answer(None, None) == []
+
+
+def test_where_a_sentence_says_it_read_something_is_not_a_figure():
+    """Measured on A2 (llama3.2:3b): "as stated in Source 4" was read as the
+    figure 4 and the sentence marked. Locators are not claims."""
+    passage = {"text_snippet": "Managers confirm the access of each team member every year."}
+    answer = ("Access is reviewed every year, as stated in Source 1 on page 3 of "
+              "lakeshore-access-standard-rev-b.pdf [Source 1].")
+    assert check_answer(answer, [passage]) == []
