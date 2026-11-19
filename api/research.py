@@ -1036,6 +1036,52 @@ def cite_sources(body: CitationRequest, collection_id: str = "default") -> dict:
     return out
 
 
+class WriteupRequest(BaseModel):
+    document_ids: Optional[List[str]] = Field(None, max_length=500)
+    style: Literal["apa", "chicago", "mla", "ieee", "harvard"] = "apa"
+    question: Optional[str] = Field(None, max_length=500)
+
+
+@router.post("/api/research/writeup", tags=["research"], status_code=status.HTTP_201_CREATED,
+             summary="Write up the selected sources from their reviews' verified statements")
+def write_up(body: WriteupRequest, collection_id: str = "default") -> dict:
+    """A9 (roadmap R11): a cited summary built only from statements the
+    reviews already verified, each with its quote and page, and the
+    reference list. No model is called. It is saved in Reports."""
+    import uuid
+
+    from api.artifacts import _store as artifact_store
+    from services.research import writeup
+    from services.research.store import now_iso
+
+    indexer = _indexer(collection_id)
+    _require_write(collection_id)
+    docs = _select(indexer, body.document_ids)
+    store = library.research_store(indexer)
+    latest: Dict[str, dict] = {}
+    for doc in docs:
+        found = store.list_briefs(document_id=doc["document_id"], limit=1)
+        if found:
+            latest[doc["document_id"]] = found[0]
+    if not latest:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="None of these sources has a review yet. Prepare reviews first; the write-up "
+                                   "is built from what they verified.")
+    papers = store.get_papers([d["document_id"] for d in docs])
+    title, content, sources = writeup.build(docs, papers, latest, body.style, _collection_name(collection_id),
+                                            body.question)
+    now = now_iso()
+    artifact = artifact_store(indexer, collection_id).create(
+        uuid.uuid4().hex, artifact_type="writeup", title=title[:200], status="done", focus=body.question,
+        document_ids=[d["document_id"] for d in docs], content=content, sources=[],
+        source_documents=[{"document_id": d["document_id"], "filename": d.get("filename"),
+                           "content_hash": d.get("content_hash")} for d in docs],
+        created_by=get_request_user(), created_at=now, started_at=now, finished_at=now,
+    )
+    return {"artifact": {k: artifact.get(k) for k in ("id", "title", "artifact_type", "status", "created_at")},
+            "reviewed": len(latest), "selected": len(docs)}
+
+
 @router.post("/api/research/check-draft", tags=["research"],
              summary="Check a draft's quotes and citations against the sources")
 def check_draft_endpoint(

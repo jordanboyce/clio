@@ -20,6 +20,15 @@
         >Unread<span v-if="unread" class="tabular-nums text-base-content/60">{{ unread }}</span></button>
       </div>
       <span class="flex-1" />
+      <!-- A9: the tab's end product, from the reviews' verified statements. -->
+      <button
+        v-if="canWrite && reviewedCount"
+        class="btn btn-sm btn-ghost"
+        :disabled="writingUp"
+        :title="`A cited summary of ${selectedIds.length ? 'the selected' : 'the reviewed'} sources, built only from statements their reviews verified. Saved in Reports.`"
+        data-testid="write-up"
+        @click="writeUp"
+      ><span v-if="writingUp" class="loading loading-spinner loading-xs" />Write up</button>
       <button
         v-if="canWrite"
         class="btn btn-sm"
@@ -298,6 +307,7 @@ import { researchApi, authorsShort, nextLocalTime, pageUrl, VERDICTS } from '../
 import { depthLabel, reviewQueue, reviewStatus, verifiedCount } from '../utils/reviewView.js'
 import { reviewCost } from '../utils/libraryFlow.js'
 import { getProviderDisplayName } from '../utils/aiProviders.js'
+import { useCitationStyle } from '../utils/citations.js'
 import { useUiStore } from '../stores/uiStore'
 
 const props = defineProps({
@@ -330,8 +340,28 @@ watch(() => props.selectedIds.length, (n) => {
   if (n) scope.value = 'selected'
   else if (scope.value === 'selected') scope.value = 'unreviewed'
 }, { immediate: true })
+const citationStyle = useCitationStyle()
 const depth = ref('brief')
 const question = ref('')
+
+// A9: Write up builds a report from the reviews; no model is called.
+const writingUp = ref(false)
+const reviewedCount = computed(() => props.papers.filter(p => (p.review_count || 0) > 0).length)
+async function writeUp() {
+  writingUp.value = true
+  try {
+    const data = await researchApi.writeUp(props.collectionId, {
+      document_ids: props.selectedIds.length ? props.selectedIds : null,
+      style: citationStyle.value || 'apa',
+    })
+    ui.notify(`Write-up saved in Reports: ${data.artifact.title}. ${data.reviewed} of ${data.selected} sources had a review.`,
+      'success', { duration: 10000, action: { label: 'Open Reports', run: () => ui.openView('generate') } })
+  } catch (err) {
+    ui.toastError(err, 'Could not write it up')
+  } finally {
+    writingUp.value = false
+  }
+}
 const when = ref('now')
 const atTime = ref('01:00')
 const starting = ref(false)

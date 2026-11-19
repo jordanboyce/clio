@@ -55,6 +55,8 @@ export const researchApi = {
     return http.post(`/api/research/jobs?${q(cid)}`, { ...body, provider }, { headers }).then(r => r.data)
   },
   jobs: (cid) => http.get(`/api/research/jobs?${q(cid)}`).then(r => r.data),
+  // A9: a write-up from the reviews' verified statements, saved in Reports.
+  writeUp: (cid, body) => http.post(`/api/research/writeup?${q(cid)}`, body).then(r => r.data),
   // A6: clear the catalogues' rest and read again what was read without them.
   retryLookups: (cid) => http.post(`/api/research/lookups/retry?${q(cid)}`).then(r => r.data),
   // R7: "Find open copies" runs as a job, one entry per reference.

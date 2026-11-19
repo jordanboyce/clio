@@ -127,6 +127,17 @@ ARTIFACT_TYPES: Dict[str, Dict[str, str]] = {
 }
 
 
+# A9: the Library's write-up is a report too, but it is assembled from the
+# reviews' verified statements, never generated: it is not offered among the
+# types a model writes, and generate_artifact refuses it.
+LIBRARY_ARTIFACT_TYPES: Dict[str, Dict[str, str]] = {
+    "writeup": {
+        "label": "Literature write-up",
+        "description": "Built in the Library from reviewed statements, each with its quote and page.",
+    },
+}
+
+
 def list_artifact_types() -> List[Dict[str, str]]:
     """Public catalog for the UI / API."""
     return [
@@ -136,7 +147,7 @@ def list_artifact_types() -> List[Dict[str, str]]:
 
 
 def artifact_title(artifact_type: str, focus: Optional[str] = None) -> str:
-    label = ARTIFACT_TYPES[artifact_type]["label"]
+    label = {**ARTIFACT_TYPES, **LIBRARY_ARTIFACT_TYPES}[artifact_type]["label"]
     # A focus can run to pages; the title is one line in a list.
     focus_line = " ".join((focus or "").split())
     if not focus_line:

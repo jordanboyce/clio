@@ -259,3 +259,22 @@ describe('reading a review', () => {
     expect(wrapper.findAll('[data-testid="review-row"]')).toHaveLength(1)
   })
 })
+
+describe('Write up (A9)', () => {
+  it('builds a report from the reviews and offers to open it', async () => {
+    const w = await mountReviews([review(1)], { papers: [{ document_id: 'd1', review_count: 1 }, { document_id: 'd2', review_count: 0 }] })
+    http.post.mockResolvedValueOnce({ data: { artifact: { id: 'a1', title: 'Literature write-up' }, reviewed: 1, selected: 2 } })
+    await w.get('[data-testid="write-up"]').trigger('click')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledWith('/api/research/writeup?collection_id=lab', { document_ids: null, style: expect.any(String) })
+    const toast = useUiStore().toasts.find(t => t.action)
+    expect(toast.message).toContain('1 of 2 sources had a review')
+    toast.action.run()
+    expect(useUiStore().viewRequest.tab).toBe('generate')
+  })
+
+  it('is not offered before any source has a review', async () => {
+    const w = await mountReviews([], { papers: [{ document_id: 'd1', review_count: 0 }] })
+    expect(w.find('[data-testid="write-up"]').exists()).toBe(false)
+  })
+})

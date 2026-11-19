@@ -2129,6 +2129,7 @@ const openSettingsSection = (id) => {
 }
 // Any view may ask for a Settings section through the UI store (C3).
 watch(() => ui.settingsRequest, (request) => { if (request?.id) openSettingsSection(request.id) })
+watch(() => ui.viewRequest, (request) => { if (request?.tab) switchTab(request.tab) })
 
 // Notification bell / footer indicator: land on the part of Admin that holds
 // the thing being counted, not just the top of the page.

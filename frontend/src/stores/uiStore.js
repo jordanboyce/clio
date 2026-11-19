@@ -53,6 +53,11 @@ export const useUiStore = defineStore('ui', () => {
   function connectModel() {
     openSettings('providers')
   }
+  // Any view may ask to open another ({ tab, at }); App.vue switches.
+  const viewRequest = ref(null)
+  function openView(tab) {
+    viewRequest.value = { tab, at: Date.now() }
+  }
 
   // D5: one confirm dialog for the whole app (ConfirmDialog.vue).
   //   if (!(await ui.confirm({ title, message, confirmLabel, danger }))) return
@@ -100,5 +105,5 @@ export const useUiStore = defineStore('ui', () => {
     return notify(message, 'error', { duration: 6000 })
   }
 
-  return { toasts, offline, authRequired, confirmRequest, confirm, settleConfirm, manualCopy, highlightAddSources, sourcesVersion, sourcesChanged, researchView, praViewer, openPra, closePra, notify, dismiss, toastError, settingsRequest, openSettings, connectModel }
+  return { toasts, offline, authRequired, confirmRequest, confirm, settleConfirm, manualCopy, viewRequest, openView, highlightAddSources, sourcesVersion, sourcesChanged, researchView, praViewer, openPra, closePra, notify, dismiss, toastError, settingsRequest, openSettings, connectModel }
 })
