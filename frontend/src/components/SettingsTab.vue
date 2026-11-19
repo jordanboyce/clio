@@ -313,6 +313,21 @@
                           <span v-if="editBuffer.keyError" class="text-error text-sm" role="alert">{{ editBuffer.keyError }}</span>
                           <button v-if="isProviderConfigured(row.id) && !editBuffer.keyDirty" class="btn btn-sm btn-ghost text-error ml-auto" @click="removeProvider(row.id)">Remove</button>
                         </div>
+                        <!-- P5: test the choice, not only the key. -->
+                        <div v-if="isProviderConfigured(row.id)" class="space-y-1" data-testid="model-job-check">
+                          <button class="btn btn-xs btn-ghost" :disabled="jobChecks[row.id]?.running" @click="checkModelJobs(row.id)">
+                            <span v-if="jobChecks[row.id]?.running" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+                            Check what the model can do
+                          </button>
+                          <ul v-if="jobChecks[row.id]?.out?.jobs" class="text-xs space-y-0.5">
+                            <li v-for="(r, job) in jobChecks[row.id].out.jobs" :key="job" class="flex gap-1.5">
+                              <Check v-if="r.ok" :size="13" class="text-success shrink-0 mt-px" aria-hidden="true" />
+                              <X v-else :size="13" class="text-warning shrink-0 mt-px" aria-hidden="true" />
+                              <span><span class="font-medium">{{ JOB_NAMES[job] || job }}</span>: {{ r.detail }}</span>
+                            </li>
+                          </ul>
+                          <p v-if="jobChecks[row.id]?.out?.error" class="text-xs text-error" role="alert">{{ jobChecks[row.id].out.error }}</p>
+                        </div>
                       </template>
 
                       <!-- Your own OpenAI-compatible endpoint -->
@@ -1035,7 +1050,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import http from '../utils/http'
 import { researchApi } from '../utils/researchApi.js'
-import { ChevronDown, Check, Plus, RefreshCw, ShieldCheck, ShieldAlert, AlertTriangle } from 'lucide-vue-next'
+import { ChevronDown, Check, Plus, RefreshCw, ShieldCheck, ShieldAlert, AlertTriangle, X } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useLayoutStore } from '../stores/layoutStore'
@@ -1058,6 +1073,7 @@ import {
   fetchProviderModels,
   invalidateModelCache,
   testProviderConnection,
+  testModelJobs,
   fetchDeploymentDefault,
   fetchServerProviderIds,
   migrateLegacySettings,
@@ -2039,6 +2055,16 @@ const toggleExpand = (id) => {
   } else if (isProviderConfigured(id) && !modelState.value[id]) {
     loadModels(id)
   }
+}
+
+// P5: what the chosen model can do, by the job it may be picked for.
+const JOB_NAMES = { answers: 'Answers', tools: 'Deep search and agent mode', vision: 'Scanned pages and figures' }
+const jobChecks = ref({})
+async function checkModelJobs(id) {
+  const cfg = getProviderConfig(id) || {}
+  jobChecks.value = { ...jobChecks.value, [id]: { running: true } }
+  const out = await testModelJobs(id, { apiKey: cfg.apiKey || '', baseUrl: cfg.baseUrl || '', model: cfg.model || '' })
+  jobChecks.value = { ...jobChecks.value, [id]: { running: false, out } }
 }
 
 const connectProvider = async (id) => {

@@ -521,6 +521,27 @@ export async function testProviderConnection(providerId, { apiKey = '', baseUrl 
 }
 
 /**
+ * Roadmap P5: try the model on the jobs it may be picked for (answers, tool
+ * calls for deep search and agent mode, a small picture for scanned pages)
+ * rather than only the key. Returns { ok, model, jobs: { answers: { ok,
+ * detail, seconds }, ... }, error }.
+ */
+export async function testModelJobs(providerId, { apiKey = '', baseUrl = '', model = '' } = {},
+  jobs = ['answers', 'tools', 'vision']) {
+  const headers = { 'X-AI-Provider': getAPIProviderName(providerId) }
+  if (apiKey && apiKey !== 'none') headers['X-AI-Key'] = apiKey
+  if (baseUrl) headers['X-AI-Base-URL'] = baseUrl
+  if (model) headers['X-AI-Model'] = model
+  try {
+    const { default: axios } = await import('axios')
+    const resp = await axios.post('/api/ai/test-model', { jobs }, { headers, timeout: 180000 })
+    return resp.data || { ok: false, jobs: {} }
+  } catch (err) {
+    return { ok: false, jobs: {}, error: err?.response?.data?.detail || err.message }
+  }
+}
+
+/**
  * True when the app is being used at a remote origin (hosted deployment).
  * "Local" options (Ollama on localhost, LM Studio, vLLM presets) point at the
  * *server's* network in that case — an option labeled "runs on this machine"

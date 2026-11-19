@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+from typing import List, Literal
 
 from fastapi import Body, Header, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
@@ -1488,6 +1489,103 @@ def _provider_from_headers(x_ai_provider: str, api_key, x_ai_base_url, model=Non
     if model:
         extra["model"] = model
     return create_provider(x_ai_provider, api_key, **extra)
+
+
+# ── P5: test the choice, not only the key ─────────────────────────────────
+
+# A 16x16 red PNG: the smallest picture a vision model can be asked about.
+_TEST_IMAGE_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGklEQVR42mO8IyfHQApgYiARjGoY1TB0NAAAjEsBOPY5fDQAAAAASUVORK5CYII="
+)
+
+
+class ModelTestRequest(BaseModel):
+    jobs: List[Literal["answers", "tools", "vision"]] = Field(default_factory=lambda: ["answers"], max_length=3)
+
+
+def _run_model_job(provider, job: str, model: str) -> dict:
+    """One small real request for ``job``; ``{ok, detail, seconds}``."""
+    import time as _time
+
+    started = _time.perf_counter()
+
+    def done(ok: bool, detail: str) -> dict:
+        return {"ok": ok, "detail": detail, "seconds": round(_time.perf_counter() - started, 2)}
+
+    try:
+        if job == "answers":
+            out = provider.complete("Reply with the single word: ready", 16, model)
+            return done(bool((out.get("text") or "").strip()), "It wrote an answer." if (out.get("text") or "").strip()
+                        else "It answered with no text.")
+        if job == "tools":
+            if not provider.supports_native_tools():
+                # Providers without native tool calls (Ollama) use the written
+                # <tool_call> protocol the chat loop parses: test that.
+                from services.structured_chat import parse_tool_calls
+                prompt = ("You can call one tool, get_time, which returns the current time. To call it, reply "
+                          'with exactly <tool_call>{"tool": "get_time"}</tool_call> and nothing else.\n\n'
+                          "What time is it?")
+                out = provider.complete(prompt, 64, model)
+                called = any(c.get("tool") == "get_time" for c in parse_tool_calls(out.get("text") or ""))
+                return done(called, "It called a tool in the written form this provider uses." if called else
+                            "It answered without calling the tool, so deep search and agent mode may not work "
+                            "well with it.")
+            from services.ai_service import AnthropicProvider
+            schema = {"type": "object", "properties": {}, "required": []}
+            if isinstance(provider, AnthropicProvider):
+                tools = [{"name": "get_time", "description": "Get the current time.", "input_schema": schema}]
+            else:
+                tools = [{"type": "function", "function": {"name": "get_time",
+                                                            "description": "Get the current time.",
+                                                            "parameters": schema}}]
+            messages = [{"role": "user", "content": "What time is it? Use the get_time tool."}]
+            out = provider.complete_with_tools(messages, tools, 64, model)
+            called = any(c.get("name") == "get_time" for c in out.get("tool_calls") or [])
+            return done(called, "It called a tool." if called else "It answered without calling the tool it "
+                                                                    "was given, so it may not use tools reliably.")
+        if job == "vision":
+            out = provider.complete_with_image("What colour is this square? One word.", _TEST_IMAGE_PNG,
+                                               "image/png", 16, model)
+            text = (out.get("text") or "").strip()
+            return done(bool(text), "It read the picture." if text else "It answered with no text.")
+    except NotImplementedError:
+        return done(False, "This provider cannot read pictures here." if job == "vision"
+                    else "This provider cannot do this here.")
+    except Exception as e:  # noqa: BLE001 - the reason is the result
+        first = str(e).splitlines()[0][:200] if str(e) else e.__class__.__name__
+        return done(False, f"It failed: {first}")
+    return done(False, "Unknown job.")
+
+
+@router.post(
+    "/api/ai/test-model",
+    summary="Try a model on the jobs it was picked for (answers, tools, pictures)",
+    tags=["ai"],
+)
+def test_model(  # sync: provider round-trips run in the threadpool
+    body: ModelTestRequest = ModelTestRequest(),
+    x_ai_key: str = Header(None),
+    x_ai_provider: str = Header(None),
+    x_ai_model: str = Header(None),
+    x_ai_base_url: str = Header(None),
+):
+    """Roadmap P5: one short completion for answers, one tool call for deep
+    search and agent mode, one small picture for scanned pages and figures.
+    Each job reports ``ok`` and a plain sentence; a failure in one does not
+    stop the others. Same headers as /api/ai/validate-key."""
+    x_ai_provider = x_ai_provider or default_ai_provider()
+    if x_ai_provider in RETIRED_AI_PROVIDERS:
+        return {"ok": False, "error": RETIRED_AI_PROVIDERS[x_ai_provider], "jobs": {}}
+    if x_ai_provider not in ALL_AI_PROVIDERS:
+        return {"ok": False, "error": f"Unknown provider: {x_ai_provider}", "jobs": {}}
+    model = x_ai_model or (DEFAULT_OLLAMA_MODEL if x_ai_provider == "ollama" else None)
+    try:
+        provider = _provider_from_headers(x_ai_provider, x_ai_key, x_ai_base_url, model)
+    except _ProviderHeaderError as e:
+        return {"ok": False, "error": str(e), "jobs": {}}
+    model = model or getattr(provider, "QUALITY_MODEL", None) or getattr(provider, "FAST_MODEL", None)
+    results = {job: _run_model_job(provider, job, model) for job in dict.fromkeys(body.jobs)}
+    return {"ok": all(r["ok"] for r in results.values()), "model": model, "jobs": results}
 
 
 # Local File Reference endpoints (v3.1 feature)
