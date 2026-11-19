@@ -54,10 +54,27 @@ def test_no_profile_lists_every_tool_as_before():
     assert len(_list()) == len(asyncio.run(mcp._clio_mcp.list_tools()))
 
 
-def test_a_misspelled_filter_is_an_error_that_names_the_valid_keys():
-    with pytest.raises(ValueError) as e:
-        mcp._normalize_search_filters({"source_typ": "agent_note"})
-    assert "source_typ" in str(e.value) and "source_type" in str(e.value) and "written_after" in str(e.value)
+def test_a_misspelled_filter_is_ignored_with_a_warning_for_one_release():
+    # The roadmap's compatibility rule: the old behaviour (ignored) stays for
+    # one release, but the agent is now told, with the valid keys.
+    token = mcp._request_warnings.set(None)
+    try:
+        assert mcp._normalize_search_filters({"source_typ": "agent_note"}) is None
+        response = mcp._tool_response({"results": []}, "search_collection")
+    finally:
+        mcp._request_warnings.reset(token)
+    [warning] = response["warnings"]
+    assert "source_typ" in warning and "source_type" in warning and "written_after" in warning
+    assert "next release" in warning
+
+
+def test_a_response_without_an_ignored_filter_carries_no_warnings():
+    token = mcp._request_warnings.set(None)
+    try:
+        mcp._normalize_search_filters({"source_type": "agent_note"})
+        assert "warnings" not in mcp._tool_response({"results": []}, "search_collection")
+    finally:
+        mcp._request_warnings.reset(token)
 
 
 def test_note_filters_reach_the_index():
@@ -81,3 +98,10 @@ def test_an_agent_can_search_only_its_own_notes(indexer, tmp_path):  # noqa: F81
     assert {r.filename for r in everything} == {"backups.md", "backup-notes.md"}
     assert {r.document_id for r in notes} == {note["document_id"]}
     assert later == []
+
+
+def test_deep_search_passes_the_warning_back(indexer):  # noqa: F811
+    mcp.write_document_sync("notes", "Backups run nightly.\n", collection_id="default")
+    out = asyncio.run(mcp.deep_search("when do backups run", collection_id="default",
+                                      filters={"filenme": ["notes.md"]}))
+    assert any("filenme" in w for w in out.get("warnings", []))

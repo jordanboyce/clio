@@ -291,6 +291,21 @@ _clio_mcp = FastMCP(
 )
 
 
+# Things a tool call should tell the agent without failing it (an ignored
+# filter key). Collected while the call runs, added to its response as
+# `warnings` by _tool_response.
+_request_warnings: ContextVar[list[str] | None] = ContextVar("clio_request_warnings", default=None)
+
+
+def _note_warning(message: str) -> None:
+    current = _request_warnings.get(None)
+    if current is None:
+        current = []
+        _request_warnings.set(current)
+    if message not in current:
+        current.append(message)
+
+
 def _tool_response(response: dict[str, Any], tool_name: str) -> dict[str, Any]:
     """Return an MCP tool response unchanged, auditing the call when asked.
 
@@ -302,6 +317,10 @@ def _tool_response(response: dict[str, Any], tool_name: str) -> dict[str, Any]:
 
     `tool_name` identifies the producing tool for callers and diagnostics.
     """
+    pending = _request_warnings.get(None)
+    if pending and isinstance(response, dict):
+        response["warnings"] = list(response.get("warnings") or []) + pending
+        _request_warnings.set(None)
     if settings.mcp_audit_tool_calls:
         _audit_tool_call(tool_name, response)
     return response
@@ -997,9 +1016,16 @@ def _normalize_search_filters(filters: dict[str, Any] | None) -> dict[str, Any] 
 
     unknown = set(filters) - set(_FILTER_KEYS)
     if unknown:
-        raise ValueError(
-            f"Unknown filter {', '.join(sorted(unknown))}. Valid filters: {', '.join(_FILTER_KEYS)}."
-        )
+        # The roadmap's rule: a changed MCP shape keeps its old form for one
+        # release. An unknown key used to be dropped silently; for this
+        # release it is still ignored, but the response says so (the
+        # `warnings` field, added by _tool_response). From the next release
+        # it is an error that names the valid keys.
+        message = (f"Ignored unknown filter {', '.join(sorted(unknown))}: the search ran without it. "
+                   f"Valid filters: {', '.join(_FILTER_KEYS)}. From the next release an unknown "
+                   "filter is an error.")
+        logger.info("search filters: %s", message)
+        _note_warning(message)
 
     out: dict[str, Any] = {}
     for key in ("document_ids", "filenames", "source_formats"):
@@ -1633,10 +1659,11 @@ async def deep_search(
     """
     # Through the audit seam like every other tool (D2); the in-app agent
     # calls deep_search_sync directly and is not an MCP tool call.
-    return _tool_response(await asyncio.to_thread(deep_search_sync, query,
-        collection_id=collection_id, subqueries=subqueries, top_k=top_k,
+    # Inside the worker thread, where any warning about the filters was noted.
+    return await asyncio.to_thread(lambda: _tool_response(deep_search_sync(
+        query, collection_id=collection_id, subqueries=subqueries, top_k=top_k,
         max_per_document=max_per_document, max_context_chars=max_context_chars,
-        filters=filters, collection_ids=collection_ids), "deep_search")
+        filters=filters, collection_ids=collection_ids), "deep_search"))
 
 
 @_clio_mcp.tool(title="Research documents (old name of deep_search)",
