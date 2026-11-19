@@ -18,7 +18,7 @@ import sqlite3
 from pathlib import Path
 
 from services.sqlite_utils import sqlite_connect
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
@@ -298,7 +298,8 @@ class BM25Index:
         logger.info(f"Removed {removed} chunks from BM25 index")
         return removed
 
-    def search(self, query: str, top_k: int = 10) -> List[Tuple[str, float]]:
+    def search(self, query: str, top_k: int = 10,
+               allowed_chunk_ids: Optional[Iterable[str]] = None) -> List[Tuple[str, float]]:
         """
         Search the index using FTS5's built-in BM25 scoring.
 
@@ -308,6 +309,10 @@ class BM25Index:
         Args:
             query: Search query
             top_k: Number of results to return
+            allowed_chunk_ids: Search only these chunks (a metadata filter).
+                The restriction is applied inside the query, before the
+                limit (B5); it used to be applied in Python to every match
+                in the collection.
 
         Returns:
             List of (chunk_id, score) tuples, sorted by score descending.
@@ -320,6 +325,30 @@ class BM25Index:
         # Tokens are alphanumeric-only, but quote them anyway so nothing is
         # ever interpreted as FTS5 query syntax.
         match_expr = " OR ".join(f'"{t}"' for t in query_terms)
+
+        if allowed_chunk_ids is not None:
+            allowed = list(allowed_chunk_ids)
+            if not allowed:
+                return []
+            with self._connect() as conn:
+                conn.execute("CREATE TEMP TABLE IF NOT EXISTS allowed_chunks (chunk_id TEXT PRIMARY KEY)")
+                conn.execute("DELETE FROM temp.allowed_chunks")
+                conn.executemany("INSERT OR IGNORE INTO temp.allowed_chunks (chunk_id) VALUES (?)",
+                                 ((c,) for c in allowed))
+                # A join, not "rowid IN (subquery)": FTS5 cannot use the
+                # latter and re-evaluates it (12 s for 2,000 allowed chunks
+                # in a 200,000-chunk index, against 0.15 s this way).
+                rows = conn.execute("""
+                    SELECT d.chunk_id, -bm25(bm25_fts) AS score
+                    FROM bm25_fts
+                    JOIN bm25_docs d ON d.id = bm25_fts.rowid
+                    JOIN temp.allowed_chunks a ON a.chunk_id = d.chunk_id
+                    WHERE bm25_fts MATCH ?
+                    ORDER BY bm25(bm25_fts)
+                    LIMIT ?
+                """, (match_expr, max(1, int(top_k)))).fetchall()
+                conn.execute("DROP TABLE temp.allowed_chunks")
+            return [(chunk_id, float(score)) for chunk_id, score in rows]
 
         with self._connect() as conn:
             rows = conn.execute("""

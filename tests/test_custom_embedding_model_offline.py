@@ -113,7 +113,9 @@ def test_nothing_guessed_reaches_the_disk(site, tmp_path):
     indexer.save_index()
 
     assert not (site.indexes / "faiss.index").exists()
-    assert indexer.vector_store.metadata_store.get_index_info() in (None, {})
+    # Nothing about the model (the indexing recipe, B2, is not a guess).
+    info = indexer.vector_store.metadata_store.get_index_info() or {}
+    assert not {"signature", "model", "dimension"} & set(info), info
 
 
 @pytest.mark.parametrize("dim", [8, 512, 1536])

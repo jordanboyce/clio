@@ -694,13 +694,11 @@ class VectorStore:
                 chunk_data[chunk_id] = chunk
 
         # 2. BM25 keyword search
-        bm25_k = searchable if filtering else candidate_limit
+        # A filter is applied inside the keyword query (B5), so a filtered
+        # search costs what the filtered set costs, not the whole collection.
         with stage_timing.stage("keyword_search"):
-            bm25_results = self.bm25_index.search(query, bm25_k)
-        if filtering:
-            bm25_results = [
-                (cid, score) for cid, score in bm25_results if cid in allowed_chunk_ids
-            ][:candidate_limit]
+            bm25_results = self.bm25_index.search(
+                query, candidate_limit, allowed_chunk_ids=allowed_chunk_ids if filtering else None)
 
         # Normalize BM25 scores to 0-1 range
         bm25_scores: Dict[str, float] = {}

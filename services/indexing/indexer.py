@@ -1369,13 +1369,9 @@ class DocumentIndexer:
         if mode == SearchMode.KEYWORD:
             # Pure BM25 keyword search. When filtering, pull the full ranked list
             # so post-filtering down to fetch_k stays exact.
-            bm25_k = self.vector_store.searchable_chunks() if allowed_chunk_ids is not None else fetch_k
             with stage_timing.stage("keyword_search"):
-                bm25_results = self.vector_store.bm25_index.search(query, max(bm25_k, 1))
-            if allowed_chunk_ids is not None:
-                bm25_results = [
-                    (cid, score) for cid, score in bm25_results if cid in allowed_chunk_ids
-                ][:fetch_k]
+                bm25_results = self.vector_store.bm25_index.search(
+                    query, max(fetch_k, 1), allowed_chunk_ids=allowed_chunk_ids)
             results = self._bm25_to_search_results(bm25_results)
         elif mode == SearchMode.HYBRID:
             # Combined semantic + keyword search
