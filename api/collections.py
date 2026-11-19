@@ -468,7 +468,19 @@ async def get_collection_embedding_health(collection_id: str, user_id: str = Dep
     def probe() -> dict:
         indexer = indexer_manager.get_indexer(collection_id)
         ensure_embedding_ready(indexer.embedding_service)
-        return {"ok": True, "collection_id": collection_id}
+        out = {"ok": True, "collection_id": collection_id}
+        # A collection indexed before the current recipe (B2) searches less
+        # well than it could; a re-index rebuilds it from empty, which takes
+        # the current recipe. Offered, never done unasked.
+        try:
+            from services.indexing import embedding_text
+            store = indexer.vector_store.metadata_store
+            if store.get_total_chunks() > 0 and indexer.index_recipe < embedding_text.CURRENT_RECIPE:
+                out.update(recipe=indexer.index_recipe, recipe_upgrade=True, can_reindex=can_reindex,
+                           chunks=store.get_total_chunks())
+        except Exception:  # noqa: BLE001 - advisory only
+            pass
+        return out
 
     try:
         return await asyncio.to_thread(probe)

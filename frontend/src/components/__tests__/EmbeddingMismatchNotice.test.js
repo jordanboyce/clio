@@ -167,3 +167,44 @@ describe('a collection whose own model is not on this server (B8)', () => {
     expect(detail).toContain('BAAI/bge-small-en-v1.5')
   })
 })
+
+// The owner's B2 decision: an older collection is offered a re-index that
+// rebuilds it the better way; "Not now" is remembered.
+describe('the offer to re-index an older collection', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    localStorage.clear()
+    http.get.mockReset()
+    http.post.mockReset()
+  })
+
+  const old = { ok: true, collection_id: 'docs', recipe: 1, recipe_upgrade: true, can_reindex: true, chunks: 1200 }
+
+  it('offers it, and starts a re-index of the collection', async () => {
+    http.get.mockResolvedValue({ data: old })
+    http.post.mockResolvedValueOnce({ data: { job_id: 9 } })
+    const w = await mountNotice()
+    expect(w.get('[data-testid="recipe-upgrade-notice"]').text()).toContain('Search can find more')
+    expect(w.text()).toContain('1,200 passages')
+
+    await w.get('[data-testid="recipe-upgrade-start"]').trigger('click')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledWith('/api/collections/docs/reindex')
+    expect(useBackgroundJobsStore().reindexJob.id).toBe(9)
+  })
+
+  it('remembers Not now', async () => {
+    http.get.mockResolvedValue({ data: old })
+    const w = await mountNotice()
+    await w.get('[data-testid="recipe-upgrade-later"]').trigger('click')
+    expect(w.find('[data-testid="recipe-upgrade-notice"]').exists()).toBe(false)
+    const again = await mountNotice()
+    expect(again.find('[data-testid="recipe-upgrade-notice"]').exists()).toBe(false)
+  })
+
+  it('is not offered to someone who may not re-index', async () => {
+    http.get.mockResolvedValue({ data: { ...old, can_reindex: false } })
+    const w = await mountNotice()
+    expect(w.find('[data-testid="recipe-upgrade-notice"]').exists()).toBe(false)
+  })
+})

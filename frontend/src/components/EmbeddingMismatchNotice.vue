@@ -112,6 +112,31 @@
 
     </div>
   </div>
+  <!-- B2 upgrade: an older collection can be rebuilt to search better. Offered
+       to whoever may re-index, once, and remembered when declined. -->
+  <div
+    v-else-if="health && health.ok && health.recipe_upgrade && health.can_reindex && !upgradeDeclined"
+    class="rounded-lg border border-info/40 bg-info/5 text-sm px-3 py-2.5 space-y-1.5"
+    role="status"
+    data-testid="recipe-upgrade-notice"
+  >
+    <p class="font-medium">Search can find more in this collection</p>
+    <p class="text-xs text-base-content/70">
+      It was indexed before Clio read each passage together with the source it comes from and the
+      heading above it. Re-indexing rebuilds it from your files that way. On Clio's own test set, the
+      right passage was in the top ten for nearly every question instead of about a third. It takes
+      about as long as adding these {{ (health.chunks || 0).toLocaleString() }} passages did, and
+      search finds less until it finishes.
+    </p>
+    <div class="flex flex-wrap items-center gap-2 pt-0.5">
+      <button class="btn btn-primary btn-xs" :disabled="busy" data-testid="recipe-upgrade-start" @click="startReindex()">
+        <span v-if="busy" class="loading loading-spinner loading-xs" />
+        Re-index now
+      </button>
+      <button class="btn btn-ghost btn-xs" :disabled="busy" data-testid="recipe-upgrade-later" @click="declineUpgrade">Not now</button>
+    </div>
+    <p v-if="error" class="text-xs text-error" role="alert">{{ error }}</p>
+  </div>
 </template>
 
 <script setup>
@@ -133,6 +158,16 @@ const emit = defineEmits(['reindex-started', 'copy-started'])
 
 const jobs = useBackgroundJobsStore()
 const health = ref(null)
+// "Not now" on the upgrade offer, remembered per collection in this browser.
+const upgradeKey = () => `clio_recipe_offer_declined:${props.collectionId}`
+const readDeclined = () => {
+  try { return localStorage.getItem(upgradeKey()) === '1' } catch { return false }
+}
+const upgradeDeclined = ref(readDeclined())
+const declineUpgrade = () => {
+  upgradeDeclined.value = true
+  try { localStorage.setItem(upgradeKey(), '1') } catch { /* storage is a convenience */ }
+}
 const copied = ref('')
 const confirming = ref(false)
 const busy = ref(false)
@@ -196,7 +231,7 @@ async function startReindex(model = null) {
 }
 
 onMounted(refresh)
-watch(() => props.collectionId, () => { confirming.value = false; refresh() })
+watch(() => props.collectionId, () => { confirming.value = false; upgradeDeclined.value = readDeclined(); refresh() })
 // A finished re-index (or a finished upload) is the moment the answer can change.
 watch(() => jobs.reindexJob?.status, (status) => {
   if (status === 'completed' || status === 'failed') refresh()
