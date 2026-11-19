@@ -57,9 +57,10 @@ VALID_CONFIG_FIELDS = {
     "data_classifications", "controlled_data_hosts",
 }
 
-# Kept in the database only. The catalogue is JSON, which .env cannot hold
-# safely, and the database restores it on start.
-DATABASE_ONLY_FIELDS = {"data_classifications"}
+# Kept in the database only. The catalogue is JSON and the acceptable-use
+# text runs over several lines, which .env cannot hold safely; the database
+# restores both on start.
+DATABASE_ONLY_FIELDS = {"data_classifications", "aup_text"}
 
 # Checked before saving: a value of the wrong type here would be written to
 # .env and stop the next start.
@@ -524,17 +525,26 @@ class ConfigManager:
 
     def _update_env_file(self, updates: Dict[str, Any]):
         """Update .env file with new values. A value of None removes its line,
-        which is how a setting goes back to automatic."""
+        which is how a setting goes back to automatic.
+
+        A value with a line break is never written: its second line would be
+        read as a setting of its own at the next start. Its old line is
+        removed instead; the database keeps the value and restores it on
+        start. The file is written to a temporary file and renamed, so a stop
+        mid-write leaves the old file whole."""
         env_lines = []
 
         # Read existing .env file if it exists
         if self.env_file.exists():
-            with open(self.env_file, "r") as f:
+            with open(self.env_file, "r", encoding="utf-8") as f:
                 env_lines = f.readlines()
 
+        def _one_line(v: Any) -> bool:
+            return "\n" not in str(v) and "\r" not in str(v)
+
         # Convert updates to uppercase env var names
-        env_updates = {k.upper(): str(v) for k, v in updates.items() if v is not None}
-        removed = {k.upper() for k, v in updates.items() if v is None}
+        env_updates = {k.upper(): str(v) for k, v in updates.items() if v is not None and _one_line(v)}
+        removed = {k.upper() for k, v in updates.items() if v is None or not _one_line(v)}
 
         # Update or append values
         updated_keys = set()
@@ -551,14 +561,24 @@ class ConfigManager:
                 elif key in removed:
                     env_lines[i] = ""
 
+        # A last line with no line break would run into the first appended one.
+        if env_lines and env_lines[-1] and not env_lines[-1].endswith("\n"):
+            env_lines[-1] += "\n"
+
         # Append new values that weren't found
         for key, value in env_updates.items():
             if key not in updated_keys:
                 env_lines.append(f"{key}={value}\n")
 
-        # Write back to file
-        with open(self.env_file, "w") as f:
-            f.writelines(env_lines)
+        # Write back through a temporary file in the same folder
+        tmp = self.env_file.with_name(f".{self.env_file.name}.{os.getpid()}.tmp")
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.writelines(env_lines)
+            os.replace(tmp, self.env_file)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
 
 
     def get_embedding_models(self) -> list:

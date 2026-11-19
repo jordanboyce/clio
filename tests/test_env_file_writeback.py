@@ -69,3 +69,38 @@ def test_an_unwritable_file_is_skipped_with_one_log_line(tmp_path, monkeypatch, 
     lines = [r for r in caplog.records if "not writable" in r.getMessage()]
     assert len(lines) == 1
     assert str(target) in lines[0].getMessage()
+
+
+def test_a_multi_line_value_cannot_write_a_second_setting(tmp_path):
+    """E2: a value with a line break used to be written as is, so its second
+    line, `CHUNK_SIZE=5`, became a setting of its own at the next start."""
+    from dotenv import dotenv_values
+
+    target = tmp_path / "x.env"
+    target.write_text("CHUNK_SIZE=900\nAUP_TEXT=old\n", encoding="utf-8")
+    manager = cm.ConfigManager(env_file=target)
+
+    manager._update_env_file({"aup_text": "First line\nCHUNK_SIZE=5", "chunk_overlap": 120})
+
+    values = dotenv_values(target)
+    assert values == {"CHUNK_SIZE": "900", "CHUNK_OVERLAP": "120"}
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_saving_the_acceptable_use_text_keeps_it_out_of_the_file(tmp_path, monkeypatch):
+    from services.app_database import app_db
+
+    target = tmp_path / "x.env"
+    target.write_text("CHUNK_SIZE=900", encoding="utf-8")  # no final line break
+    manager = cm.ConfigManager(env_file=target)
+    before = config.settings.aup_text, config.settings.chunk_overlap
+    try:
+        assert manager.update_config({"aup_text": "Rule one.\nRule two.", "chunk_overlap": 90})["success"]
+        assert app_db.get_config("aup_text") == "Rule one.\nRule two."
+    finally:
+        config.settings.aup_text, config.settings.chunk_overlap = before
+        app_db.delete_config("aup_text")
+        app_db.delete_config("chunk_overlap")
+
+    lines = target.read_text(encoding="utf-8").splitlines()
+    assert lines == ["CHUNK_SIZE=900", "CHUNK_OVERLAP=90"]
