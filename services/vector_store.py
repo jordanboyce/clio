@@ -50,6 +50,38 @@ def _current_scan_slots() -> Optional[FifoSemaphore]:
         return _scan_slots
 
 
+# How hybrid search combines its two halves (B3). "sum": the weighted sum of
+# cosine similarity and the keyword score divided by the best keyword score,
+# so the best keyword hit always gets full marks however weak it is. "rrf":
+# reciprocal rank fusion, which uses each half's order and not its scale,
+# rescaled to 0-1 so the rest of the pipeline (the superseded penalty, chunk
+# boosts) reads it as before. The benchmark (scripts/retrieval_bench.py
+# --fusion) measures both.
+HYBRID_FUSION = "sum"
+RRF_K = 60
+
+
+def fuse_scores(semantic: Dict[str, float], keyword: Dict[str, float], chunk_ids, semantic_weight: float,
+                fusion: Optional[str] = None) -> Dict[str, float]:
+    """``{chunk_id: combined score}`` for the hybrid ranking."""
+    fusion = fusion or HYBRID_FUSION
+    if fusion == "rrf":
+        def ranks(scores: Dict[str, float]) -> Dict[str, int]:
+            order = sorted(scores, key=lambda c: (-scores[c], c))
+            return {cid: i for i, cid in enumerate(order, start=1)}
+        sem_rank, kw_rank = ranks(semantic), ranks(keyword)
+        scale = RRF_K + 1  # a chunk first in both lists scores 1.0
+        return {
+            cid: scale * (semantic_weight / (RRF_K + sem_rank[cid]) if cid in sem_rank else 0.0)
+            + scale * ((1 - semantic_weight) / (RRF_K + kw_rank[cid]) if cid in kw_rank else 0.0)
+            for cid in chunk_ids
+        }
+    return {
+        cid: semantic_weight * semantic.get(cid, 0) + (1 - semantic_weight) * keyword.get(cid, 0)
+        for cid in chunk_ids
+    }
+
+
 class VectorStore:
     """
     FAISS-based vector store with SQLite metadata storage.
@@ -685,15 +717,7 @@ class VectorStore:
         all_chunk_ids = set(semantic_scores.keys()) | set(bm25_scores.keys())
         if filtering:
             all_chunk_ids &= allowed_chunk_ids
-        combined_scores: Dict[str, float] = {}
-
-        for chunk_id in all_chunk_ids:
-            sem_score = semantic_scores.get(chunk_id, 0)
-            bm25_score = bm25_scores.get(chunk_id, 0)
-            combined_scores[chunk_id] = (
-                semantic_weight * sem_score +
-                (1 - semantic_weight) * bm25_score
-            )
+        combined_scores = fuse_scores(semantic_scores, bm25_scores, all_chunk_ids, semantic_weight)
 
         # 4. Sort by combined score and build results
         sorted_chunks = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)
