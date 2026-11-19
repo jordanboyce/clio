@@ -1244,11 +1244,12 @@ class MetadataStore:
             return [row[0] for row in cursor.fetchall()]
 
     def iter_rowid_texts(self, batch_size: int = 256):
-        """Stream lists of (rowid, text) in id order - the FAISS id and the
-        text it embeds, which is all a re-embed needs."""
+        """Stream lists of (rowid, text, filename) in id order - the FAISS id
+        and what it embeds (services/indexing/embedding_text.py), which is
+        all a re-embed needs."""
         conn = sqlite_connect(self.db_path)
         try:
-            cursor = conn.execute("SELECT id, text FROM chunks ORDER BY id")
+            cursor = conn.execute("SELECT id, text, filename FROM chunks ORDER BY id")
             while True:
                 rows = cursor.fetchmany(batch_size)
                 if not rows:

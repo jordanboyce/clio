@@ -172,11 +172,12 @@ def test_index_prepared_documents_search_finds_bulk_indexed_chunks(tmp_path, ind
     ]
     indexer.index_prepared_documents(prepared)
 
-    # The fake embedder is deterministic per text, so querying with an indexed
-    # chunk's exact text must return that chunk first.
+    # The fake embedder is deterministic per text, so querying with what was
+    # embedded for a chunk (its text under the collection's recipe, B2) must
+    # return that chunk first.
     target = prepared[1].chunks[0]
     results = indexer.vector_store.search(
-        indexer.embedding_service.embed_query(target.text), top_k=3
+        indexer.embedding_service.embed_query(indexer._texts_to_embed([target])[0]), top_k=3
     )
     assert results
     assert results[0].text_snippet == target.text

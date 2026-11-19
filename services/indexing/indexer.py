@@ -28,6 +28,7 @@ from services.prompt_injection_detector import mark_passage as _mark_passage
 from services.content_policy import BlockedContentError, ContentRejectedError
 from services.governance import content_hash_of
 from services.supersede import BACKFILL_MARGIN
+from services.indexing import embedding_text
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,47 @@ class DocumentIndexer:
         self._fill_lock = threading.Lock()
         self._fill_running = False
         self._fill_not_before = 0.0
+        self._recipe: Optional[int] = None
+
+    # ── The indexing recipe (B2) ──────────────────────────────────────
+
+    @property
+    def index_recipe(self) -> int:
+        """How this collection's chunks are cut and embedded
+        (services/indexing/embedding_text.py). Read once from the index's own
+        record; a collection indexed before recipes existed stays on recipe 1
+        until it is re-indexed from empty."""
+        if self._recipe is None:
+            try:
+                # Stored chunks, not vectors: a collection whose vectors were
+                # just cleared for a rebuild is not a new collection.
+                empty = int(self.vector_store.metadata_store.get_total_chunks()) == 0
+            except Exception:  # noqa: BLE001 - a store that cannot say: treat as not empty
+                empty = False
+            self._recipe = embedding_text.read_recipe(self.vector_store.metadata_store, empty=empty)
+        return self._recipe
+
+    def _chunker(self):
+        """The chunker for this collection's recipe."""
+        chunker = self.text_chunker
+        want = self.index_recipe >= embedding_text.HEADED
+        if isinstance(chunker, TextChunker) and getattr(chunker, "continuous", False) != want:
+            chunker = TextChunker(chunker.chunk_size, chunker.chunk_overlap, continuous=want)
+        return chunker
+
+    def _texts_to_embed(self, chunks) -> List[str]:
+        return embedding_text.texts_for_embedding(chunks, recipe=self.index_recipe)
+
+    def _rerank_text_getter(self):
+        """What the cross-encoder reads for a result: None (the passage, the
+        reranker's default) under recipe 1, the embedded text under recipe 2."""
+        if self.index_recipe < embedding_text.HEADED:
+            return None
+
+        def text(result) -> str:
+            return embedding_text.texts_for_embedding(
+                [{"text": result.text_snippet, "filename": result.filename}], recipe=self.index_recipe)[0]
+        return text
 
     # ── Working without an embedding model ────────────────────────────
 
@@ -258,7 +300,8 @@ class DocumentIndexer:
             rows = store.metadata_store.get_chunks_by_rowids(missing[start:start + batch_size])
             row_ids = list(rows)
             if row_ids:
-                store.add_vectors(row_ids, self.embedding_service.embed_texts([rows[r]["text"] for r in row_ids]))
+                store.add_vectors(row_ids, self.embedding_service.embed_texts(
+                    self._texts_to_embed([rows[r] for r in row_ids])))
                 filled += len(row_ids)
         if filled:
             store.save()
@@ -496,7 +539,7 @@ class DocumentIndexer:
         # Phase 2: Chunk the text with format metadata
         report("chunking", 0, f"Chunking {num_pages} pages")
         logger.debug(f"Chunking text from {filename}")
-        chunks = self.text_chunker.chunk_document(
+        chunks = self._chunker().chunk_document(
             page_texts=page_texts,
             document_id=document_id,
             filename=filename,
@@ -520,7 +563,7 @@ class DocumentIndexer:
         report("embedding", 0, f"Generating embeddings for {num_chunks} chunks", 0, num_chunks)
         logger.debug(f"Generating embeddings for {num_chunks} chunks")
 
-        chunk_texts = [chunk.text for chunk in chunks]
+        chunk_texts = self._texts_to_embed(chunks)
 
         # The embedding service batches internally; we just relay progress.
         def _embed_progress(done: int, total: int):
@@ -663,7 +706,7 @@ class DocumentIndexer:
             logger.warning(f"No pages extracted from {filename}")
             raise ValueError(f"Could not extract any pages from {filename}")
 
-        chunks = self.text_chunker.chunk_document(
+        chunks = self._chunker().chunk_document(
             page_texts=page_texts,
             document_id=document_id,
             filename=filename,
@@ -738,7 +781,7 @@ class DocumentIndexer:
 
         if embeddings is None:
             embeddings = self._embed(
-                [chunk.text for chunk in all_chunks],
+                self._texts_to_embed(all_chunks),
                 progress_callback=progress_callback,
             )
         elif len(embeddings) != len(all_chunks):
@@ -970,7 +1013,7 @@ class DocumentIndexer:
             collection_id=collection_id, uploaded_by=uploaded_by,
         )
 
-        chunks = self.text_chunker.chunk_document(
+        chunks = self._chunker().chunk_document(
             page_texts=page_texts, document_id=document_id, filename=filename,
             source_format=source_format, extraction_method="text",
         )
@@ -981,7 +1024,7 @@ class DocumentIndexer:
             report("embedding", min(100, int(done / total * 100)),
                    f"Embedded {done}/{total} chunks", done, total)
 
-        embeddings = self._embed([c.text for c in chunks],
+        embeddings = self._embed(self._texts_to_embed(chunks),
                                  progress_callback=_embed_progress if progress_callback else None)
         report("embedding", 100,
                f"Embedded {num_chunks} chunks" if embeddings is not None
@@ -1070,7 +1113,7 @@ class DocumentIndexer:
         )
 
         report("embedding", 0, f"Generating embeddings for {num_chunks} chunks", 0, num_chunks)
-        chunk_texts = [c.text for c in chunks]
+        chunk_texts = self._texts_to_embed(chunks)
 
         # The embedding service batches internally; we just relay progress.
         def _embed_progress(done: int, total: int):
@@ -1193,7 +1236,7 @@ class DocumentIndexer:
 
         for start in range(0, len(chunks), batch_size):
             batch = chunks[start:start + batch_size]
-            embeddings = self.embedding_service.embed_texts([c["text"] for c in batch])
+            embeddings = self.embedding_service.embed_texts(self._texts_to_embed(batch))
             embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
             ids = np.asarray([id_by_chunk[c["chunk_id"]] for c in batch], dtype=np.int64)
             new_index.add_with_ids(embeddings.astype(np.float32), ids)
@@ -1427,9 +1470,17 @@ class DocumentIndexer:
                 # False when the reranker shed the request under load
                 # (RERANK_MAX_CONCURRENT / RERANK_QUEUE_TIMEOUT_SECONDS):
                 # the response then says so in `retrieval.reranked`.
+                # Under recipe 2 the cross-encoder reads what the search
+                # model read: the source's header line, then the passage.
+                # Judging the bare passage threw away what the header won.
+                rerank_text = self._rerank_text_getter()
                 try:
-                    results, reranked_locally = local_reranker.rerank_with_status(
-                        query, results, pool_k, score_sink=rerank_scores)
+                    if rerank_text is None:
+                        results, reranked_locally = local_reranker.rerank_with_status(
+                            query, results, pool_k, score_sink=rerank_scores)
+                    else:
+                        results, reranked_locally = local_reranker.rerank_with_status(
+                            query, results, pool_k, rerank_text, score_sink=rerank_scores)
                 except TypeError:  # a reranker without the score_sink argument
                     results, reranked_locally = local_reranker.rerank_with_status(query, results, pool_k)
             except Exception as e:

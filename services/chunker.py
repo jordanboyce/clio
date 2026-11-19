@@ -12,16 +12,21 @@ logger = logging.getLogger(__name__)
 class TextChunker:
     """Splits text into overlapping chunks suitable for embedding."""
 
-    def __init__(self, chunk_size: int = 600, chunk_overlap: int = 100):
+    def __init__(self, chunk_size: int = 600, chunk_overlap: int = 100, continuous: bool = False):
         """
         Initialize the text chunker.
 
         Args:
             chunk_size: Target size of each chunk in characters
             chunk_overlap: Number of characters to overlap between chunks
+            continuous: Read a document as one text rather than separate
+                pages (B2, indexing recipe 2): the current heading carries
+                over to the next page, and a sentence cut by a page break is
+                finished on the page it starts on.
         """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.continuous = continuous
 
         if chunk_overlap >= chunk_size:
             raise ValueError("chunk_overlap must be less than chunk_size")
@@ -48,13 +53,20 @@ class TextChunker:
             List of ChunkMetadata objects
         """
         all_chunks = []
+        if self.continuous:
+            page_texts = self._finish_sentences_across_pages(page_texts)
+        heading: Optional[str] = None
 
         for page_num, text in page_texts.items():
             if not text.strip():
                 logger.debug(f"Skipping empty page {page_num} in {filename}")
                 continue
 
-            page_chunks = self._chunk_text(text)
+            if self.continuous:
+                page_chunks = self._chunk_text(text, heading)
+                heading = self._last_heading(text, heading)
+            else:
+                page_chunks = self._chunk_text(text)
 
             for chunk_idx, chunk_text in enumerate(page_chunks):
                 chunk_id = f"{document_id}_p{page_num}_c{chunk_idx}"
@@ -73,24 +85,71 @@ class TextChunker:
 
         return all_chunks
 
-    def _chunk_text(self, text: str) -> List[str]:
-        """Split text with heading/step-aware boundaries before falling back to windows."""
-        if len(text) <= self.chunk_size:
-            return [text]
+    # A page whose text ends like this has finished its sentence.
+    _SENTENCE_END = re.compile(r"[.!?:;)\]\"'\u201d\u2019]\s*$")
+    # The rest of a cut sentence at the top of the next page: up to the first
+    # sentence end, within a bound so a page with no full stop is not swallowed.
+    _REST_OF_SENTENCE = re.compile(r"^(.{1,400}?[.!?][\"'\u201d\u2019)]?)(?=\s|$)", re.DOTALL)
 
-        segments = self._split_into_structured_segments(text)
+    def _finish_sentences_across_pages(self, page_texts: dict) -> dict:
+        """Move the end of a sentence cut by a page break back to the page
+        it starts on, so one chunk holds the whole sentence."""
+        pages = dict(page_texts)
+        numbers = list(pages)
+        for prev, nxt in zip(numbers, numbers[1:]):
+            before, after = pages[prev] or "", pages[nxt] or ""
+            if not before.strip() or not after.strip() or self._SENTENCE_END.search(before):
+                continue
+            first_line = after.lstrip().split("\n", 1)[0].strip()
+            if self._is_heading_line(first_line):
+                continue
+            rest = self._REST_OF_SENTENCE.match(after.lstrip())
+            if not rest or "\n\n" in rest.group(1):
+                continue
+            pages[prev] = before.rstrip() + " " + rest.group(1).strip()
+            pages[nxt] = after.lstrip()[rest.end():].lstrip()
+        return pages
+
+    def _last_heading(self, text: str, default: Optional[str]) -> Optional[str]:
+        """The heading in force at the end of ``text``."""
+        heading = default
+        for block in re.split(r"\n\s*\n+", text):
+            lines = [line.strip() for line in block.splitlines() if line.strip()]
+            if len(lines) == 1 and self._is_heading_line(lines[0]):
+                heading = lines[0]
+        return heading
+
+    def _chunk_text(self, text: str, heading: Optional[str] = None) -> List[str]:
+        """Split text with heading/step-aware boundaries before falling back to windows.
+
+        ``heading``: the heading in force where this text starts (a page that
+        continues a section from the page before). It is put in front of
+        whatever comes before the text's own first heading."""
+        if heading and self._starts_with_heading(text):
+            heading = None
+        if len(text) <= self.chunk_size:
+            return [f"{heading}\n{text}" if heading else text]
+
+        segments = self._split_into_structured_segments(text, heading)
         if len(segments) > 1:
             structured_chunks = self._chunk_structured_segments(segments)
             if structured_chunks:
                 return structured_chunks
 
-        return self._chunk_text_window(text)
+        windows = self._chunk_text_window(text)
+        if heading and windows:
+            windows[0] = f"{heading}\n{windows[0]}"
+        return windows
 
-    def _split_into_structured_segments(self, text: str) -> List[str]:
+    def _starts_with_heading(self, text: str) -> bool:
+        first = text.lstrip().split("\n\n", 1)[0].strip()
+        return "\n" not in first and self._is_heading_line(first)
+
+    def _split_into_structured_segments(self, text: str, heading: Optional[str] = None) -> List[str]:
         """Split text into structural blocks such as headings, steps, and paragraphs."""
         blocks = [block.strip() for block in re.split(r"\n\s*\n+", text) if block.strip()]
         segments: List[str] = []
-        current_heading: Optional[str] = None
+        current_heading: Optional[str] = heading
 
         for block in blocks:
             lines = [line.strip() for line in block.splitlines() if line.strip()]

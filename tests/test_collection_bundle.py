@@ -464,8 +464,9 @@ def test_import_with_matching_model_embeds_again_and_never_reads_the_shipped_vec
     assert new.vector_store.index.ntotal == new.vector_store.metadata_store.get_total_chunks() > 0
     # Fake vectors are hashes of the text, so a chunk's own text must find
     # that exact chunk first - proof each vector was made from its chunk.
+    # What was embedded is the chunk under its collection's recipe (B2).
     chunk = new.vector_store.metadata_store.get_all_chunks_ordered()[-1]
-    hits = new.search(chunk["text"], top_k=1, mode=SearchMode.SEMANTIC)["results"]
+    hits = new.search(new._texts_to_embed([chunk])[0], top_k=1, mode=SearchMode.SEMANTIC)["results"]
     assert hits[0].text_snippet.startswith(chunk["text"][:40])
     assert (collection_service.get_documents_path(result["id"]) / "holidays.txt").exists()
 
@@ -483,7 +484,7 @@ def test_import_with_another_model_re_embeds_from_chunk_text(env, monkeypatch):
     new = indexer_manager.get_indexer(result["id"])
     assert new.vector_store.index.ntotal == new.vector_store.metadata_store.get_total_chunks()
     chunk = new.vector_store.metadata_store.get_all_chunks_ordered()[0]
-    hits = new.search(chunk["text"], top_k=1, mode=SearchMode.SEMANTIC)["results"]
+    hits = new.search(new._texts_to_embed([chunk])[0], top_k=1, mode=SearchMode.SEMANTIC)["results"]
     assert hits[0].text_snippet.startswith(chunk["text"][:40])
 
 

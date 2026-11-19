@@ -200,16 +200,20 @@ def test_hard_fixture_is_consistent_and_regenerates_byte_for_byte(tmp_path, monk
 
 
 def test_sentence_labels_follow_the_chunker(tmp_path):
-    """A label names the sentence, so it resolves to whatever chunk holds it,
-    and a sentence cut by a page break resolves to nothing until a chunk
-    holds all of it."""
+    """A label names the sentence, so it resolves to whatever chunk holds it.
+    A sentence cut by a page break resolves to nothing when pages are chunked
+    one at a time (recipe 1), and to the page it starts on when the chunker
+    finishes it there (recipe 2, B2)."""
     corpus = bench.load_corpus(HARD_FIXTURE)
-    indexers = bench.build_index(corpus, tmp_path / "index", tmp_path, embedder=_HashEmbedder())
+    split = [q for q in corpus.queries if q["category"] == "cross_page"]
+    bench.build_index(corpus, tmp_path / "old", tmp_path, embedder=_HashEmbedder(), recipe=1)
+    assert split and all(corpus.resolve(q["relevant"][0]) == [] for q in split)
+
+    indexers = bench.build_index(corpus, tmp_path / "index", tmp_path, embedder=_HashEmbedder(), recipe=2)
     assert set(indexers) == set(corpus.collections)
     late = next(q for q in corpus.queries if q["category"] == "late_page")
     assert corpus.resolve(late["relevant"][0])
-    split = [q for q in corpus.queries if q["category"] == "cross_page"]
-    assert split and all(corpus.resolve(q["relevant"][0]) == [] for q in split)
+    assert all(corpus.resolve(q["relevant"][0]) for q in split)
 
     result = bench.run_config(indexers, corpus, "hash", top_k=10, repeats=1, parallel=1,
                               queries=[q for q in corpus.queries if q["category"] == "cross_collection"][:5],

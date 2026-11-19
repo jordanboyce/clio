@@ -644,7 +644,7 @@ class ReindexService:
             # Kept from an outside embedding provider: indexed for keyword search,
             # which index_prepared_documents does when it is given no vectors.
             embeddings = None if data_controls.embedding_withheld(collection_id) else (
-                indexer.embedding_service.embed_texts([c.text for c in prepared.chunks]))
+                indexer.embedding_service.embed_texts(indexer._texts_to_embed(prepared.chunks)))
 
             # The old entry goes only now that the new one is ready, and the swap
             # holds the index lock so a search never sees the document half-way.

@@ -250,7 +250,7 @@ def _check_ref(corpus: Corpus, ref: str) -> Optional[str]:
 # ── Index ────────────────────────────────────────────────────────────────────
 
 def build_index(corpus: Corpus, index_dir: Path, cache_dir: Path, embedder=None,
-                model_name: str = EMBEDDING_MODEL):
+                model_name: str = EMBEDDING_MODEL, recipe: Optional[int] = None):
     """Index every passage as one chunk with the real local embedder.
     Returns the DocumentIndexer whose ``search`` the benchmark calls.
 
@@ -271,9 +271,13 @@ def build_index(corpus: Corpus, index_dir: Path, cache_dir: Path, embedder=None,
         documents = [d for d in corpus.documents if (d.get("collection") or "main") == collection]
         target = index_dir if len(corpus.collections) == 1 else Path(index_dir) / collection
         store = VectorStore(target, embedding_dim=getattr(embedder, "embedding_dim", 384))
-        chunks, texts = _chunks_for(corpus, documents, ChunkMetadata)
+        chunks, texts = _chunks_for(corpus, documents, ChunkMetadata, recipe)
         vectors = embedder.embed_texts(texts)
         store.add_chunks(chunks, vectors)
+        # Recorded as the app records it, so search (the reranker's input)
+        # follows the same recipe.
+        from services.indexing import embedding_text
+        embedding_text.write_recipe(store.metadata_store, corpus.recipe)
         apply_supersede_marks(corpus, store.metadata_store, documents)
         indexers[collection] = DocumentIndexer(
             vector_store=store,
@@ -284,17 +288,22 @@ def build_index(corpus: Corpus, index_dir: Path, cache_dir: Path, embedder=None,
     return indexers[corpus.collections[0]] if len(indexers) == 1 else indexers
 
 
-def _chunks_for(corpus: Corpus, documents: List[dict], ChunkMetadata) -> tuple:
+def _chunks_for(corpus: Corpus, documents: List[dict], ChunkMetadata, recipe: Optional[int] = None) -> tuple:
     """The chunks to index and the text to embed for each.
 
     A document given as passages is one chunk per passage. A document given
-    as pages goes through the app's own chunker at the configured size, and
-    its chunks are embedded with the text the indexer would embed."""
+    as pages goes through the app's own chunker at the configured size. Both
+    are embedded with the text the indexer would embed under ``recipe``
+    (services/indexing/embedding_text.py; default: what a new collection
+    gets)."""
     from config import settings
     from services.chunker import TextChunker
-    from services.indexing.embedding_text import texts_for_embedding
+    from services.indexing import embedding_text
 
-    chunker = TextChunker(chunk_size=settings.chunk_size, chunk_overlap=settings.chunk_overlap)
+    recipe = embedding_text.CURRENT_RECIPE if recipe is None else recipe
+    corpus.recipe = recipe
+    chunker = TextChunker(chunk_size=settings.chunk_size, chunk_overlap=settings.chunk_overlap,
+                          continuous=recipe >= embedding_text.HEADED)
     chunks: List[Any] = []
     texts: List[str] = []
     for d in documents:
@@ -305,7 +314,7 @@ def _chunks_for(corpus: Corpus, documents: List[dict], ChunkMetadata) -> tuple:
             )
             corpus.chunked[d["id"]] = [(c.chunk_id, _norm_text(c.text)) for c in made]
             chunks.extend(made)
-            texts.extend(texts_for_embedding(made, title=d.get("title")))
+            texts.extend(embedding_text.texts_for_embedding(made, recipe=recipe))
             continue
         for i, text in enumerate(d["passages"], start=1):
             chunks.append(ChunkMetadata(
@@ -318,7 +327,7 @@ def _chunks_for(corpus: Corpus, documents: List[dict], ChunkMetadata) -> tuple:
                 source_format=d.get("format"),
                 extraction_method="text",
             ))
-            texts.append(text)
+            texts.append(embedding_text.texts_for_embedding([chunks[-1]], recipe=recipe)[0])
     return chunks, texts
 
 
@@ -631,6 +640,11 @@ class BenchmarkReport:
         }
 
 
+def _fusion() -> str:
+    from services import vector_store
+    return vector_store.HYBRID_FUSION
+
+
 def _chunking() -> tuple:
     from config import settings
     return settings.chunk_size, settings.chunk_overlap
@@ -648,6 +662,8 @@ def _environment(corpus: Corpus, backend: str, cache_dir: Path,
         "collections": len(corpus.collections),
         "chunks": sum(len(corpus.chunked[d["id"]]) if "pages" in d else len(d["passages"])
                       for d in corpus.documents),
+        "recipe": getattr(corpus, "recipe", None),
+        "fusion": _fusion(),
         "chunk_size": _chunking()[0],
         "chunk_overlap": _chunking()[1],
         "queries": len(corpus.queries),
@@ -680,6 +696,7 @@ def run_benchmark(*, top_k: int = 10, repeats: int = 1, multipliers: Sequence[in
                   parallel: int = 8, concurrency_multiplier: int = 3, concurrency_queries: int = 40,
                   skip_concurrency: bool = False, index_dir: Optional[Path] = None,
                   fixture_dir: Path = FIXTURE_DIR, embedding_model: str = EMBEDDING_MODEL,
+                  recipe: Optional[int] = None,
                   log: Callable[[str], None] = lambda s: None) -> BenchmarkReport:
     """Build the index once and run every configuration against it.
 
@@ -702,7 +719,7 @@ def run_benchmark(*, top_k: int = 10, repeats: int = 1, multipliers: Sequence[in
 
     workdir = index_dir or Path(tempfile.mkdtemp(prefix="clio-bench-index-"))
     log(f"indexing {len(corpus.documents)} documents with {embedding_model} ...")
-    indexer = build_index(corpus, workdir / "index", cache_dir, model_name=embedding_model)
+    indexer = build_index(corpus, workdir / "index", cache_dir, model_name=embedding_model, recipe=recipe)
     log("checking the reranker model ...")
     backend = ensure_reranker_model(cache_dir)
     env = _environment(corpus, backend, cache_dir, embedding_model)
@@ -772,6 +789,7 @@ def render_markdown(report: BenchmarkReport) -> str:
         f"(corpus v{env['corpus_version']}, queries v{env['queries_version']})",
         "",
         f"{env['documents']} documents / {env['chunks']} chunks / {env['queries']} queries; "
+        f"indexing recipe {env.get('recipe')}, fusion {env.get('fusion')}; "
         f"embedding {env['embedding_model']}, reranker {env['reranker_model']} ({env['reranker_backend']}); "
         f"fastembed {env.get('fastembed')}, onnxruntime {env.get('onnxruntime')}; "
         f"{env['cpus']} CPUs, {env['platform']}, Python {env['python']}, git {env.get('git')}; "
@@ -861,6 +879,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--json", type=Path, help="write the raw numbers here")
     parser.add_argument("--out", type=Path, help="write the markdown report here (also printed)")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--fusion", choices=("sum", "rrf"), default=None,
+                        help="hybrid fusion (services/vector_store.py HYBRID_FUSION); default: the current one")
+    parser.add_argument("--recipe", type=int, default=None,
+                        help="indexing recipe (services/indexing/embedding_text.py); default: the current one")
     parser.add_argument("--embedding-model", default=EMBEDDING_MODEL,
                         help="fastembed model to index with (the images bake all-MiniLM-L6-v2 or BAAI/bge-small-en-v1.5)")
     args = parser.parse_args(argv)
@@ -868,6 +890,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sys.path.insert(0, str(REPO_ROOT))
     prepare_environment()
     logging.basicConfig(level=logging.WARNING)
+    if args.fusion:
+        from services import vector_store
+        vector_store.HYBRID_FUSION = args.fusion
     log = (lambda s: None) if args.quiet else (lambda s: print(s, file=sys.stderr, flush=True))
 
     report = run_benchmark(
@@ -876,7 +901,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parallel=args.parallel, concurrency_multiplier=args.concurrency_multiplier,
         concurrency_queries=args.concurrency_queries,
         skip_concurrency=args.skip_concurrency, fixture_dir=args.fixture,
-        embedding_model=args.embedding_model, log=log,
+        embedding_model=args.embedding_model, recipe=args.recipe, log=log,
     )
     markdown = render_markdown(report)
     print(markdown)

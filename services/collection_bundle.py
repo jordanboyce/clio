@@ -1154,7 +1154,8 @@ def _run_import(job_id: int, collection_id: str, source_model: Optional[str]) ->
                 upload_service.finish_job(job_id, {"chunks": total, "embedded": done}, cancelled=True)
                 return
             ids = np.asarray([r[0] for r in rows], dtype=np.int64)
-            vectors = np.asarray(service.embed_texts([r[1] for r in rows]), dtype=np.float32)
+            vectors = np.asarray(service.embed_texts(indexer._texts_to_embed(
+                [{"text": r[1], "filename": r[2]} for r in rows])), dtype=np.float32)
             vectors /= np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-12)
             with store._index_lock:
                 store.index.add_with_ids(vectors, ids)
