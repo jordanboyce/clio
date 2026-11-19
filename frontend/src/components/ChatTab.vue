@@ -210,6 +210,10 @@
             <pre class="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words font-sans">{{ errorDetail }}</pre>
           </details>
         </div>
+        <button v-if="chatStore.ask.retry && !loading" type="button" class="btn btn-xs btn-outline gap-1"
+          data-testid="chat-retry" @click="retryLast">
+          <RefreshCw :size="11" aria-hidden="true" /> Retry
+        </button>
         <button class="side-icon-btn side-icon-btn-sm text-base-content/60" @click="dismissError" aria-label="Dismiss error"><X :size="13" aria-hidden="true" /></button>
       </div>
 
@@ -540,6 +544,14 @@
                   </div>
                 </div>
 
+                <div v-if="msg.interrupted" class="flex items-center gap-2 mt-2 text-xs text-warning" data-testid="answer-interrupted">
+                  <CircleAlert :size="12" aria-hidden="true" />
+                  <span>This answer was interrupted before it finished.</span>
+                  <button type="button" class="btn btn-xs btn-ghost gap-1" :disabled="loading" @click="rerunAnswer(index)">
+                    <RefreshCw :size="11" aria-hidden="true" /> Retry
+                  </button>
+                </div>
+
                 <!-- Footer: one muted line of provenance, actions on the right -->
                 <div
                   v-if="!msg.streaming && (msg.aiUsage || msg.content)"
@@ -792,7 +804,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, toRef } from 'vue'
 import http from '../utils/http'
 import AnswerEvidence from './AnswerEvidence.vue'
 import { answerWithReferences } from '../utils/answerEvidence'
@@ -855,8 +867,9 @@ const indexingActive = computed(() =>
   )
 )
 
-// UI state
-const loading = ref(false)
+// UI state. The answer in flight and its error live in the chat store, so
+// they outlive this view when another tab opens (C2).
+const loading = toRef(chatStore.ask, 'loading')
 
 // A one-second clock while an answer is in flight, so the status line can
 // say how long the current step has taken ("Waiting for Anthropic… · 42 s").
@@ -870,7 +883,7 @@ watch(loading, (busy) => {
     clock.value = Date.now()
     clockTimer = setInterval(() => { clock.value = Date.now() }, 1000)
   }
-})
+}, { immediate: true })
 const STATUS_TIMER_AFTER_S = 5
 const streamStatusText = (msg, fallback) => {
   const status = msg.status
@@ -878,9 +891,13 @@ const streamStatusText = (msg, fallback) => {
   const seconds = Math.floor((clock.value - status.since) / 1000)
   return seconds >= STATUS_TIMER_AFTER_S ? `${status.text} · ${seconds} s` : status.text
 }
-const error = ref('')
-const errorDetail = ref('')
-const inputMessage = ref('')
+const error = toRef(chatStore.ask, 'error')
+const errorDetail = toRef(chatStore.ask, 'errorDetail')
+// The unsent question is kept per collection in the store (C2).
+const inputMessage = computed({
+  get: () => chatStore.getDraft(collectionStore.currentCollectionId),
+  set: (text) => chatStore.setDraft(collectionStore.currentCollectionId, text),
+})
 const messagesEnd = ref(null)
 const messagesContainer = ref(null)
 const settingsDrawerOpen = ref(false)
@@ -1385,28 +1402,57 @@ const rerunAnswer = async (index, { depth: nextDepth } = {}) => {
     if (msgs[i].role === 'user') { userIdx = i; break }
   }
   if (userIdx === -1) return
-  const question = msgs[userIdx].content
-  // Drop the question + its answer, then resend as a fresh exchange.
-  msgs.splice(userIdx, msgs.length - userIdx)
-  inputMessage.value = question
+  // The old answer (and anything after it) stays until the new one has
+  // arrived, so a failed regenerate loses nothing (C3).
   forceFresh.value = true
   depthOverride.value = nextDepth || ''
   try {
-    await sendMessage()
+    await sendMessage({
+      question: msgs[userIdx].content,
+      history: msgs.slice(0, userIdx + 1),
+      replaces: msgs.slice(userIdx + 1).map(m => m.id),
+      rerun: { answerId: msgs[index].id, depth: nextDepth || '' },
+    })
   } finally {
     forceFresh.value = false
     depthOverride.value = ''
   }
 }
 
-const sendMessage = async () => {
-  if (!inputMessage.value.trim() || loading.value) return
+// Retry what failed: the regenerate, or the last question, which stays in
+// the thread with no answer under it.
+const retryLast = async () => {
+  const retry = chatStore.ask.retry
+  if (!retry || loading.value) return
+  const msgs = messages.value
+  if (retry.rerun) {
+    const i = msgs.findIndex(m => m.id === retry.rerun.answerId)
+    if (i !== -1) return rerunAnswer(i, { depth: retry.rerun.depth })
+  }
+  const userIdx = msgs.map(m => m.id).lastIndexOf(retry.questionId)
+  if (userIdx === -1) return
+  await sendMessage({
+    question: msgs[userIdx].content,
+    history: msgs.slice(0, userIdx + 1),
+    replaces: msgs.slice(userIdx + 1).map(m => m.id),
+  })
+}
 
-  const userContent = inputMessage.value.trim()
+// `again` resends a question already in the thread (regenerate, Retry):
+// {question, history: the messages up to and including it, replaces: ids
+// removed once the new answer has arrived, rerun: the answer regenerated}.
+const sendMessage = async (resend = null) => {
+  // A button's click handler passes its event here; only a resend counts.
+  const again = typeof resend?.question === 'string' ? resend : null
+  if (loading.value) return
+  if (!again && !inputMessage.value.trim()) return
 
-  inputMessage.value = ''
+  const userContent = again ? again.question : inputMessage.value.trim()
+
+  if (!again) inputMessage.value = ''
   error.value = ''
   errorDetail.value = ''
+  chatStore.ask.retry = null
   slashPickerOpen.value = false
 
   // Intercept slash commands before hitting the LLM — zero tokens, instant.
@@ -1433,7 +1479,10 @@ const sendMessage = async () => {
   }
 
   const collectionId = collectionStore.currentCollectionId
-  chatStore.addMessage(collectionId, { role: 'user', content: userContent })
+  if (!again) chatStore.addMessage(collectionId, { role: 'user', content: userContent })
+  const history = again ? again.history : messages.value.filter(m => !m.streaming)
+  // What Retry resends if this fails: the question stays in the thread.
+  const failed = { questionId: history[history.length - 1]?.id, rerun: again?.rerun || null }
   await scrollToBottom()
 
   loading.value = true
@@ -1447,16 +1496,15 @@ const sendMessage = async () => {
   try {
     const providerHeaders = buildProviderHeaders(selectedProvider.value)
     // Pass only role+content to the API (strip UI-only fields like timestamps).
-    const apiMessages = messages.value
-      .filter(m => !m.streaming)
-      .map(m => ({ role: m.role, content: m.content }))
+    const apiMessages = history.map(m => ({ role: m.role, content: m.content }))
 
-    abortController = new AbortController()
+    const controller = new AbortController()
+    chatStore.setController(controller)
     const response = await fetch(
       `/api/chat/stream?collection_id=${collectionId}`,
       {
         method: 'POST',
-        signal: abortController.signal,
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json', ...providerHeaders },
         body: JSON.stringify({
           messages: apiMessages,
@@ -1560,9 +1608,10 @@ const sendMessage = async () => {
             provider: selectedProvider.value,
             scope: scope.value,
           })
+          if (again?.replaces?.length) chatStore.removeMessages(stream, again.replaces)
         } else if (event.type === 'error') {
           chatStore.removeStreamingMessage(stream)
-          setChatError(event.message)
+          setChatError(event.message, failed)
         }
       }
     }
@@ -1577,7 +1626,7 @@ const sendMessage = async () => {
         setChatError('The connection closed before the answer finished, so it may be cut short. Ask again for the full answer.')
       } else {
         chatStore.removeStreamingMessage(stream)
-        setChatError('The connection to the server closed before an answer arrived. A proxy or tunnel may have cut it off, or the server restarted. Try again.')
+        setChatError('The connection to the server closed before an answer arrived. A proxy or tunnel may have cut it off, or the server restarted. Try again.', failed)
       }
     }
   } catch (err) {
@@ -1588,19 +1637,18 @@ const sendMessage = async () => {
       else chatStore.removeStreamingMessage(stream)
     } else {
       chatStore.removeStreamingMessage(stream)
-      setChatError(err.message)
+      setChatError(err.message, failed)
     }
   } finally {
-    abortController = null
+    chatStore.setController(null)
     loading.value = false
   }
 }
 
 // Stop the in-flight answer. Aborting the fetch closes the SSE reader; the
 // server notices the dropped connection and stops the provider call.
-let abortController = null
 const stopStreaming = () => {
-  abortController?.abort()
+  chatStore.stopAsking()
 }
 
 const formatTokens = (n) => {
@@ -1610,15 +1658,18 @@ const formatTokens = (n) => {
   return String(n)
 }
 
-const setChatError = (message) => {
+// `retry`, when given, is what the Retry button beside the message resends.
+const setChatError = (message, retry = null) => {
   const presented = presentChatError(message)
   error.value = presented.message
   errorDetail.value = presented.detail
+  chatStore.ask.retry = retry
 }
 
 const dismissError = () => {
   error.value = ''
   errorDetail.value = ''
+  chatStore.ask.retry = null
 }
 
 const clearChat = async () => {
@@ -1667,9 +1718,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  // Nothing is left to render the answer into; stopping the fetch also
-  // tells the server to stop the provider call.
-  abortController?.abort()
+  // The answer keeps arriving into the chat store while another tab is open
+  // (C2); only Stop ends it.
   window.removeEventListener('clio:prefill-chat', handlePrefill)
   clearInterval(clockTimer)
   if (autoScrollTimer) {

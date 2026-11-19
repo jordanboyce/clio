@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { markRaw, reactive, ref } from 'vue'
 
 const STORAGE_KEY = 'clio_chat_history_v2'
 const LEGACY_STORAGE_KEY = 'clio_chat_history_v1'
@@ -21,6 +21,14 @@ const ensureMessageIds = (conversations) => {
     for (const session of conv?.sessions || []) {
       for (const msg of session?.messages || []) {
         if (msg && !msg.id) msg.id = newMessageId()
+        // Saved mid-answer (another chat was saved while this one streamed)
+        // and then the page reloaded: nothing will ever finish it. Shown as
+        // interrupted, with Retry, not as "Thinking…" forever.
+        if (msg?.streaming) {
+          msg.streaming = false
+          msg.interrupted = true
+          delete msg.status
+        }
       }
     }
   }
@@ -44,6 +52,18 @@ const deriveTitle = (text) => {
 export const useChatStore = defineStore('chat', () => {
   // { collectionId: { sessions: [Session], activeSessionId: string } }
   const conversations = ref({})
+
+  // The answer being asked for now, and what went wrong with the last one.
+  // Held here, not in the Ask view, so leaving Ask for another tab neither
+  // stops the answer nor loses the error and its Retry (C2, C3).
+  const ask = reactive({ loading: false, controller: null, error: '', errorDetail: '', retry: null })
+  const setController = (controller) => { ask.controller = controller ? markRaw(controller) : null }
+  const stopAsking = () => { ask.controller?.abort() }
+
+  // The unsent question, per collection: it survives a switch to another tab.
+  const drafts = ref({})
+  const getDraft = (collectionId) => drafts.value[collectionId] || ''
+  const setDraft = (collectionId, text) => { drafts.value[collectionId] = text }
 
   const loadFromStorage = () => {
     try {
@@ -258,6 +278,17 @@ export const useChatStore = defineStore('chat', () => {
     saveToStorage()
   }
 
+  // Remove messages by id from the session a stream belongs to (a
+  // regenerated answer replaces the old one only once it has arrived).
+  const removeMessages = (stream, ids) => {
+    const session = _streamSession(stream)
+    if (!session || !ids?.length) return
+    const drop = new Set(ids)
+    session.messages = session.messages.filter((m) => !drop.has(m.id))
+    session.updatedAt = Date.now()
+    saveToStorage()
+  }
+
   const removeStreamingMessage = (stream) => {
     const session = _streamSession(stream)
     if (!session) return
@@ -343,6 +374,12 @@ export const useChatStore = defineStore('chat', () => {
 
   return {
     conversations,
+    ask,
+    setController,
+    stopAsking,
+    getDraft,
+    setDraft,
+    removeMessages,
     getMessages,
     getSessions,
     getActiveSessionId,
