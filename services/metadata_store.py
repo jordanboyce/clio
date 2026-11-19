@@ -2497,6 +2497,7 @@ class MetadataStore:
         filenames: Optional[List[str]] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        source_types: Optional[List[str]] = None,
     ) -> Optional[set]:
         """Resolve a set of chunk_ids matching the given metadata filters.
 
@@ -2511,7 +2512,7 @@ class MetadataStore:
         comparison is correct for ISO-8601). Values are matched case-insensitively
         for formats and filenames.
         """
-        has_filter = any([document_ids, source_formats, filenames, date_from, date_to])
+        has_filter = any([document_ids, source_formats, filenames, date_from, date_to, source_types])
         if not has_filter:
             return None
 
@@ -2546,8 +2547,18 @@ class MetadataStore:
             clauses.append("COALESCE(d.upload_timestamp, '') <= ?")
             params.append(date_to)
 
+        if source_types:
+            # upload, local_reference, url, agent_note (D1): what kind of
+            # source a document is, so an agent can ask for its own notes.
+            kinds = [str(k).lower() for k in source_types]
+            placeholders = ",".join("?" for _ in kinds)
+            clauses.append(f"LOWER(COALESCE(d.source_type, 'upload')) IN ({placeholders})")
+            params.extend(kinds)
+
         where = " AND ".join(clauses)
         with sqlite_connect(self.db_path) as conn:
+            if source_types:
+                self._ensure_v3_1_columns(conn)
             cursor = conn.execute(
                 f"""
                 SELECT c.chunk_id

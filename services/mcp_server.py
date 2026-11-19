@@ -20,6 +20,7 @@ from pydantic import Field
 from mcp.server.fastmcp import FastMCP
 
 from services import provenance as _provenance
+from mcp import types
 from mcp.types import ToolAnnotations
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
@@ -129,6 +130,26 @@ def get_request_mcp_can_write() -> bool:
     return _request_mcp_can_write.get(True)
 
 
+# Which tools this connection lists (D1, roadmap M4): ``?tools=notes`` or
+# ``?tools=core`` on the MCP URL; none means every tool, as before. A profile
+# changes what is listed, not what is allowed: authorization is unchanged.
+_request_mcp_tools: ContextVar[str | None] = ContextVar("clio_request_mcp_tools", default=None)
+
+TOOL_PROFILES: dict[str, tuple[str, ...]] = {
+    # Reading and writing an agent's own notes, in about 4,000 tokens.
+    "notes": (
+        "list_collections", "search_collection", "read_document", "find_in_documents",
+        "create_document", "append_to_document", "write_document", "list_changes",
+    ),
+    # Reading and research over the sources, without tables, PRA or admin.
+    "core": (
+        "list_collections", "get_collection_info", "list_documents", "search_collection",
+        "search_all_collections", "deep_search", "get_document_context", "read_document",
+        "find_in_documents", "cite_sources", "check_citations", "list_changes",
+    ),
+}
+
+
 # Whether this MCP request may replace a source a person uploaded. Only a
 # personal token minted with ``can_overwrite_uploads`` carries it; every other
 # caller (shared password, SSO session, app key, in-process chat) is refused,
@@ -212,7 +233,13 @@ _SERVER_INSTRUCTIONS = (
     "and say what the sources do not establish. Responses carry a corpus_version "
     "per collection; if it changes between calls, evidence fetched earlier may be "
     "stale. " + _RESEARCH_INSTRUCTIONS + " " + authored_text.MCP_RULE + " "
-    + authored_text.MCP_DOCUMENT_TEXT_RULE
+    + authored_text.MCP_DOCUMENT_TEXT_RULE + " "
+    "Writing, where this credential may write: create_document starts a note, "
+    "append_to_document adds to one, write_document replaces one. Notes are "
+    "source_type agent_note: search them alone with filters "
+    "{\"source_type\": \"agent_note\", \"written_after\": <ISO time>}. "
+    "list_changes reports what changed in a collection since a time. Connect "
+    "with ?tools=notes for a small tool set for reading and writing notes."
 )
 
 # The grounded-answer tool exists only when the deployment runs a model of
@@ -926,18 +953,31 @@ def get_collection_info(
 
 
 _FILTER_KEYS = ("document_ids", "filenames", "source_formats", "date_from", "date_to",
-                "include_superseded")
+                "include_superseded", "source_type", "written_after", "written_before")
 
 
 def _normalize_search_filters(filters: dict[str, Any] | None) -> dict[str, Any] | None:
     """Validate and normalize a raw filters dict into the indexer's shape.
 
-    Drops unknown/empty keys, coerces single strings into lists for the
-    list-valued filters, and returns None when nothing usable remains so the
-    search path stays on its unfiltered fast track.
+    An unknown key is an error that names the valid ones (D1): a misspelled
+    filter used to be dropped, so the search ran unfiltered and looked as if
+    it had worked. Coerces single strings into lists for the list-valued
+    filters, and returns None when nothing usable remains so the search path
+    stays on its unfiltered fast track.
+
+    ``source_type`` (upload, local_reference, url, agent_note) picks a kind
+    of source, so an agent can search its own notes only. ``written_after``
+    and ``written_before`` are when a source was last written or indexed (the
+    same time as date_from / date_to, named for notes).
     """
     if not filters or not isinstance(filters, dict):
         return None
+
+    unknown = set(filters) - set(_FILTER_KEYS)
+    if unknown:
+        raise ValueError(
+            f"Unknown filter {', '.join(sorted(unknown))}. Valid filters: {', '.join(_FILTER_KEYS)}."
+        )
 
     out: dict[str, Any] = {}
     for key in ("document_ids", "filenames", "source_formats"):
@@ -950,17 +990,20 @@ def _normalize_search_filters(filters: dict[str, Any] | None) -> dict[str, Any] 
         if cleaned:
             out[key] = cleaned
 
-    for key in ("date_from", "date_to"):
-        val = filters.get(key)
+    for key, alias in (("date_from", "written_after"), ("date_to", "written_before")):
+        val = filters.get(key) or filters.get(alias)
         if val and str(val).strip():
             out[key] = str(val).strip()
 
+    kinds = filters.get("source_type")
+    if kinds:
+        kinds = [kinds] if isinstance(kinds, str) else list(kinds)
+        cleaned = [str(k).strip().lower() for k in kinds if str(k).strip()]
+        if cleaned:
+            out["source_types"] = cleaned
+
     if filters.get("include_superseded") is True or str(filters.get("include_superseded")).lower() == "true":
         out["include_superseded"] = True
-
-    unknown = set(filters) - set(_FILTER_KEYS)
-    if unknown:
-        logger.info("search filters: ignoring unknown keys %s", sorted(unknown))
 
     return out or None
 
@@ -5321,6 +5364,13 @@ class ToggleableMCPApp:
                 profile = _normalize_profile(raw_profile)
 
         token = _request_mcp_profile.set(profile)
+        wanted_tools = None
+        if scope["type"] == "http":
+            wanted_tools = (parse_qs(scope.get("query_string", b"").decode("utf-8")).get("tools") or [None])[-1]
+            if wanted_tools and wanted_tools not in TOOL_PROFILES:
+                logger.info("MCP: unknown tool profile %r; listing every tool", wanted_tools)
+                wanted_tools = None
+        tools_token = _request_mcp_tools.set(wanted_tools)
         # The personal-token collection scope (restricted-collection grant)
         # and write flag ride on request.state from main.py's auth middleware.
         state = scope.get("state", {}) if scope["type"] == "http" else {}
@@ -5365,6 +5415,7 @@ class ToggleableMCPApp:
             _request_mcp_can_write.reset(write_token)
             _request_mcp_token_allowlist.reset(allowlist_token)
             _request_mcp_token_scope.reset(scope_token)
+            _request_mcp_tools.reset(tools_token)
             _request_mcp_profile.reset(token)
 
 
@@ -5461,6 +5512,25 @@ def _with_legacy_sse(app):
     app.router.routes.insert(1, Mount("/sse/messages", app=sse.handle_post_message))
     return app
 
+
+async def _listed_tools() -> types.ListToolsResult:
+    """tools/list for this connection: a read-only credential never sees a
+    write tool, and a profile (?tools=notes) lists its own few tools with the
+    first paragraph of each description only (D1)."""
+    tools = await _clio_mcp.list_tools()
+    if not get_request_mcp_can_write():
+        tools = [t for t in tools if t.annotations and t.annotations.readOnlyHint]
+    profile = _request_mcp_tools.get(None)
+    if profile in TOOL_PROFILES:
+        wanted = TOOL_PROFILES[profile]
+        tools = sorted((t for t in tools if t.name in wanted), key=lambda t: wanted.index(t.name))
+        tools = [t.model_copy(update={"description": _first_paragraph(t.description)}) for t in tools]
+    # The new-style result adds to the SDK's tool cache instead of replacing
+    # it, so one connection's short list never hides a tool from another's.
+    return types.ListToolsResult(tools=tools)
+
+
+_clio_mcp._mcp_server.list_tools()(_listed_tools)
 
 embedded_mcp_app = ToggleableMCPApp(_with_legacy_sse(_clio_mcp.streamable_http_app()))
 

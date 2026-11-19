@@ -1275,6 +1275,7 @@ class DocumentIndexer:
                 filenames=filters.get("filenames"),
                 date_from=filters.get("date_from"),
                 date_to=filters.get("date_to"),
+                source_types=filters.get("source_types"),
             )
             if allowed_chunk_ids is not None and len(allowed_chunk_ids) == 0:
                 logger.info("Search filters matched no documents; returning no results")
