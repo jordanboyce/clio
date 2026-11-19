@@ -207,8 +207,13 @@ def test_after_a_failed_download_every_surface_says_it_failed(monkeypatch):
     from services.embedding_status import embedding_status
 
     model = "BAAI/bge-small-en-v1.5"
-    monkeypatch.setattr(im.settings, "embedding_provider", "local")
-    monkeypatch.setattr(im.settings, "embedding_model", model)
+    # Pin every input: another test's offline mode or settings object must
+    # not choose the branch for this one.
+    for s in {id(im.settings): im.settings, id(readiness.settings): readiness.settings}.values():
+        monkeypatch.setattr(s, "embedding_provider", "local")
+        monkeypatch.setattr(s, "embedding_model", model)
+        monkeypatch.setattr(s, "offline_mode", False)
+    monkeypatch.setattr(im, "hub_offline", lambda: False)
     monkeypatch.setattr(embedding_status, "_state", {
         **embedding_status._blank(), "provider": "local", "model": model, "status": "error",
         "error": f"Could not download embedding model '{model}' from 10.255.255.1:81.",
@@ -219,6 +224,7 @@ def test_after_a_failed_download_every_surface_says_it_failed(monkeypatch):
 
     monkeypatch.setattr(embedder, "local_model_cached", lambda name, backend=None: False)
     monkeypatch.setattr(embedder, "resolve_local_backend", lambda name: "fastembed")
+    monkeypatch.setattr(embedder, "hub_offline", lambda: False)
     gate = threading.Event()
     monkeypatch.setattr(im.indexer_manager, "_get_embedding_service", lambda m: gate.wait(5))
     monkeypatch.setattr(im.indexer_manager, "_builds", {})
