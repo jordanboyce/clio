@@ -184,18 +184,30 @@ while it holds no documents.
 New collections take the server's model, bge-small on a bge image.
 
 On a bge image in an air gap, a collection still recorded as MiniLM cannot load
-its model, so search by meaning for it answers 503 with a message naming the
-missing model. Keyword search, and the default `auto` mode, which falls back to
-keywords, keep working. Move it to bge as below, or keep it on an image that
-holds MiniLM.
+its model, so it is searched by keyword. Keyword search, and the default `auto`
+mode, which falls back to keywords, keep working. The collection says so where
+you are: the Sources panel shows "This collection is searched by keyword" with
+the model it needs and the one this server has, and the collection list marks
+it. Move it to bge as below, or keep it on an image that holds MiniLM.
+
+The vectors on disk record the model that wrote them. A collection whose
+vectors came from another model than the one its search would use (two
+384-dimensional models, say) is refused that model and searched by keyword,
+with a notice naming both, until it is re-indexed with one. No state exists in
+which queries are embedded with one model against another model's vectors
+without an error.
 
 ### Moving a collection to bge-small
 
 Both ways re-embed from the collection's source files, so they need those files
 (uploads are kept by default; a folder or git source must still be reachable).
+Neither needs a terminal.
 
-**Clone (recommended).** The copy is built with the new model while the
-original keeps answering with its own:
+**Copy (recommended).** Press **Copy to the current model** on the notice. The
+copy is built with the server's model while the original keeps answering with
+its own; follow it in Background work. The guide, the sensitivity label and any
+classification marking travel with the copy; publishing and shares do not. When
+the copy is ready, delete the original if it is no longer needed. Over the API:
 
 ```bash
 curl -X POST http://<host>:8473/api/collections/<id>/clone \
@@ -203,27 +215,21 @@ curl -X POST http://<host>:8473/api/collections/<id>/clone \
   -d '{"name": "Handbook (bge)", "embedding_model": "BAAI/bge-small-en-v1.5"}'
 ```
 
-The answer carries the new collection and a `job_id`; follow it in Background
-work. The guide, the sensitivity label and any classification marking travel
-with the copy; publishing and shares do not. When the copy is ready, delete the
-original if it is no longer needed.
-
-**Re-index in place.** Change the collection's model, then rebuild it:
+**Re-index in place.** Press **Re-index in place** on the notice (the
+collection's owner sees it). The collection is rebuilt with the server's model
+and its record names that model only once the new vectors are saved; until the
+job finishes it is searched by keyword with the old vectors. If a re-index was
+interrupted, start it again. Over the API, one request does both:
 
 ```bash
-curl -X PUT http://<host>:8473/api/collections/<id> \
+curl -X POST http://<host>:8473/api/collections/<id>/reindex \
   -H "Authorization: Bearer <password>" -H "Content-Type: application/json" \
   -d '{"embedding_model": "BAAI/bge-small-en-v1.5"}'
-curl -X POST http://<host>:8473/api/collections/<id>/reindex -H "Authorization: Bearer <password>"
 ```
 
-Run the two together and do not rely on the collection's search until the job
-finishes. In between it holds MiniLM vectors under a bge label: a server that
-already had the collection open keeps searching with MiniLM, but one that opens
-it afresh (after a restart, say) embeds queries with bge against those vectors
-and returns poor results without any error. While the job runs the collection is
-only partly searchable. If a re-index was interrupted, start it again. Clone
-has none of these gaps.
+Changing the model with `PUT /api/collections/<id>` alone is refused (409) for a
+collection that holds vectors, since it would leave one model's vectors under
+another model's name.
 
 Either way, check the result before exporting it for a website:
 `GET /api/collections/<id>/export/static/preview` should list no blockers and

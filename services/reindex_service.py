@@ -198,6 +198,14 @@ class ReindexService:
 
         return failures
 
+    @staticmethod
+    def _relabel(collection_id: str, model: Optional[str]) -> None:
+        if not model:
+            return
+        from services.collection_service import collection_service
+        collection_service.update_collection(collection_id=collection_id, embedding_model=model)
+        logger.info(f"Collection {collection_id} now records embedding model {model}")
+
     def _finish_reindex(self, job_id: int, total_docs: int, failures: List[str]) -> None:
         """Close the job out, naming any file that did not come back."""
         if failures:
@@ -234,8 +242,12 @@ class ReindexService:
         chunk_size: int,
         chunk_overlap: int,
         embedding_dim: int = 384,
+        relabel_to: Optional[str] = None,
     ) -> int:
         """Start a re-indexing job for a specific collection.
+
+        ``relabel_to`` names a new model for the collection: its record is
+        changed only after the index rebuilt with that model is saved (B8).
 
         Args:
             collection_id: Collection to reindex
@@ -281,6 +293,7 @@ class ReindexService:
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             embedding_dim=embedding_dim,
+            relabel_to=relabel_to,
         )
 
         return job_id
@@ -357,6 +370,7 @@ class ReindexService:
         chunk_size: int,
         chunk_overlap: int,
         embedding_dim: int,
+        relabel_to: Optional[str] = None,
     ):
         """Run the re-indexing process for a collection in background.
 
@@ -435,6 +449,14 @@ class ReindexService:
             app_db.update_reindex_job(job_id, total_documents=total_docs)
 
             if total_docs == 0:
+                # Nothing to rebuild: an empty collection may take the new
+                # model at once, since no vectors carry the old one.
+                self._relabel(collection_id, relabel_to)
+                if relabel_to and self.reload_callback:
+                    try:
+                        self.reload_callback(collection_id)
+                    except Exception as e:  # noqa: BLE001
+                        logger.error(f"Failed to reload indexer for collection {collection_id}: {e}")
                 app_db.update_reindex_job(
                     job_id,
                     status="completed",
@@ -458,6 +480,9 @@ class ReindexService:
             logger.info("Saving re-indexed data to disk...")
             self._set_live(job_id, "saving", "Saving the new index")
             vector_store.save()
+            # B8: the new vectors are on disk; only now does the collection's
+            # record name the model that made them.
+            self._relabel(collection_id, relabel_to)
 
             # Swap the rebuilt index in before saying the job is over: whoever
             # is watching reloads the moment it does, and must see the new one.

@@ -1146,6 +1146,23 @@ class EmbeddingDimensionMismatch(EmbeddingUnavailable):
         )
 
 
+class EmbeddingModelMismatch(EmbeddingUnavailable):
+    """The collection's vectors were written by another model than the one
+    its queries would use. Two models of the same size (MiniLM and bge-small
+    are both 384) would otherwise search each other's vectors with no error
+    and poor results (B8). Only a re-index with one model fixes it."""
+
+    code = "embedding_model_mismatch"
+
+    def __init__(self, stored_model: str, model_name: str):
+        self.stored_model = stored_model
+        self.model_name = model_name
+        super().__init__(
+            f"This collection's vectors were made with '{stored_model}', but its search would use "
+            f"'{model_name}'. It is searched by keyword until it is re-indexed with one model."
+        )
+
+
 def ensure_embedding_ready(service) -> None:
     """Fail fast if `service` cannot embed, with a typed reason.
 
@@ -1259,6 +1276,11 @@ class DeferredEmbeddingService:
             self._last_attempt = now
             try:
                 service = self._factory()
+            except EmbeddingUnavailable as e:
+                # A typed reason (a model mismatch, say) keeps its type and code.
+                self.last_error = str(e) or e.__class__.__name__
+                self._last_exc = e
+                raise
             except Exception as e:
                 self.last_error = str(e) or e.__class__.__name__
                 self._last_exc = EmbeddingUnavailable(self.last_error)

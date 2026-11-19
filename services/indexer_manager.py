@@ -18,7 +18,8 @@ from services.collection_service import collection_service
 from services.document_extractor import DocumentExtractor
 from services.chunker import TextChunker
 from services.embedder import (
-    DeferredEmbeddingService, create_embedding_service, describe_embedding, index_dimension,
+    DeferredEmbeddingService, EmbeddingModelMismatch, create_embedding_service, describe_embedding,
+    index_dimension,
     embedding_signature, known_embedding_dim, local_model_cached,
 )
 from services.vector_store import VectorStore
@@ -33,6 +34,24 @@ _UNLOAD_SWEEP_INTERVAL_S = 60
 # come over a network. A healthy endpoint answers within this; a blocked one
 # carries on in the background while the collection works by keyword.
 EMBEDDING_BUILD_WAIT_SECONDS = 5.0
+
+
+def _stored_embedding(indexes_dir) -> dict:
+    """What the saved vectors record about the model that wrote them
+    (``signature``, ``model``); empty when nothing was recorded."""
+    import json
+
+    from services.sqlite_utils import sqlite_connect
+
+    path = Path(indexes_dir) / "metadata.db"
+    if not path.exists():
+        return {}
+    try:
+        with sqlite_connect(path) as conn:
+            rows = conn.execute("SELECT key, value FROM index_info WHERE key IN ('signature', 'model')").fetchall()
+        return {k: json.loads(v) for k, v in rows}
+    except Exception:  # noqa: BLE001 - no table yet, or an old store: nothing recorded
+        return {}
 
 
 def _holds_no_vectors(indexer) -> bool:
@@ -340,6 +359,36 @@ class IndexerManager:
                     embedding_dim=on_disk,
                     factory=lambda: built,
                 )
+
+        # B8: the vectors on disk record the model that wrote them. Queries
+        # embedded by another model of the same size would search them with
+        # no error and poor results, so that model is refused here and the
+        # collection opens for keyword search with a typed reason.
+        stored = _stored_embedding(indexes_dir) if on_disk is not None else {}
+        stored_signature = stored.get("signature")
+        if stored_signature:
+            def checked(service, stored=stored):
+                signature = getattr(service, "signature", None)
+                if signature and signature != stored["signature"]:
+                    raise EmbeddingModelMismatch(stored.get("model") or stored["signature"],
+                                                 getattr(service, "model_name", embedding_model))
+                return service
+
+            if isinstance(embedding_service, DeferredEmbeddingService):
+                inner = embedding_service._factory
+                embedding_service._factory = lambda inner=inner: checked(inner())
+            else:
+                built = embedding_service
+                try:
+                    checked(built)
+                except EmbeddingModelMismatch as mismatch:
+                    logger.warning(f"Collection '{collection_id}': {mismatch}")
+                    embedding_service = DeferredEmbeddingService(
+                        model_name=getattr(built, "model_name", embedding_model),
+                        embedding_dim=on_disk,
+                        factory=lambda built=built: checked(built),
+                        reason=str(mismatch),
+                    )
 
         # Create vector store
         vector_store = VectorStore(

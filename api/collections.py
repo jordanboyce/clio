@@ -83,7 +83,8 @@ async def start_reindex():
     summary="Start re-indexing a collection",
     tags=["collections"],
 )
-async def start_collection_reindex(collection_id: str, user_id: str = Depends(get_current_user_id)):
+async def start_collection_reindex(collection_id: str, body: Optional[dict] = None,
+                                   user_id: str = Depends(get_current_user_id)):
     """
     Start a background re-indexing job for a specific collection.
 
@@ -117,15 +118,29 @@ async def start_collection_reindex(collection_id: str, user_id: str = Depends(ge
         documents_dir = indexer_manager.get_documents_path(collection_id)
         indexes_dir = indexer_manager.get_indexes_path(collection_id)
 
+        # B8: {"embedding_model": ...} re-indexes with another model. The
+        # collection's label changes only once the new vectors are saved, so
+        # no moment exists with one model's vectors under the other's name.
+        new_model = ((body or {}).get("embedding_model") or "").strip() or None
+        if new_model and len(new_model) > 200:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="embedding_model: the name is longer than 200 characters")
+        relabel_to = new_model if new_model and new_model != collection["embedding_model"] else None
+
         # Start re-indexing (the job resolves provider + dimension itself)
         job_id = await reindex_service.start_collection_reindex(
             collection_id=collection_id,
             documents_dir=documents_dir,
             indexes_dir=indexes_dir,
-            embedding_model=collection["embedding_model"],
+            embedding_model=relabel_to or collection["embedding_model"],
             chunk_size=collection["chunk_size"],
             chunk_overlap=collection["chunk_overlap"],
+            relabel_to=relabel_to,
         )
+        if relabel_to:
+            from services import audit
+            audit.record("collection.embedding", actor=user_id, collection_id=collection_id,
+                         detail={"from": collection["embedding_model"], "to": relabel_to, "via": "reindex"})
 
         return {
             "job_id": job_id,
@@ -315,6 +330,21 @@ def get_reindex_status(job_id: int = None):
 
 # AI Preferences endpoints
 # Collection endpoints
+def _own_model_missing(collection: dict) -> bool:
+    """B8: the collection is recorded with a local model other than the
+    server's, and that model is not on this server, so it is searched by
+    keyword. Disk only: no download is tried here."""
+    from services.embedder import local_model_cached
+
+    own = collection.get("embedding_model") or ""
+    if settings.embedding_provider != "local" or not own or own == settings.embedding_model:
+        return False
+    try:
+        return not local_model_cached(own)
+    except Exception:  # noqa: BLE001 - when unsure, do not mark it
+        return False
+
+
 @router.get(
     "/api/collections",
     summary="List all collections",
@@ -334,6 +364,7 @@ def list_collections(request: Request, user_id: str = Depends(get_current_user_i
         # (sharing_service.check_collection_access), and the listing skips
         # the field; say it anyway so the app reads one shape.
         c.setdefault("permission", "owner")
+        c["model_missing"] = _own_model_missing(c)
     return {
         "collections": collections,
         "user_id": user_id,
@@ -416,10 +447,13 @@ async def get_collection_embedding_health(collection_id: str, user_id: str = Dep
     import asyncio
 
     from api.deps import require_collection_access
-    from services.embedder import EmbeddingDimensionMismatch, EmbeddingUnavailable, ensure_embedding_ready
+    from services.embedder import (
+        EmbeddingDimensionMismatch, EmbeddingModelMismatch, EmbeddingUnavailable, ensure_embedding_ready,
+    )
 
     require_collection_access(collection_id, user_id)
-    if not collection_service.get_collection(collection_id):
+    collection = collection_service.get_collection(collection_id)
+    if not collection:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail=f"Collection '{collection_id}' not found")
 
@@ -442,9 +476,20 @@ async def get_collection_embedding_health(collection_id: str, user_id: str = Dep
         return {"ok": False, "collection_id": collection_id, "code": e.code, "message": str(e),
                 "model": e.model_name, "model_dim": e.model_dim, "index_dim": e.index_dim,
                 "fix": "reindex", "can_reindex": can_reindex}
-    except EmbeddingUnavailable as e:
+    except EmbeddingModelMismatch as e:
         return {"ok": False, "collection_id": collection_id, "code": e.code, "message": str(e),
-                "fix": "model"}
+                "model": e.model_name, "stored_model": e.stored_model,
+                "fix": "reindex", "can_reindex": can_reindex}
+    except EmbeddingUnavailable as e:
+        out = {"ok": False, "collection_id": collection_id, "code": e.code, "message": str(e), "fix": "model"}
+        # B8: a collection recorded with a local model this server does not
+        # have (MiniLM on a bge image, say) is fixed by copying it to the
+        # server's model; say which two models, and that a copy works.
+        own = collection.get("embedding_model") or ""
+        if settings.embedding_provider == "local" and own and own != settings.embedding_model:
+            out.update(fix="copy", collection_model=own, server_model=settings.embedding_model,
+                       can_copy=True, can_reindex=can_reindex)
+        return out
 
 
 @router.get(
@@ -539,6 +584,21 @@ def update_collection(collection_id: str, updates: dict, user_id: str = Depends(
         except ValueError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     prior = collection_service.get_collection(collection_id) or {}
+
+    # B8: renaming a collection's model while it holds vectors would leave
+    # one model's vectors under another's name until someone re-indexed. A
+    # collection with vectors changes model only through a re-index, which
+    # relabels it once the new vectors are saved.
+    new_model = updates.get("embedding_model")
+    if new_model is not None and new_model != (prior.get("embedding_model") or None):
+        from services.embedder import index_dimension
+        if index_dimension(indexer_manager.get_indexes_path(collection_id)) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=("This collection holds vectors made with its current model, so its model changes "
+                        "only through a re-index: POST /api/collections/{id}/reindex with "
+                        '{"embedding_model": "..."}, or copy it with that model.'),
+            )
 
     # Sensitivity is a governance label: validated, and its changes audited
     # (it decides whether the collection can be shared or reached over MCP).

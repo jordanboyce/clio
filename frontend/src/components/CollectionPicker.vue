@@ -35,6 +35,13 @@
           >
             <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ backgroundColor: c.color }" aria-hidden="true"></span>
             <span class="flex-1 truncate">{{ c.name }}</span>
+            <span
+              v-if="c.model_missing"
+              class="text-warning"
+              title="Indexed with a model this server does not have, so it is searched by keyword"
+              aria-label="Searched by keyword: its model is not on this server"
+              data-testid="collection-model-missing"
+            ><AlertTriangle :size="12" aria-hidden="true" /></span>
             <span v-if="c.shared" class="text-[10px] uppercase tracking-wider text-base-content/40">shared</span>
             <span class="text-xs tabular-nums text-base-content/45">{{ c.document_count || 0 }}</span>
             <Check v-if="c.id === current?.id" :size="12" class="text-primary flex-shrink-0" aria-hidden="true" />
@@ -52,7 +59,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { Check, ChevronDown, Layers, Plus } from 'lucide-vue-next'
+import { AlertTriangle, Check, ChevronDown, Layers, Plus } from 'lucide-vue-next'
 
 const props = defineProps({
   collections: { type: Array, default: () => [] },

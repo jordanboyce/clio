@@ -123,3 +123,47 @@ describe('EmbeddingMismatchNotice', () => {
     expect(w.find('[data-testid="embedding-notice"]').exists()).toBe(false)
   })
 })
+
+describe('a collection whose own model is not on this server (B8)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    http.get.mockReset()
+    http.post.mockReset()
+  })
+
+  const missing = {
+    ok: false, code: 'embedding_unavailable', collection_id: 'docs', message: 'not here', fix: 'copy',
+    collection_model: 'all-MiniLM-L6-v2', server_model: 'BAAI/bge-small-en-v1.5', can_copy: true, can_reindex: true,
+  }
+
+  it('says so where the person is and copies it to the current model without a terminal', async () => {
+    http.get.mockResolvedValue({ data: missing })
+    const w = await mountNotice()
+    const notice = w.get('[data-testid="model-missing-notice"]')
+    expect(notice.text()).toContain('searched by keyword')
+    expect(notice.text()).toContain('all-MiniLM-L6-v2')
+    http.post.mockResolvedValueOnce({ data: { id: 'docs-copy', name: 'Copy of Docs', job_id: 9 } })
+    await w.get('[data-testid="copy-to-current-model"]').trigger('click')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledWith('/api/collections/docs/clone', { embedding_model: 'BAAI/bge-small-en-v1.5' })
+    expect(w.text()).toContain('Copy of Docs')
+  })
+
+  it('re-indexes in place with the server model in one request', async () => {
+    http.get.mockResolvedValue({ data: missing })
+    const w = await mountNotice()
+    await w.findAll('button').find(b => b.text() === 'Re-index in place').trigger('click')
+    http.post.mockResolvedValueOnce({ data: { job_id: 3 } })
+    await w.get('[data-testid="confirm-reindex"]').trigger('click')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledWith('/api/collections/docs/reindex', { embedding_model: 'BAAI/bge-small-en-v1.5' })
+  })
+
+  it('names both models when the vectors came from another model of the same size', async () => {
+    http.get.mockResolvedValue({ data: { ok: false, code: 'embedding_model_mismatch', stored_model: 'all-MiniLM-L6-v2', model: 'BAAI/bge-small-en-v1.5', fix: 'reindex', can_reindex: true } })
+    const w = await mountNotice()
+    const detail = w.get('[data-testid="model-mismatch-detail"]').text()
+    expect(detail).toContain('all-MiniLM-L6-v2')
+    expect(detail).toContain('BAAI/bge-small-en-v1.5')
+  })
+})
