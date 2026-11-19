@@ -1,10 +1,12 @@
 <template>
   <div
     v-if="show"
+    ref="root"
     class="fixed inset-0 z-[300] bg-base-200 flex items-center justify-center p-4 sm:p-6 overflow-y-auto"
     role="dialog"
     aria-modal="true"
     aria-labelledby="welcome-title"
+    tabindex="-1"
   >
     <div class="max-w-lg w-full my-auto">
       <!-- Logo + welcome -->
@@ -247,7 +249,8 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, watch, onMounted } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, toRef } from 'vue'
+import { useOverlayFocus } from '../composables/useOverlayFocus'
 import { Check, ScrollText } from 'lucide-vue-next'
 import http from '../utils/http'
 import EmbeddingSetup from './EmbeddingSetup.vue'
@@ -277,6 +280,11 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['complete', 'skip', 'samples'])
+
+// C2: a dialog that says aria-modal behaves like one: focus moves in and
+// stays in, and Escape skips, as "Skip for now" does.
+const root = ref(null)
+useOverlayFocus(toRef(props, 'show'), root, { onEscape: () => emit('skip') })
 
 // Two stages: the answer model, then the search index. The index step is
 // skipped when it is already ready (the baked Docker image) or when this

@@ -1173,6 +1173,23 @@
       @shared="handleShared"
     />
 
+    <!-- C2: setup offered as a card, not a takeover, when sources already
+         exist or this is a non-admin of a shared deployment. -->
+    <div
+      v-if="showSetupCard && !showOnboarding"
+      class="fixed bottom-12 right-4 z-[90] w-[22rem] max-w-[calc(100vw-2rem)] rounded-box bg-base-100 shadow-lg ring-1 ring-base-content/10 p-3 text-sm"
+      role="region"
+      aria-label="Set up answers"
+      data-testid="setup-card"
+    >
+      <p class="font-medium">Connect a model for written answers</p>
+      <p class="text-xs text-base-content/65 mt-0.5">Find already works on your sources. A model adds answers with citations.</p>
+      <div class="flex gap-2 mt-2">
+        <button class="btn btn-xs btn-primary" @click="showSetupCard = false; showOnboarding = true">Set up</button>
+        <button class="btn btn-xs btn-ghost" @click="dismissSetupCard">Not now</button>
+      </div>
+    </div>
+
     <!-- First-run onboarding takeover (shown only when no provider is configured) -->
     <WelcomeOnboarding
       :show="showOnboarding"
@@ -1903,18 +1920,39 @@ const downloadEmbeddingModel = async () => {
 // nothing works until you curl an endpoint" problem we hit earlier.
 const showOnboarding = ref(false)
 
+// C2: a card in place of the takeover, for whoever should not be stopped by
+// one: a non-admin of a shared deployment (who cannot set the server up and
+// may never need a key of their own), and anyone whose collection already
+// holds sources (Find works on them now).
+const showSetupCard = ref(false)
+
 const checkOnboardingNeeded = () => {
-  // If any provider is already configured in localStorage, skip onboarding.
-  // We intentionally don't also check server-side embedding keys — the
-  // primary gate is "can this user have a chat conversation yet."
-  // Users who pre-configured a chat provider via another path (e.g. the
-  // MCP setup flow) shouldn't be blocked by this screen.
-  showOnboarding.value = getConfiguredProviderIds().length === 0
+  // A provider in this browser, or the deployment's own model (the server's
+  // providers load before this runs), means there is nothing to set up.
+  const needsModel = getConfiguredProviderIds().length === 0
     && localStorage.getItem('onboarding_dismissed') !== 'true'
+  if (!needsModel) {
+    showOnboarding.value = false
+    showSetupCard.value = false
+    return
+  }
+  const sharedNonAdmin = userStore.privateCollections && !userStore.isAdmin
+  const hasSources = (statsStore.documents || 0) > 0
+    || collectionStore.collections.some(c => (c.document_count || 0) > 0)
+  showOnboarding.value = !(sharedNonAdmin || hasSources)
+  showSetupCard.value = sharedNonAdmin || hasSources
+}
+
+const dismissSetupCard = () => {
+  showSetupCard.value = false
+  localStorage.setItem('onboarding_dismissed', 'true')
 }
 
 const handleOnboardingComplete = () => {
   showOnboarding.value = false
+  showSetupCard.value = false
+  // C1: back to the view a link asked for.
+  if (linkedTab) activeTab.value = linkedTab
   // Provider connected — the actual next blocker is having zero sources.
   // Point at the sidebar instead of dropping the user on an empty chat.
   if (statsStore.documents === 0) {
@@ -2554,6 +2592,9 @@ onMounted(async () => {
 
   // Load collections first
   await collectionStore.loadCollections()
+  // C2: with the collections (and who this is) known, a collection that
+  // already holds sources turns the takeover into a card.
+  if (chatTabEnabled.value && (showOnboarding.value || showSetupCard.value)) checkOnboardingNeeded()
 
   // Offer the read-only MCP tools to an agent built into this browser
   // (WebMCP). A no-op in browsers without the API; the Connect tab says

@@ -254,6 +254,9 @@ import SearchResult from './SearchResult.vue'
 import { storeToRefs } from 'pinia'
 import { useSearchStore } from '../stores/searchStore'
 import { useCollectionStore } from '../stores/collectionStore'
+import { useUiStore } from '../stores/uiStore'
+import { SAMPLE_QUESTIONS, isSampleSet } from '../utils/sampleSources'
+import { suggestionsFromSources } from '../utils/searchPresentation'
 import SlashCommandPicker from './SlashCommandPicker.vue'
 import SearchSettings from './SearchSettings.vue'
 import { runSlashCommand, isSlashCommand } from '../utils/slashCommands'
@@ -289,6 +292,7 @@ const searchButtonDisabled = computed(() => {
 // Use the search store for persistent state
 const searchStore = useSearchStore()
 const collectionStore = useCollectionStore()
+const ui = useUiStore()
 
 // Local state for loading and error (not persisted)
 const loading = ref(false)
@@ -360,12 +364,28 @@ const dismissSlashOutput = () => {
   slashOutput.value = null
 }
 
-// Empty state (no search run yet, nothing else on screen)
-const searchSuggestions = [
-  'What are the key requirements?',
-  'Important dates and deadlines',
-  'Definitions of key terms',
-]
+// Empty state (no search run yet, nothing else on screen). C5: the
+// suggestions come from this collection: the sample set's own questions, or
+// the titles of its sources (searching a title finds that source's
+// passages). An empty collection gets none rather than generic ones that
+// fit nothing.
+const searchSuggestions = ref([])
+let suggestionSeq = 0
+async function loadSearchSuggestions() {
+  const cid = collectionStore.currentCollectionId
+  const mine = ++suggestionSeq
+  try {
+    if (await isSampleSet(cid)) {
+      if (mine === suggestionSeq) searchSuggestions.value = SAMPLE_QUESTIONS.slice(0, 3)
+      return
+    }
+    const { data } = await http.get('/documents', { params: { collection_id: cid, limit: 12 }, quiet: true })
+    if (mine === suggestionSeq) searchSuggestions.value = suggestionsFromSources(data?.documents || [])
+  } catch {
+    if (mine === suggestionSeq) searchSuggestions.value = []
+  }
+}
+watch(() => [collectionStore.currentCollectionId, ui.sourcesVersion], loadSearchSuggestions, { immediate: true })
 
 const showEmptyState = computed(() =>
   !searchStore.searched && !loading.value && !slashOutput.value && !error.value

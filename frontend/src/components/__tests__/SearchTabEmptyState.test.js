@@ -2,8 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
+// C5: the collection's own sources supply the example searches.
 vi.mock('../../utils/http', () => ({
-  default: { get: vi.fn(() => Promise.resolve({ data: {} })), post: vi.fn(() => Promise.resolve({ data: {} })) },
+  default: {
+    get: vi.fn(() => Promise.resolve({ data: { documents: [
+      { filename: 'Harbour logbook queries.pdf' }, { filename: 'Breakwater condition review.docx' },
+    ] } })),
+    post: vi.fn(() => Promise.resolve({ data: {} })),
+  },
 }))
 import SearchTab from '../SearchTab.vue'
 import { useStatsStore } from '../../stores/statsStore'
@@ -27,14 +33,15 @@ describe('SearchTab empty state', () => {
   it('offers Add sources, not example searches, in an empty collection', async () => {
     const w = await mountWith(0)
     const add = w.get('[data-testid="find-add-sources"]')
-    expect(w.text()).not.toContain('What are the key requirements?')
+    expect(w.text()).not.toContain('Harbour logbook queries')
     await add.trigger('click')
     expect(w.emitted('add-sources')).toHaveLength(1)
   })
 
-  it('offers example searches once there is something to search', async () => {
+  it('offers example searches from its own sources once there is something to search', async () => {
     const w = await mountWith(12)
     expect(w.find('[data-testid="find-add-sources"]').exists()).toBe(false)
-    expect(w.text()).toContain('What are the key requirements?')
+    expect(w.text()).toContain('Harbour logbook queries')
+    expect(w.text()).not.toContain('What are the key requirements?')
   })
 })

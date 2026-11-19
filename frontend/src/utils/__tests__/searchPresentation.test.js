@@ -41,3 +41,15 @@ describe('highlightSnippet', () => {
     expect(highlightSnippet('a & b', 'a b')).toBe('a &amp; b')
   })
 })
+
+describe('Find suggests searches from the collection itself (C5)', () => {
+  it('makes readable titles from source names and skips codes', async () => {
+    const { suggestionsFromSources } = await import('../searchPresentation')
+    const docs = [
+      { filename: 'tidal-memory_long-records.pdf' }, { filename: '2401.18059.pdf' }, { filename: 'scan_0042.pdf' },
+      { filename: 'Breakwater Review 2021.docx' }, { filename: 'gulls.pdf' }, { filename: 'Harbour logbook.md' },
+    ]
+    expect(suggestionsFromSources(docs)).toEqual(['tidal memory long records', 'Breakwater Review 2021', 'Harbour logbook'])
+    expect(suggestionsFromSources([])).toEqual([])
+  })
+})

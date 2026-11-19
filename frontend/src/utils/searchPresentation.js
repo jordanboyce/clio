@@ -43,3 +43,21 @@ export function highlightSnippet(value, query) {
   }
   return html + escape(text.slice(end))
 }
+
+/**
+ * C5: up to three search suggestions drawn from a collection's own sources:
+ * readable titles made from their file names ("tidal-memory_v2.pdf" ->
+ * "tidal memory v2"), skipping names that are only numbers or codes.
+ */
+export function suggestionsFromSources(documents, limit = 3) {
+  const out = []
+  for (const doc of documents || []) {
+    const stem = String(doc?.filename || '').replace(/\.[a-z0-9]{1,8}$/i, '')
+    const words = stem.replace(/[_\-.]+/g, ' ').replace(/\s+/g, ' ').trim()
+    // Two real words at least: "scan 0042" or "gulls" says nothing worth searching.
+    if ((words.match(/[a-z]{3,}/gi) || []).length < 2) continue
+    if (!out.includes(words)) out.push(words)
+    if (out.length >= limit) break
+  }
+  return out
+}

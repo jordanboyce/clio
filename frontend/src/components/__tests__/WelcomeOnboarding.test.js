@@ -84,3 +84,23 @@ describe('Onboarding steps', () => {
     expect(steps(wrapper).map((s) => s.current)).toEqual([false, true])
   })
 })
+
+describe('the onboarding behaves like the modal dialog it says it is (C2)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+    http.get.mockReset()
+    http.get.mockResolvedValue({ data: {} })
+  })
+
+  it('moves focus in, and Escape skips', async () => {
+    const wrapper = mount(WelcomeOnboarding, { props: { show: true }, global: { stubs: { EmbeddingSetup: true } }, attachTo: document.body })
+    await flushPromises()
+    const dialog = wrapper.get('[role="dialog"]').element
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.emitted('skip')).toBeTruthy()
+    wrapper.unmount()
+  })
+})
