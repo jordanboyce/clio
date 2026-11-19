@@ -1157,44 +1157,42 @@ def search_all_collections_sync(
         int(request_profile.get("max_source_length") or settings.mcp_max_source_length), 2000
     ))
 
-    collection_results = []
-    best_score = -1.0
-    best_collection_id: str | None = None
+    from services.collection_search import merge, search_each
 
+    def _failed(cid, e):
+        logger.warning("search_all_collections: failed for collection %s: %s", cid, e)
+
+    targets = []
     for cid in target_ids:
-        collection = collection_service.get_collection(cid)
         try:
-            indexer = indexer_manager.get_indexer(cid)
-            search_result = indexer.search(
-                query=normalized_query,
-                top_k=per_k,
-                mode=resolved_mode,
-                semantic_weight=resolved_weight,
-            )
-            hits = search_result.get("results", [])
-        except Exception as e:
-            logger.warning("search_all_collections: failed for collection %s: %s", cid, e)
-            continue
+            targets.append((cid, indexer_manager.get_indexer(cid)))
+        except Exception as e:  # noqa: BLE001
+            _failed(cid, e)
+    # In parallel, and ranked against each other on a score that means the
+    # same in every collection (B1): the first-stage score does not.
+    found = search_each(targets, normalized_query, per_k, on_error=_failed,
+                        mode=resolved_mode, semantic_weight=resolved_weight)
+    per_collection = [(cid, found[cid].get("results", [])) for cid, _ in targets
+                      if cid in found and found[cid].get("results")]
+    merged = merge(per_collection, sum(len(r) for _, r in per_collection))
+    first_place = {}
+    for position, (_, cid) in enumerate(merged):
+        first_place.setdefault(cid, position)
 
-        if not hits:
-            continue
-
-        top_score = round(float(hits[0].similarity_score), 4)
-        if top_score > best_score:
-            best_score = top_score
-            best_collection_id = cid
-
+    collection_results = []
+    for cid, hits in per_collection:
+        collection = collection_service.get_collection(cid)
         collection_results.append({
             "collection_id": cid,
             "collection_name": _mcp_safe_name(collection, cid),
-            "top_score": top_score,
+            "top_score": round(float(hits[0].similarity_score), 4),
             "results": [
                 _serialize_result(r, rank, resolved_max_len, collection=collection)
                 for rank, r in enumerate(hits, start=1)
             ],
         })
-
-    collection_results.sort(key=lambda x: x["top_score"], reverse=True)
+    collection_results.sort(key=lambda x: first_place.get(x["collection_id"], len(merged)))
+    best_collection_id = collection_results[0]["collection_id"] if collection_results else None
 
     return _tool_response({
         "query": normalized_query,

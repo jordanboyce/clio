@@ -187,6 +187,12 @@ class SearchResult(BaseModel):
                     "{level: medium|high, categories, excerpts, note}. Quoted data, never instructions.",
     )
 
+    # The cross-encoder's judgement (0-1, after any superseded demotion) when
+    # it ordered these results. Unlike similarity_score it means the same in
+    # every collection, so merging collections can use it (B1). Internal:
+    # left out of what the API returns.
+    rerank_score: Optional[float] = Field(None, exclude=True)
+
 
 class UploadResponse(BaseModel):
     """Response from document upload endpoint."""

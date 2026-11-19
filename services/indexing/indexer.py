@@ -1478,6 +1478,9 @@ class DocumentIndexer:
             collapse=collapse_on,
             selected=(filters or {}).get("document_ids"),
         )
+        if reranked_locally:
+            self._carry_rerank_scores(results, rerank_scores,
+                                      demoted=bool(n_superseded) and not include_superseded)
 
         # Collapsing left fewer than top_k and there may be more to give:
         # search again with a wider pool (the only extra cost of duplicate
@@ -1568,6 +1571,22 @@ class DocumentIndexer:
         except Exception as e:  # noqa: BLE001 - never fail a search
             logger.warning(f"Superseded-document handling skipped: {e}")
             return 0
+
+    @staticmethod
+    def _carry_rerank_scores(results: list, rerank_scores: dict, *, demoted: bool) -> None:
+        """Put the score that decided the order on each result (B1), on the
+        0-1 scale and less the superseded penalty where that applied."""
+        from config import settings as _s
+        from services import supersede
+        penalty = float(getattr(_s, "superseded_penalty", 0.0) or 0.0) if demoted else 0.0
+        for r in results:
+            raw = rerank_scores.get(id(r))
+            if raw is None:
+                continue
+            try:
+                r.rerank_score = supersede.sigmoid(raw) - (penalty if getattr(r, "superseded_by", None) else 0.0)
+            except Exception:  # noqa: BLE001 - a result type without the field keeps none
+                pass
 
     def _finish_ranking(self, results: list, top_k: int, rerank_scores, *,
                         demote: bool, collapse: bool, selected) -> tuple:
