@@ -341,7 +341,11 @@ def test_link_job_saves_fetched_copy_and_records_the_url(tmp_path, monkeypatch):
     assert final, job_updates
     summary = json.loads(final[-1]["result_summary"])
     assert summary["documents_processed"] == 2
-    assert summary["failed_files"] == [{"filename": "https://example.com/broken", "error": "HTTP 500 from https://example.com/broken"}]
+    (failed,) = summary["failed_files"]
+    assert failed["filename"] == "https://example.com/broken"
+    assert failed["error"] == "HTTP 500 from https://example.com/broken"
+    # D1: and why, in words, with the next step.
+    assert "could not be fetched" in failed["reason"] and failed["fix"]
 
     # Two pages with the same title get distinct saved copies.
     saved = sorted(p.name for p in docs_dir.iterdir())

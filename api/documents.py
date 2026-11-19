@@ -18,7 +18,7 @@ import config
 from services.document_extractor import (
     is_supported_file, is_supported_upload, unsupported_reason,
 )
-from services import pii_detector
+from services import pii_detector, upload_failures
 from services.prompt_injection_detector import apply_suppressions
 from services.custom_file_types import registry as custom_types
 from services.collection_locks import collection_write_lock
@@ -315,7 +315,8 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
                 logger.warning(f"Could not read {file.filename}: {e}")
             else:
                 logger.error(f"Failed to index {file.filename}: {e}")
-            failed_docs.append({"filename": file.filename, "error": str(e)})
+            # D1: the reason and the next step, not only the raw error.
+            failed_docs.append({"error": str(e), **upload_failures.explain(file.filename, e)})
             # Continue processing remaining files
 
     # Persist the index if any documents were successfully indexed
@@ -350,8 +351,8 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
 
     if failed_docs:
         # Partial success
-        failed_names = [f["filename"] for f in failed_docs]
-        message = f"Indexed {len(indexed_docs)} document(s) to collection '{collection_id}'. Failed: {', '.join(failed_names)}"
+        failed_names = [f"{f['filename']} ({f['reason']})" for f in failed_docs]
+        message = f"Indexed {len(indexed_docs)} document(s) to collection '{collection_id}'. Failed: {'; '.join(failed_names)}"
     else:
         # Full success
         message = f"Successfully indexed {len(indexed_docs)} document(s) to collection '{collection_id}'"
@@ -364,6 +365,7 @@ def upload_documents(  # sync: extraction+embedding run in FastAPI's threadpool,
         total_pages=total_pages,
         total_chunks=total_chunks,
         document_ids=indexed_docs,
+        failed=[{k: f[k] for k in ("filename", "reason", "fix")} for f in failed_docs],
     )
 
 
@@ -1237,11 +1239,46 @@ def list_sync_folders(collection_id: str = "default") -> SyncFoldersResponse:
 MAX_LOCAL_FILES_PER_REQUEST = 10000
 
 
+class RetryFailedRequest(BaseModel):
+    """Failed browser uploads to index again, by the ``retry`` handle their
+    failure carried (U2)."""
+    collection_id: str = "default"
+    items: List[str] = Field(..., min_length=1, max_length=MAX_LOCAL_FILES_PER_REQUEST)
+
+
 class IndexLocalAsyncRequest(BaseModel):
     """Request body for async local file indexing."""
     file_paths: List[str] = Field(..., max_length=MAX_LOCAL_FILES_PER_REQUEST)
     collection_id: str = "default"
     copy_to_library: bool = False
+
+
+@router.post(
+    "/documents/retry-failed",
+    response_model=UploadJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Index again browser uploads that failed (U2)",
+    tags=["documents"],
+)
+def retry_failed_uploads(request: RetryFailedRequest) -> UploadJobResponse:
+    """Re-queue failed browser uploads by the ``retry`` handle each failure
+    carried. The file is still in the collection's staging folder until the
+    stale-upload sweep removes it; a handle whose file is gone answers 410,
+    since the file must then be added again."""
+    _require_ingest(request.collection_id)
+    staging = collection_service.get_staging_path(request.collection_id).resolve()
+    paths: List[str] = []
+    for handle in request.items:
+        parts = [p for p in str(handle).replace("\\", "/").split("/") if p]
+        if len(parts) != 2 or any(p in (".", "..") for p in parts):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="items: each one is a retry handle from a failed upload")
+        path = (staging / parts[0] / parts[1]).resolve()
+        if path.parent.parent != staging or not path.is_file():
+            raise HTTPException(status_code=status.HTTP_410_GONE,
+                                detail=f"{parts[1]} is no longer on the server. Add it again.")
+        paths.append(str(path))
+    return index_local_files_async(IndexLocalAsyncRequest(file_paths=paths, collection_id=request.collection_id))
 
 
 @router.post(

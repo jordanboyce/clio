@@ -196,6 +196,10 @@ class UploadResponse(BaseModel):
     total_pages: int = Field(..., description="Total pages across all documents")
     total_chunks: int = Field(..., description="Total chunks created")
     document_ids: List[str] = Field(..., description="List of created document IDs")
+    failed: List[Dict[str, str]] = Field(
+        default_factory=list,
+        description="Files that could not be added: {filename, reason, fix} each (D1)",
+    )
 
 
 class UploadPhase(str, Enum):

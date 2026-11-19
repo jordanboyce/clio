@@ -148,6 +148,9 @@ class _BulkFileWork:
     # the file without copying it; held_bytes is the reservation taken
     # against the cap until the row commits or the file fails.
     size_bytes: int = 0
+    # A browser upload waiting in the staging folder: kept after a failure,
+    # so the failure can offer Retry (U2) without asking for the file again.
+    staged_source: Optional[Path] = None
     held_bytes: int = 0
 
 
@@ -743,7 +746,7 @@ class UploadService:
                     _install_staged(indexer, doc_metadata.document_id, source_path, documents_dir)
 
                 return _BulkFileWork(display_name=source_path.name, stage=stage, finalize=finalize,
-                                     size_bytes=_size_of(source_path))
+                                     size_bytes=_size_of(source_path), staged_source=source_path)
 
             if copy_to_library:
                 def stage_copy() -> Path:
@@ -1627,7 +1630,12 @@ class UploadService:
                     f"Failed to index {work.display_name} (job {job_id}, collection "
                     f"'{collection_id}', {type(error).__name__}): {error}"
                 )
-                entry = {"filename": work.display_name, "error": str(error)}
+                # D1: the reason and the next step beside the raw error.
+                from services import upload_failures
+                entry = {"error": str(error), **upload_failures.explain(work.display_name, error)}
+                if work.staged_source is not None and work.staged_source.exists():
+                    # An opaque handle (staging folder and name), never a path.
+                    entry["retry"] = f"{work.staged_source.parent.name}/{work.staged_source.name}"
                 error_code = getattr(error, "code", None)
                 if error_code:
                     entry["code"] = error_code

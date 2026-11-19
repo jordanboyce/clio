@@ -363,38 +363,103 @@ from fastapi.exception_handlers import http_exception_handler as _default_http_e
 from starlette.exceptions import HTTPException as _StarletteHTTPException  # noqa: E402
 
 
-async def _http_exception(request, exc: _StarletteHTTPException):
-    """A 500's reason is for whoever runs the server, not whoever hit it.
+# D7: one error envelope across the main API: {detail, code, request_id}.
+# `code` is stable for a client to branch on; `request_id` finds the request
+# in the server log and is on the X-Request-ID header too.
+_ERROR_CODES = {
+    400: "bad_request", 401: "unauthenticated", 403: "forbidden", 404: "not_found",
+    405: "method_not_allowed", 409: "conflict", 410: "gone", 413: "too_large",
+    415: "unsupported_media_type", 422: "invalid", 429: "rate_limited", 500: "internal_error",
+    502: "upstream_error", 503: "unavailable", 504: "upstream_timeout",
+}
+# A failure upstream (a model provider, a catalogue, a mirror) or in the
+# server itself: its raw text can carry an internal address, a path or a
+# provider's error body, so it goes to the log, and the caller gets a fixed
+# sentence that says retrying is safe.
+_REDACTED_STATUSES = (500, 502, 504)
 
-    Many routes answer an unexpected failure with ``HTTPException(500,
-    detail=str(e))``, and that text can carry a file path, a SQL fragment or
-    an internal hostname. An admin, which on a one-person install is
-    everyone, still reads it; anyone else gets a request id that finds the
-    same text in the server log. Other statuses pass through unchanged: a
-    4xx is about the caller's own request, and a 502/503 names the upstream
-    that failed on purpose.
-    """
-    if exc.status_code != 500:
-        return await _default_http_exception_handler(request, exc)
+
+def _request_id(request) -> str:
+    return getattr(request.state, "request_id", None) or "-"
+
+
+def _reason_visible() -> bool:
+    """Whether this caller reads a server failure's own text: an identified
+    admin, or anyone on a one-person install (no password, no identity
+    provider). A password-only deployment is shared by everyone who knows the
+    password, so there it goes to the log only."""
     from api.deps import require_admin
 
+    if (settings.auth_password or "").strip() and not (settings.identity_provider or "").strip():
+        return False
     try:
         require_admin("see the reason for a server error")
-        return await _default_http_exception_handler(request, exc)
+        return True
     except HTTPException:
-        pass
-    request_id = getattr(request.state, "request_id", None) or "-"
-    logger.error(f"500 on {request.method} {request.url.path} rid={request_id}: {exc.detail}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "detail": f"Something went wrong on the server. An admin can find the details "
-                      f"in the server log under request {request_id}.",
-            "code": "internal_error",
-            "request_id": request_id,
-        },
-        headers=getattr(exc, "headers", None),
+        return False
+
+
+def _fixed_reason(status: int, request_id: str) -> str:
+    if status == 500:
+        return (f"Something went wrong on the server. An admin can find the details in the server log "
+                f"under request {request_id}.")
+    return (f"A service this needed (a model provider or another server) did not answer as expected. "
+            f"Retrying is safe. An admin can find the details in the server log under request {request_id}.")
+
+
+def _envelope(request, status: int, detail, code: str = None, headers=None) -> JSONResponse:
+    rid = _request_id(request)
+    if isinstance(detail, dict) and not code:
+        code = detail.get("code")
+    response = JSONResponse(
+        status_code=status,
+        content={"detail": detail, "code": code or _ERROR_CODES.get(status, "error"), "request_id": rid},
+        headers=headers,
     )
+    response.headers.setdefault("X-Request-ID", rid)
+    return response
+
+
+async def _http_exception(request, exc: _StarletteHTTPException):
+    """Every HTTPException in the one envelope. A 500, 502 or 504's text is
+    for whoever runs the server (see _reason_visible); other statuses keep
+    their detail, which is about the caller's own request or names the
+    upstream on purpose."""
+    if exc.status_code in (204, 304):
+        return await _default_http_exception_handler(request, exc)
+    detail = exc.detail
+    if exc.status_code in _REDACTED_STATUSES and not _reason_visible():
+        rid = _request_id(request)
+        logger.error(f"{exc.status_code} on {request.method} {request.url.path} rid={rid}: {exc.detail}")
+        detail = _fixed_reason(exc.status_code, rid)
+    return _envelope(request, exc.status_code, detail, headers=getattr(exc, "headers", None))
+
+
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+from fastapi.encoders import jsonable_encoder  # noqa: E402
+
+
+async def _validation_error(request, exc: RequestValidationError):
+    """FastAPI's 422 list, in the envelope (the list stays under detail)."""
+    return _envelope(request, 422, jsonable_encoder(exc.errors()), code="invalid")
+
+
+async def _unhandled(request, exc: Exception):
+    """D7: an exception no route handled. Before this it was a plain-text
+    500 with no request id and none of the security headers (the request
+    middleware re-raises before setting them); now it is the envelope, with
+    both, and the reason in the log."""
+    from middleware import security_headers
+
+    rid = _request_id(request)
+    logger.exception(f"Unhandled error on {request.method} {request.url.path} rid={rid}")
+    detail = f"{type(exc).__name__}: {exc}" if _reason_visible() else _fixed_reason(500, rid)
+    response = _envelope(request, 500, detail, code="internal_error")
+    try:
+        security_headers.apply(request, response)
+    except Exception:  # noqa: BLE001 - the error answer must still go out
+        pass
+    return response
 
 
 # A mounted app handles its own exceptions, so /api/v1 needs them registered too.
@@ -404,6 +469,8 @@ for _target in (app, v1_app):
 # Not on /api/v1: that surface has its own error envelope (api/v1.py), which is
 # part of the published contract.
 app.add_exception_handler(_StarletteHTTPException, _http_exception)
+app.add_exception_handler(RequestValidationError, _validation_error)
+app.add_exception_handler(Exception, _unhandled)
 
 
 # CORS: origins come from CORS_ALLOW_ORIGINS (comma-separated). Empty — the
