@@ -1189,10 +1189,11 @@
     />
 
     <!-- C2: setup offered as a card, not a takeover, when sources already
-         exist or this is a non-admin of a shared deployment. -->
+         exist or this is a non-admin of a shared deployment. It hangs under
+         the header's Connect a model, clear of the toasts at the bottom. -->
     <div
       v-if="showSetupCard && !showOnboarding"
-      class="fixed bottom-12 right-4 z-[90] w-[22rem] max-w-[calc(100vw-2rem)] rounded-box bg-base-100 shadow-lg ring-1 ring-base-content/10 p-3 text-sm"
+      class="fixed top-14 right-4 z-[90] w-[22rem] max-w-[calc(100vw-2rem)] rounded-box bg-base-100 shadow-lg ring-1 ring-base-content/10 p-3 text-sm"
       role="region"
       aria-label="Set up answers"
       data-testid="setup-card"
