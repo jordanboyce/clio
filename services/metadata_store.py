@@ -1055,6 +1055,10 @@ class MetadataStore:
         if "public_url" not in self._get_table_columns(conn, "documents"):
             conn.execute("ALTER TABLE documents ADD COLUMN public_url TEXT DEFAULT NULL")
             conn.commit()
+        # Additive and nullable: who wrote an agent's note (its token's name, D2).
+        if "written_by" not in self._get_table_columns(conn, "documents"):
+            conn.execute("ALTER TABLE documents ADD COLUMN written_by TEXT DEFAULT NULL")
+            conn.commit()
         if migrated:
             conn.execute("""
                 INSERT OR REPLACE INTO schema_info (key, value)
@@ -1274,6 +1278,13 @@ class MetadataStore:
             )
             conn.commit()
 
+    def set_document_writer(self, document_id: str, written_by: Optional[str]) -> None:
+        """Record who wrote a document (an agent's token name), D2."""
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            conn.execute("UPDATE documents SET written_by = ? WHERE document_id = ?", (written_by, document_id))
+            conn.commit()
+
     def get_index_info(self) -> Dict[str, Any]:
         with sqlite_connect(self.db_path) as conn:
             try:
@@ -1307,7 +1318,7 @@ class MetadataStore:
                     SELECT document_id, filename, num_pages, num_chunks, upload_timestamp,
                            source_format, extraction_method, embedding_model, chunk_size,
                            chunk_overlap, schema_version, source_path, source_type,
-                           uploaded_by, sensitivity, policy_status, classification
+                           uploaded_by, sensitivity, policy_status, classification, written_by
                     FROM documents
                     WHERE document_id IN ({placeholders})
                 """, batch)
@@ -1755,7 +1766,8 @@ class MetadataStore:
                     d.superseded_by,
                     d.superseded_at,
                     d.superseded_note,
-                    d.classification"""
+                    d.classification,
+                    d.written_by"""
 
     def list_documents_page(self, limit: int, offset: int = 0, q: str = "",
                             keys: Optional[List[str]] = None) -> List[dict]:
@@ -2355,7 +2367,8 @@ class MetadataStore:
                        chunk_overlap, schema_version, source_path, source_type,
                        uploaded_by, content_hash, sensitivity, policy_status, policy_flags,
                        injection_warnings, injection_review,
-                       superseded_by, superseded_at, superseded_note, classification, public_url
+                       superseded_by, superseded_at, superseded_note, classification, public_url,
+                       written_by
                 FROM documents
                 WHERE document_id = ?
             """, (document_id,))

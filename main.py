@@ -818,6 +818,9 @@ async def require_auth(request, call_next):
             # Which credential made the call, for the MCP audit trail. The
             # id, never the token — the plaintext is unrecoverable by design.
             request.state.mcp_token_id = token_record.get("id")
+            # And its name, which is who a note says wrote it (D2): two
+            # agents on tokens one person made are still two authors.
+            request.state.mcp_token_name = token_record.get("name")
             # Any MCP rate budget is per token, not per identity or IP.
             request.state.rate_limit_key = f"mcp-token:{token_record.get('id')}"
             return await _call_with_user_context(request, call_next)

@@ -175,6 +175,25 @@ def get_request_mcp_token_id() -> str | None:
     return _request_mcp_token_id.get(None)
 
 
+_request_mcp_token_name: ContextVar[str | None] = ContextVar("clio_request_mcp_token_name", default=None)
+
+
+def request_writer() -> str | None:
+    """Who a write over MCP is recorded as written by (D2): the token's name,
+    else the registered app's, else the signed-in identity."""
+    name = _request_mcp_token_name.get(None)
+    if name:
+        return name
+    try:
+        from middleware.user_context import get_request_app
+        app = get_request_app()
+        if app is not None:
+            return app.get("name") or app.get("actor")
+    except Exception:  # noqa: BLE001
+        pass
+    return _request_mcp_identity.get(None)
+
+
 # The verified identity behind this MCP call, for the audit trail only. Read
 # separately from the user contextvar because that one carries ownership
 # semantics and reads back as default_user_id when private collections are
@@ -688,6 +707,9 @@ def _serialize_result(
         "chunk_id": getattr(result, "chunk_id", None),
         "source_format": result.source_format,
         "source_type": result.source_type,
+        # When this source was last written or indexed, and by whom (D2).
+        "written_at": getattr(result, "written_at", None),
+        "written_by": getattr(result, "written_by", None),
         "source_path": result.source_path,
         # Label in force, so an agent can honour handling rules downstream.
         "sensitivity": effective_sensitivity(collection, getattr(result, "sensitivity", None)),
@@ -1609,10 +1631,12 @@ async def deep_search(
     when a passage is from an older, replaced version, and `duplicates` when
     the same text appears in other files. Numeric questions should use the structured-table tools.
     """
-    return await asyncio.to_thread(deep_search_sync, query,
+    # Through the audit seam like every other tool (D2); the in-app agent
+    # calls deep_search_sync directly and is not an MCP tool call.
+    return _tool_response(await asyncio.to_thread(deep_search_sync, query,
         collection_id=collection_id, subqueries=subqueries, top_k=top_k,
         max_per_document=max_per_document, max_context_chars=max_context_chars,
-        filters=filters, collection_ids=collection_ids)
+        filters=filters, collection_ids=collection_ids), "deep_search")
 
 
 @_clio_mcp.tool(title="Research documents (old name of deep_search)",
@@ -2040,6 +2064,8 @@ def read_document_sync(
         "document_id": version,
         "filename": filename,
         "source_type": doc_info.get("source_type"),
+        "written_at": doc_info.get("upload_timestamp"),
+        "written_by": doc_info.get("written_by") or doc_info.get("uploaded_by"),
         "text": text,
         "offset": offset,
         "total_chars": len(full_text),
@@ -3217,6 +3243,8 @@ def _document_metadata_payload(collection_id: str, doc_info: dict[str, Any]) -> 
         "source_format": doc_info.get("source_format"),
         "source_type": doc_info.get("source_type"),
         "source_path": doc_info.get("source_path"),
+        "written_at": doc_info.get("upload_timestamp"),
+        "written_by": doc_info.get("written_by") or doc_info.get("uploaded_by"),
         "extraction_method": doc_info.get("extraction_method"),
         "embedding_model": doc_info.get("embedding_model"),
         "chunk_size": doc_info.get("chunk_size"),
@@ -3635,6 +3663,7 @@ def _write_document_locked(
     document_dir = indexer_manager.get_documents_path(resolved)
     file_path = document_dir / safe_filename
     uploaded_by = get_request_user()
+    writer = request_writer()
 
     same_name = store.find_documents_by_filename(safe_filename)
     # More than one row only where a race before this lock left them; a
@@ -3749,6 +3778,7 @@ def _write_document_locked(
                         store.update_document_source(
                             document_id, source_path=None, source_type=new_source_type,
                         )
+                    store.set_document_writer(document_id, writer)
                 except (BlockedContentError, ContentRejectedError) as e:
                     raise ValueError(f"{e}{kept_note}")
                 except Exception as e:
@@ -3800,7 +3830,17 @@ def _write_document_locked(
             "replaced_document_id": replaced_id,
             # Read back by _is_agent_note once a re-index has reset the column.
             "source_type": new_source_type,
+            "written_by": writer,
+            "token_id": get_request_mcp_token_id(),
         },
+    )
+    # The change feed (list_changes) hears about agent writes too (D2).
+    from services import source_changes
+    source_changes.record(
+        resolved, source="agent", label=writer or "an agent",
+        added=[safe_filename] if replaced_id is None else [],
+        changed=[safe_filename] if replaced_id is not None else [],
+        removed=[], trigger=f"mcp {mode}", by=writer,
     )
 
     status = {"create": "created", "replace": "replaced", "append": "appended"}[mode]
@@ -5381,6 +5421,7 @@ class ToggleableMCPApp:
             bool(state.get("mcp_token_can_overwrite_uploads", False))
         )
         token_id_token = _request_mcp_token_id.set(state.get("mcp_token_id") or None)
+        token_name_token = _request_mcp_token_name.set(state.get("mcp_token_name") or None)
         identity_token = _request_mcp_identity.set(state.get("auth_identity") or None)
         # Bind the verified identity for private-collections scoping. The auth
         # middleware in main.py verifies the Access JWT and records the result
@@ -5416,6 +5457,7 @@ class ToggleableMCPApp:
             _request_mcp_token_allowlist.reset(allowlist_token)
             _request_mcp_token_scope.reset(scope_token)
             _request_mcp_tools.reset(tools_token)
+            _request_mcp_token_name.reset(token_name_token)
             _request_mcp_profile.reset(token)
 
 

@@ -768,6 +768,8 @@ class VectorStore:
             # Document-level override only; the API layer resolves the
             # collection default (it knows which collection it is serving).
             sensitivity=doc_info.get("sensitivity") if doc_info else None,
+            written_at=doc_info.get("upload_timestamp") if doc_info else None,
+            written_by=(doc_info.get("written_by") or doc_info.get("uploaded_by")) if doc_info else None,
         )
 
     def delete_document(self, document_id: str) -> int:

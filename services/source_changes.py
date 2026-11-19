@@ -75,6 +75,7 @@ def record(
     previous_head: Optional[str] = None,
     branch: Optional[str] = None,
     trigger: str = "manual",
+    by: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Append an event for a sync that changed something; None when nothing did."""
     if not (added or changed or removed):
@@ -94,6 +95,8 @@ def record(
             "commits": (commits or [])[:MAX_COMMITS],
             "head": head, "previous_head": previous_head, "branch": branch,
         }
+        if by:
+            event["by"] = by
         data["next_id"] += 1
         data["events"] = (data["events"] + [event])[-MAX_EVENTS:]
         try:
