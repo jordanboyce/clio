@@ -2140,11 +2140,13 @@ const switchTab = (tabName) => {
 // Back returns to the previous view instead of leaving the app; Back and
 // Forward (and a pasted link) move the app to the view the URL names.
 if (linkedRoute?.view) ui.researchView = linkedRoute.view
-const currentHash = () => routeHash(activeTab.value, ui.researchView)
+// C9: a link names its collection; it wins over the one this browser last had.
+if (linkedRoute?.collection) collectionStore.setCurrentCollection(linkedRoute.collection)
+const currentHash = () => routeHash(activeTab.value, ui.researchView, collectionStore.currentCollectionId)
 if (window.location.hash !== currentHash()) {
   window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + currentHash())
 }
-watch([activeTab, () => ui.researchView], () => {
+watch([activeTab, () => ui.researchView, () => collectionStore.currentCollectionId], () => {
   const hash = currentHash()
   if (window.location.hash !== hash) {
     window.history.pushState(null, '', window.location.pathname + window.location.search + hash)
@@ -2155,6 +2157,9 @@ const followUrl = () => {
   if (!route) return
   if (route.tab !== activeTab.value) activeTab.value = route.tab
   if (route.view && route.view !== ui.researchView) ui.researchView = route.view
+  if (route.collection && route.collection !== collectionStore.currentCollectionId) {
+    collectionStore.setCurrentCollection(route.collection)
+  }
 }
 window.addEventListener('popstate', followUrl)
 onBeforeUnmount(() => window.removeEventListener('popstate', followUrl))
@@ -2611,7 +2616,7 @@ onMounted(async () => {
   const wantedTab = resolveTab(params.get('tab'))
   if (wantedTab) {
     activeTab.value = wantedTab
-    window.history.replaceState({}, '', window.location.pathname + routeHash(wantedTab, ui.researchView))
+    window.history.replaceState({}, '', window.location.pathname + routeHash(wantedTab, ui.researchView, collectionStore.currentCollectionId))
   }
   // ?pra=<document>&collection_id=… opens a PRA model in its viewer (a
   // citation or "open in a new tab"); ft= / et= name the tree to show.

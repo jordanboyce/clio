@@ -25,4 +25,13 @@ describe('real URLs (U8, C1)', () => {
     expect(routeHash('research', 'reviews')).toBe('#/library/reviews')
     expect(routeHash('research', 'library')).toBe('#/library')
   })
+
+  // C9: a shared link opens the collection it was copied from.
+  it('carries the collection', () => {
+    expect(routeHash('chat', null, 'team ops')).toBe('#/ask?c=team%20ops')
+    expect(routeHash('research', 'map', 'x')).toBe('#/library/map?c=x')
+    expect(parseRoute('#/ask?c=team%20ops')).toEqual({ tab: 'chat', view: null, collection: 'team ops' })
+    expect(parseRoute('#/library/map?c=x')).toEqual({ tab: 'research', view: 'map', collection: 'x' })
+    expect(parseRoute('#/find?q=1')).toEqual({ tab: 'search', view: null })
+  })
 })
