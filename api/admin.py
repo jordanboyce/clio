@@ -330,6 +330,53 @@ async def get_audit(
     }
 
 
+@router.get("/api/admin/answer-feedback", summary="What people found wrong with answers", tags=["admin"])
+async def list_answer_feedback(limit: int = 500):
+    require_admin("view answer feedback")
+    from services.app_database import app_db
+
+    rows = app_db.list_answer_feedback(max(1, min(int(limit), 5000)))
+    return {"feedback": rows, "helpful": sum(r["verdict"] == "helpful" for r in rows),
+            "wrong": sum(r["verdict"] == "wrong" for r in rows)}
+
+
+@router.get("/api/admin/answer-feedback/export", summary="Reported answers as test cases", tags=["admin"])
+async def export_answer_feedback():
+    """Every "Something is wrong" as a case in the question-file format
+    scripts/pilot_eval.py --questions reads (docs/demo/quality-evaluation.json),
+    so a reported failure becomes a test case. The question text is not
+    stored yet (an owner's decision), so each case says so: fill it in from
+    the person who reported it before running the file."""
+    require_admin("export answer feedback")
+    from services.app_database import app_db
+
+    cases = []
+    for r in app_db.list_answer_feedback(5000):
+        if r["verdict"] != "wrong":
+            continue
+        cited = [s.get("filename") for s in r.get("sources") or [] if s.get("filename")]
+        cases.append({
+            "id": f"reported-{r['id']}",
+            "kind": r.get("problem") or "reported",
+            "question": r.get("question") or "",
+            "expect": "",
+            "must_mention": [],
+            "flag_values": [],
+            "expected_sources": [] if r.get("problem") == "wrong_citation" else cited,
+            "reported": {"problem": r.get("problem"), "cited": cited, "collection_id": r.get("collection_id"),
+                         "provider": r.get("provider"), "model": r.get("model"), "at": r.get("created_at")},
+            **({} if r.get("question") else {"note": "The question text is not stored on this server. "
+                                                     "Add it, and what a right answer says, before running."}),
+        })
+    return {
+        "corpus": "Answers people marked as wrong in Ask",
+        "purpose": "Reported failures as test cases for scripts/pilot_eval.py run --questions.",
+        "fields": {"kind": "wrong_answer | wrong_citation | missing_source",
+                   "expected_sources": "the sources the answer cited, except for a wrong citation"},
+        "cases": cases,
+    }
+
+
 @router.get("/api/admin/blocked-hashes", summary="Hash blocklist", tags=["admin"])
 async def list_blocked_hashes():
     require_admin("view the blocklist")

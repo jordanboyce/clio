@@ -476,6 +476,25 @@ class SQLiteBackend(DatabaseBackend):
                 )
             """)
 
+            # A3: what people found wrong with an answer. The verdict and the
+            # source ids only; whether the question text is kept is the
+            # owner's decision (the column waits empty until then).
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS answer_feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    user_id TEXT,
+                    collection_id TEXT,
+                    scope TEXT,
+                    verdict TEXT NOT NULL,
+                    problem TEXT,
+                    provider TEXT,
+                    model TEXT,
+                    sources TEXT,
+                    question TEXT
+                )
+            """)
+
             # ── Migrations for existing databases ────────────
             # Add owner_id to collections if missing
             try:
@@ -1610,6 +1629,33 @@ class SQLiteBackend(DatabaseBackend):
                 "SELECT * FROM aup_acknowledgements ORDER BY accepted_at DESC"
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # ── Answer feedback (A3) ─────────────────────────────────
+
+    def add_answer_feedback(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        row = {**record, "created_at": utcnow().isoformat()}
+        with sqlite_connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """INSERT INTO answer_feedback (created_at, user_id, collection_id, scope, verdict, problem,
+                   provider, model, sources, question) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (row["created_at"], row.get("user_id"), row.get("collection_id"), row.get("scope"),
+                 row["verdict"], row.get("problem"), row.get("provider"), row.get("model"),
+                 json.dumps(row.get("sources") or []), row.get("question")),
+            )
+            conn.commit()
+            row["id"] = cursor.lastrowid
+        return row
+
+    def list_answer_feedback(self, limit: int = 1000) -> List[Dict[str, Any]]:
+        with sqlite_connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM answer_feedback ORDER BY id DESC LIMIT ?", (int(limit),)
+            ).fetchall()
+        out = [dict(r) for r in rows]
+        for r in out:
+            r["sources"] = json.loads(r["sources"] or "[]")
+        return out
 
     # ── Hash blocklist ───────────────────────────────────────
 

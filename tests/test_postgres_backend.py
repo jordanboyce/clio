@@ -340,6 +340,17 @@ def test_hash_blocklist(db):
     assert db.is_hash_blocked("abc") is False
 
 
+def test_answer_feedback(db):
+    db.add_answer_feedback({"verdict": "helpful", "collection_id": "c"})
+    row = db.add_answer_feedback({"verdict": "wrong", "problem": "wrong_citation", "collection_id": "c",
+                                  "sources": [{"document_id": "d", "filename": "f.pdf", "page_number": 2}]})
+    assert row["id"] and row["created_at"]
+    listed = db.list_answer_feedback()
+    assert [r["verdict"] for r in listed] == ["wrong", "helpful"]
+    assert listed[0]["sources"] == [{"document_id": "d", "filename": "f.pdf", "page_number": 2}]
+    assert listed[0]["question"] is None
+
+
 def test_suspended_identities(db):
     assert db.is_identity_suspended("a@example.org") is False
     db.suspend_identity("a@example.org", "admin@example.org", "left")

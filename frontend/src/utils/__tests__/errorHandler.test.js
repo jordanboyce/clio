@@ -1,3 +1,4 @@
+/* eslint-disable vue/one-component-per-file -- the tests mount small apps of their own */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, defineComponent, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'

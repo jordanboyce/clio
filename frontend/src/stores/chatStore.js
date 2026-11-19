@@ -279,6 +279,15 @@ export const useChatStore = defineStore('chat', () => {
     saveToStorage()
   }
 
+  // A3: the reader's verdict on an answer, kept with it so the buttons
+  // do not ask twice.
+  const setFeedback = (collectionId, messageId, value) => {
+    const msg = getActiveSession(collectionId)?.messages.find((m) => m.id === messageId)
+    if (!msg) return
+    msg.feedback = value
+    saveToStorage()
+  }
+
   // Remove messages by id from the session a stream belongs to (a
   // regenerated answer replaces the old one only once it has arrived).
   const removeMessages = (stream, ids) => {
@@ -381,6 +390,7 @@ export const useChatStore = defineStore('chat', () => {
     getDraft,
     setDraft,
     removeMessages,
+    setFeedback,
     getMessages,
     getSessions,
     getActiveSessionId,

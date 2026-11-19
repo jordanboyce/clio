@@ -375,6 +375,19 @@
     </section>
 
     <!-- ═══ Usage by person ═══ -->
+    <section aria-labelledby="admin-feedback">
+      <div class="flex items-center justify-between mb-3">
+        <h2 id="admin-feedback" class="text-sm font-semibold uppercase tracking-wider text-base-content/60">Answer feedback</h2>
+        <button class="btn btn-xs btn-ghost" data-testid="feedback-export" :disabled="!feedback.wrong" @click="exportFeedback">
+          Export as test cases
+        </button>
+      </div>
+      <p class="text-sm text-base-content/70">
+        {{ feedback.helpful }} marked helpful, {{ feedback.wrong }} marked wrong.
+        The export is a question file for <code>scripts/pilot_eval.py</code>. Questions are not stored, so add each one before running it.
+      </p>
+    </section>
+
     <section aria-labelledby="admin-usage">
       <div class="flex items-center justify-between mb-3">
         <h2 id="admin-usage" class="text-sm font-semibold uppercase tracking-wider text-base-content/60">Usage — last {{ usageDays }} days</h2>
@@ -1009,6 +1022,28 @@ const suspendEmail = ref('')
 const suspendReason = ref('')
 const aupAcks = ref({ required: false, version: '1', acknowledgements: [] })
 
+// A3: what people marked on answers, and the export of the wrong ones.
+const feedback = ref({ helpful: 0, wrong: 0 })
+const loadFeedback = async () => {
+  try {
+    const data = (await http.get('/api/admin/answer-feedback', { params: { limit: 5000 }, quiet: true })).data
+    feedback.value = { helpful: data.helpful || 0, wrong: data.wrong || 0 }
+  } catch { feedback.value = { helpful: 0, wrong: 0 } }
+}
+const exportFeedback = async () => {
+  try {
+    const data = (await http.get('/api/admin/answer-feedback/export')).data
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'reported-answers.json'
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    ui.notify(`The export failed: ${err?.message || 'the server did not answer'}.`, 'error')
+  }
+}
+
 const loadBlocked = async () => {
   try {
     blocked.value = (await http.get('/api/admin/blocked-hashes')).data.hashes || []
@@ -1160,4 +1195,5 @@ const loadAll = async () => {
 }
 
 onMounted(loadAll)
+onMounted(loadFeedback)
 </script>

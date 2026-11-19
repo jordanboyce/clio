@@ -1397,6 +1397,40 @@ def chat_with_documents(  # sync: provider round-trips + tool loop run in FastAP
     )
 
 
+class AnswerFeedback(BaseModel):
+    """A3: what a person thought of an answer. Stored on this server only."""
+    verdict: Literal["helpful", "wrong"]
+    problem: Literal["wrong_answer", "wrong_citation", "missing_source"] | None = None
+    collection_id: str = Field("default", max_length=200)
+    scope: Literal["current", "all"] = "current"
+    provider: str | None = Field(None, max_length=100)
+    model: str | None = Field(None, max_length=200)
+    sources: list[dict] = Field(default_factory=list, max_length=50)
+
+
+@router.post("/api/chat/feedback", tags=["chat"], status_code=201)
+def answer_feedback(body: AnswerFeedback):
+    """Record "Helpful" or "Something is wrong" for an answer: the verdict,
+    the collection, the model and the sources it cited (ids, file names and
+    pages). The question and the answer are not stored; that waits on the
+    owner's decision for sites with classification markings."""
+    if body.verdict == "wrong" and not body.problem:
+        raise HTTPException(status_code=422, detail="Say what is wrong: the answer, a citation, or a missing source.")
+    from services.app_database import app_db
+
+    sources = [
+        {"document_id": str(s.get("document_id") or "")[:100], "filename": str(s.get("filename") or "")[:300],
+         "page_number": s.get("page_number") if isinstance(s.get("page_number"), int) else None}
+        for s in body.sources if isinstance(s, dict)
+    ]
+    row = app_db.add_answer_feedback({
+        "user_id": get_request_user(), "collection_id": body.collection_id, "scope": body.scope,
+        "verdict": body.verdict, "problem": body.problem if body.verdict == "wrong" else None,
+        "provider": body.provider, "model": body.model, "sources": sources,
+    })
+    return {"id": row["id"], "recorded": True}
+
+
 # Seconds of quiet on the answer stream before it sends a keepalive comment.
 _KEEPALIVE_SECONDS = 15.0
 

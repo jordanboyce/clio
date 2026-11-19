@@ -625,6 +625,31 @@
                     <Quote v-else :size="11" />
                     <span class="text-xs">{{ citedMessageIndex === index ? 'Copied' : `Copy with citations (${styleLabel(citationStyle)})` }}</span>
                   </button>
+                  <!-- A3: what the reader thought of it, kept on this server
+                       with the sources cited; the question is not sent. -->
+                  <template v-if="msg.content && !msg.slashCommand">
+                    <span v-if="msg.feedback" class="text-xs text-base-content/50" data-testid="feedback-given">
+                      {{ msg.feedback === 'helpful' ? 'Marked helpful' : 'Reported. Thank you' }}
+                    </span>
+                    <template v-else-if="feedbackFor === msg.id">
+                      <span class="text-xs">What is wrong?</span>
+                      <button v-for="choice in FEEDBACK_PROBLEMS" :key="choice.value" type="button"
+                        class="btn btn-ghost btn-xs h-5 min-h-0 px-1.5" :data-testid="`feedback-${choice.value}`"
+                        @click="sendFeedback(msg, 'wrong', choice.value)">{{ choice.label }}</button>
+                      <button type="button" class="btn btn-ghost btn-xs h-5 min-h-0 px-1.5 text-base-content/50"
+                        @click="feedbackFor = null">Cancel</button>
+                    </template>
+                    <template v-else>
+                      <button type="button" class="btn btn-ghost btn-xs h-5 min-h-0 px-1.5 text-base-content/50 hover:text-base-content gap-1"
+                        data-testid="feedback-helpful" @click="sendFeedback(msg, 'helpful')">
+                        <ThumbsUp :size="11" aria-hidden="true" /><span class="text-xs">Helpful</span>
+                      </button>
+                      <button type="button" class="btn btn-ghost btn-xs h-5 min-h-0 px-1.5 text-base-content/50 hover:text-base-content gap-1"
+                        data-testid="feedback-wrong" @click="feedbackFor = msg.id">
+                        <ThumbsDown :size="11" aria-hidden="true" /><span class="text-xs">Something is wrong</span>
+                      </button>
+                    </template>
+                  </template>
                 </div>
 
                 <!-- Related: what a reader of this answer asks next. One tap asks it. -->
@@ -811,7 +836,7 @@ import { answerWithReferences } from '../utils/answerEvidence'
 import { answerWithCitations, citeSources, copyRich, styleLabel, useCitationStyle } from '../utils/citations.js'
 import { researchApi } from '../utils/researchApi.js'
 import { depthLabel, normalizeDepth } from '../utils/answerDepth.js'
-import { CornerDownRight, Feather, MessageSquare, ScrollText, FileText, ArrowUp, Trash2, Layers, Database, Plus, History, ChevronDown, SlidersHorizontal, Table2, Search, BookOpen, ListTree, Wrench, Copy, Check, RefreshCw, Zap, Download, Square, Info, CircleAlert, X, Bot, Sparkles, Quote } from 'lucide-vue-next'
+import { ThumbsUp, ThumbsDown, CornerDownRight, Feather, MessageSquare, ScrollText, FileText, ArrowUp, Trash2, Layers, Database, Plus, History, ChevronDown, SlidersHorizontal, Table2, Search, BookOpen, ListTree, Wrench, Copy, Check, RefreshCw, Zap, Download, Square, Info, CircleAlert, X, Bot, Sparkles, Quote } from 'lucide-vue-next'
 import { useChatStore } from '../stores/chatStore'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
@@ -1290,6 +1315,29 @@ const copyMessage = async (msg, index) => {
 const citationStyle = useCitationStyle()
 const citedMessageIndex = ref(null)
 let citedResetTimer = null
+
+const FEEDBACK_PROBLEMS = [
+  { value: 'wrong_answer', label: 'Wrong answer' },
+  { value: 'wrong_citation', label: 'Wrong citation' },
+  { value: 'missing_source', label: 'A source is missing' },
+]
+const feedbackFor = ref(null)
+const sendFeedback = async (msg, verdict, problem = null) => {
+  try {
+    await http.post('/api/chat/feedback', {
+      verdict, problem,
+      collection_id: collectionStore.currentCollectionId,
+      scope: msg.scope === 'all' ? 'all' : 'current',
+      provider: msg.provider || null,
+      model: msg.aiUsage?.synthesis?.model || null,
+      sources: (msg.sources || []).map(s => ({ document_id: s.document_id, filename: s.filename, page_number: s.page_number })),
+    })
+    chatStore.setFeedback(collectionStore.currentCollectionId, msg.id, problem || verdict)
+    feedbackFor.value = null
+  } catch (err) {
+    ui.notify(`Your feedback was not saved: ${err?.message || 'the server did not answer'}.`, 'error')
+  }
+}
 
 const copyWithCitations = async (msg, index) => {
   try {

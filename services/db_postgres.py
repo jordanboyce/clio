@@ -394,6 +394,21 @@ class PostgresBackend(DatabaseBackend):
                         reason TEXT
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS answer_feedback (
+                        id SERIAL PRIMARY KEY,
+                        created_at TEXT NOT NULL,
+                        user_id TEXT,
+                        collection_id TEXT,
+                        scope TEXT,
+                        verdict TEXT NOT NULL,
+                        problem TEXT,
+                        provider TEXT,
+                        model TEXT,
+                        sources TEXT,
+                        question TEXT
+                    )
+                """)
                 # Ensure default user
                 cur.execute("SELECT id FROM users WHERE id = 'default'")
                 if not cur.fetchone():
@@ -1553,6 +1568,39 @@ class PostgresBackend(DatabaseBackend):
                 return self._fetchall_dict(cur)
         finally:
             self._put(conn)
+
+    # ── Answer feedback (A3) ─────────────────────────────────
+
+    def add_answer_feedback(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        row = {**record, "created_at": utcnow().isoformat()}
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO answer_feedback (created_at, user_id, collection_id, scope, verdict, problem,
+                       provider, model, sources, question) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       RETURNING id""",
+                    (row["created_at"], row.get("user_id"), row.get("collection_id"), row.get("scope"),
+                     row["verdict"], row.get("problem"), row.get("provider"), row.get("model"),
+                     json.dumps(row.get("sources") or []), row.get("question")),
+                )
+                row["id"] = cur.fetchone()[0]
+            conn.commit()
+            return row
+        finally:
+            self._put(conn)
+
+    def list_answer_feedback(self, limit: int = 1000) -> List[Dict[str, Any]]:
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM answer_feedback ORDER BY id DESC LIMIT %s", (int(limit),))
+                out = self._fetchall_dict(cur)
+        finally:
+            self._put(conn)
+        for r in out:
+            r["sources"] = json.loads(r["sources"] or "[]")
+        return out
 
     # ── Hash blocklist ───────────────────────────────────────
 

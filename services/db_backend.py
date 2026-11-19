@@ -396,6 +396,17 @@ class DatabaseBackend(ABC):
     # sha256 of files an admin removed with "block": the same bytes are
     # refused at every ingest path afterwards, in every collection.
 
+    # ── Answer feedback (A3) ─────────────────────────────────
+    # Verdicts people give on Ask answers; an admin exports them as test cases.
+
+    @abstractmethod
+    def add_answer_feedback(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def list_answer_feedback(self, limit: int = 1000) -> List[Dict[str, Any]]:
+        ...
+
     @abstractmethod
     def add_blocked_hash(
         self, content_hash: str, blocked_by: Optional[str], reason: str = "",
