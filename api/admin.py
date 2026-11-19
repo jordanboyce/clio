@@ -354,7 +354,7 @@ async def export_answer_feedback():
     for r in app_db.list_answer_feedback(5000):
         if r["verdict"] != "wrong":
             continue
-        cited = [s.get("filename") for s in r.get("sources") or [] if s.get("filename")]
+        cited = list(dict.fromkeys(s.get("filename") for s in r.get("sources") or [] if s.get("filename")))
         cases.append({
             "id": f"reported-{r['id']}",
             "kind": r.get("problem") or "reported",
