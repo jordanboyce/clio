@@ -1,0 +1,25 @@
+# Clio static search: settings for Apache. Other web servers ignore this file.
+
+# Types some servers do not know: without them the browser refuses the
+# WebAssembly runtime, and some servers refuse the files outright.
+AddType application/wasm .wasm
+AddType application/octet-stream .onnx .bin
+AddType text/javascript .js .mjs
+AddType application/json .json
+
+<IfModule mod_headers.c>
+  # The manifest names every other file with its checksum, so it is read
+  # fresh on each visit; the files it names may be cached.
+  <Files "manifest.json">
+    Header set Cache-Control "no-cache"
+  </Files>
+  <FilesMatch "\.(wasm|onnx)$">
+    Header set Cache-Control "public, max-age=604800"
+  </FilesMatch>
+  # To let pages on another site load this search, remove the # below.
+  # Header set Access-Control-Allow-Origin "*"
+</IfModule>
+
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE application/json text/javascript application/wasm
+</IfModule>

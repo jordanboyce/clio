@@ -198,12 +198,41 @@ def test_a_local_only_marking_refuses_the_whole_collection(site, tmp_path):
     assert not (tmp_path / "out" / "passages.json").exists()
 
 
-def test_a_model_with_no_browser_build_is_refused(env, tmp_path):  # noqa: F811
-    cid, _ = _public(env)  # "fake-embed" is not registered here
+def test_a_model_with_no_browser_build_is_exported_for_keyword_search(env, tmp_path):  # noqa: F811
+    """Any collection that may be published can be: one whose model has no
+    browser build is searched by keyword on the site instead of refused."""
+    cid, ids = _public(env)  # "fake-embed" is not registered here
     pre = se.preview(cid)
-    assert [b["code"] for b in pre["blockers"]] == ["model"] and pre["browser_model"] is None
-    message = pre["blockers"][0]["message"]
-    assert "fake-embed" in message and "BAAI/bge-small-en-v1.5" in message and "all-MiniLM-L6-v2" in message
+    assert pre["ready"] is True and pre["blockers"] == [] and pre["browser_model"] is None
+    assert pre["search"] == "keywords" and pre["vectors_bytes"] == 0
+    reason = pre["keywords_reason"]
+    assert "fake-embed" in reason and "BAAI/bge-small-en-v1.5" in reason and "all-MiniLM-L6-v2" in reason
+    assert pre["site"]["available"] is True and pre["site"]["model"] is None
+
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "vectors.bin").write_bytes(b"last year")   # would not match the new passages
+    manifest, detail = se.write_export(cid, out, confirm_public=True)
+    assert manifest["version"] == se.KEYWORD_VERSION and manifest["vectors"] is None
+    assert manifest["embedding"]["search"] == "keywords" and manifest["embedding"]["reason"] == reason
+    assert manifest["embedding"]["browser"] is None and manifest["embedding"]["probe"] is None
+    passages = json.loads((out / "passages.json").read_text(encoding="utf-8"))
+    assert manifest["passages"]["count"] == len(passages) > 0
+    assert not (out / "vectors.bin").exists()
+    assert detail["search"] == "keywords" and detail["vectors_sha256"] is None
+
+    zip_path, _, _ = se.export_zip(cid, confirm_public=True)
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            assert sorted(zf.namelist()) == ["manifest.json", "passages.json"]
+    finally:
+        zip_path.unlink()
+    # A whole keyword site: the page, the element and the server settings, no model.
+    site_out = tmp_path / "site"
+    se.write_export(cid, site_out, confirm_public=True, site=True)
+    files = sorted(p.relative_to(site_out).as_posix() for p in site_out.rglob("*") if p.is_file())
+    assert files == sorted([*se.SITE_PAGE_FILES, *se.SITE_HOSTING_FILES,
+                            "search/manifest.json", "search/passages.json"])
 
 
 def test_browser_models_are_matched_by_name():
@@ -368,7 +397,8 @@ def test_a_whole_site_carries_the_page_the_runtime_and_clios_own_model(kit, site
     assert detail["site"] is True
     files = sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
     assert files == sorted([
-        "index.html", "clio-static-search.js",
+        "index.html", "clio-static-search.js", "clio-search.js",
+        "_headers", ".htaccess", "web.config", "README.txt",
         "search/manifest.json", "search/passages.json", "search/vectors.bin",
         "vendor/LICENSE.onnxruntime-web.txt", "vendor/runtime.json", *[f"vendor/{n}" for n in se.SITE_RUNTIME_FILES],
         "models/fake-embed/config.json", "models/fake-embed/tokenizer.json",
@@ -389,7 +419,11 @@ def test_a_whole_site_carries_the_page_the_runtime_and_clios_own_model(kit, site
     assert "bundled" not in plain["embedding"]["browser"]
     assert (tmp_path / "plain/vectors.bin").read_bytes() == (out / "search/vectors.bin").read_bytes()
     # The page it ships knows how to load what it ships.
-    assert "localTransformers" in (out / "index.html").read_text(encoding="utf-8")
+    assert "clio-search.js" in (out / "index.html").read_text(encoding="utf-8")
+    assert "localTransformers" in (out / "clio-search.js").read_text(encoding="utf-8")
+    # IIS serves no file it has no type for: the settings name all three.
+    config = (out / "web.config").read_text(encoding="utf-8")
+    assert all(f'fileExtension="{ext}"' in config for ext in (".bin", ".onnx", ".wasm"))
 
 
 def test_the_site_downloads_as_one_zip_over_http(kit, site, monkeypatch):
@@ -446,3 +480,218 @@ def test_site_model_finds_fastembeds_copy_and_its_onnx_file(env, tmp_path, monke
 
     monkeypatch.setattr(embedder, "fastembed_cached_in", lambda name: None)
     assert se.site_model("BAAI/bge-small-en-v1.5") is None
+
+
+# ── An asset for a website: where each source links ────────────────────────
+
+
+@pytest.mark.parametrize("address", [
+    "https://example.org/handbook/leave.pdf", "http://intranet.example/x?y=1#z", "/files/handbook/",
+])
+def test_an_address_a_browser_can_open_is_accepted(address):
+    assert se.clean_public_url(f"  {address} ") == address
+
+
+@pytest.mark.parametrize("address", [
+    "javascript:alert(1)", "file:///C:/handbook.pdf", "C:\\docs\\a.pdf", "//evil.example/x",
+    "https://user:secret@example.org/a.pdf", "https://example.org/a b.pdf", "ftp://example.org/a.pdf",
+    "https://example.org/" + "a" * 2100,
+])
+def test_anything_else_is_refused(address):
+    with pytest.raises(se.StaticExportError) as e:
+        se.clean_public_url(address)
+    assert e.value.code == "address"
+
+
+def test_empty_means_no_address():
+    assert se.clean_public_url("") is None and se.clean_public_url(None) is None
+
+
+@pytest.mark.parametrize("remote, expected", [
+    ("git@github.com:acme/handbook.git", "https://github.com/acme/handbook/blob/abc1234/docs/a%20b.md#L3-L9"),
+    ("https://token:x@gitlab.com/group/sub/handbook.git",
+     "https://gitlab.com/group/sub/handbook/-/blob/abc1234/docs/a%20b.md#L3-9"),
+    ("ssh://git@bitbucket.org/acme/handbook", "https://bitbucket.org/acme/handbook/src/abc1234/docs/a%20b.md#lines-3:9"),
+    ("https://codeberg.org/acme/handbook.git",
+     "https://codeberg.org/acme/handbook/src/commit/abc1234/docs/a%20b.md#L3-L9"),
+])
+def test_a_file_from_a_public_repository_links_to_its_lines(remote, expected):
+    link = se.repository_file_link(remote, "abc1234", "docs/a b.md")
+    assert link["url"] + link["lines"].format(start=3, end=9) == expected
+    assert "token" not in link["url"]
+
+
+@pytest.mark.parametrize("remote, commit", [
+    ("https://git.example.internal/acme/handbook.git", "abc1234"),   # a host Clio cannot speak for
+    ("git@github.com:acme/handbook.git", None),
+    ("git@github.com:acme/handbook.git", "not-a-commit"),
+    ("https://github.com/handbook", "abc1234"),                       # no owner
+])
+def test_no_repository_link_without_a_known_host_and_commit(remote, commit):
+    assert se.repository_file_link(remote, commit, "a.md") is None
+
+
+def _rows(cid):
+    db = collection_service.get_indexes_path(cid) / "metadata.db"
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        return {r["filename"]: dict(r) for r in conn.execute("SELECT * FROM documents")}
+
+
+def test_each_source_carries_where_it_lives_on_the_web(site, tmp_path):
+    cid, ids = _public(site)
+    db = collection_service.get_indexes_path(cid) / "metadata.db"
+    indexer_manager.get_indexer(cid)  # brings the database up to date (public_url)
+    with sqlite3.connect(db) as conn:
+        # One source came from a web page.
+        conn.execute("UPDATE documents SET source_type='url', source_path='https://example.org/expenses' "
+                     "WHERE document_id=?", (ids[1],))
+    pre = se.preview(cid)
+    assert pre["addresses"] == {"with_address": 1, "total": 2, "files_base_url": None}
+
+    saved = se.save_addresses(cid, files_base_url="https://example.org/files/")
+    assert saved["files_base_url"] == "https://example.org/files/"
+    manifest, detail = se.write_export(cid, tmp_path / "out", confirm_public=True)
+    by_name = {d["name"]: d for d in manifest["documents"]}
+    assert by_name["holidays.txt"]["link"] == {"url": "https://example.org/files/holidays.txt", "from": "files",
+                                              "text": True}
+    assert by_name["holidays.txt"]["title"] == "holidays"
+    assert by_name["expenses.txt"]["link"] == {"url": "https://example.org/expenses", "from": "link", "text": True}
+    assert detail["linked_documents"] == 2
+
+    # A source's own address wins, and an export can override the base for itself.
+    se.save_addresses(cid, documents={ids[0]: "https://example.org/policies/holidays.html"})
+    assert _rows(cid)["holidays.txt"]["public_url"] == "https://example.org/policies/holidays.html"
+    manifest, _ = se.write_export(cid, tmp_path / "out2", confirm_public=True, files_base_url="")
+    by_name = {d["name"]: d for d in manifest["documents"]}
+    assert by_name["holidays.txt"]["link"]["from"] == "own"
+
+    # Clearing it falls back to nothing, since the override cleared the base too.
+    se.save_addresses(cid, documents={ids[0]: None}, files_base_url=None)
+    manifest, _ = se.write_export(cid, tmp_path / "out3", confirm_public=True)
+    assert "link" not in {d["name"]: d for d in manifest["documents"]}["holidays.txt"]
+
+
+def test_a_bad_address_saves_nothing(site):
+    cid, ids = _public(site)
+    with pytest.raises(se.StaticExportError):
+        se.save_addresses(cid, files_base_url="https://example.org/files/",
+                          documents={ids[0]: "https://example.org/ok", ids[1]: "javascript:alert(1)"})
+    assert se.address_settings(cid)["files_base_url"] is None
+    assert _rows(cid)["holidays.txt"]["public_url"] is None
+    with pytest.raises(se.StaticExportError, match="no source"):
+        se.save_addresses(cid, documents={"nope": "https://example.org/x"})
+
+
+def test_a_pdf_opens_at_the_page_and_a_repository_file_at_its_lines(site, tmp_path, monkeypatch):
+    cid, ids = _public(site)
+    indexer_manager.get_indexer(cid)
+    db = collection_service.get_indexes_path(cid) / "metadata.db"
+    root = tmp_path / "checkout"
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE documents SET filename='guide.pdf', public_url='https://example.org/guide.pdf' "
+                     "WHERE document_id=?", (ids[0],))
+        conn.execute("UPDATE documents SET source_type='folder_sync', source_path=? WHERE document_id=?",
+                     (str(root / "docs" / "expenses.txt"), ids[1]))
+        conn.execute("UPDATE chunks SET line_start=10, line_end=24 WHERE document_id=?", (ids[1],))
+    monkeypatch.setattr(se, "_repositories", lambda _cid: [
+        {"root": root, "remote": "git@github.com:acme/handbook.git", "commit": "abc1234"}])
+
+    manifest, _ = se.write_export(cid, tmp_path / "out", confirm_public=True)
+    by_name = {d["name"]: d for d in manifest["documents"]}
+    assert by_name["guide.pdf"]["link"] == {"url": "https://example.org/guide.pdf", "from": "own",
+                                           "page": "#page={page}"}
+    assert by_name["expenses.txt"]["link"] == {
+        "url": "https://github.com/acme/handbook/blob/abc1234/docs/expenses.txt", "from": "repository",
+        "lines": "#L{start}-L{end}"}
+    assert "lines" in manifest["passages"]["fields"]
+    passages = json.loads((tmp_path / "out" / "passages.json").read_text(encoding="utf-8"))
+    assert {tuple(p["lines"]) for p in passages if p["document_id"] == ids[1]} == {(10, 24)}
+    assert all("lines" not in p for p in passages if p["document_id"] == ids[0])
+
+
+def test_where_a_source_is_published_survives_a_reindex(site):
+    from services.reindex_service import ReindexService
+
+    cid, ids = _public(site)
+    store = indexer_manager.get_indexer(cid).vector_store.metadata_store
+    assert store.set_document_public_url(ids[0], "https://example.org/holidays") is True
+    prior = store.get_document_info(ids[0])
+    assert prior["public_url"] == "https://example.org/holidays"
+    store.set_document_public_url(ids[0], None)
+    prepared = type("Prepared", (), {"document_id": ids[0], "policy_status": "clear"})()
+    ReindexService._carry_over_review(store, prepared, prior)
+    assert store.get_document_info(ids[0])["public_url"] == "https://example.org/holidays"
+
+
+def test_an_imported_bundle_keeps_only_addresses_a_browser_may_open(tmp_path):
+    from services.collection_bundle import _settle_source_types
+
+    conn = sqlite3.connect(tmp_path / "m.db")
+    conn.execute("CREATE TABLE documents (document_id TEXT, source_type TEXT, source_path TEXT, public_url TEXT)")
+    conn.executemany("INSERT INTO documents VALUES (?, 'upload', NULL, ?)", [
+        ("a", "https://example.org/a.pdf"), ("b", "javascript:alert(1)"), ("c", "/files/c.pdf"),
+        ("d", "//evil.example/d"), ("e", None)])
+    _settle_source_types(conn)
+    kept = dict(conn.execute("SELECT document_id, public_url FROM documents"))
+    assert kept == {"a": "https://example.org/a.pdf", "b": None, "c": "/files/c.pdf", "d": None, "e": None}
+
+
+def test_http_addresses_owner_reads_and_saves_them_with_an_audit_row(site, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from api import deps
+    import main
+
+    monkeypatch.setattr(deps, "_initialized", True)
+    cid, ids = _public(site)
+    client = TestClient(main.app)
+    got = client.get(f"/api/collections/{cid}/export/static/addresses")
+    assert got.status_code == 200 and got.json()["total"] == 2 and got.json()["with_address"] == 0
+
+    bad = client.put(f"/api/collections/{cid}/export/static/addresses", json={"files_base_url": "ftp://x/y"})
+    assert bad.status_code == 400 and "https://" in bad.json()["detail"]
+
+    put = client.put(f"/api/collections/{cid}/export/static/addresses",
+                     json={"files_base_url": "/files/handbook/", "documents": {ids[1]: "https://example.org/e"}})
+    assert put.status_code == 200, put.text
+    body = put.json()
+    assert body["files_base_url"] == "/files/handbook/" and body["with_address"] == 2
+    rows = {r["name"]: r for r in body["documents"]}
+    assert rows["holidays.txt"]["url"] == "/files/handbook/holidays.txt" and rows["holidays.txt"]["from"] == "files"
+    assert rows["expenses.txt"]["from"] == "own"
+    # Leaving files_base_url out keeps it.
+    again = client.put(f"/api/collections/{cid}/export/static/addresses", json={"documents": {ids[1]: None}})
+    assert again.json()["files_base_url"] == "/files/handbook/"
+    audit_rows = _audit(action="collection.static_addresses")
+    assert len(audit_rows) == 2 and audit_rows[0]["collection_id"] == cid
+
+
+def test_cli_links_results_to_the_sites_copies_of_the_files(site, tmp_path):
+    from scripts import export_static
+
+    cid, _ = _public(site)
+    out = tmp_path / "public" / "search"
+    assert export_static.main([cid, "--out", str(out), "--confirm-public", "--files-url", "/files/handbook/"]) == 0
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert {d["link"]["url"] for d in manifest["documents"]} == {
+        "/files/handbook/holidays.txt", "/files/handbook/expenses.txt"}
+    # For that export only: nothing was saved.
+    assert se.address_settings(cid)["files_base_url"] is None
+    assert export_static.main([cid, "--out", str(out), "--confirm-public", "--files-url", "javascript:x"]) == 1
+
+
+def test_a_source_is_named_by_its_library_title_only_where_the_library_is_sure(site, tmp_path):
+    from services.research.store import ResearchStore
+
+    cid, ids = _public(site)
+    store = ResearchStore(collection_service.get_indexes_path(cid) / "metadata.db")
+    store.upsert_paper(ids[0], title="Holiday Entitlement for Staff", analyzed_at="2026-11-18T00:00:00",
+                       provenance={"title": {"source": "user"}})
+    store.upsert_paper(ids[1], title="reimbursed within thirty days. Expenses are", analyzed_at="2026-11-18T00:00:00",
+                       provenance={"title": {"source": "paper", "confidence": "low", "check": "starts mid-sentence"}})
+    manifest, _ = se.write_export(cid, tmp_path / "out", confirm_public=True)
+    titles = {d["name"]: d["title"] for d in manifest["documents"]}
+    assert titles == {"holidays.txt": "Holiday Entitlement for Staff", "expenses.txt": "expenses"}
+    assert se._title("leave-policy_2024.pdf") == "leave policy 2024"
+    assert se._title("Long-term plan v2.docx") == "Long-term plan v2"

@@ -1,23 +1,27 @@
 /*! Clio static search: reference client. MIT License. https://github.com/jordanboyce/clio */
 // Searches a collection exported by Clio (Export, "For a website") with no
-// server: load the three files, embed the query in the browser with the same
+// server: load the files, embed the query in the browser with the same
 // model, rank by dot product. See docs/STATIC_SEARCH.md.
 //
-//   import { createSearch, transformersEmbedder } from './clio-static-search.js'
+//   import { createSearch, transformersEmbedder, passageLink } from './clio-static-search.js'
 //   import { pipeline } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2'
 //
 //   const search = await createSearch('./search/', {
 //     embedder: (manifest) => transformersEmbedder(manifest, { pipeline }),
 //   })
 //   const hits = await search('how much holiday do staff get', { k: 5 })
-//   // [{ score, passage: { id, document_id, page, text }, document: { id, name, pages } }]
+//   // [{ score, passage: { id, document_id, page, text }, document: { id, name, title, pages, link } }]
+//   passageLink(hits[0])   // where the passage is on the web, or null
 //
 // No dependencies. The embedder is passed in, so a site decides where the
 // model and the library come from (a CDN, or its own files on a closed network).
 // An export made as a whole site carries both: see localTransformers below.
+// For a search box to drop into a page, see clio-search.js beside this file.
 
 export const FORMAT = 'clio-static-search'
-export const VERSION = 1
+// v1: searched by meaning. v2: no vectors, searched by keyword (the
+// collection's model has no browser build).
+export const VERSION = 2
 
 // How close the site's vector for the manifest's probe sentence must be to
 // Clio's. The same model at full or half precision scores above 0.9999; an
@@ -33,28 +37,74 @@ export class ModelMismatch extends Error {
 
 const join = (base, file) => (base.endsWith('/') ? base : base + '/') + file
 
-async function get(fetchFn, url, kind) {
-  const response = await fetchFn(url)
+async function get(fetchFn, url, kind, init) {
+  const response = await fetchFn(url, init)
   if (!response.ok) throw new Error(`Could not load ${url} (${response.status})`)
+  if (kind === 'bytes') return response.arrayBuffer()
   return kind === 'json' ? response.json() : response.arrayBuffer()
 }
 
-/** Load manifest.json, the passage file(s) and vectors.bin from a folder. */
-export async function loadIndex(baseUrl, { fetch: fetchFn = globalThis.fetch } = {}) {
-  const manifest = await get(fetchFn, join(baseUrl, 'manifest.json'), 'json')
+async function sha256(buffer) {
+  const subtle = globalThis.crypto?.subtle
+  if (!subtle) return null // a page on plain http has no SubtleCrypto: nothing to check with
+  const digest = new Uint8Array(await subtle.digest('SHA-256', buffer))
+  return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * One file the manifest names. It is asked for by its checksum (?v=...), so a
+ * cache that still holds last year's file cannot hand it over; and with
+ * `verify` its bytes are checked against the manifest, once more with the
+ * cache bypassed, so a half-updated site says so instead of ranking the
+ * wrong passages.
+ */
+async function getListed(fetchFn, baseUrl, entry, kind, verify) {
+  const url = join(baseUrl, entry.file) + (entry.sha256 ? `?v=${entry.sha256.slice(0, 16)}` : '')
+  if (!verify || !entry.sha256 || !globalThis.crypto?.subtle) return get(fetchFn, url, kind)
+  for (const init of [undefined, { cache: 'reload' }]) {
+    const buffer = await get(fetchFn, url, 'bytes', init)
+    if ((await sha256(buffer)) === entry.sha256) {
+      return kind === 'json' ? JSON.parse(new TextDecoder().decode(buffer)) : buffer
+    }
+  }
+  throw new Error(`${entry.file} does not match its manifest: the site holds files from two different ` +
+    'exports. Upload the whole export again.')
+}
+
+/**
+ * Load manifest.json, the passage file(s) and vectors.bin (when the export
+ * has vectors) from a folder. The manifest is never read from a cache; `verify`
+ * (on by default) checks each file against its checksum.
+ */
+export async function loadIndex(baseUrl, { fetch: fetchFn = globalThis.fetch, verify = true } = {}) {
+  // Never from a cache, not even after revalidation: a server that validates by
+  // date answers "not modified" for a manifest restored with an older date.
+  const manifest = await get(fetchFn, join(baseUrl, 'manifest.json'), 'json', { cache: 'no-store' })
   if (manifest.format !== FORMAT) throw new Error('That folder is not a Clio static search export.')
   if (manifest.version > VERSION) {
     throw new Error(`This export is format v${manifest.version}; this client reads up to v${VERSION}.`)
   }
+  const vectorsEntry = manifest.vectors
+    ? { file: manifest.vectors.file, sha256: manifest.vectors.sha256 } : null
   const [buffer, ...parts] = await Promise.all([
-    get(fetchFn, join(baseUrl, manifest.vectors.file), 'buffer'),
-    ...manifest.passages.files.map((f) => get(fetchFn, join(baseUrl, f.file), 'json')),
+    vectorsEntry ? getListed(fetchFn, baseUrl, vectorsEntry, 'buffer', verify) : null,
+    ...manifest.passages.files.map((f) => getListed(fetchFn, baseUrl, f, 'json', verify)),
   ])
-  return buildIndex(manifest, parts.flat(), buffer)
+  const index = buildIndex(manifest, parts.flat(), buffer)
+  index.baseUrl = baseUrl
+  return index
 }
 
 /** The same, from values already in hand (tests, or files read another way). */
 export function buildIndex(manifest, passages, buffer) {
+  const documents = new Map((manifest.documents || []).map((d) => [d.id, d]))
+  if (!manifest.vectors) {
+    // Searched by keyword: no vectors to line up.
+    if (manifest.passages?.count != null && passages.length !== manifest.passages.count) {
+      throw new Error(`The export has ${passages.length} passages; its manifest says ${manifest.passages.count}.`)
+    }
+    return { manifest, passages, vectors: null, count: passages.length, dimension: 0, scale: 1, documents }
+  }
   const { count, dimension, quantization, scale } = manifest.vectors
   const vectors = quantization === 'int8' ? new Int8Array(buffer) : new Float32Array(buffer)
   if (vectors.length !== count * dimension) {
@@ -63,7 +113,6 @@ export function buildIndex(manifest, passages, buffer) {
   if (passages.length !== count) {
     throw new Error(`The export has ${passages.length} passages for ${count} vectors.`)
   }
-  const documents = new Map((manifest.documents || []).map((d) => [d.id, d]))
   return { manifest, passages, vectors, count, dimension, scale: scale || 1, documents }
 }
 
@@ -86,6 +135,9 @@ function unit(vector) {
  */
 export async function checkModel(manifest, embedder, { minProbeCosine = MIN_PROBE_COSINE } = {}) {
   const embedding = manifest.embedding
+  if (!manifest.vectors || !embedding.browser) {
+    throw new ModelMismatch(embedding.reason || 'This export has no vectors, so it is searched by keyword.')
+  }
   const probe = embedding.probe
   if (!probe) {
     if (embedder.model && embedder.model !== embedding.browser.model && embedder.model !== embedding.model) {
@@ -109,9 +161,10 @@ export async function checkModel(manifest, embedder, { minProbeCosine = MIN_PROB
   return { checked: 'probe', cosine }
 }
 
-/** The k passages closest to a query vector, best first. */
-export function rank(index, queryVector, { k = 10 } = {}) {
+/** Scores of every passage for a query vector, on Clio's cosine scale. */
+function scoresFor(index, queryVector) {
   const { vectors, dimension, count, scale } = index
+  if (!vectors) throw new ModelMismatch('This export has no vectors, so it is searched by keyword.')
   if (queryVector.length !== dimension) {
     throw new ModelMismatch(`The query vector has ${queryVector.length} dimensions; the index has ${dimension}.`)
   }
@@ -122,25 +175,25 @@ export function rank(index, queryVector, { k = 10 } = {}) {
     for (let i = 0; i < dimension; i++) sum += vectors[offset + i] * query[i]
     scores[row] = sum / scale
   }
-  return top(index, scores, k)
+  return scores
+}
+
+/** The k passages closest to a query vector, best first. */
+export function rank(index, queryVector, { k = 10 } = {}) {
+  return top(index, scoresFor(index, queryVector), k)
 }
 
 function top(index, scores, k) {
   const order = Array.from(scores.keys()).sort((a, b) => scores[b] - scores[a] || a - b).slice(0, k)
   return order.map((row) => {
     const passage = index.passages[row]
-    return { score: scores[row], passage, document: index.documents.get(passage.document_id) || null }
+    return { score: scores[row], passage, document: index.documents.get(passage.document_id) || null, index }
   })
 }
 
-const words = (text) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []
+export const words = (text) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []
 
-/**
- * Plain keyword ranking, for when search by meaning is off. Counts how many
- * of the query's words a passage holds, rarer words weighing more. It is a
- * fallback, not Clio's keyword search.
- */
-export function keywordRank(index, query, { k = 10 } = {}) {
+function keywordScores(index, query) {
   if (!index.terms) index.terms = index.passages.map((p) => new Set(words(p.text)))
   const terms = [...new Set(words(query))]
   const weights = terms.map((t) => {
@@ -151,8 +204,56 @@ export function keywordRank(index, query, { k = 10 } = {}) {
   index.terms.forEach((set, row) => {
     terms.forEach((t, i) => { if (set.has(t)) scores[row] += weights[i] })
   })
-  return top(index, scores, k).filter((hit) => hit.score > 0)
+  return scores
 }
+
+/**
+ * Plain keyword ranking, for when search by meaning is off. Counts how many
+ * of the query's words a passage holds, rarer words weighing more. It is a
+ * fallback, not Clio's keyword search.
+ */
+export function keywordRank(index, query, { k = 10 } = {}) {
+  return top(index, keywordScores(index, query), k).filter((hit) => hit.score > 0)
+}
+
+// ── Where a passage is on the web ──────────────────────────────────────────
+
+const fill = (template, values) => template.replace(/\{(\w+)\}/g, (_, key) => String(values[key] ?? ''))
+
+// A text directive (#:~:text=) the browser scrolls to and highlights. Only the
+// start of the passage, a few words: the page's own text may differ from
+// what Clio extracted further on, and a directive that does not match is
+// simply ignored.
+function textDirective(text, wordCount = 8) {
+  const start = (text || '').replace(/\s+/g, ' ').trim().split(' ').slice(0, wordCount).join(' ')
+  if (!start) return ''
+  const encode = (s) => encodeURIComponent(s).replace(/-/g, '%2D').replace(/,/g, '%2C').replace(/&/g, '%26')
+  return `:~:text=${encode(start)}`
+}
+
+/**
+ * Where a hit's passage is on the web, or null when the export gave its
+ * source no address. The document's `link` (from the manifest) says how to
+ * point inside it: a PDF opens at the page, a file in a repository at its
+ * lines, and a web page scrolls to the passage's opening words.
+ */
+export function passageLink(hit) {
+  const link = hit?.document?.link
+  if (!link?.url) return null
+  const passage = hit.passage || {}
+  const [url, fragment = ''] = link.url.split('#')
+  if (link.lines && passage.lines) {
+    return url + fill(link.lines, { start: passage.lines[0], end: passage.lines[1] })
+  }
+  if (link.page && passage.page) return url + fill(link.page, { page: passage.page })
+  if (link.text) {
+    const directive = textDirective(passage.text)
+    if (directive) return `${url}#${fragment}${directive}`
+  }
+  return link.url
+}
+
+// ── The model ──────────────────────────────────────────────────────────────
 
 /**
  * transformers.js from the site's own files, set up to load models only from
@@ -160,18 +261,32 @@ export function keywordRank(index, query, { k = 10 } = {}) {
  * library and its WebAssembly runtime, models/<model>/ the model). Returns
  * the library's module; pass its `pipeline` to transformersEmbedder with
  * `model: manifest.embedding.browser.bundled.model`.
+ *
+ * `base` is the folder holding vendor/ and models/; by default the page's.
+ * It may be on another origin (an assets host or CDN that sends CORS
+ * headers): the model is then read from there as a remote host.
  */
 export async function localTransformers({ vendor = './vendor/', models = './models/', base, load } = {}) {
   const root = base || globalThis.document?.baseURI || globalThis.location?.href
   const at = (path, file = '') => new URL(file, new URL(path, root)).href
   const library = await (load || ((url) => import(url)))(at(vendor, 'transformers.min.js'))
   const { env } = library
-  env.allowRemoteModels = false
-  env.allowLocalModels = true
-  // A path on this site, never a full http(s) URL: given a URL, transformers.js
-  // 4.3.2 skips its check that a local file exists, decides the model has no
-  // tokenizer, and every query fails (the model itself still loads).
-  env.localModelPath = new URL(models, root).pathname
+  const modelsUrl = new URL(models, root)
+  const here = globalThis.location?.origin
+  if (here && modelsUrl.origin !== here) {
+    // Another origin: transformers.js reads it as a model hub of its own.
+    env.allowLocalModels = false
+    env.allowRemoteModels = true
+    env.remoteHost = modelsUrl.href
+    env.remotePathTemplate = '{model}/'
+  } else {
+    env.allowRemoteModels = false
+    env.allowLocalModels = true
+    // A path on this site, never a full http(s) URL: given a URL, transformers.js
+    // 4.3.2 skips its check that a local file exists, decides the model has no
+    // tokenizer, and every query fails (the model itself still loads).
+    env.localModelPath = modelsUrl.pathname
+  }
   // Both files named outright: the loader ships as .js, not the .mjs the
   // library would look for, because many servers send .mjs as text/plain.
   env.backends.onnx.wasm.wasmPaths = {
@@ -200,33 +315,72 @@ export async function transformersEmbedder(manifest, { pipeline, model, dtype, o
   }
 }
 
+// ── Searching ──────────────────────────────────────────────────────────────
+
 /**
  * Load an export and return `search(query, { k })`. `embedder` is an object
  * with `embed(text)`, or a function of the manifest that returns one (so the
  * model is only fetched once the manifest says which). When the model is
  * missing, fails to load or is not the right one, `search.semantic` is false,
  * `search.reason` says why, and searches fall back to keywords.
+ *
+ * Leave `embedder` out to start with keywords at once, and call
+ * `search.upgrade(embedder)` later (when the visitor first uses the box, say)
+ * to switch to search by meaning without loading the files again.
  */
-export async function createSearch(baseUrl, { embedder, fetch: fetchFn, minProbeCosine } = {}) {
-  const index = await loadIndex(baseUrl, { fetch: fetchFn })
+export async function createSearch(baseUrl, { embedder, fetch: fetchFn, minProbeCosine, verify } = {}) {
+  const index = await loadIndex(baseUrl, { fetch: fetchFn, verify })
   let ready = null
-  let reason = 'No embedding model was given.'
-  if (embedder) {
-    try {
-      const built = typeof embedder === 'function' ? await embedder(index.manifest) : embedder
-      await checkModel(index.manifest, built, { minProbeCosine })
-      ready = built
-      reason = ''
-    } catch (error) {
-      reason = error.message
-    }
-  }
   const search = async (query, { k = 10 } = {}) => {
     if (!ready) return keywordRank(index, query, { k })
     return rank(index, await ready.embed(query), { k })
   }
   search.index = index
-  search.semantic = Boolean(ready)
-  search.reason = reason
+  search.semantic = false
+  search.canUseMeaning = Boolean(index.vectors && index.manifest.embedding.browser)
+  search.reason = search.canUseMeaning ? 'No embedding model was given.'
+    : (index.manifest.embedding.reason || 'This export has no vectors, so it is searched by keyword.')
+  search.embedder = null
+  search.upgrade = async (next) => {
+    if (!search.canUseMeaning) return false
+    try {
+      const built = typeof next === 'function' ? await next(index.manifest) : next
+      await checkModel(index.manifest, built, { minProbeCosine })
+      ready = built
+      search.embedder = built
+      search.semantic = true
+      search.reason = ''
+    } catch (error) {
+      search.reason = error.message
+    }
+    return search.semantic
+  }
+  if (embedder) await search.upgrade(embedder)
   return search
+}
+
+/**
+ * Several exports searched as one (each made with createSearch). When every
+ * one is searched by meaning with the same model, the query is embedded once
+ * and the scores are compared directly; otherwise all are searched by keyword,
+ * since a keyword score and a similarity cannot be compared.
+ */
+export function combineSearches(searches) {
+  const sameModel = () => {
+    const models = new Set(searches.map((s) => s.index.manifest.embedding.signature || s.index.manifest.embedding.model))
+    return models.size === 1 && searches.every((s) => s.semantic)
+  }
+  const combined = async (query, { k = 10 } = {}) => {
+    let hits
+    if (searches.length && sameModel()) {
+      const vector = await searches[0].embedder.embed(query)
+      hits = searches.flatMap((s) => rank(s.index, vector, { k }))
+    } else {
+      hits = searches.flatMap((s) => keywordRank(s.index, query, { k }))
+    }
+    return hits.sort((a, b) => b.score - a.score).slice(0, k)
+  }
+  Object.defineProperty(combined, 'semantic', { get: () => searches.length > 0 && sameModel() })
+  combined.searches = searches
+  return combined
 }

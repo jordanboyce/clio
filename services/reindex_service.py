@@ -687,6 +687,10 @@ class ReindexService:
             injection_review=prior["injection_review"] if prior.get("injection_review") else ...,
             classification=prior["classification"] if prior.get("classification") else ...,
         )
+        # Where the source is published is a person's statement, like the
+        # review above: a re-read does not change it.
+        if prior.get("public_url"):
+            metadata_store.set_document_public_url(prepared.document_id, prior["public_url"])
 
     def _get_documents_to_reindex(
         self,

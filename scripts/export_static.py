@@ -64,6 +64,9 @@ def main(argv=None) -> int:
     parser.add_argument("--passages-per-file", type=int, default=None)
     parser.add_argument("--site", action="store_true",
                         help="write a ready-to-serve site, with the model and its runtime, instead of the data alone")
+    parser.add_argument("--files-url", default=None, metavar="URL",
+                        help="where the site keeps its copies of the files (each result links to its file there); "
+                             "this export only, the address saved in Clio otherwise")
     args = parser.parse_args(argv)
 
     from services import audit, static_export
@@ -89,7 +92,8 @@ def main(argv=None) -> int:
     try:
         manifest, detail = static_export.write_export(
             collection_id, staging, confirm_public=args.confirm_public,
-            quantization="float32" if args.float32 else "int8", passages_per_file=per_file, site=args.site)
+            quantization="float32" if args.float32 else "int8", passages_per_file=per_file, site=args.site,
+            files_base_url=args.files_url if args.files_url is not None else ...)
     except static_export.StaticExportError as e:
         shutil.rmtree(staging, ignore_errors=True)
         print(f"Cannot export: {e}", file=sys.stderr)

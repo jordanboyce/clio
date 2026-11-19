@@ -184,7 +184,10 @@ class MetadataStore:
                     superseded_at TEXT DEFAULT NULL,
                     superseded_note TEXT DEFAULT NULL,
                     -- classification marking (services/data_controls.py)
-                    classification TEXT DEFAULT NULL
+                    classification TEXT DEFAULT NULL,
+                    -- where the source is published on the web, for a static
+                    -- export used on a website (services/static_export.py)
+                    public_url TEXT DEFAULT NULL
                 )
             """)
 
@@ -1047,6 +1050,10 @@ class MetadataStore:
             conn.execute("ALTER TABLE documents ADD COLUMN classification TEXT DEFAULT NULL")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_classification "
                          "ON documents(classification) WHERE classification IS NOT NULL")
+            conn.commit()
+        # Additive and nullable too: where a source is published on the web.
+        if "public_url" not in self._get_table_columns(conn, "documents"):
+            conn.execute("ALTER TABLE documents ADD COLUMN public_url TEXT DEFAULT NULL")
             conn.commit()
         if migrated:
             conn.execute("""
@@ -1922,6 +1929,19 @@ class MetadataStore:
             conn.execute(f"UPDATE documents SET {', '.join(updates)} WHERE document_id = ?", params)
             conn.commit()
 
+    def set_document_public_url(self, document_id: str, url: Optional[str]) -> bool:
+        """Record where a source is published on the web (None clears it).
+
+        The caller has checked the address (services.static_export.clean_public_url).
+        Returns False when there is no such document.
+        """
+        with sqlite_connect(self.db_path) as conn:
+            self._ensure_v3_1_columns(conn)
+            changed = conn.execute("UPDATE documents SET public_url = ? WHERE document_id = ?",
+                                   (url or None, document_id)).rowcount
+            conn.commit()
+        return bool(changed)
+
     # ── "Replaced by" relationships ────────────────────────────────────────
     # An owner says "document A is superseded by document B" (a policy's v3
     # replaces v2). Retrieval demotes A and labels it; nothing is hidden. The
@@ -2334,7 +2354,7 @@ class MetadataStore:
                        chunk_overlap, schema_version, source_path, source_type,
                        uploaded_by, content_hash, sensitivity, policy_status, policy_flags,
                        injection_warnings, injection_review,
-                       superseded_by, superseded_at, superseded_note, classification
+                       superseded_by, superseded_at, superseded_note, classification, public_url
                 FROM documents
                 WHERE document_id = ?
             """, (document_id,))

@@ -1,6 +1,6 @@
 <template>
   <dialog :ref="modal.dialogRef" class="modal" aria-labelledby="export-collection-title" @close="modal.onClosed">
-    <div class="modal-box max-w-md">
+    <div class="modal-box" :class="mode === 'site' ? 'max-w-lg' : 'max-w-md'">
       <h3 id="export-collection-title" class="font-bold text-lg">Export {{ target?.name }}</h3>
       <div role="tablist" aria-label="What the export is for" class="tabs tabs-border tabs-sm mt-2">
         <button role="tab" class="tab" :class="{ 'tab-active': mode === 'bundle' }" :aria-selected="mode === 'bundle'" @click="setMode('bundle')">For another Clio</button>
@@ -11,8 +11,8 @@
         so nothing is scanned or OCR'd again.
       </p>
       <p v-else class="text-sm text-base-content/70 mt-3 mb-4">
-        Three files a static website can search by meaning with no server behind it: the passages, their vectors,
-        and a manifest naming the model.
+        Files a website can search with no server behind it, to put into the site's own pages or serve as a
+        ready-made search page. Each result can link to the page its source is on.
       </p>
 
       <template v-if="mode === 'site'">
@@ -33,19 +33,81 @@
           </div>
 
           <template v-if="site.ready">
-            <p class="text-xs text-base-content/65">
+            <p v-if="site.search === 'keywords'" class="text-xs text-base-content/70 rounded-box bg-base-200 p-2.5" data-testid="keyword-search">
+              {{ site.keywords_reason }}
+              About {{ formatBytes(site.passages_bytes) }} of text<span v-if="site.passage_files > 1"> in {{ site.passage_files }} files</span>.
+            </p>
+            <p v-else class="text-xs text-base-content/65">
               The site must embed each query in the browser with <code>{{ site.browser_model }}</code>. The manifest
               says so, and carries a check that turns search by meaning off for any other model.
               About {{ formatBytes(site.passages_bytes) }} of text<span v-if="site.passage_files > 1"> in {{ site.passage_files }} files</span>
               and {{ formatBytes(site.vectors_bytes) }} of vectors.
             </p>
+
+            <details class="rounded-box border border-base-300 text-sm" data-testid="result-links" @toggle="loadAddresses">
+              <summary class="cursor-pointer px-3 py-2">
+                <span class="font-medium">Where results link</span>
+                <span class="text-base-content/60"> · {{ linkSummary }}</span>
+              </summary>
+              <div class="px-3 pb-3 space-y-2.5">
+                <p class="text-xs text-base-content/60">
+                  A result opens its source on your website: a PDF at the page, a web page at the passage. Sources
+                  added by link, and files synced from a public repository, already know where they are.
+                </p>
+                <label class="block">
+                  <span class="text-xs font-medium">Where the site keeps its copies of the files</span>
+                  <input
+                    v-model="baseUrl"
+                    name="files-base-url"
+                    type="text"
+                    inputmode="url"
+                    class="input input-sm w-full mt-1"
+                    placeholder="https://www.example.org/files/handbook/"
+                    aria-describedby="files-base-url-hint"
+                  />
+                  <span id="files-base-url-hint" class="block text-xs text-base-content/60 mt-1">
+                    Each file's name is added to it. A path on the site, such as /files/handbook/, works too.
+                  </span>
+                </label>
+                <div v-if="addressesLoading" class="py-2 text-center"><span class="loading loading-spinner loading-xs"></span></div>
+                <ul v-else-if="addresses" class="max-h-48 overflow-y-auto space-y-1.5" aria-label="Each source's address">
+                  <li v-for="row in addresses.documents" :key="row.id" class="text-xs">
+                    <label class="block">
+                      <span class="block truncate" :title="row.name">{{ row.name }}</span>
+                      <input
+                        v-model="ownUrls[row.id]"
+                        type="text"
+                        inputmode="url"
+                        class="input input-xs w-full"
+                        :placeholder="row.from && row.from !== 'own' ? row.url : 'No address'"
+                        :aria-label="`Address of ${row.name}`"
+                      />
+                    </label>
+                  </li>
+                </ul>
+                <p v-if="addressError" class="text-xs text-error" role="alert">{{ addressError }}</p>
+                <div class="flex items-center gap-2">
+                  <button type="button" class="btn btn-sm" :disabled="addressesSaving || !addressesChanged" @click="saveAddresses">
+                    Save addresses
+                  </button>
+                  <span v-if="addressesSaved" class="text-xs text-success" role="status">Saved</span>
+                </div>
+              </div>
+            </details>
+
             <label v-if="site.site?.available" class="flex items-start gap-3 cursor-pointer">
               <input v-model="includeModel" name="include-model" type="checkbox" class="checkbox checkbox-sm mt-0.5" />
-              <span class="text-sm">
+              <span v-if="site.site.model" class="text-sm">
                 Include the model, as a site ready to serve<span class="text-base-content/60"> (about {{ formatBytes(site.site.bytes) }} more)</span>
                 <span class="block text-xs text-base-content/60">
-                  The page, {{ site.site.model }} and the library that runs it, so the site loads nothing from
-                  Hugging Face or a CDN. Works on a network that blocks both.
+                  The page, the search box for your own pages, {{ site.site.model }} and the library that runs it,
+                  so the site loads nothing from Hugging Face or a CDN. Works on a network that blocks both.
+                </span>
+              </span>
+              <span v-else class="text-sm">
+                As a site ready to serve
+                <span class="block text-xs text-base-content/60">
+                  The page, the search box for your own pages, and settings for common web servers.
                 </span>
               </span>
             </label>
@@ -148,6 +210,66 @@ const confirmPublic = ref(false)
 // anywhere, and its visitors' browsers contact no one else.
 const includeModel = ref(true)
 
+// "Where results link": read when opened, saved with one button.
+const addresses = ref(null)
+const addressesLoading = ref(false)
+const addressesSaving = ref(false)
+const addressesSaved = ref(false)
+const addressError = ref('')
+const baseUrl = ref('')
+const ownUrls = ref({})
+
+const linkSummary = computed(() => {
+  const counts = addresses.value || site.value?.addresses
+  if (!counts) return ''
+  if (!counts.total) return 'no sources'
+  return `${counts.with_address} of ${counts.total} source${counts.total === 1 ? '' : 's'} link to a page`
+})
+
+const addressesChanged = computed(() => {
+  if (!addresses.value) return false
+  if ((baseUrl.value || '').trim() !== (addresses.value.files_base_url || '')) return true
+  return addresses.value.documents.some((row) => (ownUrls.value[row.id] || '').trim() !== (row.own_url || ''))
+})
+
+function takeAddresses(data) {
+  addresses.value = data
+  baseUrl.value = data.files_base_url || ''
+  ownUrls.value = Object.fromEntries(data.documents.map((row) => [row.id, row.own_url || '']))
+}
+
+async function loadAddresses(event) {
+  if (!event?.target?.open || addresses.value || addressesLoading.value || !target.value) return
+  addressesLoading.value = true
+  addressError.value = ''
+  try {
+    takeAddresses((await http.get(`/api/collections/${encodeURIComponent(target.value.id)}/export/static/addresses`)).data)
+  } catch (err) {
+    addressError.value = err?.message || 'Could not read the addresses.'
+  } finally {
+    addressesLoading.value = false
+  }
+}
+
+async function saveAddresses() {
+  addressesSaving.value = true
+  addressesSaved.value = false
+  addressError.value = ''
+  const documents = Object.fromEntries(addresses.value.documents
+    .filter((row) => (ownUrls.value[row.id] || '').trim() !== (row.own_url || ''))
+    .map((row) => [row.id, (ownUrls.value[row.id] || '').trim() || null]))
+  try {
+    const { data } = await http.put(`/api/collections/${encodeURIComponent(target.value.id)}/export/static/addresses`,
+      { files_base_url: (baseUrl.value || '').trim() || null, documents })
+    takeAddresses(data)
+    addressesSaved.value = true
+  } catch (err) {
+    addressError.value = err?.message || 'The addresses were not saved.'
+  } finally {
+    addressesSaving.value = false
+  }
+}
+
 const siteHref = computed(() => site.value?.ready && confirmPublic.value && target.value
   ? `/api/collections/${encodeURIComponent(target.value.id)}/export/static?confirm_public=true` +
     (includeModel.value && site.value.site?.available ? '&site=true' : '')
@@ -179,6 +301,9 @@ async function open(collection) {
   siteError.value = ''
   confirmPublic.value = false
   includeModel.value = true
+  addresses.value = null
+  addressError.value = ''
+  addressesSaved.value = false
   preview.value = null
   error.value = ''
   loading.value = true

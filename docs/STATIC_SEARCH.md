@@ -1,6 +1,8 @@
 # Search on a static website
 
-A collection can be exported as three files that a static website searches by meaning, with no Clio and no server behind it. The page downloads the files, embeds the visitor's query in the browser, and ranks the passages itself.
+A collection can be exported as files that a static website searches by meaning, with no Clio and no server behind it. The page downloads the files, embeds the visitor's query in the browser, and ranks the passages itself. A collection whose model has no browser build is exported too, and searched by keyword ([below](#the-same-model-on-both-sides)).
+
+The export is meant to become part of a website you already run: a search box, `<clio-search>`, drops into any of its pages and takes on their look, and each result links to the page its source is on, on that site or anywhere else ([On your website](#on-your-website)).
 
 It can also be exported as a **whole site**, ready to serve: the three files, a search page, and the embedding model and library the page runs, so the site loads nothing from Hugging Face or a CDN. Use that on a network that blocks either, or for a site whose visitors' browsers should contact no one else ([below](#a-site-that-carries-its-own-model)).
 
@@ -10,9 +12,9 @@ Use it for a small, public body of text: a handbook, a course catalogue, a set o
 
 | File | Holds |
 |---|---|
-| `manifest.json` | The embedding model and how it pools, the vector size and quantization, the passage count, the export date, a checksum for each file, and the list of sources. |
-| `passages.json` | One passage per line: `id`, `document_id`, `page`, `text`. Above 2,000 passages it is split into `passages-0001.json`, `passages-0002.json`, and so on; the manifest lists them in order. |
-| `vectors.bin` | One vector per passage, in the same order as the passages, as signed 8-bit integers with no header. A browser reads it straight into an `Int8Array`. |
+| `manifest.json` | The embedding model and how it pools, the vector size and quantization, the passage count, the export date, a checksum for each file, and the list of sources: each with its name, a readable `title` (the Library's, where it is sure of it) and, when it has one, a `link` to where it lives on the web ([Where results link](#where-results-link)). |
+| `passages.json` | One passage per line: `id`, `document_id`, `page`, `text`, and `lines` (first and last) for a passage from a file that has line numbers. Above 2,000 passages it is split into `passages-0001.json`, `passages-0002.json`, and so on; the manifest lists them in order. |
+| `vectors.bin` | One vector per passage, in the same order as the passages, as signed 8-bit integers with no header. A browser reads it straight into an `Int8Array`. Absent from an export searched by keyword. |
 
 A passage's score for a query is `dot(row, query) / manifest.vectors.scale`, where `query` is the query's unit-length vector. That is cosine similarity, the score Clio's own semantic search reports, to within about 0.003.
 
@@ -20,7 +22,7 @@ Sizes: 384 bytes of vectors per passage with either supported model, plus the pa
 
 ## Exporting
 
-**In the app.** Use the **Export** button beside the collection, then the **For a website** tab. It names the model the site will have to use, says how many sources are left out and why, and gives the sizes. **Include the model** is ticked whenever this server can include it, and gives `<name>.static-site.zip`, a whole site; untick it for `<name>.static-search.zip`, the three files alone. Tick the confirmation and download.
+**In the app.** Use the **Export** button beside the collection, then the **For a website** tab. It names the model the site will have to use (or says why the site will search by keyword), says how many sources are left out and why, and gives the sizes. **Where results link** sets where each result points ([below](#where-results-link)). **Include the model** is ticked whenever this server can include it, and gives `<name>.static-site.zip`, a whole site; untick it for `<name>.static-search.zip`, the data files alone. Tick the confirmation and download.
 
 **From the command line**, which suits a site kept in a repository:
 
@@ -28,11 +30,12 @@ Sizes: 384 bytes of vectors per passage with either supported model, plus the pa
 python scripts/export_static.py "Staff handbook" --check
 python scripts/export_static.py "Staff handbook" --out ../site/public/search --confirm-public
 python scripts/export_static.py "Staff handbook" --out ../site/public --site --confirm-public
+python scripts/export_static.py "Staff handbook" --out ../site/public/search --files-url /files/handbook/ --confirm-public
 ```
 
-Run it with the server's environment (`DATA_DIR` and the rest of `.env`). It only reads, needs no network, and replaces a previous export in `--out` while leaving the folder's other files alone. If the export is refused, last time's files stay as they were. `--float32` writes full-precision vectors, four times the size, for anyone who wants scores identical to Clio's. `--site` writes the whole site into `--out`, with the export in `search/`.
+Run it with the server's environment (`DATA_DIR` and the rest of `.env`). It only reads, needs no network, and replaces a previous export in `--out` while leaving the folder's other files alone. If the export is refused, last time's files stay as they were. `--float32` writes full-precision vectors, four times the size, for anyone who wants scores identical to Clio's. `--site` writes the whole site into `--out`, with the export in `search/`. `--files-url` sets where the site keeps its copies of the files for that export only; without it the address saved in Clio is used.
 
-**Over HTTP.** `GET /api/collections/{id}/export/static/preview` returns the counts, sizes, model and any `blockers`. `GET /api/collections/{id}/export/static?confirm_public=true` returns the zip (`quantization=int8|float32`, `passages_per_file`, and `site=true` for the whole site, which the preview's `site.available` says this server can make). Both are for the collection's owner.
+**Over HTTP.** `GET /api/collections/{id}/export/static/preview` returns the counts, sizes, model and any `blockers`. `GET /api/collections/{id}/export/static?confirm_public=true` returns the zip (`quantization=int8|float32`, `passages_per_file`, and `site=true` for the whole site, which the preview's `site.available` says this server can make). `GET` and `PUT /api/collections/{id}/export/static/addresses` read and save where results link. All of these are for the collection's owner, and saving addresses is written to the audit trail as `collection.static_addresses`.
 
 ### Reviewing a new export
 
@@ -63,9 +66,65 @@ A query vector is only comparable with passage vectors from the same model, pool
 
 Both give 384 dimensions. Measured with transformers.js 4.3.2 against Clio's fastembed backend: at `fp32` and `fp16` the browser's query vector agrees with Clio's to a cosine of 0.99999 or better. The `q8` builds, a third of the download, agree only to 0.991 to 0.995, which moved scores by up to 0.02 and reordered close results. Use `fp32` (about 130 MB for bge-small, 90 MB for MiniLM) or `fp16` (half that).
 
-A collection embedded with any other model, or through Ollama or a hosted embedding service, is refused with a message saying so. Clone it or re-index it with one of the two models above, then export the copy. Clio does not re-embed during export: that would publish vectors nobody has searched against.
+A collection embedded with any other model, or through Ollama or a hosted embedding service, is exported for **keyword search**: the passages and the manifest, no `vectors.bin`, format version 2 (which an older client refuses with a message rather than misreads), and `embedding.reason` saying why. The Export dialog says the same before you download. To search such a collection by meaning on a site, clone it or re-index it with one of the two models above and export the copy. Clio does not re-embed during export: that would publish vectors nobody has searched against.
 
 The manifest also carries a **probe**: one fixed sentence and the vector Clio's model gives it. A page embeds the sentence itself and compares. If the result disagrees, the page has the wrong model, the wrong pooling, a missing prefix or a quantised build, and it must not search by meaning. The reference client does this check and falls back to keyword matching. When the embedding model could not be loaded at export time the probe is `null`, and a page has only the model's name to go on.
+
+## On your website
+
+### The search box
+
+A whole-site export carries `clio-search.js`, a search box for any page of your site. Upload the export anywhere on the site, say `/assets/handbook/`, and add two lines where the box should be:
+
+```html
+<script type="module" src="/assets/handbook/clio-search.js"></script>
+<clio-search src="/assets/handbook/search/" label="Search the handbook"></clio-search>
+```
+
+It works from any folder of the site: paths are read relative to the page, as a link's would be. It searches by keyword as soon as the passages arrive, and loads the model the first time someone uses the box, so a page that only shows it costs a visitor nothing more. It is a standard custom element in its own shadow DOM: the site's styles do not reach inside it, and its own do not leak out.
+
+| Attribute | Default | Does |
+|---|---|---|
+| `src` | `search/` beside `clio-search.js` | The export folder. Several, separated by spaces, are searched as one box. |
+| `runtime` | beside `clio-search.js` | The folder holding `vendor/` and `models/`, so several exports can share one copy. |
+| `model` | `auto` | `auto` uses the model the export carries, else the CDN; `bundled` never the CDN; `cdn`; `off` searches by keyword and downloads no model. |
+| `load` | `focus` | `now` fetches the model with the page instead of on first use. |
+| `results` | `8` | How many results to show. |
+| `label`, `placeholder` | | The box's label and placeholder. |
+| `target` | | `_blank` opens results in a new tab (with `rel="noopener"`). |
+
+It uses the page's own font and colours. To match a design, set its custom properties: `--clio-search-accent` (links and focus), `--clio-search-muted`, `--clio-search-border`, `--clio-search-background`, `--clio-search-radius`, `--clio-search-mark` (highlighted words), `--clio-search-font`, `--clio-search-color`; or style its parts with `::part()`: `label`, `input`, `status`, `results`, `result`, `title`, `meta`, `snippet`. The status line is a polite live region, so a screen reader hears how many passages are searched, how, and when nothing matches. It sends `clio-search-ready` (`{ semantic, reason }`) and `clio-search-results` (`{ query, hits }`) events, which bubble out of the shadow DOM.
+
+### Where results link
+
+A result's title links to its source when the export gave the source a web address, and points inside it: a PDF opens at the passage's page (`#page=`), a web page scrolls to the passage's opening words and highlights them (a text fragment, `#:~:text=`, which browsers ignore when the page's text differs), and a file from a repository opens at its lines. A source's address is, in order:
+
+1. **its own address**, set in **Where results link**: any `https://` address with no user name or password in it, or a path on the site starting with `/`;
+2. **the page it came from**, for a source added by link;
+3. **the file at the commit last synced**, for a file synced from a repository on GitHub, GitLab (gitlab.com, or a host whose name starts `gitlab.`), Bitbucket, Codeberg, Gitea or Forgejo; credentials in the clone's remote are never published, and other hosts get no address of their own;
+4. **the base address for files** plus the file's name, for files the site keeps copies of (`/files/handbook/` for `/files/handbook/leave-policy.pdf`). Pasted text and agents' notes have no file and get no address this way.
+
+A source with none is shown without a link. The addresses are kept with the collection, carried through a re-index and in a bundle (an imported one keeps only addresses a browser may open), and checked again when exported, so a stored address that is not a web address is never published.
+
+### Several collections on one site
+
+The `vendor/` and `models/` folders are the same in every export made with the same model. Upload them once, and point every box at them with `runtime`; they may be on another origin, an assets host or a CDN, if it sends `Access-Control-Allow-Origin`. To search several collections in one box, list their folders in `src`. When all of them are searched by meaning with the same model, the query is embedded once and the scores are compared directly; otherwise the box searches all of them by keyword, since a keyword score and a similarity cannot be compared.
+
+### Updating, and caches
+
+Export again and replace the whole folder. The box reads `manifest.json` past every cache on each visit, then asks for the other files by their checksum (`passages.json?v=…`), so a browser cache or a CDN cannot pair this year's manifest with last year's passages. Where the page can compute checksums (any `https://` site, or `localhost`), each file is also checked against the manifest after download, once more with the cache bypassed; if the site really holds files from two exports, the box says so and turns itself off rather than show wrong results.
+
+### Web server settings
+
+A whole site carries settings for the common servers at its root; each reads only its own:
+
+| File | For | Sets |
+|---|---|---|
+| `web.config` | IIS | the types of `.bin`, `.onnx`, `.wasm`, `.json` and `.mjs`, which IIS otherwise refuses to serve (a 404.3); no caching for the manifest |
+| `.htaccess` | Apache | the same types, caching, compression |
+| `_headers` | Netlify, Cloudflare Pages | caching and the `.wasm` type; read only at the site's root, so for a folder inside a bigger site, copy its lines into the site's own file with the folder's path in front |
+
+Each has the `Access-Control-Allow-Origin` line for serving to other origins, turned off. `README.txt` beside them says all of this for whoever puts the folder on the site, including nginx.
 
 ## The reference client
 
@@ -83,7 +142,7 @@ const hits = await search('how much holiday do staff get', { k: 5 })
 // [{ score, passage: { id, document_id, page, text }, document: { id, name, pages } }]
 ```
 
-It loads the files, checks the model against the probe, embeds the query with the manifest's prefix and pooling, and ranks every passage. Ranking is a plain loop: 5,000 passages take about 3 ms. `loadIndex`, `checkModel`, `rank` and `keywordRank` are exported for a site that wants to assemble these differently.
+It loads the files, checks the model against the probe, embeds the query with the manifest's prefix and pooling, and ranks every passage. Ranking is a plain loop: 5,000 passages take about 3 ms. `passageLink(hit)` gives the address of a hit's passage ([Where results link](#where-results-link)); `search.upgrade(embedder)` switches a search that started with keywords to search by meaning; `combineSearches([...])` searches several exports as one. `loadIndex`, `checkModel`, `rank` and `keywordRank` are exported for a site that wants to assemble these differently. The search box is built on exactly these.
 
 ### A site that carries its own model
 
@@ -127,4 +186,5 @@ These settings are transformers.js's own and have changed between its major vers
 - Search is by meaning only, with a simple keyword fallback. Clio's hybrid ranking, reranker, entity boosts and table search stay in Clio.
 - Every visitor downloads the whole index and the model. Past a few tens of thousands of passages, use a server.
 - Spreadsheets are not in the export: Clio keeps them as tables, not passages.
+- A result links only where its source has an address; the export cannot know where a file is published unless someone says so.
 - A source marked as replaced by a newer version is exported like any other. Remove it from the collection first if the site should not show it.

@@ -58,6 +58,7 @@ ACTIONS: List[str] = [
     "collection.embedding",     # collection's embedding model changed (from/to model id)
     "collection.exported",      # bundle downloaded (with/without originals)
     "collection.static_export",  # exported for a public website (counts, model, who confirmed)
+    "collection.static_addresses",  # where its sources are published on the web, for a static export
     "collection.imported",      # collection created from a bundle
     "collection.guide",         # guide text changed (length/digest/scan verdict, never the text)
     "collection.metadata",      # name/description changed (length/digest only)

@@ -3,7 +3,7 @@
 import json
 import logging
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
@@ -940,6 +940,63 @@ def export_static_preview(collection_id: str, user_id: str = Depends(get_current
         if e.code == "not_found":
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+class StaticAddressesRequest(BaseModel):
+    """Where a static export's sources are published. A field left out is kept."""
+    files_base_url: Optional[str] = Field(
+        default=None, max_length=2048,
+        description="Base address of the site's copies of the files; each file's name is added to it. "
+                    "Empty clears it.")
+    documents: Optional[Dict[str, Optional[str]]] = Field(
+        default=None, description="Source id -> its own web address (empty or null clears it).")
+
+
+@router.get(
+    "/api/collections/{collection_id}/export/static/addresses",
+    summary="Where each source of a static export links to on the web",
+    tags=["collections"],
+)
+def static_export_addresses(collection_id: str, user_id: str = Depends(get_current_user_id)):
+    """For each source a static export would hold: its own address, the address
+    it will carry (`url`) and where that comes from (`from`: `own`, `link`,
+    `repository` or `files`), plus the collection's base address for files."""
+    from api.deps import require_collection_access
+    from services.static_export import StaticExportError, addresses
+
+    require_collection_access(collection_id, user_id, owner=True)
+    try:
+        return addresses(collection_id)
+    except StaticExportError as e:
+        if e.code == "not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.put(
+    "/api/collections/{collection_id}/export/static/addresses",
+    summary="Save where a static export's sources are published",
+    tags=["collections"],
+)
+def save_static_export_addresses(collection_id: str, request: StaticAddressesRequest,
+                                 user_id: str = Depends(get_current_user_id)):
+    """Owner only. Each address must be an https:// (or http://) address with no
+    user name or password, or a path on the site starting with "/". One that is
+    not refuses the whole request, so nothing is half saved."""
+    from api.deps import require_collection_access
+    from services.static_export import StaticExportError, addresses, save_addresses
+
+    require_collection_access(collection_id, user_id, owner=True)
+    fields = request.model_dump(exclude_unset=True)
+    try:
+        saved = save_addresses(collection_id,
+                               files_base_url=fields["files_base_url"] if "files_base_url" in fields else ...,
+                               documents=fields.get("documents"))
+    except StaticExportError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    audit.record("collection.static_addresses", actor=user_id, collection_id=collection_id,
+                 detail={"files_base_url": saved["files_base_url"], "documents": saved["documents"]})
+    return addresses(collection_id)
 
 
 @router.post(

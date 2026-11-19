@@ -43,6 +43,16 @@ release. Nothing here calls a network: it reads the index on disk.
 Reviewable. Passages are ordered by source name, page and position, their ids
 are Clio's chunk ids, and each sits on its own line, so a year's export
 diffs cleanly against the last one in the site's repository.
+
+An asset for a website. Each source in the manifest says where it lives on
+the web (``link``): the address someone gave it, the page a link source came
+from, the file at its commit for a source synced from a public repository, or
+the collection's base address for files. The client turns that into a link to
+the passage (a PDF's page, a web page's text, a file's lines). A collection
+whose model has no browser build is exported for keyword search (format v2,
+no vectors) rather than refused, so any collection that may be published can
+be. A whole site also carries <clio-search>, the element a host site drops
+into its own pages, and settings for the common web servers.
 """
 
 from __future__ import annotations
@@ -50,6 +60,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 import sqlite3
 import uuid
@@ -57,6 +68,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote, urlsplit
 
 import numpy as np
 
@@ -66,6 +78,10 @@ logger = logging.getLogger(__name__)
 
 FORMAT = "clio-static-search"
 VERSION = 1
+# An export with no vectors (the collection's model has no browser build) is
+# searched by keyword only. A v1 client would fail on it, so it says v2, which
+# such a client refuses with a message instead.
+KEYWORD_VERSION = 2
 
 MANIFEST_FILE = "manifest.json"
 VECTORS_FILE = "vectors.bin"
@@ -89,7 +105,11 @@ SITE_RUNTIME_IMAGE_DIR = Path("/opt/clio/static-search/vendor")
 SITE_RUNTIME_FILES = ("transformers.min.js", "ort-wasm-simd-threaded.asyncify.js",
                       "ort-wasm-simd-threaded.asyncify.wasm")
 SITE_PAGE_DIR = Path(__file__).resolve().parent.parent / "docs" / "static-search"
-SITE_PAGE_FILES = ("index.html", "clio-static-search.js")
+SITE_PAGE_FILES = ("index.html", "clio-static-search.js", "clio-search.js")
+# Settings for the common web servers (content types, caching, an optional
+# CORS line), copied to the root of a whole site. Each server reads only its own.
+SITE_HOSTING_DIR = SITE_PAGE_DIR / "hosting"
+SITE_HOSTING_FILES = ("_headers", ".htaccess", "web.config", "README.txt")
 # Besides the ONNX file, what transformers.js reads from a model folder.
 SITE_MODEL_FILES = ("config.json", "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json")
 
@@ -108,7 +128,8 @@ class StaticExportError(ValueError):
     """The export cannot be made; the message says why in plain words.
 
     ``code`` is stable: ``not_found``, ``empty``, ``local_only``,
-    ``not_public``, ``model``, ``vectors``, ``confirm``, ``option``, ``site``.
+    ``not_public``, ``model``, ``vectors``, ``confirm``, ``option``, ``site``,
+    ``address``.
     """
 
     def __init__(self, message: str, code: str = "invalid"):
@@ -129,6 +150,216 @@ def browser_model(model_name: Optional[str]) -> Optional[Dict[str, str]]:
 
 def _supported() -> str:
     return " or ".join(BROWSER_MODELS)
+
+
+# ── Where each source lives on the web ───────────────────────────────────────
+
+MAX_ADDRESS_CHARS = 2048
+_ADDRESS_SETTINGS = "static_export_addresses:{}"
+# Sources whose file a site can publish; a pasted note or an agent's note has
+# no file at an address of its own.
+_FILE_SOURCE_TYPES = (None, "", "upload", "local_reference", "folder_sync")
+_PAGE_EXTENSIONS = (".pdf",)
+_TEXT_FRAGMENT_EXTENSIONS = (".html", ".htm", ".xhtml", ".md", ".txt")
+
+
+def clean_public_url(value: Optional[str]) -> Optional[str]:
+    """An address a visitor's browser can open, or None for "none".
+
+    Accepted: an absolute http(s) URL with no user name or password in it, or
+    a path on the site itself starting with "/". Anything else (javascript:,
+    a file path, an address with spaces) is refused with StaticExportError.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    if len(text) > MAX_ADDRESS_CHARS or re.search(r"[\s\x00-\x1f\x7f<>\"\\]", text):
+        raise StaticExportError(f"{text[:80]} is not a web address a page can link to.", "address")
+    if text.startswith("/") and not text.startswith("//"):
+        return text
+    parts = urlsplit(text)
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        raise StaticExportError(
+            f"{text[:80]} is not a web address: use one that starts with https:// (or a path on the site, "
+            f"starting with /).", "address")
+    if parts.username or parts.password:
+        raise StaticExportError("A web address for a public site must not carry a user name or password.",
+                                "address")
+    return text
+
+
+def address_settings(collection_id: str) -> Dict[str, Any]:
+    """The collection's saved export addresses: ``{"files_base_url": ...}``."""
+    from services.app_database import app_db
+
+    saved = app_db.get_config(_ADDRESS_SETTINGS.format(collection_id), {}) or {}
+    return {"files_base_url": saved.get("files_base_url") if isinstance(saved, dict) else None}
+
+
+def _web_page(path: str) -> str:
+    return quote(path, safe="/-._~")
+
+
+# A repository host whose web pages show a file at a commit: (does the host
+# match, the file's page, the anchor for lines). Other hosts get no link of
+# their own; give their sources an address instead.
+_FORGES = (
+    (lambda h: h == "github.com", "{base}/blob/{commit}/{path}", "#L{start}-L{end}"),
+    (lambda h: h == "gitlab.com" or h.startswith("gitlab."), "{base}/-/blob/{commit}/{path}", "#L{start}-{end}"),
+    (lambda h: h == "bitbucket.org", "{base}/src/{commit}/{path}", "#lines-{start}:{end}"),
+    (lambda h: h == "codeberg.org" or h.startswith(("gitea.", "forgejo.")),
+     "{base}/src/commit/{commit}/{path}", "#L{start}-L{end}"),
+)
+
+
+def repository_file_link(remote: Optional[str], commit: Optional[str], path: str) -> Optional[Dict[str, str]]:
+    """The web page of one file at one commit, for the hosts in ``_FORGES``.
+
+    Takes the clone's remote as git has it (https://, ssh:// or git@host:...);
+    credentials in it are dropped, never published.
+    """
+    remote = (remote or "").strip()
+    if not remote or not commit or not re.fullmatch(r"[0-9a-fA-F]{7,64}", commit):
+        return None
+    scp = re.fullmatch(r"[\w.-]+@([\w.-]+):(.+)", remote)
+    if scp:
+        host, repo = scp.group(1), scp.group(2)
+    else:
+        parts = urlsplit(remote)
+        if parts.scheme not in ("http", "https", "ssh", "git") or not parts.hostname:
+            return None
+        host, repo = parts.hostname, parts.path
+    host = host.lower()
+    repo = re.sub(r"\.git$", "", repo.strip("/"))
+    if repo.count("/") < 1 or ".." in repo.split("/"):
+        return None
+    for matches, page, lines in _FORGES:
+        if matches(host):
+            url = page.format(base=f"https://{host}/{repo}", commit=commit, path=_web_page(path))
+            return {"url": url, "lines": lines}
+    return None
+
+
+def _repositories(collection_id: str) -> List[Dict[str, Any]]:
+    """Synced folders that are git repositories: [{"root", "remote", "commit"}]."""
+    from services.upload_service import upload_service
+
+    found = []
+    for entry in upload_service.list_sync_folders(collection_id):
+        if not entry.get("git") or not entry.get("git_head"):
+            continue
+        remote = entry.get("git_url")
+        root = Path(entry["path"])
+        if not remote:
+            # A checkout indexed in place: its own origin, read from disk.
+            try:
+                from services import git_source
+
+                remote = git_source._run(["config", "--get", "remote.origin.url"], cwd=root,
+                                         safe_dir=root).strip()
+            except Exception:  # noqa: BLE001 - no origin, no link
+                remote = None
+        if remote:
+            found.append({"root": root, "remote": remote, "commit": entry["git_head"]})
+    return found
+
+
+def _repository_link(doc: Dict[str, Any], repositories: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+    if doc.get("source_type") != "folder_sync" or not doc.get("source_path"):
+        return None
+    try:
+        path = Path(doc["source_path"]).resolve()
+    except (OSError, ValueError):
+        return None
+    for repo in repositories:
+        try:
+            relative = path.relative_to(repo["root"].resolve())
+        except (OSError, ValueError):
+            continue
+        return repository_file_link(repo["remote"], repo["commit"], relative.as_posix())
+    return None
+
+
+def document_link(doc: Dict[str, Any], files_base_url: Optional[str],
+                  repositories: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Where a visitor goes for this source, and how to point inside it.
+
+    In order: the address someone gave the source; the page a link source was
+    fetched from; the file at its commit, for a file synced from a public
+    repository; the collection's base address for files plus the file name.
+    ``page`` and ``lines`` are anchors with {page}, {start} and {end} to fill
+    in; ``text`` says the page can take a text fragment (#:~:text=).
+    """
+    name = doc.get("filename") or ""
+    extension = Path(name).suffix.lower()
+    url, came_from, lines = None, None, None
+    own = doc.get("public_url")
+    try:
+        own = clean_public_url(own)
+    except StaticExportError:
+        own = None  # an address that was never checked (an old bundle) is not published
+    if own:
+        url, came_from = own, "own"
+    elif doc.get("source_type") == "url" and str(doc.get("source_path") or "").lower().startswith(("http://", "https://")):
+        url, came_from = doc["source_path"], "link"
+    else:
+        repo = _repository_link(doc, repositories)
+        if repo:
+            url, came_from, lines = repo["url"], "repository", repo["lines"]
+        elif files_base_url and doc.get("source_type") in _FILE_SOURCE_TYPES:
+            url, came_from = files_base_url.rstrip("/") + "/" + _web_page(name), "files"
+    if not url:
+        return None
+    link: Dict[str, Any] = {"url": url, "from": came_from}
+    if lines:
+        link["lines"] = lines
+    elif extension in _PAGE_EXTENSIONS:
+        link["page"] = "#page={page}"
+    elif extension in _TEXT_FRAGMENT_EXTENSIONS or came_from == "link":
+        link["text"] = True
+    return link
+
+
+def addresses(collection_id: str) -> Dict[str, Any]:
+    """Every source that would be exported, with the address it would carry."""
+    survey = _survey(collection_id)
+    survey["conn"].close()
+    settings_ = address_settings(collection_id)
+    repositories = _repositories(collection_id)
+    rows = []
+    for d in survey["documents"]:
+        link = document_link(d, settings_["files_base_url"], repositories)
+        rows.append({"id": d["document_id"], "name": d["filename"], "source_type": d.get("source_type") or "upload",
+                     "own_url": d.get("public_url"), "url": (link or {}).get("url"),
+                     "from": (link or {}).get("from")})
+    return {"files_base_url": settings_["files_base_url"], "documents": rows,
+            "with_address": sum(1 for r in rows if r["url"]), "total": len(rows)}
+
+
+def save_addresses(collection_id: str, *, files_base_url: Any = ...,
+                   documents: Optional[Dict[str, Optional[str]]] = None) -> Dict[str, Any]:
+    """Save the base address for files and any source's own address.
+
+    ``files_base_url`` left out keeps the saved one; None or "" clears it.
+    ``documents`` maps a source's id to its address (None or "" clears it).
+    Every address is checked first, so a refusal saves nothing.
+    """
+    from services.app_database import app_db
+    from services.indexer_manager import indexer_manager
+
+    base = clean_public_url(files_base_url) if files_base_url is not ... else ...
+    cleaned = {doc_id: clean_public_url(url) for doc_id, url in (documents or {}).items()}
+    if cleaned:
+        store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store
+        unknown = [doc_id for doc_id in cleaned if not store.get_document_info(doc_id)]
+        if unknown:
+            raise StaticExportError(f"This collection has no source {unknown[0]}.", "address")
+        for doc_id, url in cleaned.items():
+            store.set_document_public_url(doc_id, url)
+    if base is not ...:
+        app_db.set_config(_ADDRESS_SETTINGS.format(collection_id), {"files_base_url": base})
+    return {"files_base_url": base if base is not ... else address_settings(collection_id)["files_base_url"],
+            "documents": len(cleaned)}
 
 
 # ── What a ready-to-serve site needs ─────────────────────────────────────────
@@ -187,10 +418,17 @@ def site_model(clio_model: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _page_bytes() -> int:
+    files = [SITE_PAGE_DIR / n for n in SITE_PAGE_FILES] + [SITE_HOSTING_DIR / n for n in SITE_HOSTING_FILES]
+    return sum(p.stat().st_size for p in files if p.is_file())
+
+
 def _site_offer(browser: Optional[Dict[str, str]]) -> Dict[str, Any]:
     """Whether a ready-to-serve site can be exported here, and its extra size."""
     if browser is None:
-        return {"available": False, "reason": None}
+        # Searched by keyword: the site is the page and the client, no model.
+        return {"available": True, "reason": None, "model": None, "model_bytes": 0, "runtime_bytes": 0,
+                "bytes": _page_bytes()}
     runtime, model = site_runtime(), site_model(browser["clio_model"])
     if runtime is None:
         return {"available": False, "reason": (
@@ -281,17 +519,20 @@ def _survey(collection_id: str) -> Dict[str, Any]:
 
         info = _index_info(conn)
         model = describe_model(info, kept)
-        browser = browser_model(model["model"]) if model["provider"] == "local" else None
+        browser = browser_model(model["model"]) if model["provider"] == "local" and model["recorded"] else None
+        # No browser build: the site searches by keyword instead of refusing.
+        keywords_reason = None
         if not model["recorded"]:
-            blockers.append({"code": "model", "message": (
-                "This collection was indexed before Clio recorded its embedding model, so nothing can say "
-                "which model a website must use. Re-index it, then export.")})
+            keywords_reason = (
+                "This collection was indexed before Clio recorded its embedding model, so a website cannot "
+                "embed queries the same way: it will search by keyword. To search by meaning, re-index it, "
+                "then export.")
         elif browser is None:
             where = "" if model["provider"] == "local" else f" ({model['provider']})"
-            blockers.append({"code": "model", "message": (
+            keywords_reason = (
                 f"This collection was embedded with {model['model'] or 'an unknown model'}{where}, which has no "
-                f"browser build Clio has checked. A website has to embed each query with the same model, so "
-                f"clone or re-index the collection with {_supported()} and export that.")})
+                f"browser build Clio has checked, so the website will search by keyword. To search by meaning "
+                f"there, clone or re-index the collection with {_supported()} and export that.")
 
         marks = ",".join("?" * len(kept))
         ids = [d["document_id"] for d in kept]
@@ -308,7 +549,7 @@ def _survey(collection_id: str) -> Dict[str, Any]:
         "collection": collection, "indexes_dir": indexes_dir, "conn": conn,
         "blockers": blockers, "sensitivity": sensitivity,
         "documents": kept, "held": len(held), "not_public": len(not_public),
-        "info": info, "model": model, "browser": browser,
+        "info": info, "model": model, "browser": browser, "keywords_reason": keywords_reason,
         "passages": int(passages), "text_bytes": int(text_bytes),
     }
 
@@ -317,8 +558,12 @@ def preview(collection_id: str, passages_per_file: int = DEFAULT_PASSAGES_PER_FI
     """What a static export would hold, and what stands in its way."""
     survey = _survey(collection_id)
     survey["conn"].close()
-    dimension = int(survey["info"].get("dimension") or 0)
+    semantic = survey["browser"] is not None
+    dimension = int(survey["info"].get("dimension") or 0) if semantic else 0
     passages = survey["passages"]
+    settings_ = address_settings(collection_id)
+    repositories = _repositories(collection_id)
+    linked = sum(1 for d in survey["documents"] if document_link(d, settings_["files_base_url"], repositories))
     return {
         "name": survey["collection"].get("name"),
         "ready": not survey["blockers"],
@@ -330,6 +575,12 @@ def preview(collection_id: str, passages_per_file: int = DEFAULT_PASSAGES_PER_FI
         "not_public_excluded": survey["not_public"],
         "embedding": survey["model"],
         "browser_model": (survey["browser"] or {}).get("model"),
+        # "meaning", or "keywords" when the model has no browser build (why in keywords_reason).
+        "search": "meaning" if semantic else "keywords",
+        "keywords_reason": survey["keywords_reason"],
+        # Where results link: how many sources carry a web address.
+        "addresses": {"with_address": linked, "total": len(survey["documents"]),
+                      "files_base_url": settings_["files_base_url"]},
         # One byte per dimension per passage; the text plus about 90 bytes of
         # JSON around each passage.
         "vectors_bytes": passages * dimension,
@@ -424,13 +675,20 @@ def clear_previous(out_dir: Path) -> None:
 def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = False,
                  quantization: str = "int8",
                  passages_per_file: int = DEFAULT_PASSAGES_PER_FILE,
-                 site: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+                 site: bool = False,
+                 files_base_url: Any = ...) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Write manifest.json, the passage file(s) and vectors.bin into ``out_dir``.
 
     With ``site`` they go into ``out_dir/search`` instead, beside the
-    reference page, the browser runtime under vendor/ and the model under
-    models/: a folder any static web server can serve as it is, which loads
-    nothing from anywhere else.
+    reference page, the <clio-search> element, web server settings, the
+    browser runtime under vendor/ and the model under models/: a folder any
+    static web server can serve as it is, which loads nothing from anywhere
+    else.
+
+    A collection whose model has no browser build is written for keyword
+    search: no vectors.bin, and a manifest of format v2 saying why.
+    ``files_base_url`` overrides the saved base address for files for this
+    export only (see address_settings).
 
     Returns (the manifest, what the audit trail should keep). Raises
     StaticExportError when anything stands in the way; nothing is written in
@@ -464,22 +722,36 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                 "passage is published to every visitor of the site.", "confirm")
 
         collection, model, browser = survey["collection"], survey["model"], survey["browser"]
+        semantic = browser is not None
         documents = survey["documents"]
+        base = (clean_public_url(files_base_url) if files_base_url is not ...
+                else address_settings(collection_id)["files_base_url"])
+        repositories = _repositories(collection_id)
+        links = {d["document_id"]: document_link(d, base, repositories) for d in documents}
+        titles = _library_titles(collection_id, [d["document_id"] for d in documents])
         runtime = model_files = None
-        if site:
+        if site and semantic:
             runtime, model_files = site_runtime(), site_model(browser["clio_model"])
             if runtime is None or model_files is None:
                 raise StaticExportError(_site_offer(browser)["reason"], "site")
         data_dir = out_dir / SITE_DATA_DIR if site else out_dir
-        rows_by_id, matrix = _read_vectors(survey["indexes_dir"] / "faiss.index")
-        dimension = int(matrix.shape[1])
-        if survey["info"].get("dimension") and int(survey["info"]["dimension"]) != dimension:
-            raise StaticExportError("The recorded model does not match the index dimension. Re-index the "
-                                    "collection, then export.", "vectors")
+        rows_by_id: Dict[int, int] = {}
+        matrix = np.zeros((0, 0), dtype=np.float32)
+        dimension = 0
+        if semantic:
+            rows_by_id, matrix = _read_vectors(survey["indexes_dir"] / "faiss.index")
+            dimension = int(matrix.shape[1])
+            if survey["info"].get("dimension") and int(survey["info"]["dimension"]) != dimension:
+                raise StaticExportError("The recorded model does not match the index dimension. Re-index the "
+                                        "collection, then export.", "vectors")
 
+        # A file read from a repository keeps its line range, which a link to
+        # the file's page can point at.
+        chunk_columns = {r[1] for r in conn.execute("PRAGMA table_info(chunks)")}
+        lines_sql = ", c.line_start, c.line_end" if {"line_start", "line_end"} <= chunk_columns else ""
         marks = ",".join("?" * len(documents))
         cursor = conn.execute(
-            f"SELECT c.id, c.chunk_id, c.document_id, c.page_number, c.text FROM chunks c "
+            f"SELECT c.id, c.chunk_id, c.document_id, c.page_number, c.text{lines_sql} FROM chunks c "
             f"JOIN documents d ON d.document_id = c.document_id WHERE c.document_id IN ({marks}) "
             f"ORDER BY d.filename, c.document_id, c.page_number, c.chunk_index, c.chunk_id",
             [d["document_id"] for d in documents])
@@ -488,6 +760,8 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
         file_count = max(1, -(-total // passages_per_file))
         data_dir.mkdir(parents=True, exist_ok=True)
         order: List[int] = []
+        exported = 0
+        with_lines = False
         missing = 0
         per_document: Dict[str, int] = {}
         passage_files: List[Dict[str, Any]] = []
@@ -506,14 +780,19 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
 
                     put(b"[\n")
                     for row in cursor.fetchmany(passages_per_file):
-                        if row["id"] not in rows_by_id:
-                            missing += 1
-                            continue
-                        order.append(rows_by_id[row["id"]])
+                        if semantic:
+                            if row["id"] not in rows_by_id:
+                                missing += 1
+                                continue
+                            order.append(rows_by_id[row["id"]])
+                        exported += 1
                         per_document[row["document_id"]] = per_document.get(row["document_id"], 0) + 1
-                        line = json.dumps({"id": row["chunk_id"], "document_id": row["document_id"],
-                                           "page": row["page_number"], "text": row["text"]},
-                                          ensure_ascii=False, separators=(",", ":"))
+                        entry = {"id": row["chunk_id"], "document_id": row["document_id"],
+                                 "page": row["page_number"], "text": row["text"]}
+                        if lines_sql and row["line_start"] is not None:
+                            entry["lines"] = [row["line_start"], row["line_end"] or row["line_start"]]
+                            with_lines = True
+                        line = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
                         put((",\n" if count else "") .encode() + line.encode("utf-8"))
                         count += 1
                     put(b"\n]\n")
@@ -523,69 +802,127 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                     f"{missing} passage{' has' if missing == 1 else 's have'} no vector yet. Open the collection "
                     "in Clio so it can finish embedding, then export.", "vectors")
 
-            data, scale = quantize(matrix[np.asarray(order, dtype=np.int64)] if order
-                                   else np.zeros((0, dimension), dtype=np.float32), quantization)
-            (data_dir / VECTORS_FILE).write_bytes(data)
-            written.append(data_dir / VECTORS_FILE)
-
-            from services.embedder import retrieval_prompts
-
-            query_prefix, _ = retrieval_prompts(browser["clio_model"])
-            browser_entry: Dict[str, Any] = {"library": "@huggingface/transformers", "model": browser["model"],
-                                             "dtype": "fp32", "also_matches": ["fp16"]}
-            if site:
-                # The page loads this folder (models/<model>/) and the runtime
-                # beside it, not the hub build named above.
-                browser_entry["bundled"] = {
-                    "model": browser["clio_model"], "source": model_files["source"],
-                    "license": model_files["license"],
-                    "sha256": _sha256_file(model_files["files"]["onnx/model.onnx"]),
-                    "runtime": runtime["info"].get("packages", {}),
-                }
-            manifest = {
-                "format": FORMAT,
-                "version": VERSION,
-                "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "clio_version": _clio_version(),
-                "collection": {"name": collection.get("name"), "description": collection.get("description") or ""},
-                "embedding": {
-                    "model": browser["clio_model"],
-                    "signature": model["signature"],
-                    "dimension": dimension,
-                    "pooling": browser["pooling"],
-                    "normalization": "l2",
-                    "metric": "inner_product",
-                    "query_prefix": query_prefix or "",
-                    # What a page loads to embed a query the same way.
-                    "browser": browser_entry,
-                    "probe": _probe(browser["clio_model"], dimension),
-                },
-                "vectors": {
+            if semantic:
+                data, scale = quantize(matrix[np.asarray(order, dtype=np.int64)] if order
+                                       else np.zeros((0, dimension), dtype=np.float32), quantization)
+                (data_dir / VECTORS_FILE).write_bytes(data)
+                written.append(data_dir / VECTORS_FILE)
+                embedding, vectors = _semantic_entries(browser, model, dimension, site, runtime, model_files), {
                     "file": VECTORS_FILE, "count": len(order), "dimension": dimension,
                     "quantization": quantization, "dtype": "int8" if quantization == "int8" else "float32le",
                     "scale": scale, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-                },
-                "passages": {"count": len(order), "fields": ["id", "document_id", "page", "text"],
+                }
+            else:
+                # A previous export's vectors would no longer match these passages.
+                (data_dir / VECTORS_FILE).unlink(missing_ok=True)
+                embedding = {"model": model["model"], "signature": model.get("signature"), "browser": None,
+                             "probe": None, "search": "keywords", "reason": survey["keywords_reason"]}
+                vectors = None
+            manifest = {
+                "format": FORMAT,
+                "version": VERSION if semantic else KEYWORD_VERSION,
+                "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "clio_version": _clio_version(),
+                "collection": {"name": collection.get("name"), "description": collection.get("description") or ""},
+                "embedding": embedding,
+                "vectors": vectors,
+                "passages": {"count": exported,
+                             "fields": ["id", "document_id", "page", "text"] + (["lines"] if with_lines else []),
                              "files": passage_files},
-                "documents": [{"id": d["document_id"], "name": d["filename"], "pages": d.get("num_pages"),
-                               "passages": per_document.get(d["document_id"], 0)} for d in documents],
+                "documents": [_document_entry(d, per_document.get(d["document_id"], 0), links[d["document_id"]],
+                                              titles.get(d["document_id"]))
+                              for d in documents],
             }
             (data_dir / MANIFEST_FILE).write_text(_manifest_text(manifest), encoding="utf-8", newline="\n")
             written.append(data_dir / MANIFEST_FILE)
             if site:
-                written += _write_site(out_dir, runtime, browser["clio_model"], model_files)
+                written += _write_site(out_dir, runtime, browser["clio_model"] if semantic else None, model_files)
         except Exception:
             for path in written:
                 path.unlink(missing_ok=True)
             raise
         return manifest, {
-            "documents": len(documents), "passages": len(order), "model": browser["clio_model"],
-            "quantization": quantization, "vectors_sha256": manifest["vectors"]["sha256"],
+            "documents": len(documents), "passages": exported, "model": model["model"],
+            "search": "meaning" if semantic else "keywords",
+            "quantization": quantization if semantic else None,
+            "vectors_sha256": vectors["sha256"] if vectors else None,
+            "linked_documents": sum(1 for link in links.values() if link),
             "held_excluded": survey["held"], "not_public_excluded": survey["not_public"],
             "confirmed_public": True, "site": site,
         }
     finally:
         conn.close()
+
+
+def _semantic_entries(browser, model, dimension, site, runtime, model_files) -> Dict[str, Any]:
+    """The manifest's ``embedding`` for an export searched by meaning."""
+    from services.embedder import retrieval_prompts
+
+    query_prefix, _ = retrieval_prompts(browser["clio_model"])
+    browser_entry: Dict[str, Any] = {"library": "@huggingface/transformers", "model": browser["model"],
+                                     "dtype": "fp32", "also_matches": ["fp16"]}
+    if site:
+        # The page loads this folder (models/<model>/) and the runtime
+        # beside it, not the hub build named above.
+        browser_entry["bundled"] = {
+            "model": browser["clio_model"], "source": model_files["source"],
+            "license": model_files["license"],
+            "sha256": _sha256_file(model_files["files"]["onnx/model.onnx"]),
+            "runtime": runtime["info"].get("packages", {}),
+        }
+    return {
+        "model": browser["clio_model"],
+        "signature": model["signature"],
+        "dimension": dimension,
+        "pooling": browser["pooling"],
+        "normalization": "l2",
+        "metric": "inner_product",
+        "query_prefix": query_prefix or "",
+        "search": "meaning",
+        # What a page loads to embed a query the same way.
+        "browser": browser_entry,
+        "probe": _probe(browser["clio_model"], dimension),
+    }
+
+
+def _title(filename: str) -> str:
+    """A readable name from a file name: no extension, and in a name with no
+    spaces (leave-policy_2024), hyphens and underscores read as spaces."""
+    stem = Path(filename or "").stem
+    if " " not in stem:
+        stem = re.sub(r"[-_]+", " ", stem)
+    return re.sub(r"\s+", " ", stem).strip() or filename
+
+
+def _library_titles(collection_id: str, document_ids: List[str]) -> Dict[str, str]:
+    """Titles the Library holds for these sources, where it is sure of them:
+    one marked "needs checking" is left out, and the file name is shown."""
+    from services.collection_service import collection_service
+    from services.research import library
+    from services.research.store import ResearchStore
+
+    try:
+        # The store itself, not an indexer: the export never opens one.
+        store = ResearchStore(collection_service.get_indexes_path(collection_id) / "metadata.db")
+        papers = store.get_papers(document_ids)
+    except Exception as e:  # noqa: BLE001 - a nicer title, never a reason to fail
+        logger.info(f"Static export: no Library titles for {collection_id}: {e}")
+        return {}
+    titles = {}
+    for doc_id, paper in (papers or {}).items():
+        title = str((paper or {}).get("title") or "").strip()
+        if title and "title" not in library.needs_checking(paper):
+            titles[doc_id] = title
+    return titles
+
+
+def _document_entry(doc: Dict[str, Any], passages: int, link: Optional[Dict[str, Any]],
+                    title: Optional[str] = None) -> Dict[str, Any]:
+    entry = {"id": doc["document_id"], "name": doc["filename"], "title": title or _title(doc["filename"]),
+             "pages": doc.get("num_pages"), "passages": passages}
+    if link:
+        entry["link"] = link
+    return entry
 
 
 def _sha256_file(path: Path) -> str:
@@ -596,9 +933,11 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _write_site(out_dir: Path, runtime: Dict[str, Any], clio_model: str,
-                model_files: Dict[str, Any]) -> List[Path]:
-    """Put the page, the runtime and the model beside search/. Returns what it wrote."""
+def _write_site(out_dir: Path, runtime: Optional[Dict[str, Any]], clio_model: Optional[str],
+                model_files: Optional[Dict[str, Any]]) -> List[Path]:
+    """Put the page, the element, the web server settings, the runtime and the
+    model beside search/. A keyword-only site has no runtime or model.
+    Returns what it wrote."""
     written: List[Path] = []
 
     def put(source: Path, target: Path) -> None:
@@ -608,6 +947,10 @@ def _write_site(out_dir: Path, runtime: Dict[str, Any], clio_model: str,
 
     for name in SITE_PAGE_FILES:
         put(SITE_PAGE_DIR / name, out_dir / name)
+    for name in SITE_HOSTING_FILES:
+        put(SITE_HOSTING_DIR / name, out_dir / name)
+    if runtime is None or clio_model is None or model_files is None:
+        return written
     for name in runtime["files"]:
         put(runtime["dir"] / name, out_dir / "vendor" / name)
     model_dir = out_dir / "models" / Path(*clio_model.split("/"))
@@ -637,7 +980,8 @@ def export_zip(collection_id: str, **options: Any) -> Tuple[Path, str, Dict[str,
                 for path in sorted(p for p in work.rglob("*") if p.is_file()):
                     zf.write(path, path.relative_to(work).as_posix())
             else:
-                for name in [MANIFEST_FILE, *[f["file"] for f in manifest["passages"]["files"]], VECTORS_FILE]:
+                names = [MANIFEST_FILE, *[f["file"] for f in manifest["passages"]["files"]]]
+                for name in names + ([VECTORS_FILE] if manifest["vectors"] else []):
                     zf.write(work / name, name)
     finally:
         shutil.rmtree(work, ignore_errors=True)

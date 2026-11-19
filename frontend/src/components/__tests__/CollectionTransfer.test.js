@@ -135,6 +135,67 @@ describe('Export dialog, for a website', () => {
     expect(wrapper.get('a.btn-primary').classes()).toContain('btn-disabled')
   })
 
+  it('exports a collection with no browser model for keyword search, and says why', async () => {
+    const wrapper = await openSite({
+      ...ready, browser_model: null, vectors_bytes: 0, search: 'keywords',
+      keywords_reason: 'This collection was embedded with nomic-embed-text (ollama), so the website will search by keyword.',
+      site: { available: true, model: null, bytes: 30 * 1024 },
+    })
+    expect(wrapper.get('[data-testid="keyword-search"]').text()).toContain('will search by keyword')
+    expect(wrapper.text()).toContain('As a site ready to serve')
+    expect(wrapper.text()).not.toContain('Include the model')
+    await wrapper.get('input[name="confirm-public"]').setValue(true)
+    expect(wrapper.get('a.btn-primary').attributes('href')).toBe('/api/collections/c1/export/static?confirm_public=true&site=true')
+  })
+
+  it('reads where results link when asked, and saves only what changed', async () => {
+    const addresses = {
+      files_base_url: null, with_address: 1, total: 2,
+      documents: [
+        { id: 'a', name: 'leave.pdf', source_type: 'upload', own_url: null, url: null, from: null },
+        { id: 'b', name: 'expenses page', source_type: 'url', own_url: null, url: 'https://example.org/expenses', from: 'link' },
+      ],
+    }
+    const wrapper = await openSite({ ...ready, addresses: { with_address: 1, total: 2, files_base_url: null } })
+    http.get.mockImplementation((url) => Promise.resolve({ data: url.endsWith('/addresses') ? addresses : ready }))
+    const details = wrapper.get('[data-testid="result-links"]')
+    expect(details.text()).toContain('1 of 2 sources link to a page')
+    details.element.open = true
+    await details.trigger('toggle')
+    await flushPromises()
+    expect(http.get).toHaveBeenCalledWith('/api/collections/c1/export/static/addresses')
+    // A link source shows where it already goes.
+    expect(wrapper.get('input[aria-label="Address of expenses page"]').attributes('placeholder')).toBe('https://example.org/expenses')
+
+    const save = wrapper.findAll('button').find((b) => b.text() === 'Save addresses')
+    expect(save.attributes('disabled')).toBeDefined()
+    await wrapper.get('input[name="files-base-url"]').setValue(' /files/handbook/ ')
+    http.put = vi.fn(() => Promise.resolve({ data: { ...addresses, files_base_url: '/files/handbook/', with_address: 2 } }))
+    await save.trigger('click')
+    await flushPromises()
+    expect(http.put).toHaveBeenCalledWith('/api/collections/c1/export/static/addresses',
+      { files_base_url: '/files/handbook/', documents: {} })
+    expect(details.text()).toContain('2 of 2 sources link to a page')
+    expect(wrapper.text()).toContain('Saved')
+  })
+
+  it('shows why an address was refused', async () => {
+    const addresses = { files_base_url: null, with_address: 0, total: 1,
+      documents: [{ id: 'a', name: 'leave.pdf', source_type: 'upload', own_url: null, url: null, from: null }] }
+    const wrapper = await openSite(ready)
+    http.get.mockImplementation((url) => Promise.resolve({ data: url.endsWith('/addresses') ? addresses : ready }))
+    const details = wrapper.get('[data-testid="result-links"]')
+    details.element.open = true
+    await details.trigger('toggle')
+    await flushPromises()
+    await wrapper.get('input[aria-label="Address of leave.pdf"]').setValue('javascript:alert(1)')
+    http.put = vi.fn(() => Promise.reject(new Error('javascript:alert(1) is not a web address')))
+    await wrapper.findAll('button').find((b) => b.text() === 'Save addresses').trigger('click')
+    await flushPromises()
+    expect(http.put.mock.calls[0][1]).toEqual({ files_base_url: null, documents: { a: 'javascript:alert(1)' } })
+    expect(details.get('[role="alert"]').text()).toContain('is not a web address')
+  })
+
   it('returns to the bundle export, and forgets a confirmation when reopened', async () => {
     const wrapper = await openSite(ready)
     await wrapper.get('input[type="checkbox"]').setValue(true)

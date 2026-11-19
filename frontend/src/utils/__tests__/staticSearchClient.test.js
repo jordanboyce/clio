@@ -3,7 +3,8 @@
 // tested here with the rest of the frontend.
 import { describe, expect, it } from 'vitest'
 import {
-  ModelMismatch, buildIndex, checkModel, createSearch, keywordRank, localTransformers, rank,
+  ModelMismatch, buildIndex, checkModel, combineSearches, createSearch, keywordRank, localTransformers,
+  passageLink, rank,
 } from '../../../../docs/static-search/clio-static-search.js'
 
 const passages = [
@@ -37,9 +38,10 @@ const embedder = (vectors, model = 'Xenova/bge-small-en-v1.5') => ({
   embed: async (text) => vectors[text] || [0, 0, 0, 1],
 })
 
-function site(files) {
-  return async (url) => {
-    const name = url.split('/').pop()
+function site(files, seen = []) {
+  return async (url, init) => {
+    seen.push({ url, init })
+    const name = url.split('?')[0].split('/').pop()
     if (!(name in files)) return { ok: false, status: 404 }
     return { ok: true, json: async () => files[name], arrayBuffer: async () => files[name] }
   }
@@ -140,7 +142,7 @@ describe('keyword fallback', () => {
 
 describe('a site that carries its own model', () => {
   it('loads transformers.js from vendor/ and models only from models/', async () => {
-    const base = 'https://example.org/handbook/'
+    const base = new URL('/handbook/', globalThis.location.href).href
     const loaded = []
     const library = await localTransformers({
       base,
@@ -161,5 +163,107 @@ describe('a site that carries its own model', () => {
       mjs: base + 'vendor/ort-wasm-simd-threaded.asyncify.js',
       wasm: base + 'vendor/ort-wasm-simd-threaded.asyncify.wasm',
     })
+  })
+})
+
+describe('an export used on a website', () => {
+  const linked = (link, passage = passages[0]) => ({ passage, document: { id: 'a', name: 'a', link } })
+
+  it('links a PDF passage to its page, a repository file to its lines, a web page to its words', () => {
+    expect(passageLink(linked({ url: 'https://example.org/a.pdf', page: '#page={page}' }, { ...passages[1] })))
+      .toBe('https://example.org/a.pdf#page=2')
+    expect(passageLink(linked({ url: 'https://github.com/o/r/blob/abc/a.md', lines: '#L{start}-L{end}' },
+      { ...passages[0], lines: [3, 9] }))).toBe('https://github.com/o/r/blob/abc/a.md#L3-L9')
+    expect(passageLink(linked({ url: 'https://example.org/leave#rules', text: true },
+      { ...passages[0], text: 'Staff accrue 25 days, of holiday - a year & more words beyond the eighth' })))
+      .toBe('https://example.org/leave#rules:~:text=Staff%20accrue%2025%20days%2C%20of%20holiday%20%2D%20a')
+    expect(passageLink(linked({ url: '/files/a.txt' }))).toBe('/files/a.txt')
+    expect(passageLink(linked(undefined))).toBeNull()
+  })
+
+  it('reads the manifest past any cache and asks for each file by its checksum', async () => {
+    const seen = []
+    const m = manifest()
+    m.vectors.sha256 = 'a'.repeat(64)
+    await createSearch('https://example.org/search/', {
+      fetch: site({ ...files(), 'manifest.json': m }, seen), verify: false,
+    })
+    expect(seen[0]).toEqual({ url: 'https://example.org/search/manifest.json', init: { cache: 'no-store' } })
+    expect(seen.map((s) => s.url)).toContain(`https://example.org/search/vectors.bin?v=${'a'.repeat(16)}`)
+  })
+
+  it('says so when the site holds files from two different exports', async () => {
+    const m = manifest()
+    const text = new TextEncoder().encode(JSON.stringify(passages.slice(2)))
+    const digest = async (bytes) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
+      (b) => b.toString(16).padStart(2, '0')).join('')
+    m.passages.files[1].sha256 = await digest(text)
+    const bytes = { 'passages-0002.json': text.buffer }
+    const fetchFn = async (url, init) => {
+      const name = url.split('?')[0].split('/').pop()
+      if (name === 'passages-0002.json') return { ok: true, arrayBuffer: async () => bytes[name] }
+      return site({ ...files(), 'manifest.json': m })(url, init)
+    }
+    const search = await createSearch('https://example.org/search/', { fetch: fetchFn })
+    expect(search.index.passages).toHaveLength(3)
+
+    bytes['passages-0002.json'] = new TextEncoder().encode('[]').buffer   // last year's file, still cached
+    await expect(createSearch('https://example.org/search/', { fetch: fetchFn }))
+      .rejects.toThrow('files from two different exports')
+  })
+
+  it('searches an export with no vectors by keyword, and says why', async () => {
+    const m = { ...manifest(), version: 2, vectors: null,
+      embedding: { model: 'nomic-embed-text', browser: null, probe: null, reason: 'No browser build.' } }
+    const search = await createSearch('https://example.org/search/', {
+      fetch: site({ 'manifest.json': m, 'passages-0001.json': passages.slice(0, 2), 'passages-0002.json': passages.slice(2) }),
+      embedder: embedder({}),
+    })
+    expect(search.semantic).toBe(false)
+    expect(search.canUseMeaning).toBe(false)
+    expect(search.reason).toBe('No browser build.')
+    expect((await search('expenses'))[0].passage.id).toBe('b_p1_c0')
+  })
+
+  it('starts with keywords and switches to meaning once the model is there', async () => {
+    const search = await createSearch('https://example.org/search/', { fetch: site(files()) })
+    expect(search.semantic).toBe(false)
+    expect((await search('reimbursed'))[0].passage.id).toBe('b_p1_c0')
+    expect(await search.upgrade(embedder({ probe: [0, 0, 0, 1], money: [0, 0, 1, 0] }))).toBe(true)
+    expect(search.semantic).toBe(true)
+    expect((await search('money', { k: 1 }))[0].passage.id).toBe('b_p1_c0')
+  })
+
+  it('searches several exports as one, embedding the query once when they share a model', async () => {
+    const calls = []
+    const model = { model: 'Xenova/bge-small-en-v1.5',
+      embed: async (text) => { calls.push(text); return text === 'probe' ? [0, 0, 0, 1] : [0, 0, 1, 0] } }
+    const one = await createSearch('https://a.example/search/', { fetch: site(files()), embedder: model })
+    const two = await createSearch('https://b.example/search/', { fetch: site(files()), embedder: model })
+    const both = combineSearches([one, two])
+    expect(both.semantic).toBe(true)
+    calls.length = 0
+    const hits = await both('money', { k: 2 })
+    expect(calls).toEqual(['money'])
+    expect(hits.map((h) => h.passage.id)).toEqual(['b_p1_c0', 'b_p1_c0'])
+    expect(new Set(hits.map((h) => h.index))).toEqual(new Set([one.index, two.index]))
+
+    const keywordOnly = await createSearch('https://c.example/search/', { fetch: site(files()) })
+    const mixed = combineSearches([one, keywordOnly])
+    expect(mixed.semantic).toBe(false)
+    expect((await mixed('reimbursed')).every((h) => h.passage.id === 'b_p1_c0')).toBe(true)
+  })
+
+  it('reads the model from another origin as a host of its own', async () => {
+    const base = 'https://assets.example.net/clio-runtime/'
+    const library = await localTransformers({
+      base,
+      load: async () => ({ env: { backends: { onnx: { wasm: {} } } }, pipeline: () => 'pipeline' }),
+    })
+    expect(library.env.allowLocalModels).toBe(false)
+    expect(library.env.allowRemoteModels).toBe(true)
+    expect(library.env.remoteHost).toBe(base + 'models/')
+    expect(library.env.remotePathTemplate).toBe('{model}/')
+    expect(library.env.backends.onnx.wasm.wasmPaths.wasm).toBe(base + 'vendor/ort-wasm-simd-threaded.asyncify.wasm')
   })
 })

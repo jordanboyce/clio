@@ -896,6 +896,14 @@ def _settle_source_types(conn: sqlite3.Connection) -> None:
         "OR lower(COALESCE(source_path, '')) LIKE 'https://%')))",
         _PORTABLE_SOURCE_TYPES,
     )
+    # Where a source is published travels too, but only as an address a
+    # browser may open: a bundle can come from anywhere.
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(documents)")}
+    if "public_url" in columns:
+        conn.execute(
+            "UPDATE documents SET public_url = NULL WHERE public_url IS NOT NULL AND NOT ("
+            "lower(public_url) LIKE 'http://%' OR lower(public_url) LIKE 'https://%' "
+            "OR (public_url LIKE '/%' AND public_url NOT LIKE '//%'))")
 
 
 def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,

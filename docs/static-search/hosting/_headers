@@ -1,0 +1,28 @@
+# Clio static search: settings for Netlify and Cloudflare Pages.
+# Other web servers ignore this file (see README.txt for nginx, Apache and IIS).
+# These hosts read _headers only at the site's root: when this folder is part
+# of a bigger site, copy these lines into the site's own _headers and put the
+# folder's path in front of each path (/assets/handbook/search/manifest.json).
+
+# The manifest names every other file with its checksum, so it is read
+# fresh on each visit; the files it names are fetched by checksum and may
+# be cached.
+/search/manifest.json
+  Cache-Control: no-cache
+
+/search/*
+  Cache-Control: public, max-age=86400
+
+/models/*
+  Cache-Control: public, max-age=604800
+
+/vendor/*
+  Cache-Control: public, max-age=604800
+
+/*.wasm
+  Content-Type: application/wasm
+
+# To let pages on another site load this search (the files are on a CDN or
+# an assets host), remove the # from the two lines below.
+# /*
+#   Access-Control-Allow-Origin: *
