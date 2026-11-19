@@ -525,6 +525,11 @@ class ChatResponse(BaseModel):
         default_factory=list, description="Suggested follow-up questions for this answer"
     )
     depth: str = Field("deep", description="The answer depth this turn ran at: 'quick' or 'deep'")
+    answer_checks: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Citations whose sentence is not supported by the cited passage, in order: "
+                    "{group (the n-th [Source N] citation in the answer), sources, missing, reason}",
+    )
 
 
 class StarterQuestionsRequest(BaseModel):

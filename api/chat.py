@@ -24,6 +24,7 @@ from services.agent_tools import anthropic_tools, openai_tools
 from services.collection_overview import build_collection_overview as _build_collection_overview
 from services.collection_service import collection_service
 from services.collection_search import search_collections
+from services.answer_check import check_answer
 from services.chat_evidence import ChatEvidence, CITATION_INSTRUCTIONS
 from services.prompt_injection_detector import mark_passage
 from services.chat_followups import (
@@ -915,6 +916,7 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
             yield {"type": "related", "questions": related}
         yield _done({"input_tokens": 0, "output_tokens": 0, "model": "answer-cache"}, [], sources,
                     related, cached=True, cached_question=cache_entry["question"],
+                    answer_checks=check_answer(cache_entry["answer"], sources),
                     cached_similarity=(round(float(cache_entry["similarity"]), 4)
                                        if cache_entry.get("similarity") is not None else None),
                     _answer=cache_entry["answer"])
@@ -1277,6 +1279,8 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
             {"input_tokens": ai_usage.total_input_tokens, "output_tokens": ai_usage.total_output_tokens,
              "model": tokens["model"]},
             executed, sources, related, _ai_usage=ai_usage, _answer=answer,
+            # C4: each cited sentence checked against its passage, no model.
+            answer_checks=check_answer(answer, sources),
         )
 
     except HTTPException as e:
@@ -1385,6 +1389,7 @@ def chat_with_documents(  # sync: provider round-trips + tool loop run in FastAP
         cached_similarity=done.get("cached_similarity"),
         related_questions=done["related_questions"],
         depth=done["depth"],
+        answer_checks=done.get("answer_checks") or [],
     )
 
 

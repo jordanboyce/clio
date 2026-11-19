@@ -531,7 +531,7 @@
                      auto-scroll keeps the final response visible. -->
                 <div v-if="!msg.slashCommand && (msg.content || msg.streaming)" class="relative"
                   :class="{ 'mt-3': msg.structuredResults && msg.structuredResults.length > 0 }">
-                  <AnswerEvidence :content="msg.content" :sources="msg.sources || []" :streaming="msg.streaming" answer />
+                  <AnswerEvidence :content="msg.content" :sources="msg.sources || []" :checks="msg.answerChecks || []" :streaming="msg.streaming" answer />
                   <!-- Blinking cursor while streaming -->
                   <span v-if="msg.streaming && msg.content" class="answer-caret" aria-hidden="true"></span>
                   <!-- Post-tool "Synthesizing…" hint: tools finished, prose not started -->
@@ -1603,6 +1603,7 @@ const sendMessage = async (resend = null) => {
             cachedQuestion: event.cached_question || '',
             cachedSimilarity: typeof event.cached_similarity === 'number' ? event.cached_similarity : null,
             relatedQuestions: event.related_questions || [],
+            answerChecks: event.answer_checks || [],
             depth: event.depth || (depthOverride.value || depth.value),
             // Provider and scope stamp the answer for its badge.
             provider: selectedProvider.value,

@@ -255,12 +255,13 @@ export const useChatStore = defineStore('chat', () => {
     if (msg) msg.relatedQuestions = Array.isArray(questions) ? questions : []
   }
 
-  const finalizeStreamingMessage = (stream, { sources, usage, structuredResults, cached, cachedQuestion, cachedSimilarity, relatedQuestions, depth, provider, scope } = {}) => {
+  const finalizeStreamingMessage = (stream, { sources, usage, structuredResults, cached, cachedQuestion, cachedSimilarity, relatedQuestions, depth, provider, scope, answerChecks } = {}) => {
     const msg = getStreamingMessage(stream)
     if (!msg) return
     msg.streaming = false
     delete msg.status
     if (sources) msg.sources = sources
+    if (Array.isArray(answerChecks)) msg.answerChecks = answerChecks
     if (Array.isArray(relatedQuestions)) msg.relatedQuestions = relatedQuestions
     if (depth) msg.depth = depth
     if (provider) msg.provider = provider

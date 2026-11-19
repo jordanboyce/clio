@@ -60,7 +60,25 @@ export function previewAlt(source) {
 // are too ambiguous to turn into evidence links.
 const CITATION_GROUP = /\[Source\s+\d+(?:\s*[,;:](?:\s*Source)?[^\]]*)?\]/gi
 
-export function renderEvidenceMarkdown(text, sources = []) {
+// C4: what the server's check found (services/answer_check.py), by the n-th
+// citation in the answer. The mark goes after the last citation of the
+// sentence and opens the first passage it cites.
+function unsupportedNote(failure) {
+  const note = document.createElement('button')
+  note.type = 'button'
+  note.className = 'answer-unsupported text-warning text-xs underline decoration-dotted px-1'
+  note.dataset.sourceNumber = String(failure.reason === 'no_such_source' ? '' : failure.sources[0] || '')
+  const what = (failure.missing || []).join(', ')
+  note.title = failure.reason === 'no_such_source'
+    ? `This sentence cites a source that is not in the answer: ${what}`
+    : `Not found in the cited passage: ${what}`
+  note.textContent = failure.reason === 'no_such_source' ? 'source not found' : 'not found in the cited passage'
+  return note
+}
+
+export function renderEvidenceMarkdown(text, sources = [], checks = []) {
+  const failed = new Map((checks || []).map(f => [f.group, f]))
+  let group = -1
   const root = document.createElement('div')
   root.innerHTML = DOMPurify.sanitize(marked.parse(String(text || ''), { gfm: true, breaks: true }), {
     FORBID_TAGS: ['button', 'input', 'form', 'textarea', 'select'],
@@ -76,6 +94,7 @@ export function renderEvidenceMarkdown(text, sources = []) {
     const fragment = document.createDocumentFragment()
     let end = 0
     for (const match of node.textContent.matchAll(CITATION_GROUP)) {
+      group += 1
       fragment.append(node.textContent.slice(end, match.index))
       // One bracket can carry several citations ("[Source 2, Source 3]") or a
       // restated location ("[Source 2: file.pdf, page 56]"); each valid number
@@ -97,6 +116,8 @@ export function renderEvidenceMarkdown(text, sources = []) {
       } else {
         fragment.append(match[0])
       }
+      const failure = failed.get(group)
+      if (failure && failed.get(group + 1)?.sentence !== failure.sentence) fragment.append(' ', unsupportedNote(failure))
       end = match.index + match[0].length
     }
     if (end) {

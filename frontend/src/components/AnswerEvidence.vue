@@ -80,6 +80,8 @@ const props = defineProps({
   content: { type: String, default: '' },
   sources: { type: Array, default: () => [] },
   streaming: Boolean,
+  // C4: cited sentences not supported by their passage (from the server).
+  checks: { type: Array, default: () => [] },
   // Long-form answer on the page: gets the reading measure. Off for
   // compact places (search synthesis) that set their own width.
   answer: Boolean,
@@ -94,9 +96,9 @@ const html = ref('')
 let renderTimer = null
 const render = () => {
   renderTimer = null
-  html.value = renderEvidenceMarkdown(props.content, props.sources)
+  html.value = renderEvidenceMarkdown(props.content, props.sources, props.streaming ? [] : props.checks)
 }
-watch(() => [props.content, props.sources, props.streaming], () => {
+watch(() => [props.content, props.sources, props.streaming, props.checks], () => {
   if (!props.streaming || !html.value) {
     clearTimeout(renderTimer)
     render()
