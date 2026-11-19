@@ -190,6 +190,8 @@ http.interceptors.response.use(
     return Promise.reject({
       status,
       message: detailText || fallbackMessage(status, error.response.statusText),
+      // Quoted when the error is reported, so it can be found in the server log.
+      requestId: data?.request_id || error.response.headers?.['x-request-id'] || null,
       isNetwork: false,
       isRateLimit: false,
       isStorageLimit: status === 413 && data?.detail?.error === 'storage_limit_exceeded',

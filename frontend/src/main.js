@@ -4,6 +4,8 @@ import './style.css'
 import { migrateBrowserStorage } from './utils/storageMigration'
 import { startBootstrap } from './utils/http'
 import { prepareStorageScope } from './utils/storageScope'
+import { installErrorHandler } from './utils/errorHandler'
+import { useUiStore } from './stores/uiStore'
 
 import App from './App.vue'
 
@@ -22,6 +24,7 @@ document.documentElement.dataset.clioBuild = `${build.version}+${build.commit.sl
 const app = createApp(App)
 
 app.use(createPinia())
+installErrorHandler(app, () => useUiStore())
 
 // Who is signed in decides which person's browser state is read
 // (utils/storageScope.js), so it is asked before anything reads storage.

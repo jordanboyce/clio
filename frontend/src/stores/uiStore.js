@@ -81,8 +81,10 @@ export const useUiStore = defineStore('ui', () => {
   let nextId = 1
 
   // `action`: { label, run } renders one button on the toast ("Undo all");
-  // pressing it runs the action and dismisses the toast.
-  function notify(message, type = 'info', { duration = 4000, action = null } = {}) {
+  // pressing it runs the action and dismisses the toast. A toast with an
+  // action asks for a decision, so it stays until it is answered or closed
+  // unless its caller sets a duration (C8).
+  function notify(message, type = 'info', { action = null, duration = action ? 0 : 4000 } = {}) {
     const id = nextId++
     toasts.value.push({ id, message, type, action })
     if (duration > 0) {
