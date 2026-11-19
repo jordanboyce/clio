@@ -6,7 +6,7 @@ This version was rewritten on 2026-11-16 after a full pass over the product: the
 
 On 2026-11-18 the hardening work order ([docs/prompts/HARDENING_PROMPT.md](prompts/HARDENING_PROMPT.md)) shipped R2, R3, R5, R6, R7, R8b, R11, P2, P4, P5, U2, U4 and U8, most of U5 and U10, the confirm part of U9 and the settings part of M10, each marked below. It also covered first-run model setup with hubs blocked, visible failures and an enterprise pass (audit, suspension, settings checks, upgrades, restarts, disk). The decisions that work left for the owner are listed under [Decisions waiting for the owner](#decisions-waiting-for-the-owner).
 
-On 2026-11-19 the improvement work order ([docs/prompts/IMPROVEMENT_PROMPT.md](prompts/IMPROVEMENT_PROMPT.md); report in [docs/prompts/improvement-report/REPORT.md](prompts/improvement-report/REPORT.md)) shipped a retrieval benchmark that can tell configurations apart and an answer-level run (A1, A2), per-stage timings (A4), cross-collection merging on the reranker's score (B1), passages embedded with their source and heading under a per-collection indexing recipe (B2: recall@10 with the reranker 0.31 → 0.98 on the new benchmark), streaming answers with a working Stop (C1), Ask that survives tab switches and failures (C2, C3), Ask checking its own citations (C4), Find honouring the source selection (C7), a top-level error handler (C8), the collection in the URL (C9), MCP tool profiles with typed filters and writing instructions (D1, roadmap M2, M4, M6), and a release gated on tests and the smoke test (E1, E2). Rank fusion (B3) was measured and not adopted. New decisions are added under [Decisions waiting for the owner](#decisions-waiting-for-the-owner).
+On 2026-11-19 the improvement work order ([docs/prompts/IMPROVEMENT_PROMPT.md](prompts/IMPROVEMENT_PROMPT.md); report in [docs/prompts/improvement-report/REPORT.md](prompts/improvement-report/REPORT.md)) shipped a retrieval benchmark that can tell configurations apart and an answer-level run (A1, A2), per-stage timings (A4), cross-collection merging on the reranker's score (B1), passages embedded with their source and heading under a per-collection indexing recipe (B2: recall@10 with the reranker 0.31 → 0.98 on the new benchmark), streaming answers with a working Stop (C1), Ask that survives tab switches and failures (C2, C3), Ask checking its own citations (C4), Find honouring the source selection (C7), a top-level error handler (C8), the collection in the URL (C9), MCP tool profiles with typed filters and writing instructions (D1, roadmap M2, M4, M6), and a release gated on tests and the smoke test (E1, E2). Later the same day: feedback capture with an admin export (A3), filtered keyword search inside the query (B5), upload progress, cancel and drag and drop (C6, U6), authorship and agent writes in the change feed (D2, roadmap B3 and part of B4), and tests that hold the settings and tool counts (E7). Rank fusion (B3) was measured and not adopted. New decisions are added under [Decisions waiting for the owner](#decisions-waiting-for-the-owner).
 
 ## Guiding frame
 
@@ -365,8 +365,12 @@ Keep previous versions of a note (a bounded number, or by age). Add `list_versio
 **B3 — Authorship. (S)**
 Record the token (or identity) on each write. Return `written_by` and `written_at` from the read tools and in the audit row.
 
+*Shipped 2026-11-19 (work order D2):* the token's name is recorded on each MCP write; search results, `read_document` and `get_document_metadata` return `written_at` and `written_by`; the upload audit row carries both and the token id; `deep_search` now writes its tool-call audit row.
+
 **B4 — A change feed for notes. (S)**
 `list_changes` carries folder and git sync events only. Add agent and human writes, so one agent can ask "what changed since I last looked".
+
+*Shipped in part 2026-11-19 (D2):* agent writes are in the feed, with who wrote them. Human uploads are not yet.
 
 **B5 — Edit part of a note. (M)**
 `edit_document` with exact string replace and "replace under this heading". Today every append re-reads and re-embeds the whole file; re-embed only the chunks that changed.
@@ -419,6 +423,8 @@ Seen live: about nine unlabeled ribbon icons, an eight-icon rail above Sources, 
 
 **U6 — Drag and drop. (S)**
 There is none. Accept drops on the Sources panel and the chat.
+
+*Shipped 2026-11-19 (work order C6),* with transfer progress in bytes and Cancel.
 
 **U7 — Find across collections, with filters. (M)**
 Ask has an "All" scope; Find does not. Add the scope switch, filters for type, source and date, grouping by source, and "load more".
