@@ -88,18 +88,27 @@ def _restore_import_time_settings():
 # Variables Settings() writes into the process for the hub client: building a
 # Settings with offline_mode=True or a mirror in one test used to leave them
 # set for every later one, so download tests passed or failed by test order.
+# The baseline is taken here, before any test module is imported: a module
+# that builds such a Settings at import time sets them during collection,
+# before the first test, so restoring "what was there before this test" kept
+# offline mode on for the whole run.
 _HUB_ENVIRONMENT = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_ENDPOINT", "HF_HUB_DISABLE_XET")
+_HUB_BASELINE = {name: os.environ.get(name) for name in _HUB_ENVIRONMENT}
 
 
-@pytest.fixture(autouse=True)
-def _hub_environment_is_not_shared_between_tests():
-    before = {name: os.environ.get(name) for name in _HUB_ENVIRONMENT}
-    yield
-    for name, value in before.items():
+def _reset_hub_environment():
+    for name, value in _HUB_BASELINE.items():
         if value is None:
             os.environ.pop(name, None)
         else:
             os.environ[name] = value
+
+
+@pytest.fixture(autouse=True)
+def _hub_environment_is_not_shared_between_tests():
+    _reset_hub_environment()
+    yield
+    _reset_hub_environment()
 
 
 @pytest.fixture(autouse=True)

@@ -159,6 +159,16 @@ def test_a_failed_download_names_the_hub_but_not_the_server_path(monkeypatch, tm
 
 # ── B11: the first page load does not wait on a model being prepared ────
 
+def _no_service_built_yet(monkeypatch, im):
+    """The shared manager may hold a model an earlier test loaded, which it
+    returns before any of the code under test runs; start from none, local,
+    and online."""
+    monkeypatch.setattr(im.indexer_manager, "_embedding_services", {})
+    monkeypatch.setattr(im.indexer_manager, "_builds", {})
+    monkeypatch.setattr(im.settings, "embedding_provider", "local")
+    monkeypatch.setattr(im, "hub_offline", lambda: False)
+
+
 def test_opening_a_collection_while_the_warm_up_runs_does_not_wait_or_download_twice(monkeypatch):
     import time
 
@@ -166,6 +176,7 @@ def test_opening_a_collection_while_the_warm_up_runs_does_not_wait_or_download_t
     from services.embedding_status import embedding_status
 
     started = []
+    _no_service_built_yet(monkeypatch, im)
     monkeypatch.setattr(embedding_status, "is_running", lambda: True)
     monkeypatch.setattr(im, "local_model_cached", lambda name: False)
     monkeypatch.setattr(im.indexer_manager, "_get_embedding_service",
@@ -185,6 +196,7 @@ def test_a_local_model_that_must_be_downloaded_is_not_waited_for(monkeypatch):
     from services.embedding_status import embedding_status
 
     gate = threading.Event()
+    _no_service_built_yet(monkeypatch, im)
     monkeypatch.setattr(embedding_status, "is_running", lambda: False)
     monkeypatch.setattr(im, "local_model_cached", lambda name: False)
     monkeypatch.setattr(im.indexer_manager, "_get_embedding_service", lambda model: gate.wait(5))
