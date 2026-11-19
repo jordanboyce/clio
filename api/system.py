@@ -42,6 +42,24 @@ def _health_embedding() -> dict:
 
 
 @router.get(
+    "/api/system/settings-sources",
+    summary="Settings set by the environment",
+    tags=["system"],
+)
+async def settings_sources_report():
+    """Every setting the environment (or the env file) set, read-only, and
+    each one a value saved in Settings overrides (roadmap U10). Admin only:
+    values can be internal addresses or paths; credentials show only as set."""
+    require_admin("view where settings come from")
+    from services import settings_sources
+
+    return {
+        "environment": settings_sources.from_environment(settings),
+        "overridden": settings_sources.overrides(),
+    }
+
+
+@router.get(
     "/api/system/readiness",
     summary="Is this deployment ready to run where it is going?",
     tags=["system"],
@@ -141,6 +159,11 @@ def _readiness_problem() -> Optional[str]:
         return "database"
     if not os.access(settings.data_dir, os.W_OK):
         return "storage"
+    from services import storage_quota
+
+    keep, free = storage_quota.min_free_bytes(), storage_quota.free_disk_bytes()
+    if keep and free is not None and free < keep:
+        return "disk"
     return None
 
 
@@ -590,6 +613,10 @@ async def whoami(request: Request):
     return {
         "authenticated_via": via,
         "identity": identity,
+        # Where "Sign out and clear this browser" goes once it has cleared
+        # this browser's copy of the person's state (an authenticating
+        # proxy's sign-out page); empty = just clear and reload.
+        "sign_out_url": settings.sign_out_url if identity else "",
     }
 
 

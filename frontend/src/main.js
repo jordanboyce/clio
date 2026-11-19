@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import './style.css'
 import { migrateBrowserStorage } from './utils/storageMigration'
 import { startBootstrap } from './utils/http'
+import { prepareStorageScope } from './utils/storageScope'
 
 import App from './App.vue'
 
@@ -22,10 +23,15 @@ const app = createApp(App)
 
 app.use(createPinia())
 
-// One request for the reads every store makes on startup (utils/bootstrap.js).
-// Sent after Pinia is active: the http client's interceptors use the ui store.
-let openingCollection = 'default'
-try { openingCollection = localStorage.getItem('clio_current_collection') || 'default' } catch { /* private mode */ }
-startBootstrap(openingCollection)
+// Who is signed in decides which person's browser state is read
+// (utils/storageScope.js), so it is asked before anything reads storage.
+// Then one request for the reads every store makes on startup
+// (utils/bootstrap.js). Both sent after Pinia is active: the http client's
+// interceptors use the ui store.
+prepareStorageScope().finally(() => {
+  let openingCollection = 'default'
+  try { openingCollection = localStorage.getItem('clio_current_collection') || 'default' } catch { /* private mode */ }
+  startBootstrap(openingCollection)
 
-app.mount('#app')
+  app.mount('#app')
+})

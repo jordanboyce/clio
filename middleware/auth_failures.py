@@ -40,6 +40,7 @@ class FailedAuthLimiter:
         self._lock = threading.Lock()
         self._failures: Dict[str, Deque[float]] = {}
         self.lockouts = 0
+        self.failures = 0  # every failed credential since start, for /metrics
 
     @staticmethod
     def _limits() -> tuple[int, int]:
@@ -70,6 +71,8 @@ class FailedAuthLimiter:
         """Count one failed credential, and say so once the address is cut off."""
         limit, window = self._limits()
         logger.info("Failed sign-in (%s) from %s on %s", kind, key, path)
+        self.failures += 1
+        _audit("auth.sign_in_failed", key, {"kind": kind, "path": path})
         if limit <= 0:
             return
         now = time.monotonic()
@@ -82,6 +85,7 @@ class FailedAuthLimiter:
                 self._prune(now, window)
         if count == limit:
             self.lockouts += 1
+            _audit("auth.lockout", key, {"failures": count, "window_seconds": window, "kind": kind, "path": path})
             logger.warning(
                 "SECURITY: %d failed sign-ins from %s within %ds (latest: %s on %s). Further "
                 "credentialed requests from that address are refused with 429 until the "
@@ -97,6 +101,15 @@ class FailedAuthLimiter:
         with self._lock:
             self._failures.clear()
             self.lockouts = 0
+            self.failures = 0
+
+
+def _audit(action: str, address: str, detail: dict) -> None:
+    """Failed sign-ins and lockouts belong in the audit trail; bounded by the
+    limit itself (an address stops being checked once it is locked out)."""
+    from services import audit
+
+    audit.record(action, actor=None, target=address, detail=detail)
 
 
 failed_auth_limiter = FailedAuthLimiter()

@@ -981,6 +981,8 @@
             Cloud AI providers are disabled and models load from the local cache only.
             This deployment makes no outbound connections beyond the endpoints configured on your network.
           </p>
+
+          <EnvironmentSettings />
         </section>
 
         <!-- (The Access section moved to the Admin tab, next to usage.) -->
@@ -1059,6 +1061,7 @@ import { useUserStore } from '../stores/userStore'
 import { useProviderStore } from '../stores/providerStore'
 import CustomFileTypes from './CustomFileTypes.vue'
 import FeatureSettings from './FeatureSettings.vue'
+import EnvironmentSettings from './EnvironmentSettings.vue'
 import CoverageReportPanel from './CoverageReportPanel.vue'
 import AnswerModelSelect from './AnswerModelSelect.vue'
 import { chunkFit, embeddingModelFacts, switchCostSentence } from '../utils/embeddingChoice.js'

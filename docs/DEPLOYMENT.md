@@ -80,6 +80,12 @@ revoke one person without changing the password for all, and it keeps no record
 of who did what. Agents should use [personal MCP tokens](#mcp-clients) rather
 than the shared password.
 
+Once the server is reachable from the network, a chat request can no longer
+point the server's model calls at an address of its own choosing: only
+`AI_BASE_URL` and `OLLAMA_BASE_URL` are called, and the startup log says so.
+List other endpoints people may pick in `AI_ALLOWED_BASE_URLS`, or set it to
+`any` for the old open behaviour. A loopback-only install is unaffected.
+
 Over plain `http://` on a trusted LAN this works, but the password crosses the
 wire in the clear. Prefer shape C, or a private network (shape D), as soon as
 anyone is not sitting in the same room.
@@ -431,9 +437,16 @@ it applies to any corpus.
   deployment settings and embedding model changes (field names and model ids,
   never values), the team AI key being stored or removed (provider only) and
   every admin action land in an
-  append-only `audit_events` table. Admin tab → *Audit trail* filters it and
-  exports CSV; `AUDIT_RETENTION_DAYS` (default 365, `0` = forever) is the
-  only knob, and it is separate from the search-history sweep.
+  append-only `audit_events` table, as do sign-ins (once per caller, method
+  and address an hour), failed sign-ins and lockouts. Every row carries the
+  source address, the request id (the `X-Request-ID` the caller was answered
+  with) and the sign-in method (`password`, `mcp_token`, the identity
+  verifier, `app_key`, or `open` where nothing is asked), so a shared-password
+  action is at least attributable to an address and a moment. Admin tab →
+  *Audit trail* filters it, pages back through it and exports CSV;
+  `GET /api/admin/audit` returns `next_before`, the cursor for the next older
+  page. `AUDIT_RETENTION_DAYS` (default 365, `0` = forever) is the only knob,
+  and it is separate from the search-history sweep.
 - **Report.** Anyone who can read a collection can report one of its
   documents (the flag icon in the sidebar). The report is audited and, when
   `RESEND_API_KEY` is set, emailed to `ADMIN_EMAILS`.
@@ -575,9 +588,13 @@ recorded per identity, so this only takes effect under
 **Admin actions** (Admin tab → *Content review*)
 
 Approve a held or flagged document, remove it with or without blocking its
-hash, act on user reports, and suspend an identity — which revokes every
-MCP token it holds. Suspension leaves the person's documents in place; removal
-is a separate, reviewable decision.
+hash, act on user reports, and suspend an identity. A suspended identity is
+refused (403, `account_suspended`) on every request, however it signs in
+(identity provider, proxy header or MCP token), and every MCP token it holds
+is revoked. **Reinstate** in the same panel lets it back in; its old tokens
+stay revoked. Suspension leaves the person's documents in place; removal is a
+separate, reviewable decision. Password and open deployments have no
+identity to suspend.
 
 Decisions can be made in bulk: check rows (or *Select all shown* under the
 current filter) and **Approve selected**, **Remove & block selected** or
@@ -697,9 +714,16 @@ What protects the deployment when many people share it:
 | `SEARCH_HISTORY_RETENTION_DAYS` | 30 | Search log (stores result snippets) |
 | `USAGE_RETENTION_DAYS` | 180 | Per-turn chat usage rows |
 
+Jobs across a restart. An index job (upload, folder, repository or link) keeps on its row what it needs to run again. One still waiting for its turn when the server stopped is queued again at start; one that was running is listed as interrupted with **Run again**, which starts a new job for the files that are still there and not yet indexed (`POST /documents/upload/{job_id}/rerun`). Browser uploads staged for either are kept for a day for that. A running job that reports no progress for `JOB_STALL_TIMEOUT_SECONDS` (default 3600, 0 = never) is stopped the same way, so its collection's queue moves on. Reports being generated are marked failed at start: they need the model key the browser sent, which is never stored, so generate them again.
+
 Identity for the limits is the verified identity when there is one, else the
 client IP — which behind a reverse proxy is the address uvicorn reports, so
-set `FORWARDED_ALLOW_IPS` to the proxy (see shape **C**). A
+set `FORWARDED_ALLOW_IPS` to the proxy (see shape **C**). Failed sign-ins
+are counted the same way, so without it one person guessing a password
+locks out everyone behind the proxy. The readiness report
+(`/api/system/readiness`) warns when every request so far (at least 50) has
+come from one private address on a server reachable from the network, and
+names the `FORWARDED_ALLOW_IPS` value to set. A
 **429 response** means "you, specifically, are over a limit — wait the
 `Retry-After` seconds," not that the server is down; the UI says so. With
 `ADMIN_EMAILS` set, the Admin tab shows per-person spend, live process
@@ -905,7 +929,27 @@ scrape_configs:
 
 For load balancers and orchestrators, `/livez` and `/readyz` need no credential
 and never open a collection; see [ENTERPRISE.md](ENTERPRISE.md#health-probes).
-`LOG_FORMAT=json` writes one JSON object per log line for a log shipper.
+`LOG_FORMAT=json` writes one JSON object per log line for a log shipper;
+`LOG_LEVEL` (default `INFO`) sets the least severe line the app writes. Every
+line logged while a request is handled carries its id (`request_id` in JSON,
+` rid=...` at the end of a text line), the same id the caller got back as
+`X-Request-ID`.
+
+Numeric settings are checked at start: a value outside the range that works
+(a zero `WORKER_THREADS`, a `CHUNK_OVERLAP` as large as `CHUNK_SIZE`) stops the
+server with a line naming each setting and its range, instead of failing at
+first use. The ranges are `SETTING_RANGES` in `config.py`; a save in Settings is
+checked against the same table.
+
+About sixty settings can also be changed in the app (Settings, Admin). A value
+saved there is kept in the app database and applied over the environment at
+every start, which is how a container recreated without its env file keeps its
+choices. When it differs from what the environment sets, the start log says so
+for each one ("CHUNK_SIZE is 900 in the environment, but 1200, saved in
+Settings, is in force"), and Settings → System → *Set by environment* lists
+every setting the environment set, marking the ones Settings overrides
+(admins only; credentials show only as set). A saved number outside its range
+is ignored at start, with a warning naming it.
 
 Metrics carry no identities, queries or document names, and routes are labelled
 by template (`/api/collections/{collection_id}/stats`), never by the raw path.
@@ -921,6 +965,10 @@ The ones that tell you a deployment is reaching its limit:
 | `clio_db_pool_in_use`, `clio_db_pool_waits_total`, `clio_db_pool_timeouts_total` | Postgres only. Timeouts are 503s people saw: raise `POSTGRES_POOL_MAX` |
 | `clio_rate_limit_rejected_total` | People hitting their limits, by class |
 | `clio_api_app_requests_total` | Traffic from each [registered app](APP_API.md), by app name and status class. The one label that names a caller: an app is a system an admin registered, not a person |
+| `clio_data_dir_free_bytes`, `clio_data_dir_min_free_bytes` | Free space where the data directory lives. Below the second (`MIN_FREE_DISK_MB`, 500 by default) ingest is refused with 507 and `/readyz` says `disk` |
+| `clio_auth_failures_total`, `clio_auth_lockouts_total` | Refused credentials, and addresses cut off for too many of them. Lockouts behind a proxy usually mean `FORWARDED_ALLOW_IPS` is unset |
+| `clio_jobs_failed_total` | Background jobs that failed, by kind: `index`, `report`, `library` |
+| `clio_provider_errors_total` | Model calls that raised, by provider: an endpoint that is down or refusing |
 
 Numbers belong to one process and reset when it restarts, which is what
 Prometheus counters expect.
@@ -979,21 +1027,42 @@ manifest into the archive, and refuses to restore anything that fails
 verification:
 
 ```bash
-docker compose stop                       # needed for a restorable backup
 docker run --rm -v clio_clio-data:/app/data -v "$PWD:/out" clio:local     python scripts/backup.py backup --data /app/data --out /out/clio-$(date +%F).tar.gz
-docker compose start
 
 python scripts/backup.py verify clio-2026-10-27.tar.gz     # hashes + integrity_check
 python scripts/backup.py restore clio-2026-10-27.tar.gz --data ./data-restored
 ```
 
-Stop the server first when the backup must be restorable: vector indexes are
-plain files and one being saved at that instant can be captured half-written.
-The databases are always consistent; the tool says this on every run. The
-archive is written `0600` because it holds your documents; encrypt it before
-it leaves the host. Run a restore drill (restore to a scratch directory,
-start a second instance on it, search) before you need it, and after each
-upgrade.
+The server can keep running. Each vector index is read once into a staging
+copy before the databases beside it are snapshotted; the server replaces an
+index file whole, so the copy is always complete, and at worst it lags its
+database by the last few writes. A restored collection then embeds those
+passages again the first time it opens (this needs the embedding model) and
+drops vectors whose passages were deleted. The archive is written `0600`
+because it holds your documents; encrypt it before it leaves the host. Run a
+restore drill (restore to a scratch directory, start a second instance on it,
+search) before you need it, and after each upgrade.
+
+The manifest records the Clio version that made the backup and the schema
+version of each database. `restore` refuses a backup whose databases are newer
+than the running copy of Clio reads, and names both versions. `--no-key`
+leaves `secret.key` out of the archive (see Stored credentials below): keep
+the key apart from the backup when the archive leaves the machine.
+
+### Upgrades
+
+Each database carries a schema version: every collection's `metadata.db`, and
+`app.db` from this release on. On start:
+
+- A database written by a **newer** Clio stops the server with a line naming
+  the database and both versions; nothing is changed. Start the newer version
+  again, or restore a backup taken with this one. (Before this release an older
+  image re-stamped such a database and carried on.)
+- An **older** database is copied into `DATA_DIR/backups/pre-upgrade/` with
+  SQLite's online backup, then migrated. The copies are not removed
+  automatically; delete them once the upgraded server has run for a while.
+  With `DB_BACKEND=postgresql` only the collection databases are versioned, so
+  `pg_dump` before an upgrade.
 
 The shipped `docker-compose.yml` bind-mounts `./data`; on Windows hosts, or
 wherever SQLite misbehaves on a bind mount, use a named volume and take the
@@ -1008,7 +1077,7 @@ Nothing needs setting up, but where the key lives decides what this protects:
 
 | | Key | Protects against |
 |---|---|---|
-| **Default** | Generated at `DATA_DIR/secret.key` on first use | A database that leaves on its own: a Postgres dump or replica, a copied `app.db`. **Not** a stolen data directory or a `scripts/backup.py` archive, which hold the key too; that is what lets a restore work with nothing else to carry |
+| **Default** | Generated at `DATA_DIR/secret.key` on first use | A database that leaves on its own: a Postgres dump or replica, a copied `app.db`. **Not** a stolen data directory or a `scripts/backup.py` archive, which hold the key too (unless the backup was made with `--no-key`); that is what lets a restore work with nothing else to carry |
 | **Your own** | `SECRET_ENCRYPTION_KEY` (16+ characters; use `openssl rand -base64 32`), from your secret manager or the service's environment | Everything above, including the data directory and its backups. Restoring then also needs this key |
 
 Changing or losing the key does not stop the app. Stored credentials read as not

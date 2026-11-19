@@ -208,6 +208,9 @@ def start_job(
                 slots.release()
         except Exception as exc:  # noqa: BLE001 - the job row must not stay "running"
             logger.exception("Research job %s crashed", job_id)
+            from services import ops_counters
+
+            ops_counters.incr("jobs_failed", "library")
             store.update_job(job_id, status="failed", finished_at=now_iso(), current=str(exc)[:300])
         finally:
             with _live_lock:

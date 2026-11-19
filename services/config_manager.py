@@ -10,10 +10,11 @@ Configuration is stored in SQLite database for persistence across restarts.
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional
-from config import ALL_AI_PROVIDERS, settings
+from config import ALL_AI_PROVIDERS, ENV_FILE, SETTING_RANGES, setting_problems, settings
 from services.app_database import app_db
 from services.secret_box import SECRET_CONFIG_FIELDS
 
@@ -37,7 +38,7 @@ VALID_CONFIG_FIELDS = {
     "enable_mcp", "mcp_server_id", "mcp_default_collection",
     "mcp_top_k", "mcp_mode", "mcp_semantic_weight",
     "mcp_include_sources", "mcp_max_source_length",
-    "mcp_ai_provider", "mcp_ollama_model",
+    "mcp_ollama_model",
     "enable_llm_schema_inference", "llm_schema_inference_threshold",
     "enable_chat_tab",
     "ollama_num_ctx",
@@ -96,8 +97,11 @@ def normalize_config_keys(values: Dict[str, Any]) -> Dict[str, Any]:
 class ConfigManager:
     """Manages dynamic configuration updates with database persistence."""
 
-    def __init__(self, env_file: Path = Path(".env")):
-        self.env_file = env_file
+    def __init__(self, env_file: Optional[Path] = None):
+        # The file Settings was read from (config.ENV_FILE), never whatever
+        # .env sits in the current working directory.
+        self.env_file = Path(env_file) if env_file is not None else ENV_FILE
+        self._unwritable_logged = False
 
     def get_current_config(self) -> Dict[str, Any]:
         """Get current configuration values.
@@ -142,7 +146,6 @@ class ConfigManager:
             "mcp_semantic_weight": settings.mcp_semantic_weight,
             "mcp_include_sources": settings.mcp_include_sources,
             "mcp_max_source_length": settings.mcp_max_source_length,
-            "mcp_ai_provider": settings.mcp_ai_provider,
             "mcp_ollama_model": settings.mcp_ollama_model,
             # LLM schema inference (P0.5)
             "enable_llm_schema_inference": settings.enable_llm_schema_inference,
@@ -243,7 +246,7 @@ class ConfigManager:
         }
         mcp_fields = {"enable_mcp", "mcp_server_id", "mcp_default_collection", "mcp_top_k",
                       "mcp_mode", "mcp_semantic_weight", "mcp_include_sources",
-                      "mcp_max_source_length", "mcp_ai_provider", "mcp_ollama_model"}
+                      "mcp_max_source_length", "mcp_ollama_model"}
         inference_fields = {"enable_llm_schema_inference", "llm_schema_inference_threshold"}
         ui_fields = {"enable_chat_tab"}
 
@@ -324,6 +327,19 @@ class ConfigManager:
                 return result
             updates["pii_flag_threshold"] = threshold
 
+        # Numbers inside the range that works (config.SETTING_RANGES), judged
+        # together with what is in force so an overlap larger than the
+        # chunk is caught whichever of the two is being changed.
+        ranged = {k: v for k, v in updates.items() if k in SETTING_RANGES}
+        if ranged:
+            merged = {k: getattr(settings, k) for k in ("chunk_size", "chunk_overlap", "default_top_k", "max_top_k")}
+            merged.update(ranged)
+            problems = setting_problems(merged, env_names=False)
+            if problems:
+                result["errors"].extend(problems)
+                result["success"] = False
+                return result
+
         feature_error = self._check_feature_fields(updates)
         if feature_error:
             result["errors"].append(feature_error)
@@ -368,8 +384,10 @@ class ConfigManager:
         try:
             mirrored = {k: v for k, v in updates.items()
                         if k not in SECRET_CONFIG_FIELDS and k not in DATABASE_ONLY_FIELDS}
-            if mirrored:
+            if mirrored and self._env_file_writable():
                 self._update_env_file(mirrored)
+        except PermissionError:
+            self._log_unwritable()
         except Exception as e:
             # Non-fatal - database is source of truth
             logger.warning(f"Failed to update .env file: {e}")
@@ -391,6 +409,9 @@ class ConfigManager:
             # Update runtime settings if no restart required
             if key not in restart_fields:
                 try:
+                    from services import settings_sources
+
+                    settings_sources.note_save(key, getattr(settings, key, None), value, settings)
                     setattr(settings, key, value)
                     if key in ocr_fields:
                         ocr_settings_changed = True
@@ -482,6 +503,24 @@ class ConfigManager:
                         f"llm.corp.example or *.corp.example. Not a host: {bad[0]}")
             updates["controlled_data_hosts"] = ", ".join(hosts)
         return None
+
+    def _env_file_writable(self) -> bool:
+        """Whether the env file (or, while it does not exist, its folder) can
+        be written. A read-only mount is normal in a container."""
+        target = self.env_file if self.env_file.exists() else self.env_file.parent
+        if os.access(target, os.W_OK):
+            return True
+        self._log_unwritable()
+        return False
+
+    def _log_unwritable(self) -> None:
+        if self._unwritable_logged:
+            return
+        self._unwritable_logged = True
+        logger.info(
+            "Settings saved in the app are kept in the database only: %s is not writable, so it is "
+            "not updated. The saved values are applied again at every start.", self.env_file,
+        )
 
     def _update_env_file(self, updates: Dict[str, Any]):
         """Update .env file with new values. A value of None removes its line,

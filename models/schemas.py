@@ -248,6 +248,11 @@ class UploadJobResponse(BaseModel):
         default_factory=list,
         description="Files left out of the job at submission, with the reason for each",
     )
+    can_rerun: bool = Field(
+        False,
+        description="A failed or cancelled job (one a restart interrupted, say) whose inputs are still "
+                    "there: POST /documents/upload/{job_id}/rerun does the rest",
+    )
 
 
 class AIOptions(BaseModel):

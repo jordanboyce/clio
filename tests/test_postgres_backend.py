@@ -340,6 +340,17 @@ def test_hash_blocklist(db):
     assert db.is_hash_blocked("abc") is False
 
 
+def test_suspended_identities(db):
+    assert db.is_identity_suspended("a@example.org") is False
+    db.suspend_identity("a@example.org", "admin@example.org", "left")
+    db.suspend_identity("a@example.org", "admin@example.org", "again")
+    assert db.is_identity_suspended("a@example.org") is True
+    assert [(r["identity"], r["reason"]) for r in db.list_suspended_identities()] == [("a@example.org", "again")]
+    assert db.reinstate_identity("a@example.org") is True
+    assert db.reinstate_identity("a@example.org") is False
+    assert db.is_identity_suspended("a@example.org") is False
+
+
 # ── Jobs ────────────────────────────────────────────────────────────────────
 
 

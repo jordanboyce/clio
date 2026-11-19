@@ -278,6 +278,7 @@ Read the logs first: `docker compose logs clio`, `docker compose logs proxy`.
 | Answers arrive all at once, or cut off at about a minute | Another proxy on the way is buffering, or timing out | Turn off response buffering there, and raise its read timeout to 15 minutes |
 | `/readyz` says `database` | Postgres is unreachable, or `app.db` cannot be opened | The log says which |
 | `/readyz` says `storage` | The data directory is not writable by uid 10001 | Use the named volume, or `chown -R 10001:10001` the folder |
+| `/readyz` says `disk` | Less free space than `MIN_FREE_DISK_MB` (500 by default) where the data directory lives; new sources are refused with 507 | Free space or grow the volume |
 | 401 for one app, others fine | Revoked, expired, or a rotated key past its grace | Admin → Registered apps |
 
 ## Your own proxy or load balancer
@@ -301,7 +302,7 @@ exposure that is really there. `check_deployment.sh` works the same against it.
 | Path | Answers | Use for |
 | --- | --- | --- |
 | `/livez` | 200 while the process serves requests, touching nothing | Liveness: restart if this fails |
-| `/readyz` | 200, or 503 with a reason code (`initializing`, `database`, `storage`, `timeout`) | Readiness, and the load balancer's health check |
+| `/readyz` | 200, or 503 with a reason code (`initializing`, `database`, `storage`, `disk`, `timeout`) | Readiness, and the load balancer's health check |
 | `/health` | Status for anyone. Counts and model state only for a caller who could see the rest of the app | The app's own status bar. Not a probe |
 
 All three work with no credential. `/readyz` stays 200 while the search model is missing,
@@ -317,10 +318,16 @@ driver at your SIEM.
 **Metrics:** set `METRICS_ENABLED=true` and `METRICS_TOKEN=<token>`. That token opens
 `/metrics` and nothing else. See [Monitoring](DEPLOYMENT.md#monitoring).
 
-**Audit trail:** Admin → Audit trail, or `GET /api/admin/audit` (add `format=csv` to export).
-It records uploads, deletions, shares, tokens, app changes and admin decisions, and agent and
-app reads with `MCP_AUDIT_TOOL_CALLS=true` (on under the secure profile). It keeps
-`AUDIT_RETENTION_DAYS`, 365 by default.
+**Audit trail:** Admin → Audit trail, or `GET /api/admin/audit` (add `format=csv` to export;
+pass the response's `next_before` back as `before` for the next older page).
+It records uploads, deletions, shares, tokens, app changes and admin decisions, sign-ins,
+failed sign-ins and lockouts, and agent and app reads with `MCP_AUDIT_TOOL_CALLS=true` (on
+under the secure profile). Each row has the source address, request id and sign-in method.
+It keeps `AUDIT_RETENTION_DAYS`, 365 by default.
+
+Each row is also written to the log as it happens, on the `clio.audit` logger: with
+`LOG_FORMAT=json`, one line whose `audit` object is the row, so the SIEM that collects the
+container's stdout has the trail without polling the API.
 
 ## Limits
 

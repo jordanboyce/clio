@@ -20,10 +20,19 @@ from config import settings
 from services.db_backend import DatabaseBackend
 from services.sqlite_utils import sqlite_connect
 from services import provenance
+from services.schema_versions import (
+    APP_DB_SCHEMA_VERSION,
+    NewerSchemaError,
+    newer_message,
+    snapshot_before_migrating,
+)
 # Re-exported: both backends (and tests) import these from here.
 from services.db_helpers import _get_document_count_from_metadata, _get_storage_bytes_from_metadata  # noqa: F401
 
 logger = logging.getLogger(__name__)
+
+# Request context on every audit row (services/audit.py), in column order.
+AUDIT_CONTEXT_COLUMNS = ("source_ip", "request_id", "auth_method")
 
 
 def _collection_holds_nothing(collection_id: str) -> bool:
@@ -56,9 +65,48 @@ class SQLiteBackend(DatabaseBackend):
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
+    def _app_schema_version(self) -> Optional[int]:
+        """The version stamped in app.db; 0 for one made before versions were
+        stamped; None when there is no database yet."""
+        if not self.db_path.is_file() or self.db_path.stat().st_size == 0:
+            return None
+        with sqlite_connect(self.db_path) as conn:
+            try:
+                row = conn.execute("SELECT value FROM schema_info WHERE key = 'version'").fetchone()
+            except sqlite3.OperationalError:
+                return 0
+        try:
+            return int(row[0]) if row else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def _check_app_schema(self) -> None:
+        """Refuse a newer app.db; copy an older one aside before migrating it."""
+        found = self._app_schema_version()
+        if found is None or found == APP_DB_SCHEMA_VERSION:
+            return
+        if found > APP_DB_SCHEMA_VERSION:
+            raise NewerSchemaError(newer_message(
+                "The application database", self.db_path, found, APP_DB_SCHEMA_VERSION))
+        copy = snapshot_before_migrating(self.db_path, Path(settings.data_dir) / "backups", "app",
+                                         found, APP_DB_SCHEMA_VERSION)
+        if copy:
+            logger.info(f"Copied {self.db_path} to {copy} before migrating it")
+        else:
+            logger.warning(f"Could not copy {self.db_path} before migrating it; migrating anyway")
+
     def _init_db(self):
         """Initialize database schema."""
+        self._check_app_schema()
         with sqlite_connect(self.db_path) as conn:
+            # The version of this schema (services/schema_versions.py), stamped
+            # once every table and column below exists.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_info (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS config (
                     key TEXT PRIMARY KEY,
@@ -189,9 +237,16 @@ class SQLiteBackend(DatabaseBackend):
                     phase_detail TEXT,
                     chunks_processed INTEGER DEFAULT 0,
                     chunks_total INTEGER DEFAULT 0,
-                    job_type TEXT DEFAULT 'upload'
+                    job_type TEXT DEFAULT 'upload',
+                    rerun_spec TEXT
                 )
             """)
+            # What it takes to run a job again after a restart (E7):
+            # services/upload_service.py writes it, JSON.
+            try:
+                conn.execute("ALTER TABLE upload_jobs ADD COLUMN rerun_spec TEXT")
+            except sqlite3.OperationalError:
+                pass
             # Active-job lookups filter on status, then collection.
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_upload_jobs_status_collection
@@ -373,9 +428,18 @@ class SQLiteBackend(DatabaseBackend):
                     collection_id TEXT,
                     document_id TEXT,
                     target TEXT,
-                    detail TEXT
+                    detail TEXT,
+                    source_ip TEXT,
+                    request_id TEXT,
+                    auth_method TEXT
                 )
             """)
+            # Where a request came from and how it signed in (E1).
+            for col in AUDIT_CONTEXT_COLUMNS:
+                try:
+                    conn.execute(f"ALTER TABLE audit_events ADD COLUMN {col} TEXT")
+                except sqlite3.OperationalError:
+                    pass
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_events(timestamp DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_events(action, timestamp DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_events(actor, timestamp DESC)")
@@ -400,6 +464,15 @@ class SQLiteBackend(DatabaseBackend):
                     blocked_at TEXT NOT NULL,
                     reason TEXT,
                     filename TEXT
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS suspended_identities (
+                    identity TEXT PRIMARY KEY,
+                    suspended_by TEXT,
+                    suspended_at TEXT NOT NULL,
+                    reason TEXT
                 )
             """)
 
@@ -546,6 +619,10 @@ class SQLiteBackend(DatabaseBackend):
                     ("default", "Default User", timestamp, timestamp)
                 )
 
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
+                (str(APP_DB_SCHEMA_VERSION),),
+            )
             conn.commit()
             logger.info(f"Application database initialized at {self.db_path}")
 
@@ -953,6 +1030,7 @@ class SQLiteBackend(DatabaseBackend):
             "error": "error", "result_summary": "result_summary", "phase": "phase",
             "phase_progress": "phase_progress", "phase_detail": "phase_detail",
             "chunks_processed": "chunks_processed", "chunks_total": "chunks_total",
+            "rerun_spec": "rerun_spec",
         }
         for kwarg, col in field_map.items():
             if kwarg not in kwargs:
@@ -980,7 +1058,7 @@ class SQLiteBackend(DatabaseBackend):
             row = conn.execute(
                 """SELECT id, collection_id, status, total_files, processed_files,
                           current_file, error, started_at, completed_at, result_summary,
-                          phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                          phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type, rerun_spec
                    FROM upload_jobs WHERE id = ?""", (job_id,)
             ).fetchone()
             return dict(row) if row else None
@@ -992,7 +1070,7 @@ class SQLiteBackend(DatabaseBackend):
                 row = conn.execute(
                     """SELECT id, collection_id, status, total_files, processed_files,
                               current_file, error, started_at, completed_at, result_summary,
-                              phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                              phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type, rerun_spec
                        FROM upload_jobs WHERE status IN ('pending', 'running') AND collection_id = ?
                        ORDER BY id DESC LIMIT 1""", (collection_id,)
                 ).fetchone()
@@ -1000,7 +1078,7 @@ class SQLiteBackend(DatabaseBackend):
                 row = conn.execute(
                     """SELECT id, collection_id, status, total_files, processed_files,
                               current_file, error, started_at, completed_at, result_summary,
-                              phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                              phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type, rerun_spec
                        FROM upload_jobs WHERE status IN ('pending', 'running')
                        ORDER BY id DESC LIMIT 1"""
                 ).fetchone()
@@ -1012,7 +1090,7 @@ class SQLiteBackend(DatabaseBackend):
             return [dict(r) for r in conn.execute(
                 """SELECT id, collection_id, status, total_files, processed_files,
                           current_file, error, started_at, completed_at, result_summary,
-                          phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                          phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type, rerun_spec
                    FROM upload_jobs WHERE status IN ('pending', 'running') ORDER BY id DESC"""
             ).fetchall()]
 
@@ -1033,11 +1111,11 @@ class SQLiteBackend(DatabaseBackend):
                 f"""SELECT id, collection_id, status, total_files, processed_files,
                            current_file, error, started_at, completed_at, result_summary,
                            phase, phase_progress, phase_detail, chunks_processed,
-                           chunks_total, job_type
+                           chunks_total, job_type, rerun_spec
                     FROM upload_jobs {where} ORDER BY id DESC LIMIT ?""", params
             ).fetchall()]
 
-    def fail_interrupted_jobs(self, reason: str) -> Dict[str, int]:
+    def fail_interrupted_jobs(self, reason: str, keep_job_ids=()) -> Dict[str, int]:
         """Close out jobs left mid-flight by a process exit.
 
         Upload jobs run in threads and reindex jobs in asyncio tasks, so
@@ -1045,14 +1123,17 @@ class SQLiteBackend(DatabaseBackend):
         rows make the UI show a job that will never move, and the
         per-collection guard refuses every new job for that collection
         forever. Called once at startup, before anything can enqueue work.
+        ``keep_job_ids`` are upload jobs being queued again instead.
         """
         timestamp = utcnow().isoformat()
+        keep = [int(i) for i in keep_job_ids]
+        skip = f" AND id NOT IN ({', '.join('?' * len(keep))})" if keep else ""
         with sqlite_connect(self.db_path) as conn:
             uploads = conn.execute(
-                """UPDATE upload_jobs SET status = 'failed', error = ?, completed_at = ?,
-                                          current_file = NULL
-                   WHERE status IN ('pending', 'running')""",
-                (reason, timestamp),
+                f"""UPDATE upload_jobs SET status = 'failed', error = ?, completed_at = ?,
+                                           current_file = NULL
+                    WHERE status IN ('pending', 'running'){skip}""",
+                (reason, timestamp, *keep),
             ).rowcount
             reindexes = conn.execute(
                 """UPDATE reindex_jobs SET status = 'failed', error = ?, completed_at = ?,
@@ -1424,14 +1505,17 @@ class SQLiteBackend(DatabaseBackend):
     # ── Audit trail ──────────────────────────────────────────
 
     def add_audit_events(self, actor: Optional[str], action: str, collection_id: Optional[str],
-                         events: List[Dict[str, Optional[str]]]) -> None:
+                         events: List[Dict[str, Optional[str]]],
+                         context: Optional[Dict[str, Optional[str]]] = None) -> None:
         timestamp = utcnow().isoformat()
+        ctx = [(context or {}).get(c) for c in AUDIT_CONTEXT_COLUMNS]
         with sqlite_connect(self.db_path) as conn:
             conn.executemany(
-                """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                [(timestamp, actor, action, collection_id, e.get("document_id"), e.get("target"), e.get("detail"))
-                 for e in events],
+                """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail,
+                                             source_ip, request_id, auth_method)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [(timestamp, actor, action, collection_id, e.get("document_id"), e.get("target"), e.get("detail"),
+                  *ctx) for e in events],
             )
             conn.commit()
 
@@ -1443,12 +1527,15 @@ class SQLiteBackend(DatabaseBackend):
         document_id: Optional[str] = None,
         target: Optional[str] = None,
         detail: Optional[str] = None,
+        context: Optional[Dict[str, Optional[str]]] = None,
     ) -> int:
+        ctx = [(context or {}).get(c) for c in AUDIT_CONTEXT_COLUMNS]
         with sqlite_connect(self.db_path) as conn:
             cursor = conn.execute(
-                """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (utcnow().isoformat(), actor, action, collection_id, document_id, target, detail),
+                """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail,
+                                             source_ip, request_id, auth_method)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (utcnow().isoformat(), actor, action, collection_id, document_id, target, detail, *ctx),
             )
             conn.commit()
             return cursor.lastrowid
@@ -1461,6 +1548,7 @@ class SQLiteBackend(DatabaseBackend):
         collection_id: Optional[str] = None,
         document_id: Optional[str] = None,
         since: Optional[str] = None,
+        before_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         clauses, params = [], []
         for col, val in (("action", action), ("actor", actor),
@@ -1471,12 +1559,17 @@ class SQLiteBackend(DatabaseBackend):
         if since:
             clauses.append("timestamp >= ?")
             params.append(since)
+        if before_id is not None:
+            clauses.append("id < ?")
+            params.append(int(before_id))
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
+        # By id, the order rows were appended in, so a cursor never skips or
+        # repeats a row even when two share a timestamp.
         with sqlite_connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                f"SELECT * FROM audit_events {where} ORDER BY timestamp DESC, id DESC LIMIT ?",
+                f"SELECT * FROM audit_events {where} ORDER BY id DESC LIMIT ?",
                 params,
             ).fetchall()
             return [dict(r) for r in rows]
@@ -1553,6 +1646,41 @@ class SQLiteBackend(DatabaseBackend):
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM blocked_hashes ORDER BY blocked_at DESC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Suspended identities ─────────────────────────────────
+
+    def suspend_identity(self, identity: str, suspended_by: Optional[str], reason: str = "") -> Dict[str, Any]:
+        timestamp = utcnow().isoformat()
+        with sqlite_connect(self.db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO suspended_identities (identity, suspended_by, suspended_at, reason)
+                   VALUES (?, ?, ?, ?)""",
+                (identity, suspended_by, timestamp, reason or ""),
+            )
+            conn.commit()
+        return {"identity": identity, "suspended_by": suspended_by,
+                "suspended_at": timestamp, "reason": reason or ""}
+
+    def reinstate_identity(self, identity: str) -> bool:
+        with sqlite_connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM suspended_identities WHERE identity = ?", (identity,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def is_identity_suspended(self, identity: str) -> bool:
+        with sqlite_connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM suspended_identities WHERE identity = ?", (identity,)
+            ).fetchone()
+            return row is not None
+
+    def list_suspended_identities(self) -> List[Dict[str, Any]]:
+        with sqlite_connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM suspended_identities ORDER BY suspended_at DESC"
             ).fetchall()
             return [dict(r) for r in rows]
 

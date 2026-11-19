@@ -786,7 +786,7 @@ def clone_collection(collection_id: str, body: dict = None, user_id: str = Depen
             embedding_model=(body or {}).get("embedding_model") or None,
         )
     except storage_quota.StorageLimitExceeded as e:
-        raise HTTPException(status_code=413, detail=e.to_detail())
+        raise HTTPException(status_code=e.status_code, detail=e.to_detail())
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except RuntimeError as e:
@@ -1047,7 +1047,7 @@ def import_collection(  # sync: unpacks the bundle in the threadpool
     except BundleError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except storage_quota.StorageLimitExceeded as e:
-        raise HTTPException(status_code=413, detail=e.to_detail())
+        raise HTTPException(status_code=e.status_code, detail=e.to_detail())
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     finally:

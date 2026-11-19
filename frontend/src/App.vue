@@ -36,8 +36,19 @@
       <!-- Spacer -->
       <div class="flex-1"></div>
 
-      <!-- User identity (private-collections mode) -->
-      <div v-if="userStore.isPrivateMode" class="hidden md:flex items-center gap-1.5 text-xs text-base-content/50">
+      <!-- User identity, and the one account action: on a shared workstation,
+           leave nothing behind for the next person (utils/storageScope.js) -->
+      <div v-if="me.identity" class="hidden md:block dropdown dropdown-end">
+        <button tabindex="0" class="btn btn-ghost btn-xs gap-1.5 text-xs text-base-content/50 font-normal" aria-haspopup="menu" :aria-label="`Account: ${me.identity}`">
+          <Users :size="12" />
+          <span class="max-w-24 truncate">{{ userStore.displayName || me.identity }}</span>
+        </button>
+        <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-[60] w-64 p-2 shadow-lg border border-base-300">
+          <li class="menu-title"><span class="truncate">{{ me.identity }}</span></li>
+          <li><button data-testid="sign-out-clear" @click="signOutAndClear"><LogOut :size="14" />{{ signOutLabel }}</button></li>
+        </ul>
+      </div>
+      <div v-else-if="userStore.isPrivateMode" class="hidden md:flex items-center gap-1.5 text-xs text-base-content/50">
         <Users :size="12" />
         <span class="max-w-24 truncate">{{ userStore.displayName }}</span>
       </div>
@@ -89,6 +100,9 @@
         <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-[60] w-64 p-2 shadow-lg border border-base-300 max-h-[70vh] overflow-y-auto flex-nowrap">
           <li v-if="me.identity || userStore.isPrivateMode" class="menu-title">
             <span class="truncate">{{ me.identity || userStore.displayName }}</span>
+          </li>
+          <li v-if="me.identity">
+            <button @click="signOutAndClear"><LogOut :size="14" />{{ signOutLabel }}</button>
           </li>
           <li>
             <button :class="{ 'active': activeTab === 'settings' }" @click="activeTab = 'settings'; closeMenus()">
@@ -1281,6 +1295,15 @@
                     >
                       <XCircle :size="16" />
                     </button>
+                    <button
+                      v-if="job.canRerun"
+                      @click="rerunJob(job.id)"
+                      class="btn btn-ghost btn-xs"
+                      data-testid="job-rerun"
+                      :aria-label="`Run ${job.type} job again`"
+                    >
+                      Run again
+                    </button>
                   </div>
                 </div>
 
@@ -1383,6 +1406,7 @@ import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
 import { useOverlayFocus } from './composables/useOverlayFocus'
 import { ChartColumn, Settings, Plus, Check, ChevronDown, Trash2, Bell, Loader2, CheckCircle, XCircle, AlertTriangle, X, Share2, Users, LayoutGrid, List, BookOpen, RotateCcw, ShieldCheck, CircleUser, LogOut, HelpCircle, EllipsisVertical, Search, Copy, Upload, PanelLeft, PanelLeftClose, PanelRight, PanelRightClose, Command, Keyboard, Info, MessageSquare, Plug, FileText, Gauge, Layers, StickyNote, FolderPlus, SunMedium, Moon, Palette, MonitorCog, History, MessageSquarePlus, ShieldAlert, LibraryBig, Network, SlidersHorizontal, Sparkles, Quote } from 'lucide-vue-next'
 import CommandPalette from './components/CommandPalette.vue'
+import { clearThisBrowser } from './utils/storageScope'
 import EmbeddingMismatchNotice from './components/EmbeddingMismatchNotice.vue'
 import ShortcutsDialog from './components/ShortcutsDialog.vue'
 import AboutDialog from './components/AboutDialog.vue'
@@ -1552,6 +1576,17 @@ const startResize = (e) => {
 
 // The verified identity behind an SSO / proxy deployment, when there is one.
 const me = ref({ authenticated_via: null, identity: null })
+
+// Everything this browser kept (provider keys, chat and search history,
+// notes, every person's), then the deployment's sign-out page if it has one.
+const signOutLabel = computed(() => (me.value.sign_out_url ? 'Sign out and clear this browser' : 'Clear this browser'))
+const signOutAndClear = () => {
+  if (!window.confirm('Remove everything Clio kept in this browser, including saved provider keys and chat history? '
+    + 'What is stored on the server is not affected.')) return
+  clearThisBrowser()
+  if (me.value.sign_out_url) window.location.assign(me.value.sign_out_url)
+  else window.location.reload()
+}
 const loadMe = async () => {
   try {
     const resp = await http.get('/api/me')
@@ -2525,6 +2560,15 @@ const refreshJobsOnReturn = () => {
   if (now - lastJobsRefresh < 15000) return
   lastJobsRefresh = now
   backgroundJobsStore.checkActiveJobs()
+}
+
+// Run an interrupted job again (it skips what is already indexed)
+const rerunJob = async (jobId) => {
+  try {
+    await backgroundJobsStore.rerunUploadJob(jobId)
+  } catch (err) {
+    ui.toastError(err, 'Could not run the job again')
+  }
 }
 
 // Cancel an active upload job

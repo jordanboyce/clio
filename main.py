@@ -47,7 +47,7 @@ from api import (
     system,
 )
 
-log_format.configure(settings.log_format)
+log_format.configure(settings.log_format, settings.log_level)
 logger = logging.getLogger(__name__)
 
 
@@ -146,6 +146,13 @@ def _check_security_posture() -> None:
             f" (model {settings.ai_model})" if settings.ai_model else "",
         )
 
+    # Which model endpoints a chat request may name. Unset, this follows the
+    # bind (services/ai_service.allowed_base_urls), so the line says what it
+    # decided and why.
+    from services.ai_service import allowed_base_urls_log_line
+
+    logger.info(allowed_base_urls_log_line(settings))
+
     # Inside Docker HOST is always 0.0.0.0; readiness also looks at the
     # published interface (BIND_ADDRESS) so a loopback-only container does
     # not warn about a network it is not on.
@@ -178,6 +185,24 @@ def _check_security_posture() -> None:
             "exfiltrate indexed documents. List the origins that need access "
             "instead."
         )
+
+
+def _refuse_newer_databases() -> None:
+    """Stop before anything opens a collection a newer Clio wrote.
+
+    app.db is checked when it is opened, at import (services/app_database.py);
+    collection databases open lazily, so a newer one would otherwise surface
+    as a failing search later. Read-only: nothing is migrated or stamped here.
+    """
+    from services.collection_service import collection_service
+    from services.schema_versions import METADATA_SCHEMA_VERSION, NewerSchemaError, is_newer, \
+        newer_message, read_version
+
+    for db_path in sorted(collection_service.base_dir.glob("*/indexes/metadata.db")):
+        found = read_version(db_path)
+        if found and is_newer(found, METADATA_SCHEMA_VERSION):
+            raise NewerSchemaError(newer_message(
+                "The collection database", db_path, found, METADATA_SCHEMA_VERSION))
 
 
 def _log_renamed_settings() -> None:
@@ -218,6 +243,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager - initialize and cleanup services."""
     async with mcp_server_lifespan():
         logger.info("Initializing Clio API...")
+        _refuse_newer_databases()
         _log_renamed_settings()
         _size_worker_pools()
 
@@ -227,6 +253,10 @@ async def lifespan(app: FastAPI):
         # collection it was indexing into.
         from services.upload_service import upload_service
         upload_service.recover_orphaned_jobs()
+        # Reports being written when the process stopped (E7).
+        from services import artifact_jobs
+        from services.collection_service import collection_service
+        artifact_jobs.fail_interrupted(collection_service.base_dir)
 
         # Credentials saved by a version that stored them in plain text.
         from services.app_database import app_db
@@ -675,6 +705,7 @@ async def _serve_registered_app(request, call_next, presented: str):
     request.state.auth_via = via
     request.state.rate_limit_key = f"app:{app_record['id']}"
     request.state.rate_limit_overrides = api_apps.rate_limit_overrides(app_record)
+    await _audit_sign_in(request)
     with mcp_server.app_request_scope(app_record):
         return await call_next(request)
 
@@ -801,6 +832,7 @@ async def require_auth(request, call_next):
         and not presented.startswith("asy_mcp_")
         and not app_credential
     ):
+        request.state.auth_via = "open"  # nothing to sign in with; the audit trail says so
         return await call_next(request)
 
     # Browsers get the Basic challenge so the native prompt still works. The
@@ -829,6 +861,58 @@ async def require_auth(request, call_next):
         headers={"WWW-Authenticate": www_authenticate},
     )
 
+# Every request carries its credential, so "signed in" is recorded once per
+# caller, method and address in this window rather than on every call.
+_SIGN_IN_AUDIT_WINDOW_SECONDS = 3600
+_SIGN_IN_AUDIT_MAX = 10_000
+_signed_in: dict = {}
+
+
+async def _audit_sign_in(request) -> None:
+    """An auth.sign_in row the first time a caller succeeds in a while."""
+    import time as _time
+
+    via = getattr(request.state, "auth_via", None)
+    who = getattr(request.state, "auth_identity", None)
+    key = (via, who, _client_ip(request))
+    now = _time.monotonic()
+    last = _signed_in.get(key)
+    if last is not None and now - last < _SIGN_IN_AUDIT_WINDOW_SECONDS:
+        return
+    if len(_signed_in) >= _SIGN_IN_AUDIT_MAX:
+        _signed_in.clear()
+    _signed_in[key] = now
+    from services import audit
+
+    detail = {"method": via}
+    token_id = getattr(request.state, "mcp_token_id", None)
+    if token_id:
+        detail["token_id"] = token_id
+    await asyncio.to_thread(audit.record, "auth.sign_in", actor=who, detail=detail)
+
+
+async def _refuse_if_suspended(request, identity: str):
+    from services import governance
+
+    try:
+        suspended = await asyncio.to_thread(governance.is_suspended, identity)
+    except Exception:  # noqa: BLE001 - fail closed: an unknown state is not a pass
+        logger.exception("Could not check whether %s is suspended", identity)
+        return JSONResponse(
+            {"detail": "Your account could not be checked just now. Try again in a moment.",
+             "code": "account_check_failed"},
+            status_code=503, headers={"Retry-After": "5"},
+        )
+    if not suspended:
+        return None
+    logger.info("Refused %s %s: %s is suspended", request.method, request.url.path, identity)
+    return JSONResponse(
+        {"detail": "This account is suspended. Ask an administrator to reinstate it.",
+         "code": "account_suspended"},
+        status_code=403,
+    )
+
+
 async def _call_with_user_context(request, call_next):
     """Bind the verified identity and collection scope to this request.
 
@@ -843,6 +927,14 @@ async def _call_with_user_context(request, call_next):
         reset_request_user,
     )
     identity = getattr(request.state, "auth_identity", None)
+    # A suspended identity is refused here, where every verified credential
+    # (IdP token, proxy header, MCP token) lands, not only by revoking its
+    # MCP tokens (services/governance.suspend_user).
+    if identity:
+        refused = await _refuse_if_suspended(request, identity)
+        if refused is not None:
+            return refused
+    await _audit_sign_in(request)
     identity_token = set_request_identity(identity)
     user_token = set_request_user(identity) if settings.private_collections else None
     try:
@@ -874,6 +966,13 @@ app.middleware("http")(_enforce_boundary)
 # Added last, which makes it the OUTERMOST middleware: it times auth and rate
 # limiting too, and reads the identity auth left on request.state for its
 # access line. /api/admin/stats reads its counters.
+# Inside track_request (registered next, so outside this), which puts the
+# request id in scope["state"]: binds the scope for the audit trail and the
+# request id on log lines (middleware/request_context.py).
+from middleware.request_context import RequestContext as _RequestContext
+
+app.add_middleware(_RequestContext)
+
 from middleware.request_meta import track_request as _track_request
 
 app.middleware("http")(_track_request)

@@ -153,12 +153,42 @@ def _database_metrics() -> Iterable[Metric]:
     )
 
 
+def _failure_metrics() -> Iterable[Metric]:
+    """What went wrong since start: sign-ins, jobs and model calls (E9)."""
+    from middleware.auth_failures import failed_auth_limiter
+    from services import ops_counters
+
+    yield CounterMetricFamily("clio_auth_failures", "Credentials refused (password, token, app key, identity).",
+                              value=failed_auth_limiter.failures)
+    yield CounterMetricFamily("clio_auth_lockouts", "Addresses cut off after too many failed sign-ins.",
+                              value=failed_auth_limiter.lockouts)
+    jobs = CounterMetricFamily("clio_jobs_failed", "Background jobs that failed, by kind.", labels=["kind"])
+    for kind in ("index", "report", "library"):
+        jobs.add_metric([kind], ops_counters.snapshot("jobs_failed").get(kind, 0))
+    yield jobs
+    errors = CounterMetricFamily("clio_provider_errors", "Model calls that raised, by provider.", labels=["provider"])
+    for provider, count in sorted(ops_counters.snapshot("provider_errors").items()):
+        errors.add_metric([provider], count)
+    yield errors
+
+
+def _disk_metrics() -> Iterable[Metric]:
+    from services import storage_quota
+
+    free = storage_quota.free_disk_bytes()
+    if free is not None:
+        yield GaugeMetricFamily("clio_data_dir_free_bytes", "Free space where the data directory lives.", value=free)
+    yield GaugeMetricFamily("clio_data_dir_min_free_bytes", "Free space kept back (MIN_FREE_DISK_MB); ingest stops below it.",
+                            value=storage_quota.min_free_bytes())
+
+
 class _LiveStateCollector:
     """Reads the live components on each scrape. One failing never hides the rest."""
 
     _sources = (
         _worker_pool_metrics, _request_metrics, _rate_limit_metrics,
         _index_metrics, _search_metrics, _job_metrics, _database_metrics,
+        _failure_metrics, _disk_metrics,
     )
 
     def collect(self) -> Iterable[Metric]:

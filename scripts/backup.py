@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Back up, verify and restore a Clio data directory.
 
-    python scripts/backup.py backup  --data ./data --out clio-2026-10-27.tar.gz
+    python scripts/backup.py backup  --data ./data --out clio-2026-10-27.tar.gz [--no-key]
     python scripts/backup.py verify  clio-2026-10-27.tar.gz
     python scripts/backup.py restore clio-2026-10-27.tar.gz --data ./data-restored
 
@@ -16,11 +16,22 @@ What it does, and why it is safe to run against a live server:
 * SQLite databases (app, per-collection metadata and keyword indexes, caches)
   are copied with SQLite's online backup API, which yields a consistent
   snapshot even while the server is writing, including pending WAL content.
-* Everything else (uploaded documents, vector indexes) is copied as files.
-  A vector index being written at that instant can be captured mid-save, so
-  for a backup you must be able to restore, stop the server first
-  (`docker compose stop`) or take a volume snapshot. The tool says so and
-  never claims more than it checked.
+* Vector indexes are read once into a staging copy, before the databases
+  beside them are snapshotted, and that copy is what is hashed and archived.
+  The server replaces an index file whole (write, then rename), so the copy
+  is always a complete index; at worst it lags its database by the last few
+  writes, and a restored collection embeds the passages it lacks again on
+  first open (that needs the embedding model) and drops vectors whose
+  passages were deleted. A backup taken while the server runs is therefore
+  restorable.
+* Everything else (uploaded documents) is copied as files.
+* The manifest records the Clio version that made the backup and each
+  database's schema version. `restore` refuses a backup whose databases are
+  newer than this copy of Clio reads, naming both versions.
+* DATA_DIR/secret.key, which decrypts the credentials stored in app.db, is
+  included unless --no-key is given. Without it, restored credentials cannot
+  be read unless SECRET_ENCRYPTION_KEY was set; keep the key apart from the
+  backup when the backup leaves the machine.
 * Model caches (`models/`) and previous backups are left out: they are
   re-downloadable and large.
 * A MANIFEST.json with a SHA-256 per file travels inside the archive.
@@ -36,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -53,6 +65,31 @@ FORMAT = 1
 EXCLUDE_TOP = {"models", "backups"}      # rebuildable / self-referential
 SQLITE_MAGIC = b"SQLite format 3\x00"
 SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+SECRET_KEY = "secret.key"
+_SERVICES = Path(__file__).resolve().parent.parent / "services"
+
+
+def _load(name: str):
+    """A dependency-free app module by path (importing services would start the app)."""
+    spec = importlib.util.spec_from_file_location(f"_clio_backup_{name}", _SERVICES / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _schema_kind(rel: str) -> Optional[str]:
+    if rel == "app.db":
+        return "app"
+    if rel.endswith("/indexes/metadata.db"):
+        return "metadata"
+    return None
+
+
+def _app_version() -> str:
+    try:
+        return _load("provenance").version()
+    except Exception:  # noqa: BLE001 - a backup is still a backup without it
+        return "unknown"
 
 
 def _sha256(path: Path) -> str:
@@ -109,26 +146,51 @@ def _walk(data: Path):
             yield p, (rel_dir / name).as_posix()
 
 
-def backup(data: Path, out: Path) -> dict:
+def _is_index_file(rel: str) -> bool:
+    """A vector index file the server may replace while the backup runs."""
+    return "/indexes/" in f"/{rel}" and not rel.endswith(".tmp")
+
+
+def backup(data: Path, out: Path, include_key: bool = True) -> dict:
     if not data.is_dir():
         raise SystemExit(f"error: {data} is not a directory")
     out = out.resolve()
     work = Path(tempfile.mkdtemp(prefix="clio-backup-"))
     files: dict[str, dict] = {}
     try:
-        for src, rel in _walk(data):
-            if src.resolve() == out:
+        walked = [(src, rel) for src, rel in _walk(data) if src.resolve() != out]
+        if not include_key:
+            walked = [(src, rel) for src, rel in walked if rel != SECRET_KEY]
+        # Index files first, each read once into staging, then the databases:
+        # an index can then only lag its database, which the server repairs.
+        for src, rel in walked:
+            if _is_index_file(rel) and not _is_sqlite(src):
+                staged = work / hashlib.sha1(rel.encode()).hexdigest()
+                try:
+                    shutil.copyfile(src, staged)
+                except FileNotFoundError:
+                    continue  # replaced or removed between the walk and the copy
+                files[rel] = {"path": staged, "kind": "file"}
+        schemas: dict[str, str] = {}
+        for src, rel in walked:
+            if rel in files:
                 continue
             if _is_sqlite(src):
                 staged = work / hashlib.sha1(rel.encode()).hexdigest()
                 _snapshot_sqlite(src, staged)
                 files[rel] = {"path": staged, "kind": "sqlite"}
-            else:
+                if _schema_kind(rel):
+                    found = _load("schema_versions").read_version(staged)
+                    schemas[rel] = found if found is not None else "0"
+            elif not _is_index_file(rel):
                 files[rel] = {"path": src, "kind": "file"}
         manifest = {
             "format": FORMAT,
             "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "excluded": sorted(EXCLUDE_TOP),
+            "app_version": _app_version(),
+            "schemas": schemas,
+            "secret_key": "included" if include_key and SECRET_KEY in files else "left out",
+            "excluded": sorted(EXCLUDE_TOP | (set() if include_key else {SECRET_KEY})),
             "files": {},
         }
         for rel, info in files.items():
@@ -206,11 +268,29 @@ def verify(archive: Path) -> tuple[dict, list[str]]:
     return manifest, problems
 
 
+def newer_schemas(manifest: dict) -> list[str]:
+    """Databases in the backup that this copy of Clio cannot read."""
+    versions = _load("schema_versions")
+    supported = {"app": versions.APP_DB_SCHEMA_VERSION, "metadata": versions.METADATA_SCHEMA_VERSION}
+    problems = []
+    for rel, found in sorted((manifest.get("schemas") or {}).items()):
+        kind = _schema_kind(rel)
+        if kind and versions.is_newer(found, supported[kind]):
+            problems.append(f"{rel} is schema {found}; this version reads up to {supported[kind]}")
+    return problems
+
+
 def restore(archive: Path, target: Path, force: bool) -> dict:
     manifest, problems = verify(archive)
     if problems:
         raise SystemExit("error: backup failed verification, nothing restored:\n  "
                          + "\n  ".join(problems[:20]))
+    newer = newer_schemas(manifest)
+    if newer:
+        raise SystemExit(
+            f"error: this backup was made by Clio {manifest.get('app_version', 'unknown')}, "
+            "which is newer than this one. Restore it with that version. Nothing restored:\n  "
+            + "\n  ".join(newer))
     if target.exists() and any(target.iterdir()) and not force:
         raise SystemExit(f"error: {target} is not empty; stop the server and pass --force "
                          "to overwrite")
@@ -237,6 +317,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("backup"); b.add_argument("--data", default=os.environ.get("DATA_DIR", "./data"))
     b.add_argument("--out", required=True)
+    b.add_argument("--no-key", action="store_true",
+                   help=f"leave {SECRET_KEY} out (keep it apart from the backup)")
     v = sub.add_parser("verify"); v.add_argument("archive")
     r = sub.add_parser("restore"); r.add_argument("archive")
     r.add_argument("--data", default=os.environ.get("DATA_DIR", "./data"))
@@ -244,18 +326,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     a = ap.parse_args(argv)
 
     if a.cmd == "backup":
-        m = backup(Path(a.data), Path(a.out))
+        m = backup(Path(a.data), Path(a.out), include_key=not a.no_key)
         total = sum(f["size"] for f in m["files"].values())
         print(f"backed up {len(m['files'])} files ({total / 1e6:.1f} MB) to {a.out}")
-        print("note: stop the server first if this backup must be restorable "
-              "(vector indexes are copied as files).")
+        print(f"made by Clio {m['app_version']}; {SECRET_KEY} {m['secret_key']}")
+        if m["secret_key"] == "left out":
+            print("note: stored credentials need that key (or SECRET_ENCRYPTION_KEY) after a restore.")
         return 0
     if a.cmd == "verify":
         m, problems = verify(Path(a.archive))
         if problems:
             print("FAILED:\n  " + "\n  ".join(problems[:50]))
             return 1
-        print(f"ok: {len(m['files'])} files verified (created {m['created']})")
+        print(f"ok: {len(m['files'])} files verified (created {m['created']}, "
+              f"Clio {m.get('app_version', 'unknown')}, {SECRET_KEY} {m.get('secret_key', 'unknown')})")
+        for issue in newer_schemas(m):
+            print(f"note: {issue}; restore it with a newer Clio")
         return 0
     m = restore(Path(a.archive), Path(a.data), a.force)
     print(f"restored {len(m['files'])} files to {a.data}; start the server and run "

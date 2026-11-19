@@ -586,7 +586,7 @@
           <tbody>
             <tr v-for="e in auditEvents" :key="e.id">
               <td class="whitespace-nowrap">{{ formatWhen(e.timestamp) }}</td>
-              <td class="truncate max-w-[20ch]">{{ e.actor || 'anonymous' }}</td>
+              <td class="truncate max-w-[20ch]" :title="auditOrigin(e)">{{ e.actor || 'anonymous' }}</td>
               <td class="font-mono">{{ e.action }}</td>
               <td class="truncate max-w-[24ch]">
                 {{ e.collection_id || '' }}<span v-if="e.document_id"> · {{ e.document_id.slice(0, 8) }}</span><span v-if="e.target"> · {{ e.target }}</span>
@@ -595,6 +595,11 @@
             </tr>
           </tbody>
         </table>
+        <div v-if="auditNextBefore" class="p-2 text-center">
+          <button class="btn btn-xs btn-ghost" data-testid="audit-older" :disabled="auditLoadingOlder" @click="loadOlderAudit">
+            {{ auditLoadingOlder ? 'Loading…' : 'Show older events' }}
+          </button>
+        </div>
       </div>
       <p class="text-[11px] text-base-content/45 mt-1">
         Kept for {{ auditRetention ? auditRetention + ' days' : 'ever' }} (AUDIT_RETENTION_DAYS).
@@ -629,12 +634,19 @@
         <div class="space-y-4">
           <div class="rounded-lg border border-base-300/60 bg-base-100 p-4 space-y-2">
             <div class="text-xs font-medium">Suspend an identity</div>
-            <p class="text-[11px] text-base-content/50">Revokes every MCP token they hold. Their sources stay until you remove them.</p>
+            <p class="text-[11px] text-base-content/50">They can no longer sign in, and every MCP token they hold is revoked. Their sources stay until you remove them.</p>
             <div class="flex flex-wrap gap-2">
               <input v-model="suspendEmail" type="email" class="input input-bordered input-xs flex-1 min-w-[10rem]" placeholder="person@example.com" aria-label="Identity to suspend" />
               <input v-model="suspendReason" class="input input-bordered input-xs w-32" placeholder="reason" aria-label="Reason" />
-              <button class="btn btn-xs btn-error btn-outline" :disabled="!suspendEmail.trim()" @click="suspend">Suspend</button>
+              <button class="btn btn-xs btn-error btn-outline" :disabled="!suspendEmail.trim()" @click="suspendAndList">Suspend</button>
             </div>
+            <ul v-if="suspendedUsers.length" class="space-y-0.5 max-h-40 overflow-y-auto text-xs" aria-label="Suspended identities">
+              <li v-for="s in suspendedUsers" :key="s.identity" class="flex items-center gap-2">
+                <span class="truncate flex-1" :title="s.reason || ''">{{ s.identity }}</span>
+                <span class="text-base-content/45 whitespace-nowrap">{{ formatDay(s.suspended_at) }}</span>
+                <button class="btn btn-ghost btn-xs" @click="reinstate(s.identity)">Reinstate</button>
+              </li>
+            </ul>
           </div>
           <div class="rounded-lg border border-base-300/60 bg-base-100 p-4 space-y-2">
             <div class="text-xs font-medium">Policy acknowledgements <span class="text-base-content/45 font-normal">(version {{ aupAcks.version }})</span></div>
@@ -926,14 +938,41 @@ const auditCsvHref = computed(() => {
   return `/api/admin/audit?${p.toString()}`
 })
 
+// The server pages with a cursor (next_before); older pages are appended.
+const auditNextBefore = ref(null)
+const auditLoadingOlder = ref(false)
+
+const auditParams = () => {
+  const params = { limit: 200 }
+  if (auditFilter.action) params.action = auditFilter.action
+  if (auditFilter.actor.trim()) params.actor = auditFilter.actor.trim()
+  return params
+}
+
+// How and from where the actor signed in, for the actor cell's tooltip.
+const auditOrigin = (e) => [e.auth_method && `via ${e.auth_method}`, e.source_ip && `from ${e.source_ip}`,
+  e.request_id && `request ${e.request_id}`].filter(Boolean).join(' · ')
+
+const loadOlderAudit = async () => {
+  if (!auditNextBefore.value) return
+  auditLoadingOlder.value = true
+  try {
+    const resp = await http.get('/api/admin/audit', { params: { ...auditParams(), before: auditNextBefore.value } })
+    auditEvents.value = [...auditEvents.value, ...(resp.data.events || [])]
+    auditNextBefore.value = resp.data.next_before ?? null
+  } catch (err) {
+    ui.toastError(err, 'Could not load older events')
+  } finally {
+    auditLoadingOlder.value = false
+  }
+}
+
 const loadAudit = async () => {
   auditError.value = ''
   try {
-    const params = { limit: 200 }
-    if (auditFilter.action) params.action = auditFilter.action
-    if (auditFilter.actor.trim()) params.actor = auditFilter.actor.trim()
-    const resp = await http.get('/api/admin/audit', { params })
+    const resp = await http.get('/api/admin/audit', { params: auditParams() })
     auditEvents.value = resp.data.events || []
+    auditNextBefore.value = resp.data.next_before ?? null
     auditActions.value = resp.data.actions || []
     auditRetention.value = resp.data.retention_days || 0
   } catch (err) {
@@ -1000,6 +1039,30 @@ const suspend = async () => {
     await loadAudit()
   } catch (err) {
     ui.toastError(err, 'Could not suspend that identity')
+  }
+}
+
+// Who is suspended, with a way back (E2).
+const suspendedUsers = ref([])
+
+const loadSuspended = async () => {
+  try {
+    suspendedUsers.value = (await http.get('/api/admin/users/suspended')).data.suspended || []
+  } catch { suspendedUsers.value = [] }
+}
+
+const suspendAndList = async () => {
+  await suspend()
+  await loadSuspended()
+}
+
+const reinstate = async (identity) => {
+  try {
+    await http.post(`/api/admin/users/${encodeURIComponent(identity)}/reinstate`)
+    ui.notify(`${identity} can sign in again. Their old MCP tokens stay revoked.`, 'success')
+    await Promise.all([loadSuspended(), loadAudit()])
+  } catch (err) {
+    ui.toastError(err, 'Could not reinstate that identity')
   }
 }
 
@@ -1072,7 +1135,7 @@ const loadAll = async () => {
   loading.value = true
   try {
     await Promise.all([
-      loadStats(), loadUsage(), loadReview(), loadPolicy(), loadAudit(), loadBlocked(), loadAcks(),
+      loadStats(), loadUsage(), loadReview(), loadPolicy(), loadAudit(), loadBlocked(), loadAcks(), loadSuspended(),
     ])
   } finally {
     loading.value = false

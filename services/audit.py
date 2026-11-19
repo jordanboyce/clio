@@ -15,13 +15,22 @@ them much longer than the search log (AUDIT_RETENTION_DAYS, 0 = forever).
 
 Recording never raises: an audit failure must not turn a successful upload
 into a failed one. It logs a warning instead.
+
+Each row also carries the request it came from (source address, request id,
+sign-in method; middleware/request_context.py) and is written to the log
+stream as one line on the ``clio.audit`` logger, so a SIEM that collects
+the logs has the trail without polling the API: under LOG_FORMAT=json the
+row is the ``audit`` object of that line.
 """
 
 import json
 import logging
 from typing import Any, Dict, List, Optional
 
+from services.clock import utcnow
+
 logger = logging.getLogger(__name__)
+stream = logging.getLogger("clio.audit")
 
 # The vocabulary. Kept as plain strings so the admin filter can list them;
 # add here when a new event type is introduced.
@@ -79,6 +88,11 @@ ACTIONS: List[str] = [
     "admin.block_hash",
     "admin.unblock_hash",
     "admin.suspend_user",
+    "admin.reinstate_user",     # a suspension lifted
+    "admin.injection_tuning",   # injection-scan patterns muted/unmuted, allow phrases changed
+    "auth.sign_in",             # a credential accepted (first time per caller, method and address in a while)
+    "auth.sign_in_failed",      # a credential refused (password, token, app key, identity assertion)
+    "auth.lockout",             # an address ran out of sign-in attempts (AUTH_FAILURE_LIMIT)
     "admin.remove_document",    # admin removal (optionally with hash block)
 ]
 
@@ -101,13 +115,9 @@ def record(
     consulted.
     """
     if actor is _UNSET:
-        try:
-            from middleware.user_context import get_request_user
-
-            actor = get_request_user()
-        except Exception:
-            actor = None
-
+        actor = current_actor()
+    context = _request_context()
+    detail_text = json.dumps(detail, default=str) if detail else None
     try:
         from services.app_database import app_db
 
@@ -117,10 +127,47 @@ def record(
             collection_id=collection_id,
             document_id=document_id,
             target=target,
-            detail=json.dumps(detail, default=str) if detail else None,
+            detail=detail_text,
+            context=context,
         )
     except Exception as e:  # pragma: no cover - defensive by design
         logger.warning(f"Audit event {action} could not be recorded: {e}")
+    _emit({"actor": actor, "action": action, "collection_id": collection_id,
+           "document_id": document_id, "target": target, "detail": detail, **context})
+
+
+def current_actor() -> Optional[str]:
+    """Who the current request is: a registered app, else the verified
+    identity, else the collection user (None or the single-user default).
+    The verified identity comes before the collection user so a signed-in
+    person on a deployment without private collections is still named."""
+    try:
+        from middleware.user_context import get_request_app, get_request_identity, get_request_user
+
+        app = get_request_app()
+        if app is not None:
+            return app["actor"]
+        return get_request_identity() or get_request_user()
+    except Exception:  # noqa: BLE001 - attribution must not stop the event
+        return None
+
+
+def _request_context() -> Dict[str, Optional[str]]:
+    try:
+        from middleware.request_context import audit_context
+
+        return audit_context()
+    except Exception:  # noqa: BLE001
+        return {"source_ip": None, "request_id": None, "auth_method": None}
+
+
+def _emit(event: Dict[str, Any]) -> None:
+    """One log line per row, for whoever collects the logs."""
+    try:
+        row = {"timestamp": utcnow().isoformat(), **event}
+        stream.info("AUDIT %s", json.dumps(row, default=str), extra={"audit": row})
+    except Exception:  # noqa: BLE001 - logging must not stop the event
+        pass
 
 
 def record_many(
@@ -137,6 +184,7 @@ def record_many(
     """
     if not events:
         return
+    context = _request_context()
     try:
         from services.app_database import app_db
 
@@ -144,9 +192,12 @@ def record_many(
             {"document_id": e.get("document_id"),
              "detail": json.dumps(e["detail"], default=str) if e.get("detail") else None}
             for e in events
-        ])
+        ], context=context)
     except Exception as e:  # pragma: no cover - defensive by design
         logger.warning(f"Audit events {action} could not be recorded: {e}")
+    for e in events:
+        _emit({"actor": actor, "action": action, "collection_id": collection_id,
+               "document_id": e.get("document_id"), "target": None, "detail": e.get("detail"), **context})
 
 
 def list_events(
@@ -157,8 +208,10 @@ def list_events(
     collection_id: Optional[str] = None,
     document_id: Optional[str] = None,
     since: Optional[str] = None,
+    before_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Newest-first page of events with the detail blob decoded."""
+    """Newest-first page of events with the detail blob decoded. Pass the
+    last row's id as ``before_id`` for the next page."""
     from services.app_database import app_db
 
     rows = app_db.list_audit_events(
@@ -168,6 +221,7 @@ def list_events(
         collection_id=collection_id,
         document_id=document_id,
         since=since,
+        before_id=before_id,
     )
     for row in rows:
         raw = row.get("detail")
@@ -189,7 +243,7 @@ def to_csv(rows: List[Dict[str, Any]]) -> str:
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(["id", "timestamp", "actor", "action", "collection_id",
-                     "document_id", "target", "detail"])
+                     "document_id", "target", "detail", "source_ip", "request_id", "auth_method"])
     for r in rows:
         detail = r.get("detail")
         if isinstance(detail, (dict, list)):
@@ -200,5 +254,6 @@ def to_csv(rows: List[Dict[str, Any]]) -> str:
             r.get("id"), r.get("timestamp"), r.get("actor") or "",
             r.get("action"), r.get("collection_id") or "",
             r.get("document_id") or "", r.get("target") or "", detail or "",
+            r.get("source_ip") or "", r.get("request_id") or "", r.get("auth_method") or "",
         ]))
     return out.getvalue()

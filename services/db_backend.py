@@ -347,12 +347,16 @@ class DatabaseBackend(ABC):
         document_id: Optional[str] = None,
         target: Optional[str] = None,
         detail: Optional[str] = None,
+        context: Optional[Dict[str, Optional[str]]] = None,
     ) -> int:
+        """``context`` carries the request's ``source_ip``, ``request_id`` and
+        ``auth_method`` (services/audit.py)."""
         ...
 
     @abstractmethod
     def add_audit_events(self, actor: Optional[str], action: str, collection_id: Optional[str],
-                         events: List[Dict[str, Optional[str]]]) -> None:
+                         events: List[Dict[str, Optional[str]]],
+                         context: Optional[Dict[str, Optional[str]]] = None) -> None:
         """Record one action over many documents in one transaction."""
         ...
 
@@ -365,7 +369,9 @@ class DatabaseBackend(ABC):
         collection_id: Optional[str] = None,
         document_id: Optional[str] = None,
         since: Optional[str] = None,
+        before_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        """Newest first. ``before_id`` continues a page: only rows older than it."""
         ...
 
     @abstractmethod
@@ -407,6 +413,26 @@ class DatabaseBackend(ABC):
 
     @abstractmethod
     def list_blocked_hashes(self) -> List[Dict[str, Any]]:
+        ...
+
+    # ── Suspended identities ─────────────────────────────────
+    # An admin's "Suspend" (services/governance.py): the identity is refused
+    # wherever it is resolved (main.py) until an admin reinstates it.
+
+    @abstractmethod
+    def suspend_identity(self, identity: str, suspended_by: Optional[str], reason: str = "") -> Dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def reinstate_identity(self, identity: str) -> bool:
+        ...
+
+    @abstractmethod
+    def is_identity_suspended(self, identity: str) -> bool:
+        ...
+
+    @abstractmethod
+    def list_suspended_identities(self) -> List[Dict[str, Any]]:
         ...
 
     # ── Upload Jobs ──────────────────────────────────────────

@@ -266,9 +266,11 @@ class PostgresBackend(DatabaseBackend):
                         phase_detail TEXT,
                         chunks_processed INTEGER DEFAULT 0,
                         chunks_total INTEGER DEFAULT 0,
-                        job_type TEXT DEFAULT 'upload'
+                        job_type TEXT DEFAULT 'upload',
+                        rerun_spec TEXT
                     )
                 """)
+                cur.execute("ALTER TABLE upload_jobs ADD COLUMN IF NOT EXISTS rerun_spec TEXT")  # E7
                 # Active-job lookups filter on status, then collection.
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_upload_jobs_status_collection ON upload_jobs(status, collection_id)")
                 cur.execute("""
@@ -362,6 +364,8 @@ class PostgresBackend(DatabaseBackend):
                         detail TEXT
                     )
                 """)
+                for col in ("source_ip", "request_id", "auth_method"):  # E1
+                    cur.execute(f"ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS {col} TEXT")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_events(timestamp DESC)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_events(action, timestamp DESC)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_events(actor, timestamp DESC)")
@@ -380,6 +384,14 @@ class PostgresBackend(DatabaseBackend):
                         blocked_at TEXT NOT NULL,
                         reason TEXT,
                         filename TEXT
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS suspended_identities (
+                        identity TEXT PRIMARY KEY,
+                        suspended_by TEXT,
+                        suspended_at TEXT NOT NULL,
+                        reason TEXT
                     )
                 """)
                 # Ensure default user
@@ -853,7 +865,8 @@ class PostgresBackend(DatabaseBackend):
     def update_upload_job(self, job_id: int, **kwargs):
         updates, params = [], []
         for field in ["status", "processed_files", "current_file", "error", "result_summary",
-                       "phase", "phase_progress", "phase_detail", "chunks_processed", "chunks_total"]:
+                       "phase", "phase_progress", "phase_detail", "chunks_processed", "chunks_total",
+                       "rerun_spec"]:
             if field not in kwargs:
                 continue
             if kwargs[field] is None and field not in self.NULLABLE_UPLOAD_JOB_FIELDS:
@@ -877,7 +890,8 @@ class PostgresBackend(DatabaseBackend):
     def _upload_job_query(self):
         return """SELECT id, collection_id, status, total_files, processed_files,
                          current_file, error, started_at, completed_at, result_summary,
-                         phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                         phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type,
+                         rerun_spec
                   FROM upload_jobs"""
 
     def get_upload_job(self, job_id: int) -> Optional[Dict[str, Any]]:
@@ -927,17 +941,19 @@ class PostgresBackend(DatabaseBackend):
         finally:
             self._put(conn)
 
-    def fail_interrupted_jobs(self, reason: str) -> Dict[str, int]:
+    def fail_interrupted_jobs(self, reason: str, keep_job_ids=()) -> Dict[str, int]:
         """Close out jobs left mid-flight by a process exit (see the SQLite backend)."""
         ts = utcnow().isoformat()
+        keep = [int(i) for i in keep_job_ids]
+        skip = f" AND id NOT IN ({', '.join(['%s'] * len(keep))})" if keep else ""
         conn = self._conn()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """UPDATE upload_jobs SET status = 'failed', error = %s, completed_at = %s,
-                                              current_file = NULL
-                       WHERE status IN ('pending', 'running')""",
-                    (reason, ts),
+                    f"""UPDATE upload_jobs SET status = 'failed', error = %s, completed_at = %s,
+                                               current_file = NULL
+                        WHERE status IN ('pending', 'running'){skip}""",
+                    (reason, ts, *keep),
                 )
                 uploads = cur.rowcount
                 cur.execute(
@@ -1408,16 +1424,19 @@ class PostgresBackend(DatabaseBackend):
     # ── Audit trail ──────────────────────────────────────────
 
     def add_audit_events(self, actor: Optional[str], action: str, collection_id: Optional[str],
-                         events: List[Dict[str, Optional[str]]]) -> None:
+                         events: List[Dict[str, Optional[str]]],
+                         context: Optional[Dict[str, Optional[str]]] = None) -> None:
         timestamp = utcnow().isoformat()
+        ctx = [(context or {}).get(c) for c in ("source_ip", "request_id", "auth_method")]
         conn = self._conn()
         try:
             with conn.cursor() as cur:
                 cur.executemany(
-                    """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                    [(timestamp, actor, action, collection_id, e.get("document_id"), e.get("target"), e.get("detail"))
-                     for e in events],
+                    """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail,
+                                                 source_ip, request_id, auth_method)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    [(timestamp, actor, action, collection_id, e.get("document_id"), e.get("target"), e.get("detail"),
+                      *ctx) for e in events],
                 )
             conn.commit()
         finally:
@@ -1431,14 +1450,17 @@ class PostgresBackend(DatabaseBackend):
         document_id: Optional[str] = None,
         target: Optional[str] = None,
         detail: Optional[str] = None,
+        context: Optional[Dict[str, Optional[str]]] = None,
     ) -> int:
+        ctx = [(context or {}).get(c) for c in ("source_ip", "request_id", "auth_method")]
         conn = self._conn()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                    (utcnow().isoformat(), actor, action, collection_id, document_id, target, detail),
+                    """INSERT INTO audit_events (timestamp, actor, action, collection_id, document_id, target, detail,
+                                                 source_ip, request_id, auth_method)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (utcnow().isoformat(), actor, action, collection_id, document_id, target, detail, *ctx),
                 )
                 event_id = cur.fetchone()[0]
             conn.commit()
@@ -1454,6 +1476,7 @@ class PostgresBackend(DatabaseBackend):
         collection_id: Optional[str] = None,
         document_id: Optional[str] = None,
         since: Optional[str] = None,
+        before_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         clauses, params = [], []
         for col, val in (("action", action), ("actor", actor),
@@ -1464,13 +1487,16 @@ class PostgresBackend(DatabaseBackend):
         if since:
             clauses.append("timestamp >= %s")
             params.append(since)
+        if before_id is not None:
+            clauses.append("id < %s")
+            params.append(int(before_id))
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         conn = self._conn()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT * FROM audit_events {where} ORDER BY timestamp DESC, id DESC LIMIT %s",
+                    f"SELECT * FROM audit_events {where} ORDER BY id DESC LIMIT %s",
                     params,
                 )
                 return self._fetchall_dict(cur)
@@ -1577,6 +1603,56 @@ class PostgresBackend(DatabaseBackend):
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM blocked_hashes ORDER BY blocked_at DESC")
+                return self._fetchall_dict(cur)
+        finally:
+            self._put(conn)
+
+    # ── Suspended identities ─────────────────────────────────
+
+    def suspend_identity(self, identity: str, suspended_by: Optional[str], reason: str = "") -> Dict[str, Any]:
+        ts = utcnow().isoformat()
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO suspended_identities (identity, suspended_by, suspended_at, reason)
+                       VALUES (%s, %s, %s, %s)
+                       ON CONFLICT (identity) DO UPDATE SET
+                         suspended_by = EXCLUDED.suspended_by, suspended_at = EXCLUDED.suspended_at,
+                         reason = EXCLUDED.reason""",
+                    (identity, suspended_by, ts, reason or ""),
+                )
+            conn.commit()
+            return {"identity": identity, "suspended_by": suspended_by,
+                    "suspended_at": ts, "reason": reason or ""}
+        finally:
+            self._put(conn)
+
+    def reinstate_identity(self, identity: str) -> bool:
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM suspended_identities WHERE identity = %s", (identity,))
+                affected = cur.rowcount
+            conn.commit()
+            return affected > 0
+        finally:
+            self._put(conn)
+
+    def is_identity_suspended(self, identity: str) -> bool:
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM suspended_identities WHERE identity = %s", (identity,))
+                return cur.fetchone() is not None
+        finally:
+            self._put(conn)
+
+    def list_suspended_identities(self) -> List[Dict[str, Any]]:
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM suspended_identities ORDER BY suspended_at DESC")
                 return self._fetchall_dict(cur)
         finally:
             self._put(conn)

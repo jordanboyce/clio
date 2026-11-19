@@ -98,23 +98,48 @@ class IndexerManager:
         lands on the ephemeral filesystem and is lost on recreate. The DB is
         the persistence that survives, so every persistable field must be
         re-applied from it here, not just a subset.
+
+        A saved value wins over the environment, so each time it differs from
+        what the environment set, a line says so (E4) and Settings lists it
+        (services/settings_sources.py). A saved number outside its range
+        (config.SETTING_RANGES) is skipped with a warning, and a value that
+        cannot be applied is named instead of swallowed.
         """
+        from config import SETTING_RANGES, setting_problems
+        from services import settings_sources
+
         try:
             from services.app_database import app_db
             from services.config_manager import VALID_CONFIG_FIELDS, normalize_config_keys
             db_config = normalize_config_keys(app_db.get_all_config())
-            for key in VALID_CONFIG_FIELDS:
-                if key in db_config:
-                    try:
-                        setattr(settings, key, db_config[key])
-                    except Exception:
-                        pass
-            if "enable_pra" in db_config:
+        except Exception as e:  # noqa: BLE001 - start on the environment alone
+            logger.warning(f"Could not read the settings saved in the app database; using the environment only: {e}")
+            return
+        for key in sorted(VALID_CONFIG_FIELDS):
+            if key not in db_config:
+                continue
+            value = db_config[key]
+            if key in SETTING_RANGES:
+                problems = setting_problems({key: value}, env_names=False)
+                if problems:
+                    logger.warning(f"Ignoring the value saved in Settings for {key}: {problems[0]}")
+                    continue
+            current = getattr(settings, key, None)
+            if str(current) != str(value):
+                if key in getattr(settings, "_from_environment", frozenset()):
+                    logger.warning(settings_sources.override_log_line(key, current, value))
+                settings_sources.note_save(key, current, value, settings)
+            try:
+                setattr(settings, key, value)
+            except Exception as e:  # noqa: BLE001 - one bad row must not stop the rest
+                logger.warning(f"Could not apply the value saved in Settings for {key}: {e}")
+        if "enable_pra" in db_config:
+            try:
                 from services.mcp_server import sync_pra_tools
 
                 sync_pra_tools()  # a choice saved in Settings outlives a restart
-        except Exception as e:
-            logger.debug(f"Could not apply DB config on startup: {e}")
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Could not apply the saved PRA setting: {e}")
 
     def _create_document_extractor(self) -> DocumentExtractor:
         """Create a DocumentExtractor with current settings."""

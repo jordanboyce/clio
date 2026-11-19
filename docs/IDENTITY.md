@@ -224,6 +224,23 @@ TRUSTED_HEADER_ALLOW_LEGACY_SIGNATURE=false   # default true; false under CLIO_P
 A request that carries a timestamp header is always checked in the new
 format, never the old one.
 
+### Shared workstations and signing out
+
+Some state lives in the browser, not on the server: provider keys a person
+typed in, chat and search history, notes, panel choices. Whenever the server
+knows who is signed in (`oidc` or `trusted_header`), the app keeps that state
+under keys tied to the person (a hash of the identity, not the identity
+itself), so the next person to use the same browser profile starts empty
+rather than with the last one's history and keys. Password and open
+deployments have no identity and keep one set, as before.
+
+The account menu (the name in the header) has **Sign out and clear this
+browser**: it removes everything Clio kept in this browser, for every
+person, then goes to `SIGN_OUT_URL`, the sign-out page of your proxy or
+identity provider (`/oauth2/sign_out` for oauth2-proxy). Without
+`SIGN_OUT_URL` the item reads **Clear this browser** and reloads, because
+Clio holds no browser session of its own to end.
+
 ### Why `TRUSTED_HEADER_PROXIES` is not a guard by itself
 
 ```bash

@@ -301,15 +301,20 @@ async def get_audit(
     collection_id: Optional[str] = None,
     document_id: Optional[str] = None,
     since: Optional[str] = None,
+    before: Optional[int] = None,
     format: Optional[str] = None,
 ):
-    """Newest-first events, filterable; ``format=csv`` returns a file."""
+    """Newest-first events, filterable; ``format=csv`` returns a file.
+
+    A page holds at most 2000 rows. ``next_before`` is the cursor for the
+    next, older page (pass it back as ``before``), or null at the end.
+    """
     require_admin("view the audit trail")
     limit = max(1, min(limit, 2000))
     rows = audit.list_events(
         limit=limit, action=action or None, actor=actor or None,
         collection_id=collection_id or None, document_id=document_id or None,
-        since=since or None,
+        since=since or None, before_id=before,
     )
     if (format or "").lower() == "csv":
         return PlainTextResponse(
@@ -321,6 +326,7 @@ async def get_audit(
         "retention_days": settings.audit_retention_days,
         "actions": audit.ACTIONS,
         "events": rows,
+        "next_before": rows[-1]["id"] if len(rows) == limit else None,
     }
 
 
@@ -383,8 +389,9 @@ class SuspendRequest(BaseModel):
 
 @router.post("/api/admin/users/{email}/suspend", summary="Suspend an identity", tags=["admin"])
 async def suspend_user(email: str, body: Optional[SuspendRequest] = None):
-    """Revoke every MCP token the identity holds. Their documents
-    stay put — removal is a separate, reviewable action."""
+    """Refuse every request from the identity until it is reinstated, and
+    revoke every MCP token it holds. Their documents stay put — removal is
+    a separate, reviewable action."""
     admin = require_admin("suspend a user")
     if admin and email.strip().lower() == admin.strip().lower():
         raise HTTPException(status_code=409, detail="You cannot suspend yourself from inside the app.")
@@ -392,6 +399,26 @@ async def suspend_user(email: str, body: Optional[SuspendRequest] = None):
         return governance.suspend_user(email, reason=(body.reason if body else ""))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/api/admin/users/{email}/reinstate", summary="Lift a suspension", tags=["admin"])
+async def reinstate_user(email: str):
+    """Let a suspended identity sign in again. Its revoked MCP tokens stay
+    revoked."""
+    require_admin("reinstate a user")
+    try:
+        return governance.reinstate_user(email)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/api/admin/users/suspended", summary="Suspended identities", tags=["admin"])
+async def list_suspended_users():
+    """Every suspended identity, newest first, with who suspended it and why."""
+    require_admin("view suspended users")
+    from services.app_database import app_db
+
+    return {"suspended": app_db.list_suspended_identities()}
 
 
 @router.get("/api/admin/usage", summary="Chat usage rollups", tags=["admin"])
