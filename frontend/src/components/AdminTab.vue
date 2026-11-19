@@ -56,7 +56,7 @@
                 class="checkbox checkbox-xs"
                 :checked="allShownSelected"
                 :indeterminate.prop="selectedShown.length > 0 && !allShownSelected"
-                aria-label="Select every document shown"
+                aria-label="Select every source shown"
                 data-testid="select-all-shown"
                 @change="toggleSelectAllShown"
               />
@@ -66,7 +66,7 @@
               v-if="visibleQueue.length > 1"
               class="btn btn-xs btn-ghost text-success"
               :disabled="bulkBusy"
-              title="Marks every document the current filter shows as reviewed and fine — same as clicking its green button on each."
+              title="Marks every source the current filter shows as reviewed and fine — same as clicking its green button on each."
               @click="approveAll"
             >
               <span v-if="bulkBusy === 'approve-all'" class="loading loading-spinner loading-xs"></span>
@@ -180,15 +180,15 @@
                       <button
                         v-if="t.matched_text"
                         class="btn btn-ghost btn-xs h-5 min-h-0 px-1.5 text-[11px]"
-                        title="Never flag this exact wording again, in any document. Reversible under Scanner tuning."
+                        title="Never flag this exact wording again, in any source. Reversible under Scanner tuning."
                         data-testid="allow-wording"
                         @click="tune('allow', { phrase: t.matched_text })"
                       >Allow wording</button>
                     </template>
                   </div>
                   <p class="mt-1 text-base-content/50">
-                    Text like this can steer an AI that reads the document. Approving keeps the warning on the
-                    source but takes it off this list; it does not hide the document. Removing it counts as a
+                    Text like this can steer an AI that reads the source. Approving keeps the warning on the
+                    source but takes it off this list; it does not hide the source. Removing it counts as a
                     confirmed hit for the rules above; approving counts as a miss — rules that are usually
                     wrong are turned down automatically (see Scanner tuning below).
                   </p>
@@ -230,7 +230,7 @@
         <div class="px-4 pb-4 space-y-4 text-xs">
           <p class="text-base-content/60">
             The prompt-injection scan is wording-based. Every approve counts as a miss and every remove as a hit
-            for the rules that flagged the document; a rule dismissed at least {{ tuning.noisy_rule?.min_dismissals ?? 5 }} times and
+            for the rules that flagged the source; a rule dismissed at least {{ tuning.noisy_rule?.min_dismissals ?? 5 }} times and
             right less than {{ Math.round((1 - (tuning.noisy_rule?.dismiss_ratio ?? 0.8)) * 100) }}% of the time is scanned one level
             lower until you reset it. Muting a rule or allowing a wording applies everywhere at once, including
             to warnings already on sources, and can be undone here.
@@ -263,7 +263,7 @@
               </div>
               <div class="space-y-2">
                 <div class="font-medium">Muted rules</div>
-                <div v-if="!tuning.muted?.length" class="text-base-content/45">None. Mute a rule from a document's evidence, or from the table below.</div>
+                <div v-if="!tuning.muted?.length" class="text-base-content/45">None. Mute a rule from a source's evidence, or from the table below.</div>
                 <ul v-else class="flex flex-wrap gap-1.5">
                   <li v-for="m in tuning.muted" :key="m">
                     <button class="badge badge-sm badge-ghost gap-1 font-mono" :disabled="tuningBusy" :title="`Unmute ${m}`" @click="tune('unmute', { pattern: m })">{{ m }} ✕</button>
@@ -501,7 +501,7 @@
               <span class="label-text font-medium">Mask personal data in results</span>
             </label>
             <p class="text-[11px] text-base-content/50">
-              Replaces each item with its type (&lt;EMAIL_ADDRESS&gt;) in search results, chat context and sources, MCP excerpts and chunk views. The original file is unchanged.
+              Replaces each item with its type (&lt;EMAIL_ADDRESS&gt;) in search results, chat context and sources, MCP excerpts and passage views. The original file is unchanged.
             </p>
             <input v-model="policyForm.pii_entities" class="input input-bordered input-xs mt-2" placeholder="entity types (blank = default set, e.g. add PERSON,LOCATION)" aria-label="Personal-data entity types" />
           </div>

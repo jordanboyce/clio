@@ -8,7 +8,7 @@
       <template v-if="doc">
         <p class="text-sm text-base-content/70 mt-1 break-all">{{ doc.filename }}</p>
         <p class="text-sm mt-3">
-          Pick the document that is the current version. Search will rank
+          Pick the source that is the current version. Search will rank
           <strong>{{ doc.filename }}</strong> below it and label it as an older version. Nothing is deleted, and the
           older text is still found when it is the only match.
         </p>
@@ -20,16 +20,16 @@
 
         <label class="input input-bordered input-sm flex items-center gap-2 mt-3">
           <Search :size="14" aria-hidden="true" />
-          <input v-model="query" type="search" class="grow" placeholder="Find the newer document" aria-label="Find the newer document" />
+          <input v-model="query" type="search" class="grow" placeholder="Find the newer source" aria-label="Find the newer source" />
         </label>
-        <ul class="menu menu-sm bg-base-200 rounded-box mt-2 max-h-56 overflow-y-auto flex-nowrap" role="listbox" aria-label="Documents in this collection">
+        <ul class="menu menu-sm bg-base-200 rounded-box mt-2 max-h-56 overflow-y-auto flex-nowrap" role="listbox" aria-label="Sources in this collection">
           <li v-for="c in candidates" :key="c.document_id">
             <button type="button" role="option" :aria-selected="picked === c.document_id"
               :class="{ 'menu-active': picked === c.document_id }" @click="picked = c.document_id">
               <span class="truncate">{{ c.filename }}</span>
             </button>
           </li>
-          <li v-if="!loading && candidates.length === 0" class="px-3 py-2 text-xs text-base-content/50">No other documents match.</li>
+          <li v-if="!loading && candidates.length === 0" class="px-3 py-2 text-xs text-base-content/50">No other sources match.</li>
         </ul>
 
         <input v-model="note" type="text" maxlength="500" class="input input-bordered input-sm w-full mt-3"

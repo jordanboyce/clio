@@ -49,7 +49,7 @@
 
       <label class="flex items-center gap-2 text-xs">
         <input v-model="form.can_write" type="checkbox" class="checkbox checkbox-xs" />
-        Allow it to add, replace and remove documents
+        Allow it to add, replace and remove sources
       </label>
 
       <details class="text-xs">

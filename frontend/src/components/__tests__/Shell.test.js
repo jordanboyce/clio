@@ -71,7 +71,7 @@ describe('Sources tree', () => {
     expect(wrapper.emitted('select')[0]).toEqual([['2', '3'], true])
     await wrapper.findAll('[role="treeitem"]')[2].trigger('contextmenu', { clientX: 5, clientY: 5 })
     const items = wrapper.findAll('[role="menuitem"]').map(i => i.text())
-    expect(items).toContain('View indexed text')
+    expect(items).toContain('View its passages')
     expect(items).not.toContain('Delete')            // read-only here
     await wrapper.findAll('[role="menuitem"]').find(i => i.text() === 'Select only this').trigger('click')
     expect(wrapper.emitted('select-only')[0]).toEqual([['3']])

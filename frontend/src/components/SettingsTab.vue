@@ -102,7 +102,7 @@
             <p class="text-xs uppercase tracking-[0.14em] font-semibold text-base-content/50 mb-4">Advanced</p>
             <div class="flex items-start justify-between gap-8">
               <div class="min-w-0">
-                <div class="text-sm font-medium">Chat tab</div>
+                <div class="text-sm font-medium">Ask tab</div>
                 <p class="text-xs text-base-content/55 mt-1 leading-relaxed max-w-[52ch]">
                   The built-in chat interface. Turn off if you work through Claude Desktop or another MCP client instead.
                 </p>
@@ -114,7 +114,7 @@
                 @change="saveChatTabSetting"
                 :disabled="serverConfigLocked"
                 :title="serverConfigLocked ? 'Deployment-wide setting — admin only' : undefined"
-                aria-label="Enable chat tab"
+                aria-label="Show the Ask tab"
               />
             </div>
           </div>
@@ -413,7 +413,7 @@
                 <p class="text-xs text-base-content/55 mt-1 leading-relaxed max-w-[52ch]">
                   Tokens of context sent to local Ollama models. Ollama's default is small (~2048)
                   and silently truncates longer prompts — raise this so the model sees your full
-                  documents. Higher uses more memory. Applies to chat, search, and OCR cleanup.
+                  sources. Higher uses more memory. Applies to chat, search, and OCR cleanup.
                 </p>
               </div>
               <input
@@ -436,7 +436,7 @@
           <h2 id="settings-indexing" class="sr-only">Indexing</h2>
 
           <p class="text-[13px] text-base-content/55 leading-relaxed max-w-[60ch] mb-5">
-            How documents in <span class="font-medium text-base-content/75">{{ collectionStore.currentCollection?.name || 'Default' }}</span>
+            How sources in <span class="font-medium text-base-content/75">{{ collectionStore.currentCollection?.name || 'Default' }}</span>
             are processed and indexed.
           </p>
 
@@ -643,7 +643,7 @@
                   Passages in {{ collectionStore.currentCollection?.name || 'this collection' }} are about
                   {{ embeddingChunkFit.passageTokens.toLocaleString() }} tokens ({{ Number(chunkSize).toLocaleString() }} characters),
                   but this model reads only the first {{ embeddingChunkFit.maxInputTokens.toLocaleString() }} of each, so the rest is
-                  not searched by meaning. Choose a model that reads more, or lower the chunk size<template v-if="advanced"> under Chunking below</template>.
+                  not searched by meaning. Choose a model that reads more, or lower the passage size<template v-if="advanced"> under Chunking below</template>.
                 </span>
               </div>
 
@@ -786,7 +786,7 @@
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
                 <div class="form-control">
                   <label class="label py-1">
-                    <span class="label-text text-xs font-medium">Chunk size</span>
+                    <span class="label-text text-xs font-medium">Passage size</span>
                     <span class="label-text-alt text-xs text-base-content/50">characters</span>
                   </label>
                   <input
@@ -797,10 +797,10 @@
                     class="input input-sm input-bordered tabular-nums"
                     v-model.number="chunkSize"
                     @change="saveChunkSettings"
-                    aria-label="Chunk size (characters)"
+                    aria-label="Passage size (characters)"
                   />
                   <p class="text-xs text-base-content/60 mt-1">
-                    Smaller = more precise matches. Larger = more context per chunk.
+                    Smaller = more precise matches. Larger = more context per passage.
                   </p>
                   <p v-if="savedModelChunkFit && !savedModelChunkFit.fits" class="text-xs text-base-content/80 mt-1 flex items-start gap-1.5" role="alert" data-testid="chunk-too-long">
                     <AlertTriangle :size="13" class="text-warning flex-shrink-0 mt-0.5" aria-hidden="true" />
@@ -809,7 +809,7 @@
                 </div>
                 <div class="form-control">
                   <label class="label py-1">
-                    <span class="label-text text-xs font-medium">Chunk overlap</span>
+                    <span class="label-text text-xs font-medium">Passage overlap</span>
                     <span class="label-text-alt text-xs text-base-content/50">characters</span>
                   </label>
                   <input
@@ -820,10 +820,10 @@
                     class="input input-sm input-bordered tabular-nums"
                     v-model.number="chunkOverlap"
                     @change="saveChunkSettings"
-                    aria-label="Chunk overlap (characters)"
+                    aria-label="Passage overlap (characters)"
                   />
                   <p class="text-xs text-base-content/50 mt-1">
-                    Overlap between adjacent chunks to preserve context across boundaries.
+                    Overlap between adjacent passages to preserve context across boundaries.
                   </p>
                 </div>
               </div>

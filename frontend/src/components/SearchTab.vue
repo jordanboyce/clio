@@ -3,11 +3,11 @@
 
     <header class="flex items-center justify-between gap-3 flex-shrink-0 mb-4">
       <div class="min-w-0">
-        <h2 class="text-lg font-semibold">Search sources</h2>
+        <h2 class="text-lg font-semibold">Find</h2>
         <p class="text-sm text-base-content/75 truncate">{{ collectionStore.currentCollection?.name || 'Current collection' }}</p>
       </div>
       <div class="flex items-center gap-1">
-        <button v-if="searchStore.searched" class="btn btn-ghost btn-sm min-h-11" :disabled="loading" @click="startNewSearch"><Plus :size="16" />New search</button>
+        <button v-if="searchStore.searched" class="btn btn-ghost btn-sm min-h-11" :disabled="loading" @click="startNewSearch"><Plus :size="16" />Start over</button>
         <button v-if="cacheStats.count > 0" class="btn btn-ghost btn-sm min-h-11" :disabled="loading" @click="historyModal.open()"><History :size="16" />History</button>
       </div>
     </header>
@@ -27,7 +27,7 @@
       <div class="relative rounded-xl border border-base-content/25 bg-base-100 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary">
         <SlashCommandPicker ref="slashPickerRef" :show="slashPickerOpen" :model-value="searchStore.query" @select="onSlashSelect" @close="slashPickerOpen = false" />
         <div class="flex items-center gap-2 p-2">
-          <label for="search-query" class="sr-only">Search your indexed documents</label>
+          <label for="search-query" class="sr-only">Find passages in your sources</label>
           <input id="search-query" ref="searchInputRef" v-model="searchStore.query" type="text"
             class="min-w-0 flex-1 bg-transparent border-none outline-none text-base px-2 min-h-11 placeholder:text-base-content/60"
             placeholder="Ask a question or find a passage…" :disabled="loading"
@@ -53,7 +53,7 @@
           <SlidersHorizontal :size="16" aria-hidden="true" />
           <span>{{ providerSummary }}</span>
         </button>
-        <button type="button" class="btn btn-ghost btn-sm min-h-11 gap-1.5" :disabled="loading" @click="toggleSlashPicker" :aria-expanded="slashPickerOpen" title="Slash commands: /tools, /stats, /docs"><span class="font-mono" aria-hidden="true">/</span><span>Commands</span></button>
+        <button type="button" class="btn btn-ghost btn-sm min-h-11 gap-1.5" :disabled="loading" @click="toggleSlashPicker" :aria-expanded="slashPickerOpen" title="Slash commands, such as /tools and /stats"><span class="font-mono" aria-hidden="true">/</span><span>Commands</span></button>
       </div>
       <p v-if="searchDisabled" class="text-sm text-base-content/75 mt-2">No searchable passages yet. Add sources to this collection to get started.</p>
     </div>

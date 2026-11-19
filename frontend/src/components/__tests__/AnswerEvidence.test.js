@@ -94,8 +94,8 @@ describe('Answer evidence review', () => {
 
   it('distinguishes missing document passages from verified evidence and streaming', async () => {
     const wrapper = mount(AnswerEvidence, { props: { content: 'An answer', streaming: true } })
-    expect(wrapper.text()).not.toContain('No document passages attached')
+    expect(wrapper.text()).not.toContain('No passages attached')
     await wrapper.setProps({ streaming: false })
-    expect(wrapper.text()).toContain('No document passages attached')
+    expect(wrapper.text()).toContain('No passages attached')
   })
 })

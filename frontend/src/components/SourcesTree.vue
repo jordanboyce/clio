@@ -108,7 +108,7 @@
     >
       <template v-if="menu.row.kind === 'file'">
         <li><button role="menuitem" @click="act('open')"><ExternalLink :size="14" />Open</button></li>
-        <li><button role="menuitem" @click="act('chunks')"><FileSearch :size="14" />View indexed text</button></li>
+        <li><button role="menuitem" @click="act('chunks')"><FileSearch :size="14" />View its passages</button></li>
         <li><button role="menuitem" @click="act('only')"><CheckSquare :size="14" />Select only this</button></li>
         <li v-if="canEdit"><button role="menuitem" @click="act('replace')"><Replace :size="14" />Mark as replaced by…</button></li>
         <li><button role="menuitem" @click="act('report')"><Flag :size="14" />Report…</button></li>

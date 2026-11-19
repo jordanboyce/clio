@@ -90,7 +90,7 @@
           <span class="text-sm">
             Include the original files<span v-if="preview.sources_bytes" class="text-base-content/60"> (about {{ formatBytes(preview.sources_bytes) }})</span>
             <span class="block text-xs text-base-content/60">
-              Needed to open originals or re-chunk later. Only share files you have the right to redistribute.
+              Needed to open originals or re-index later. Only share files you have the right to redistribute.
             </span>
           </span>
         </label>

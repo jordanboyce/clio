@@ -48,8 +48,8 @@
             <label
               tabindex="0"
               class="btn btn-xs btn-ghost btn-square text-base-content/50 hover:text-base-content"
-              title="Switch chat session"
-              :aria-label="`Switch chat session. Current: ${activeSessionTitle}`"
+              title="Switch chat"
+              :aria-label="`Switch chat. Current: ${activeSessionTitle}`"
               aria-haspopup="menu"
             >
               <History :size="13" aria-hidden="true" />
@@ -88,7 +88,7 @@
                   <button
                     class="btn btn-xs btn-ghost btn-circle hover-reveal"
                     title="Delete session"
-                    :aria-label="`Delete chat session: ${session.title || 'New chat'}`"
+                    :aria-label="`Delete chat: ${session.title || 'New chat'}`"
                     @click.stop="deleteSession(session.id)"
                   >
                     <Trash2 :size="12" />
@@ -193,7 +193,7 @@
       <!-- No data notice / mid-ingest status -->
       <div v-if="documentCount === 0 && indexingActive" class="notice flex-shrink-0" role="status">
         <span class="loading loading-spinner loading-xs" aria-hidden="true"></span>
-        <span>Indexing in progress — chat becomes available as documents land.</span>
+        <span>Indexing in progress — Ask becomes available as sources land.</span>
       </div>
       <div v-else-if="indexingActive" class="notice flex-shrink-0" role="status">
         <span class="loading loading-spinner loading-xs" aria-hidden="true"></span>
@@ -295,7 +295,7 @@
                 {{ collectionStore.currentCollection?.name || 'This collection' }} is empty
               </h3>
               <p class="mt-1.5 text-sm text-base-content/55 leading-relaxed">
-                Add documents, a folder, a link or a recording. Clio indexes them locally and every answer cites the passage it came from.
+                Add sources, a folder, a link or a recording. Clio indexes them locally and every answer cites the passage it came from.
               </p>
               <div class="mt-5 flex flex-wrap items-center justify-center gap-2">
                 <button type="button" class="btn btn-sm btn-primary gap-1.5" @click="$emit('show-sources'); $emit('add-sources')">
@@ -545,7 +545,7 @@
                   v-if="!msg.streaming && (msg.aiUsage || msg.content)"
                   class="flex items-center gap-x-2 gap-y-1 mt-2.5 flex-wrap text-xs text-base-content/45"
                 >
-                  <span v-if="msg.depth" class="inline-flex items-center gap-1" :title="msg.depth === 'quick' ? 'Quick answer: one pass from the retrieved passages' : 'Deep search: document searches and verification ran before answering'">
+                  <span v-if="msg.depth" class="inline-flex items-center gap-1" :title="msg.depth === 'quick' ? 'Quick answer: one pass from the retrieved passages' : 'Deep search: searches of your sources and checks ran before answering'">
                     <Zap v-if="msg.depth === 'quick'" :size="10" aria-hidden="true" />
                     <Search v-else :size="10" aria-hidden="true" />
                     {{ depthLabel(msg.depth) }}
@@ -570,7 +570,7 @@
                     <button
                       v-if="msg.depth === 'quick'"
                       class="btn btn-ghost btn-xs h-5 min-h-0 px-1.5 gap-1 text-base-content/50 hover:text-base-content"
-                      title="Answer again with document searches and verification"
+                      title="Answer again with searches of your sources and verification"
                       :disabled="loading"
                       @click="rerunAnswer(index, { depth: 'deep' })"
                     >
@@ -672,7 +672,7 @@
           />
 
           <!-- Textarea -->
-          <label for="chat-input" class="sr-only">Ask a question about your documents</label>
+          <label for="chat-input" class="sr-only">Ask a question about your sources</label>
           <textarea
             id="chat-input"
             ref="chatInputRef"
@@ -730,7 +730,7 @@
                   :class="depth === 'deep' ? 'btn-active' : 'btn-ghost text-base-content/60'"
                   role="radio"
                   :aria-checked="depth === 'deep'"
-                  title="Deep search: runs document searches and verification before answering. Slower, more thorough."
+                  title="Deep search: searches your sources and checks what it finds before answering. Slower, more thorough."
                   data-testid="depth-deep"
                   @click="depth = 'deep'"
                 >
@@ -913,7 +913,7 @@ const seedCacheThreshold = async () => {
   }
 }
 // Answer depth. Quick answers in one pass from the retrieved passages (large
-// tables stay queryable); Deep search runs document searches and verification
+// tables stay queryable); Deep search searches your sources and checks what it finds
 // first. Quick is the default: time-to-answer is the product's metric, and
 // "Go deeper" on any quick answer is one click. A choice saved before R9 is
 // 'research', which is read as 'deep'.

@@ -201,7 +201,7 @@
                       class="select select-bordered select-sm w-full"
                     >
                       <option value="data">Data</option>
-                      <option value="docs">Docs</option>
+                      <option value="docs">Documents</option>
                       <option value="code">Code</option>
                     </select>
                   </div>

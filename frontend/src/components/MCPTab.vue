@@ -18,12 +18,12 @@
       <div class="card-body py-4">
         <div class="flex items-center justify-between">
           <div>
-            <span class="font-semibold text-sm">MCP Server</span>
+            <span class="font-semibold text-sm">Agent access (MCP)</span>
             <span :class="mcpSettings.enable_mcp ? 'badge badge-success badge-sm ml-2' : 'badge badge-ghost badge-sm ml-2'">
               {{ mcpSettings.enable_mcp ? 'Enabled' : 'Disabled' }}
             </span>
           </div>
-          <input v-if="userStore.adminConsole" v-model="mcpSettings.enable_mcp" aria-label="Enable MCP server" type="checkbox" class="toggle toggle-primary" @change="saveMcpToggle" />
+          <input v-if="userStore.adminConsole" v-model="mcpSettings.enable_mcp" aria-label="Turn on agent access (MCP)" type="checkbox" class="toggle toggle-primary" @change="saveMcpToggle" />
         </div>
       </div>
     </div>
@@ -250,7 +250,7 @@
               </tbody>
             </table>
           </div>
-          <p v-else class="text-xs text-base-content/40">No tokens yet — generate one above to connect an MCP client.</p>
+          <p v-else class="text-xs text-base-content/40">No tokens yet. Create one above to connect an agent.</p>
         </div>
       </div>
 
@@ -429,7 +429,7 @@
               <div class="flex items-center justify-between gap-2">
                 <span class="text-xs text-base-content/50 truncate">{{ activeTabMeta.filename }}</span>
                 <div class="flex items-center gap-1">
-                  <a v-if="activeTabMeta.docs" :href="activeTabMeta.docs" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-ghost">Docs</a>
+                  <a v-if="activeTabMeta.docs" :href="activeTabMeta.docs" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-ghost">Documentation</a>
                   <button
                     class="btn btn-xs btn-ghost gap-1"
                     @click="copyText(activeTabMeta.content, activeTabMeta.label)"
@@ -485,7 +485,7 @@
               and other clients that support MCP prompts list it as <span class="font-medium">Try Clio</span>.
             </p>
             <div v-if="!sampleCollection" class="mt-3 flex flex-wrap items-center gap-2 text-xs text-base-content/55">
-              <span>For a task with a clear right answer, load the sample documents first.</span>
+              <span>For a task with a clear right answer, load the sample sources first.</span>
               <button type="button" class="btn btn-xs" :disabled="addingSamples" @click="addSamples">
                 <span v-if="addingSamples" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
                 {{ addingSamples ? 'Adding…' : 'Add sample documents' }}

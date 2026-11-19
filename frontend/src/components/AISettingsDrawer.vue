@@ -50,10 +50,10 @@
           <button class="btn btn-xs btn-primary flex-shrink-0" @click="connectModel">Connect a model</button>
         </div>
 
-        <!-- Section 2: Answer depth (presets) -->
+        <!-- Section 2: Context size (presets); "Answer depth" is Ask's Quick / Deep -->
         <div class="space-y-2">
-          <span class="text-xs font-semibold text-base-content/60 uppercase tracking-wider">Answer depth</span>
-          <div class="join w-full" role="group" aria-label="Answer depth preset">
+          <span class="text-xs font-semibold text-base-content/60 uppercase tracking-wider">Context size</span>
+          <div class="join w-full" role="group" aria-label="Context size preset">
             <button
               v-for="p in PRESETS"
               :key="p.key"

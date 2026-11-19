@@ -1005,7 +1005,7 @@
             </option>
           </select>
           <p class="text-xs opacity-70 mt-1">
-            {{ SENSITIVITY_HELP[editCollectionSensitivity] }} Shown on every result and citation; individual documents can override it.
+            {{ SENSITIVITY_HELP[editCollectionSensitivity] }} Shown on every result and citation; individual sources can override it.
           </p>
         </div>
 
@@ -1319,7 +1319,7 @@
                 <div v-if="job.phase && backgroundJobsStore.isActiveStatus(job.status) && !job.queuePosition" class="flex items-center gap-2 text-sm flex-wrap">
                   <span class="badge badge-sm badge-primary capitalize">{{ job.phase }}</span>
                   <span v-if="job.chunksTotal > 0" class="text-base-content/50">
-                    {{ job.chunksProcessed.toLocaleString() }}/{{ job.chunksTotal.toLocaleString() }} chunks
+                    {{ job.chunksProcessed.toLocaleString() }}/{{ job.chunksTotal.toLocaleString() }} passages
                   </span>
                 </div>
                 <div

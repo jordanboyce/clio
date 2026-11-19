@@ -460,7 +460,7 @@
                 v-if="!folder.git_url"
                 class="btn btn-ghost btn-xs h-6 min-h-0 px-1.5 hover-reveal text-base-content/60"
                 :disabled="indexing || syncingPath === folder.path || !folder.exists"
-                title="Sync, and remove documents whose file was deleted from this folder"
+                title="Sync, and remove sources whose file was deleted from this folder"
                 @click="runFolderSync(folder, true)"
               >Prune</button>
             </div>
@@ -522,7 +522,7 @@
             <span v-if="indexResult.background">
               {{ indexResult.count.toLocaleString() }} {{ indexResult.noun || 'file' }}(s) queued — indexing runs in the background, you can close this tab
             </span>
-            <span v-else>{{ indexResult.count }} file(s), {{ indexResult.chunks }} chunks</span>
+            <span v-else>{{ indexResult.count }} file(s), {{ indexResult.chunks }} passages</span>
             <button
               class="ml-auto btn btn-ghost btn-xs p-0 h-4 min-h-0"
               @click="indexSuccess = false"
@@ -903,8 +903,8 @@
               class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content"
               @click="openChunks(doc)"
               :disabled="deleting"
-              title="View indexed chunks"
-              :aria-label="`View indexed chunks for ${doc.filename}`"
+              title="View its passages"
+              :aria-label="`View the passages of ${doc.filename}`"
             >
               <FileSearch :size="12" />
             </button>
@@ -933,8 +933,8 @@
               target="_blank"
               rel="noopener noreferrer"
               class="side-icon-btn side-icon-btn-sm text-base-content/50 hover:text-base-content"
-              :title="isLinkDoc(doc) ? 'Open the original link' : 'Open source document'"
-              :aria-label="isLinkDoc(doc) ? `Open the original link for ${doc.filename} in a new tab` : `Open source document ${doc.filename} in a new tab`"
+              :title="isLinkDoc(doc) ? 'Open the original link' : 'Open the original'"
+              :aria-label="isLinkDoc(doc) ? `Open the original link for ${doc.filename} in a new tab` : `Open the original ${doc.filename} in a new tab`"
             >
               <Eye :size="12" />
             </a>
@@ -1025,7 +1025,7 @@
     <!-- Chunks viewer modal -->
     <dialog ref="chunksModal" class="modal" aria-labelledby="sidebar-chunks-title">
       <div class="modal-box max-w-6xl">
-        <h3 id="sidebar-chunks-title" class="font-bold text-lg">Indexed Chunks</h3>
+        <h3 id="sidebar-chunks-title" class="font-bold text-lg">Passages</h3>
         <p v-if="chunkDocument" class="text-sm text-base-content/70 mt-1">{{ chunkDocument.filename }}</p>
         <div v-if="chunksLoading" class="flex justify-center py-10"><span class="loading loading-spinner loading-lg"></span></div>
         <div v-else-if="chunksError" class="alert alert-error mt-4"><XCircle :size="20" /><span>{{ chunksError }}</span></div>
@@ -1039,11 +1039,11 @@
               <span v-if="boostedChunkCount" class="badge badge-primary">{{ boostedChunkCount }} boosted</span>
             </div>
             <label class="label cursor-pointer gap-2 py-0">
-              <span class="label-text text-sm">Only chunks with fields</span>
+              <span class="label-text text-sm">Only passages with fields</span>
               <input type="checkbox" class="toggle toggle-sm" v-model="showOnlyChunksWithFields" />
             </label>
           </div>
-          <div v-if="filteredChunks.length === 0" class="alert alert-info"><span>No chunks match the current filter.</span></div>
+          <div v-if="filteredChunks.length === 0" class="alert alert-info"><span>No passages match the current filter.</span></div>
           <div v-else class="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
             <div v-for="chunk in filteredChunks" :key="chunk.chunk_id" class="card bg-base-200 border border-base-300">
               <div class="card-body p-4">
@@ -1076,10 +1076,10 @@
                 </div>
                 <div class="flex items-center gap-2 mt-2 pt-2 border-t border-base-300/50">
                   <span class="text-xs text-base-content/45 shrink-0">Rank</span>
-                  <div class="flex items-center gap-0.5" role="group" aria-label="Chunk ranking bias">
-                    <button class="btn btn-xs btn-ghost h-6 w-6 min-h-0 p-0" :disabled="boostingChunkId === chunk.chunk_id || (chunk.boost ?? 0) <= -1" title="Lower this chunk in retrieval" aria-label="Lower ranking bias" @click="nudgeChunkBoost(chunk, -0.25)"><ArrowDown :size="13" /></button>
+                  <div class="flex items-center gap-0.5" role="group" aria-label="Passage ranking bias">
+                    <button class="btn btn-xs btn-ghost h-6 w-6 min-h-0 p-0" :disabled="boostingChunkId === chunk.chunk_id || (chunk.boost ?? 0) <= -1" title="Lower this passage in search" aria-label="Lower ranking bias" @click="nudgeChunkBoost(chunk, -0.25)"><ArrowDown :size="13" /></button>
                     <span class="inline-flex min-w-[3.25rem] justify-center font-mono text-xs tabular-nums" :class="boostTone(chunk.boost)">{{ formatBoost(chunk.boost) }}</span>
-                    <button class="btn btn-xs btn-ghost h-6 w-6 min-h-0 p-0" :disabled="boostingChunkId === chunk.chunk_id || (chunk.boost ?? 0) >= 1" title="Raise this chunk in retrieval" aria-label="Raise ranking bias" @click="nudgeChunkBoost(chunk, 0.25)"><ArrowUp :size="13" /></button>
+                    <button class="btn btn-xs btn-ghost h-6 w-6 min-h-0 p-0" :disabled="boostingChunkId === chunk.chunk_id || (chunk.boost ?? 0) >= 1" title="Raise this passage in search" aria-label="Raise ranking bias" @click="nudgeChunkBoost(chunk, 0.25)"><ArrowUp :size="13" /></button>
                   </div>
                   <button v-if="chunk.boost" class="btn btn-xs btn-ghost text-base-content/50" :disabled="boostingChunkId === chunk.chunk_id" title="Reset ranking bias" @click="nudgeChunkBoost(chunk, -(chunk.boost ?? 0))">Reset</button>
                   <span v-if="boostingChunkId === chunk.chunk_id" class="loading loading-spinner loading-xs"></span>
@@ -1095,7 +1095,7 @@
                   </table>
                 </div>
                 <details>
-                  <summary class="cursor-pointer text-sm font-medium text-primary">Show chunk text</summary>
+                  <summary class="cursor-pointer text-sm font-medium text-primary">Show passage text</summary>
                   <pre class="mt-2 text-xs whitespace-pre-wrap bg-base-100 p-3 rounded border border-base-300">{{ chunk.text }}</pre>
                 </details>
               </div>
@@ -1120,7 +1120,7 @@
             Someone already looked at this. The note stays on the source so the decision is reviewable, and it is no longer in the admin queue.
           </template>
           <template v-else>
-            Some wording here resembles text that tries to steer an AI reading the document. The document stays searchable. A low-confidence match is usually ordinary prose or a quoted example.
+            Some wording here resembles text that tries to steer an AI reading the source. The source stays searchable. A low-confidence match is usually ordinary prose or a quoted example.
           </template>
         </p>
         <div v-if="injectionDoc" class="mt-4 space-y-3 max-h-[50vh] overflow-y-auto pr-1">

@@ -114,6 +114,29 @@ was found and deliberately left for later.
 - Props are read-only, listeners are removed on unmount, static layout is
   utility classes rather than inline styles.
 
+## Vocabulary
+
+One word per concept in everything a person reads: labels, aria-labels,
+titles, placeholders, messages and download names (work order C7, roadmap
+U4). `frontend/src/utils/__tests__/vocabulary.test.js` fails on a retired
+word in any component template. Code, ids and API fields keep their names.
+
+| Concept | Say | Not |
+|---|---|---|
+| The asking view | **Ask** | Chat tab |
+| One conversation in Ask | **chat** | chat session, conversation |
+| The search view | **Find** | Search sources |
+| Starting Find again | **Start over** | New search |
+| The papers view | **Library** (and **paper** only inside it) | Research |
+| What a person adds | **source** | document, doc, file (a *file* is still a file on disk) |
+| What search returns and cites | **passage** | chunk, indexed text |
+| Saved, generated write-ups | **Reports**, a **report** | Generate, artifact |
+| Guidance attached to answers | **Saved instructions** | Expertise, pack |
+| Agents over MCP | **Connect**; the switch is **agent access (MCP)** | MCP page, MCP Server |
+| Where paper details come from | **catalogue** | registry |
+| Ask's Quick / Deep | **Answer depth** | |
+| The drawer's preset for how much is sent | **Context size** | Answer depth |
+
 ## Left for later
 
 Found in the same review and not applied, because each is a larger change

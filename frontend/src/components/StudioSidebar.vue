@@ -30,13 +30,13 @@
             :aria-expanded="open.generate"
           >
             <FileText :size="15" class="flex-shrink-0" aria-hidden="true" />
-            <span class="flex-1">Generate</span>
+            <span class="flex-1">Reports</span>
             <ChevronDown :size="13" class="flex-shrink-0 text-base-content/35 transition-transform" :class="open.generate ? 'rotate-180' : ''" aria-hidden="true" />
           </button>
         </div>
         <div v-show="open.generate" class="px-3 pb-3 space-y-1.5">
           <p class="text-[11px] text-base-content/50 leading-snug">
-            Turn this collection into a source-grounded document — review the citations before sharing.
+            Turn this collection into a report grounded in the sources — review the citations before sharing.
           </p>
           <div class="flex flex-col gap-1.5">
             <button class="btn btn-outline btn-xs gap-1" @click="$emit('switch-tab', 'generate')">
