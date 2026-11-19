@@ -96,7 +96,7 @@ export function switchCostSentence(cost, { kind, dimensions } = {}) {
     + 'plus the time to read the files again. Search keeps using the current index until each collection is re-indexed.'
 }
 
-/** Ollama's own rule: "nomic-embed-text" is "nomic-embed-text:latest" (B2). */
+/** Ollama's own rule: "name" is "name:latest" (B2). */
 export function ollamaBaseName(name) {
   const s = String(name || '').trim()
   return s.endsWith(':latest') ? s.slice(0, -':latest'.length) : s

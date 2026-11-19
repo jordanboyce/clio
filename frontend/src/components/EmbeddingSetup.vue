@@ -79,7 +79,7 @@
         </label>
         <label class="form-control">
           <span class="label-text text-xs">Model name</span>
-          <input v-model="custom.model" class="input input-bordered input-sm font-mono" placeholder="e.g. BAAI/bge-small-en-v1.5" :disabled="busy" autocomplete="off" spellcheck="false" />
+          <input v-model="custom.model" class="input input-bordered input-sm font-mono" placeholder="The model name the server serves" :disabled="busy" autocomplete="off" spellcheck="false" />
         </label>
         <label class="form-control">
           <span class="label-text text-xs">Key (if the server asks for one)</span>
@@ -193,7 +193,7 @@ let pollTimer = null
 const hostedChoices = computed(() => (options.value?.hosted || []).filter(h => !h.blocked_offline))
 const hosted = computed(() => hostedChoices.value.find(h => h.id === hostedId.value) || null)
 const installed = computed(() => options.value?.ollama?.embedding_models || [])
-// B2: "nomic-embed-text" and "nomic-embed-text:latest" are one model.
+// B2: "name" and "name:latest" are one Ollama model.
 function ollamaInstalled(name) {
   return installed.value.some(m => sameOllamaModel(m, name))
 }

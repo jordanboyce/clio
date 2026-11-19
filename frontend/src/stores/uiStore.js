@@ -54,6 +54,25 @@ export const useUiStore = defineStore('ui', () => {
     openSettings('providers')
   }
 
+  // D5: one confirm dialog for the whole app (ConfirmDialog.vue).
+  //   if (!(await ui.confirm({ title, message, confirmLabel, danger }))) return
+  // Resolves true for the confirm button, false for Cancel, Escape or the
+  // backdrop. A second request while one is open answers the first "No".
+  const confirmRequest = ref(null)
+  // D6: { label, text } to show for a manual copy when the browser would not copy.
+  const manualCopy = ref(null)
+  function confirm({ title, message = '', confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false } = {}) {
+    settleConfirm(false)
+    return new Promise((resolve) => {
+      confirmRequest.value = { title, message, confirmLabel, cancelLabel, danger, resolve }
+    })
+  }
+  function settleConfirm(value) {
+    const pending = confirmRequest.value
+    confirmRequest.value = null
+    pending?.resolve(Boolean(value))
+  }
+
   let nextId = 1
 
   // `action`: { label, run } renders one button on the toast ("Undo all");
@@ -81,5 +100,5 @@ export const useUiStore = defineStore('ui', () => {
     return notify(message, 'error', { duration: 6000 })
   }
 
-  return { toasts, offline, authRequired, highlightAddSources, sourcesVersion, sourcesChanged, researchView, praViewer, openPra, closePra, notify, dismiss, toastError, settingsRequest, openSettings, connectModel }
+  return { toasts, offline, authRequired, confirmRequest, confirm, settleConfirm, manualCopy, highlightAddSources, sourcesVersion, sourcesChanged, researchView, praViewer, openPra, closePra, notify, dismiss, toastError, settingsRequest, openSettings, connectModel }
 })

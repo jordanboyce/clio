@@ -578,8 +578,8 @@ const deleteHistoryEntry = (entry) => {
   searchStore.deleteCacheEntry(entry.query, entry.topK, entry.options)
 }
 
-const clearAllHistory = () => {
-  if (confirm('Clear all search history? This cannot be undone.')) {
+const clearAllHistory = async () => {
+  if (await ui.confirm({ title: 'Clear all search history?', message: 'It cannot be brought back.', confirmLabel: 'Clear', danger: true })) {
     searchStore.clearSearchCache()
     historyModal.close()
   }

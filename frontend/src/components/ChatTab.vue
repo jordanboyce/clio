@@ -809,6 +809,7 @@ import { useSelectionStore } from '../stores/selectionStore'
 import { useSearchStore } from '../stores/searchStore'
 import { useUiStore } from '../stores/uiStore'
 import { validationMessage } from '../utils/http'
+import { copyOrShow } from '../utils/clipboard'
 import { addSampleSources, isSampleSet, SAMPLE_FILES, SAMPLE_QUESTIONS } from '../utils/sampleSources'
 import { locationLabel } from '../utils/fileTypes'
 import SlashCommandPicker from './SlashCommandPicker.vue'
@@ -1041,8 +1042,8 @@ const switchSession = (sessionId) => {
   scrollToBottom()
 }
 
-const deleteSession = (sessionId) => {
-  if (confirm('Delete this chat session? This cannot be undone.')) {
+const deleteSession = async (sessionId) => {
+  if (await ui.confirm({ title: 'Delete this chat?', message: 'It cannot be brought back.', confirmLabel: 'Delete', danger: true })) {
     chatStore.deleteSession(collectionStore.currentCollectionId, sessionId)
   }
 }
@@ -1261,13 +1262,11 @@ let copyResetTimer = null
 
 const copyMessage = async (msg, index) => {
   if (!msg?.content) return
-  try {
-      await navigator.clipboard.writeText(answerWithReferences(msg))
+  // D6: copies on a plain-HTTP host too, or shows the text to copy by hand.
+  if (await copyOrShow(answerWithReferences(msg), 'Answer')) {
     copiedMessageIndex.value = index
     if (copyResetTimer) clearTimeout(copyResetTimer)
     copyResetTimer = setTimeout(() => { copiedMessageIndex.value = null }, 1600)
-  } catch (err) {
-    console.warn('Clipboard write failed:', err)
   }
 }
 
@@ -1622,8 +1621,8 @@ const dismissError = () => {
   errorDetail.value = ''
 }
 
-const clearChat = () => {
-  if (confirm('Clear this conversation? This cannot be undone.')) {
+const clearChat = async () => {
+  if (await ui.confirm({ title: 'Clear this chat?', message: 'Its messages cannot be brought back.', confirmLabel: 'Clear', danger: true })) {
     chatStore.clearMessages(collectionStore.currentCollectionId)
   }
 }

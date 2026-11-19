@@ -184,6 +184,7 @@ import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import http from '../utils/http'
+import { copyOrShow } from '../utils/clipboard'
 import { locationLabel } from '../utils/fileTypes'
 import { useCollectionStore } from '../stores/collectionStore'
 import { useProviderStore } from '../stores/providerStore'
@@ -380,7 +381,7 @@ async function removeAll() {
 
 const copyMarkdown = async () => {
   if (!opened.value?.content) return
-  await navigator.clipboard.writeText(opened.value.content)
+  if (!(await copyOrShow(opened.value.content, 'Report'))) return
   copied.value = true
   setTimeout(() => (copied.value = false), 1500)
 }

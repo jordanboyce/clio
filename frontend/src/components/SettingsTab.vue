@@ -1054,6 +1054,7 @@ import { ChevronDown, Check, Plus, RefreshCw, ShieldCheck, ShieldAlert, AlertTri
 import { useCollectionStore } from '../stores/collectionStore'
 import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 import { useLayoutStore } from '../stores/layoutStore'
+import { useUiStore } from '../stores/uiStore'
 import { useUserStore } from '../stores/userStore'
 import { useProviderStore } from '../stores/providerStore'
 import CustomFileTypes from './CustomFileTypes.vue'
@@ -1458,6 +1459,13 @@ const refreshOcrOllamaVisionModels = async () => {
   }
 }
 
+// D4: a setting that did not save says so, and what is in force instead.
+const ui = useUiStore()
+const notSaved = (what, err, still = '') =>
+  ui.notify(`${what} was not saved: ${err?.message || 'the server did not accept it'}.${still ? ` ${still}` : ''}`,
+    'error', { duration: 8000 })
+
+let savedNumCtx = null
 const saveOllamaNumCtx = async () => {
   let v = Number(ollamaNumCtx.value)
   if (!Number.isFinite(v) || v < 512) v = 8192
@@ -1465,8 +1473,11 @@ const saveOllamaNumCtx = async () => {
   ollamaNumCtx.value = v
   try {
     await http.post('/api/config', { ollama_num_ctx: v })
-  } catch {
-    // non-fatal; keep the entered value
+    savedNumCtx = v
+  } catch (err) {
+    if (savedNumCtx !== null) ollamaNumCtx.value = savedNumCtx
+    notSaved('The Ollama context window', err,
+      savedNumCtx !== null ? `It is still ${savedNumCtx.toLocaleString()} tokens.` : '')
   }
 }
 
@@ -1474,9 +1485,9 @@ const saveChatTabSetting = async () => {
   try {
     await http.post('/api/config', { enable_chat_tab: chatTabEnabled.value })
     emit('chat-tab-toggled', chatTabEnabled.value)
-  } catch {
-    // revert on failure
+  } catch (err) {
     chatTabEnabled.value = !chatTabEnabled.value
+    notSaved('Showing the Ask tab', err, `It is still ${chatTabEnabled.value ? 'on' : 'off'}.`)
   }
 }
 
@@ -1619,6 +1630,7 @@ const detectEmbeddingOllama = async () => {
 const loadOCRSettings = (data) => {
   chatTabEnabled.value = data.enable_chat_tab ?? true
   ollamaNumCtx.value = data.ollama_num_ctx ?? 8192
+  savedNumCtx = ollamaNumCtx.value
   ocrEnabled.value = data.enable_ocr || false
   visionProvider.value = data.vision_ocr_provider || 'none'
   visionModel.value = data.vision_ocr_model || ''
@@ -1652,7 +1664,7 @@ const saveOCRSettings = async () => {
     ocrSettingsSaved.value = true
     setTimeout(() => { ocrSettingsSaved.value = false }, 5000)
   } catch (error) {
-    console.error('Failed to save OCR settings:', error?.message || error)
+    notSaved('Scanned page reading (OCR)', error, 'The server keeps its previous OCR settings.')
   }
 }
 
@@ -1675,7 +1687,7 @@ const saveInferenceSettings = async () => {
     inferenceSettingsSaved.value = true
     setTimeout(() => { inferenceSettingsSaved.value = false }, 5000)
   } catch (error) {
-    console.error('Failed to save inference settings:', error?.message || error)
+    notSaved('Table column inference', error)
   }
 }
 
@@ -2094,7 +2106,9 @@ const connectProvider = async (id) => {
   try {
     await http.post('/api/agent/config', { provider: id, api_key: key })
   } catch (err) {
-    console.warn('Could not store key server-side (browser key still works):', err?.message || err)
+    // D4: "Connected" is true for this browser only; say what that leaves out.
+    ui.notify(`Connected in this browser, but the key was not saved on the server (${err?.message || 'it did not accept it'}), `
+      + 'so background work such as reading scans cannot use it.', 'warning', { duration: 10000 })
   }
 
   invalidateModelCache(id)

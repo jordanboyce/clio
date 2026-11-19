@@ -1191,6 +1191,10 @@
       </div>
     </div>
 
+    <!-- D5: the one confirm dialog (ui.confirm) -->
+    <ConfirmDialog />
+    <ManualCopyDialog />
+
     <!-- First-run onboarding takeover (shown only when no provider is configured) -->
     <WelcomeOnboarding
       :show="showOnboarding"
@@ -1434,6 +1438,8 @@ import { SENSITIVITY_HELP, classificationInfo, classificationTitle, labelBadgeCl
 import ClassificationBadge from './components/ClassificationBadge.vue'
 import { formatBytes, describeStorage } from './utils/format'
 import Toaster from './components/Toaster.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
+import ManualCopyDialog from './components/ManualCopyDialog.vue'
 import {
   getConfiguredProviderIds,
   retireSurfaceOverrides,

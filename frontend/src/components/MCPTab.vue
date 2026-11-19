@@ -694,6 +694,8 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ShieldAlert, Plug, Wrench, MessageSquareText, FileText } from 'lucide-vue-next'
 import http from '../utils/http'
 import { useUserStore } from '../stores/userStore'
+import { useUiStore } from '../stores/uiStore'
+import { copyOrShow } from '../utils/clipboard'
 import { useLayoutStore } from '../stores/layoutStore'
 import { useCollectionStore } from '../stores/collectionStore'
 import { MCP_CLIENT_GROUPS, MCP_CLIENTS, buildClientConfig } from '../utils/mcpClients'
@@ -1045,6 +1047,15 @@ const createToken = async () => {
 
 const revokeToken = async (token) => {
   mcpError.value = ''
+  // D5: revoking cuts off every agent using the token at once, and a token
+  // cannot be shown again; it had no confirmation at all.
+  const ok = await useUiStore().confirm({
+    title: `Revoke ${token.name}?`,
+    message: 'Every agent using this token loses access at once. A revoked token cannot be restored; you would create a new one.',
+    confirmLabel: 'Revoke',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await http.delete(`/api/mcp/tokens/${token.id}`)
     if (lastCreatedTokenId.value === token.id) {
@@ -1060,12 +1071,10 @@ const revokeToken = async (token) => {
 
 const copyText = async (value, label) => {
   if (!value) return
-  try {
-    await navigator.clipboard.writeText(value)
+  // D6: the token is shown once, so a copy that fails shows it to copy by hand.
+  if (await copyOrShow(value, label)) {
     mcpStatus.value = `${label} copied`
     mcpError.value = ''
-  } catch {
-    mcpError.value = `Failed to copy ${label}`
   }
 }
 
