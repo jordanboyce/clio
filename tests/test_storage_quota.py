@@ -82,6 +82,9 @@ def test_legacy_rows_backfill_from_disk(tmp_path):
 
 def test_zero_means_unlimited(monkeypatch):
     monkeypatch.setattr(config.settings, "collection_storage_limit_bytes", 0)
+    # A terabyte with no cap: the free-disk floor (E9) would refuse it on any
+    # real machine with less room, which is not what this test is about.
+    monkeypatch.setattr(storage_quota, "free_disk_bytes", lambda: 10 ** 15)
     _fake_usage(monkeypatch, 10 ** 12)
     storage_quota.check("c", 10 ** 12)  # no raise
     with storage_quota.reserve("c", 10 ** 12):
