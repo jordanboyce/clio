@@ -6,6 +6,8 @@ This version was rewritten on 2026-11-16 after a full pass over the product: the
 
 On 2026-11-18 the hardening work order ([docs/prompts/HARDENING_PROMPT.md](prompts/HARDENING_PROMPT.md)) shipped R2, R3, R5, R6, R7, R8b, R11, P2, P4, P5, U2, U4 and U8, most of U5 and U10, the confirm part of U9 and the settings part of M10, each marked below. It also covered first-run model setup with hubs blocked, visible failures and an enterprise pass (audit, suspension, settings checks, upgrades, restarts, disk). The decisions that work left for the owner are listed under [Decisions waiting for the owner](#decisions-waiting-for-the-owner).
 
+On 2026-11-19 the improvement work order ([docs/prompts/IMPROVEMENT_PROMPT.md](prompts/IMPROVEMENT_PROMPT.md); report in [docs/prompts/improvement-report/REPORT.md](prompts/improvement-report/REPORT.md)) shipped a retrieval benchmark that can tell configurations apart and an answer-level run (A1, A2), per-stage timings (A4), cross-collection merging on the reranker's score (B1), passages embedded with their source and heading under a per-collection indexing recipe (B2: recall@10 with the reranker 0.31 → 0.98 on the new benchmark), streaming answers with a working Stop (C1), Ask that survives tab switches and failures (C2, C3), Ask checking its own citations (C4), Find honouring the source selection (C7), a top-level error handler (C8), the collection in the URL (C9), MCP tool profiles with typed filters and writing instructions (D1, roadmap M2, M4, M6), and a release gated on tests and the smoke test (E1, E2). Rank fusion (B3) was measured and not adopted. New decisions are added under [Decisions waiting for the owner](#decisions-waiting-for-the-owner).
+
 ## Guiding frame
 
 Clio owns the trustworthy data layer; the intelligence layer lives upstream in whatever LLM the user trusts. Our job: make a user's own documents and tabular data faithfully agent-queryable, and never be silently wrong.
@@ -72,6 +74,8 @@ The docstrings and signatures total about 42,000 characters, an estimated 12-14k
 Today `filters` is an untyped dict, and an unknown key is dropped with only a server log, so `{"filename": "x"}` silently searches everything ([mcp_server.py:926](../services/mcp_server.py)). Reuse the schema the in-app chat already has ([agent_tools.py:72](../services/agent_tools.py)). An unknown key is an error that names the valid keys.
 *Done when:* a misspelled filter fails loudly, and the schema appears in `tools/list`.
 
+*Shipped in part 2026-11-19 (D1):* an unknown key is an error that names the valid keys, and the filters gained `source_type` (`agent_note`, `upload`, `local_reference`, `url`) and `written_after` / `written_before`. The schema in `tools/list` is still the untyped dict.
+
 **M3 — One response envelope. (M)**
 Pick one name per concept and apply it to every tool:
 
@@ -93,6 +97,8 @@ Let a connection choose how much it loads: `?tools=core`, `library`, `notes` or 
 Suggested `core` (about 8 tools): `list_collections`, `search` (see M5), `read_document`, `get_document_context`, `find_in_documents`, `list_documents`, `query_table`, `write_document` when the token allows it.
 *Done when:* `tools/list` for `core` is under 4k tokens, measured by a test that fails if it grows.
 
+*Shipped 2026-11-19 (D1):* `?tools=notes` (8 tools, about 1,700 tokens) and `?tools=core` (12 tools, about 2,900), held by a test; no profile still lists all 32 tools (about 16,700 tokens). Read-only credentials never list a write tool. Not done: `library`, the per-token setting, and the `search`/`fetch` profile.
+
 **M5 — Fewer, clearer retrieval tools. (M)**
 - Fold `search_all_collections` into `search_collection`: `collection_id` accepts one id, a list, or `"all"`.
 - Keep `deep_search` as the multi-query tool (R9 renamed it from `research_documents`; drop the old name one release after R9).
@@ -105,6 +111,8 @@ Suggested `core` (about 8 tools): `list_collections`, `search` (see M5), `read_d
 
 **M6 — Instructions that cover writing. (S)**
 The server `instructions` never mention `write_document`, `read_document` or `list_changes`. Move the "which tool when" guidance out of the individual docstrings and into `instructions`; cut each docstring to purpose, parameters and one example.
+
+*Shipped in part 2026-11-19 (D1):* the instructions cover creating, appending and replacing notes, searching one's own notes and the change feed. The docstrings are not yet cut down.
 
 **M7 — One tool registry. (M)**
 The in-app chat has its own hand-written catalogue of 13 tools ([agent_tools.py](../services/agent_tools.py)) where `search_collection` is called `search_documents`, and [structured_chat.py:347](../services/structured_chat.py) re-implements dispatch. Generate both from one definition so the in-app chat and MCP cannot drift.
@@ -418,7 +426,7 @@ Ask has an "All" scope; Find does not. Add the scope switch, filters for type, s
 **U8 — Real URLs. (M)**
 There is no router; only `?tab=` is read, then stripped. Add hash routes for view, collection, chat and source so Back, refresh and sharing a link work. This also fixes F11 properly.
 
-*Shipped 2026-11-18* (`#/library`, `#/ask/<chat>` and the like; `?tab=` still works and survives onboarding).
+*Shipped 2026-11-18* (`#/library`, `#/library/map`, `#/find` and the like; `?tab=` still works and survives onboarding). Corrected 2026-11-19: the chat was never in the URL; the collection is now (`#/ask?c=<collection>`, work order C9). The chat stays out until history is on the server (U9).
 
 **U9 — Chat history on the server. (M)**
 History lives in the browser (50 sessions of 100 messages), in a 288px dropdown. Store it server-side per user, with a proper list, search and delete-with-undo. Add edit-and-resend. Replace the eight native `confirm()` calls with one confirm component.
@@ -426,7 +434,7 @@ History lives in the browser (50 sessions of 100 messages), in a 288px dropdown.
 *The confirm component shipped 2026-11-18* (every native confirm replaced, and MCP token revoke now asks). Server-side history is still open.
 
 **U10 — Settings you can find. (M)**
-About 105 of 162 settings are environment-only. Add a read-only "Set by environment" list in Settings so an operator can see what is in force without reading `.env.example`. Turn Admin's single long page into sections.
+About 105 of what were 162 settings are environment-only (193 settings on 2026-11-19). Add a read-only "Set by environment" list in Settings so an operator can see what is in force without reading `.env.example`. Turn Admin's single long page into sections.
 
 *The "Set by environment" list shipped 2026-11-18* (admins only; a saved value that overrides the environment is logged). Admin sections are still open.
 
@@ -439,7 +447,7 @@ About 105 of 162 settings are environment-only. Add a read-only "Set by environm
 
 Do each split when a phase first touches the file.
 
-- **`services/mcp_server.py` (4,898 lines)** → a package: context and auth, retrieval, documents, tables, writes, resources and prompts, ASGI. Public functions for `/api/v1` and chat, which today import private ones ([api/v1.py:405](../api/v1.py); `ask_documents` imports `api.chat` privates). Do with M1-M3.
+- **`services/mcp_server.py` (4,898 lines on 2026-11-16; 5,541 on 2026-11-19)** → a package: context and auth, retrieval, documents, tables, writes, resources and prompts, ASGI. Public functions for `/api/v1` and chat, which today import private ones ([api/v1.py:405](../api/v1.py); `ask_documents` imports `api.chat` privates). Do with M1-M3.
 - **One registration style** for tools (there are three), and one helper for the excerpt clamp (copied six times) and the document-list serializer (copied four times). Do with M3.
 - **`SourcesSidebar.vue` (2,871), `App.vue` (2,543), `SettingsTab.vue` (2,313)** → feature components with stores. Collections, the jobs drawer and three modals move out of `App.vue`. Do with U2, U3, U5.
 - **One modal pattern** (`useModal`). Do with F14.
@@ -475,6 +483,17 @@ Written up by the 2026-11-18 hardening pass; none was made.
 5. **Admins by group.** Today `ADMIN_EMAILS` is a static list read at start.
    (a) Add `ADMIN_GROUPS`, matched against an OIDC or proxy group claim. (b) Re-read `ADMIN_EMAILS` live and make it editable in the app. (c) Keep it static and document the restart.
 
+Added by the 2026-11-19 improvement pass; none was made.
+
+6. **Re-indexing existing collections for indexing recipe 2 (B2).** New collections embed each passage under its source line; existing ones stay on recipe 1 (on the benchmark, recall@10 0.32 instead of 0.98 with the reranker).
+   (a) New collections only (what ships). (b) Offer *Re-index in place* on collections still on recipe 1, with its cost. (c) Re-index in the background after an upgrade. (b) and (c) need a re-index that switches the recipe; today only a rebuild from empty does.
+7. **The default search model.** MiniLM or BGE small for new installs; not yet run on the new benchmark.
+   (a) Keep MiniLM. (b) BGE small for new installs only. (c) BGE small as the `:latest` image's model with the documented migration.
+8. **Feedback capture (work order A3): is the question text stored with a verdict**, at sites with classification markings?
+   (a) Verdict and source ids only. (b) Text stored unless the collection is marked local-only. (c) Text always.
+9. **Unknown MCP filter keys now fail (D1).** The always-on rule says a changed MCP shape keeps its old form for one release.
+   (a) Keep the error (what ships). (b) Accept unknown keys with a warning field for one release, then fail.
+
 ---
 
 ## Standing backlog (carried over unchanged)
@@ -509,6 +528,7 @@ Items below predate this plan. Where one overlaps a numbered item above, the num
 Shipped 2026-09-12: the answer cache keys on the whole request (corpus version, guide, attached instructions, provider/model, retrieval settings, source selection) and the source selection is enforced end-to-end (retrieval, tool calls, table queries, overview, citations, reports, cache). Still open, in priority order:
 
 - **Retrieval benchmark** — shipped 2026-10-23: a versioned fixture corpus ([tests/fixtures/retrieval_bench/](../tests/fixtures/retrieval_bench/), 60 documents, 101 chunks, 80 labelled queries: plain questions, exact identifiers, quoted phrases, negation, dates, table lookups and unanswerable cases) and a runner, [scripts/retrieval_bench.py](../scripts/retrieval_bench.py) (`venv/Scripts/python scripts/retrieval_bench.py`, or `CLIO_RETRIEVAL_BENCH=1 pytest tests/benchmark -s`; skipped by default), that indexes the corpus with the real local embedding model and reports recall@5/@10, MRR, per-category breakdowns and p50/p95 latency for no reranker and candidate multipliers 2/3/5, plus throughput and shedding for `RERANK_MAX_CONCURRENT` 0 vs 2 under eight parallel callers. Numbers are comparable only within one corpus version; bump it when a passage or label changes. First run (12-core desktop, ~3 minutes, the cross-encoder passes are the cost): recall@10 is 1.0 in every configuration, 2x/3x/5x rank identically, latency is linear in the pool (p50 22 ms without the reranker, 315/500/792 ms at 2x/3x/5x), and the gate at 2 doubles throughput and cuts p95 from 3.3 s to 1.9 s under load while shedding 60% of searches to retrieval order; the defaults (3x, 2) stay. Still open: cross-user cases, citation correctness and abstention scoring; a corpus large enough that first-stage retrieval misses the top 10, so pool size can show a difference (today it cannot); and the one regression the reranker introduces (an exact-identifier query demoted from rank 2 to 7) points at identifier-aware reranking.
+  *2026-11-19:* the corpus and the scoring now exist. [tests/fixtures/retrieval_hard/](../tests/fixtures/retrieval_hard/) (generated by [scripts/make_retrieval_corpus.py](../scripts/make_retrieval_corpus.py): 304 documents in four collections, 1,795 passages, 226 questions; `--fixture tests/fixtures/retrieval_hard`) and [scripts/answer_eval.py](../scripts/answer_eval.py) (citation precision, supported sentences, abstention, time to answer, against a named model). Baseline, MiniLM, before any retrieval change: recall@10 0.219 without the reranker, 0.290 / 0.305 / 0.305 at pools 2x / 3x / 5x. After B1 and B2 (recipe 2, reranker reading the source line): recall@10 0.829 without the reranker and 0.981 with it at 3x, MRR 0.898; every category at 0.93 or above at @5. Answer baseline (recipe 1, llama3.2:3b on CPU, 25 questions): citation precision 0.158, supported sentences 0.889, declined on every unanswerable question, answered 77% of the answerable ones, first text p50 25 s. Full tables in the improvement report. With the reranker the new fixture is close to saturated; add harder distractors (version 2) before judging the next retrieval change on it.
 - **Privacy and authorization review** — exercise every API/tool/resource as owner, reader, outsider, revoked token and anonymous; confirm egress for embeddings, OCR, reranking and chat.
 - **One dependable connector** — watched folder or SharePoint, with incremental sync, deletion propagation, resumable jobs and visible failure state.
 - **Reproducible deployment** — locked dependencies, validated container + Postgres path, backup/restore and upgrade drills. Started 2026-10-16: `CLIO_PROFILE=secure` plus `scripts/preflight.py` / `GET /api/system/readiness` check posture, local model presence and every outbound path against the live configuration ([docs/SECURE_PROFILE.md](SECURE_PROFILE.md)). Shipped 2026-10-27: the container runs as an unprivileged user, `docker-compose.hardened.yml` adds a read-only root, dropped capabilities and `no-new-privileges`, and `scripts/backup.py` backs up (online-safe SQLite snapshots, SHA-256 manifest), verifies and restores the data directory. Shipped 2026-11-04: every push to master runs the backend and frontend suites (`.github/workflows/tests.yml`), including every database method against a real Postgres (`tests/test_postgres_backend.py`). Shipped 2026-11-18: settings are range-checked at start and on save; a newer database is refused, `app.db` is versioned and copied before a migration, and a backup records versions and refuses to restore over an older app. Remaining: locked dependency hashes, an SBOM in the offline bundle, scheduled backups, and schema versioning for Postgres (today: `pg_dump` before upgrading).
