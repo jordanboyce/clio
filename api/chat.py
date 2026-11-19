@@ -1406,14 +1406,31 @@ class AnswerFeedback(BaseModel):
     provider: str | None = Field(None, max_length=100)
     model: str | None = Field(None, max_length=200)
     sources: list[dict] = Field(default_factory=list, max_length=50)
+    question: str | None = Field(None, max_length=4000)
+
+
+def _may_keep_question(body: AnswerFeedback) -> bool:
+    """The question is kept with the verdict unless the answer could have
+    drawn on local-only data: a collection marked local only, or holding a
+    local-only document (services/data_controls.py). Asking across all
+    collections counts every collection. Not being able to tell counts as no."""
+    try:
+        if body.scope == "all":
+            ids = [c.get("id") for c in collection_service.get_all_collections()]
+        else:
+            ids = [body.collection_id]
+        return not any(data_controls.holds_local_only(cid) for cid in ids if cid)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 @router.post("/api/chat/feedback", tags=["chat"], status_code=201)
 def answer_feedback(body: AnswerFeedback):
     """Record "Helpful" or "Something is wrong" for an answer: the verdict,
-    the collection, the model and the sources it cited (ids, file names and
-    pages). The question and the answer are not stored; that waits on the
-    owner's decision for sites with classification markings."""
+    the collection, the model, the sources it cited (ids, file names and
+    pages) and the question, so a reported failure becomes a runnable test
+    case. The question is dropped when the answer could have used local-only
+    data; the answer text is never stored."""
     if body.verdict == "wrong" and not body.problem:
         raise HTTPException(status_code=422, detail="Say what is wrong: the answer, a citation, or a missing source.")
     from services.app_database import app_db
@@ -1427,8 +1444,9 @@ def answer_feedback(body: AnswerFeedback):
         "user_id": get_request_user(), "collection_id": body.collection_id, "scope": body.scope,
         "verdict": body.verdict, "problem": body.problem if body.verdict == "wrong" else None,
         "provider": body.provider, "model": body.model, "sources": sources,
+        "question": (body.question or "").strip() or None if _may_keep_question(body) else None,
     })
-    return {"id": row["id"], "recorded": True}
+    return {"id": row["id"], "recorded": True, "question_kept": bool(row.get("question"))}
 
 
 # Seconds of quiet on the answer stream before it sends a keepalive comment.

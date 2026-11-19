@@ -1337,8 +1337,12 @@ const FEEDBACK_PROBLEMS = [
 const feedbackFor = ref(null)
 const sendFeedback = async (msg, verdict, problem = null) => {
   try {
+    // The question this answers: the user message just before it.
+    const msgs = messages.value
+    const at = msgs.findIndex(m => m.id === msg.id)
+    const question = [...msgs.slice(0, at)].reverse().find(m => m.role === 'user')?.content || null
     await http.post('/api/chat/feedback', {
-      verdict, problem,
+      verdict, problem, question,
       collection_id: collectionStore.currentCollectionId,
       scope: msg.scope === 'all' ? 'all' : 'current',
       provider: msg.provider || null,

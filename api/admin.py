@@ -344,9 +344,8 @@ async def list_answer_feedback(limit: int = 500):
 async def export_answer_feedback():
     """Every "Something is wrong" as a case in the question-file format
     scripts/pilot_eval.py --questions reads (docs/demo/quality-evaluation.json),
-    so a reported failure becomes a test case. The question text is not
-    stored yet (an owner's decision), so each case says so: fill it in from
-    the person who reported it before running the file."""
+    so a reported failure becomes a test case. The question is stored unless
+    the answer could have used local-only data; a case without one says so."""
     require_admin("export answer feedback")
     from services.app_database import app_db
 
@@ -365,8 +364,10 @@ async def export_answer_feedback():
             "expected_sources": [] if r.get("problem") == "wrong_citation" else cited,
             "reported": {"problem": r.get("problem"), "cited": cited, "collection_id": r.get("collection_id"),
                          "provider": r.get("provider"), "model": r.get("model"), "at": r.get("created_at")},
-            **({} if r.get("question") else {"note": "The question text is not stored on this server. "
-                                                     "Add it, and what a right answer says, before running."}),
+            **({"note": "Add what a right answer says (expect, must_mention) before running."}
+               if r.get("question") else
+               {"note": "The question was not kept: the answer could have used local-only data. "
+                        "Add it, and what a right answer says, before running."}),
         })
     return {
         "corpus": "Answers people marked as wrong in Ask",

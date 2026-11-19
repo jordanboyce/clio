@@ -384,7 +384,7 @@
       </div>
       <p class="text-sm text-base-content/70">
         {{ feedback.helpful }} marked helpful, {{ feedback.wrong }} marked wrong.
-        The export is a question file for <code>scripts/pilot_eval.py</code>. Questions are not stored, so add each one before running it.
+        The export is a question file for <code>scripts/pilot_eval.py</code>. Add what a right answer says before running it; questions about local-only data are not kept.
       </p>
     </section>
 
