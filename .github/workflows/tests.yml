@@ -11,13 +11,19 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+  # The publish workflow runs this first, on the tagged commit, and builds
+  # nothing unless it passes (E1).
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  # Called from the publish workflow, the caller's own group already holds
+  # `github.workflow`; a separate one keeps a push to master from cancelling
+  # the run a release waits on.
+  group: tests-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   backend:

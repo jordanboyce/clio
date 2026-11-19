@@ -44,8 +44,13 @@ permissions:
   id-token: write
 
 jobs:
+  # Nothing is built from a commit whose tests fail (E1).
+  tests:
+    uses: ./.github/workflows/tests.yml
+
   publish:
     name: publish (${{ matrix.variant }})
+    needs: tests
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -110,22 +115,23 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
             type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
-          # The moving tag (:latest, :slim, :bge, :bge-slim) is added only after
-          # the smoke test below passes, so a broken build never reaches the
-          # tag a quick start pulls.
+          # No tag is pushed by the build. The image goes to the registry by
+          # digest only; the version tags and the moving tag (:latest, :slim,
+          # :bge, :bge-slim) are added after the smoke test below passes, so a
+          # broken build never reaches a tag anyone pulls.
 
       - id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          # Pushed by digest, untagged: see the tags step after the smoke test.
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
           # What a site's review asks for: what is in the image, and how it was
           # made. Both travel with the image in the registry. docs/ENTERPRISE.md
           # shows how to read them and check the signature below.
           sbom: true
           provenance: mode=max
           platforms: ${{ inputs.arm64 && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
-          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             APP_VERSION=${{ steps.meta.outputs.version }}
@@ -145,8 +151,8 @@ jobs:
       # Run the image the way a locked-down site does (non-root, read-only,
       # no capabilities, no network) and check its baked embedding model,
       # document and PRA ingest through the parsing helpers, and semantic
-      # search. A failure stops here: nothing is signed and the moving tag
-      # stays on the previous release.
+      # search. A failure stops here: nothing is tagged or signed, and every
+      # tag stays where the previous release left it.
       - name: Smoke-test the image
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -156,14 +162,18 @@ jobs:
           docker pull --platform linux/amd64 "$image"
           scripts/smoke_image.sh "$image" "$EMBEDDING_MODEL"
 
-      - name: Move the ${{ matrix.moving }} tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Tag the image
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          MOVING: ${{ matrix.moving }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+          MOVING: ${{ startsWith(github.ref, 'refs/tags/v') && matrix.moving || '' }}
         run: |
           repo="ghcr.io/${GITHUB_REPOSITORY,,}"
-          docker buildx imagetools create --tag "$repo:$MOVING" "$repo@$DIGEST"
+          args=()
+          for tag in $TAGS; do args+=(--tag "$tag"); done
+          if [ -n "$MOVING" ]; then args+=(--tag "$repo:$MOVING"); fi
+          if [ ${#args[@]} -eq 0 ]; then echo "No tags to add"; exit 0; fi
+          docker buildx imagetools create "${args[@]}" "$repo@$DIGEST"
 
       - uses: sigstore/cosign-installer@v3
 
