@@ -48,6 +48,30 @@
     </button>
     </template>
 
+    <!-- C4: everything the ribbon does not show, one click away. -->
+    <div v-if="more.length" class="dropdown dropdown-right">
+      <button
+        tabindex="0"
+        class="ribbon-btn"
+        :class="{ 'has-label': labels, 'is-active': more.some(item => isActive(item, activeTab, researchView)) }"
+        aria-label="More"
+        :data-tip="labels ? null : 'More'"
+        aria-haspopup="menu"
+        data-testid="ribbon-more"
+      >
+        <MoreHorizontal :size="18" class="flex-shrink-0" />
+        <span v-if="labels">More</span>
+        <span v-if="more.some(item => item.id === 'admin') && adminBadge > 0" class="ribbon-dot" aria-hidden="true" />
+      </button>
+      <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-[80] w-56 p-2 shadow border border-base-300 ml-1" data-testid="ribbon-more-menu">
+        <li v-for="item in more" :key="item.id">
+          <button @click="$emit('action', item)">
+            <component :is="ICONS[item.id]" :size="14" />{{ item.label }}
+          </button>
+        </li>
+      </ul>
+    </div>
+
     <div class="flex-1 w-full" @dragover.prevent @drop.prevent="onDrop(null)" />
 
     <div class="dropdown dropdown-right dropdown-end">
@@ -97,7 +121,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   BookOpen, Command, EyeOff, FileText, FolderPlus, Gauge, HelpCircle, Info, Keyboard, Layers, LibraryBig,
-  MessageSquare, MessageSquarePlus, Network, NotebookPen, PanelLeft, PanelLeftClose, PanelRight, Plug, RotateCcw,
+  MessageSquare, MessageSquarePlus, MoreHorizontal, Network, NotebookPen, PanelLeft, PanelLeftClose, PanelRight, Plug, RotateCcw,
   Search, Settings, SlidersHorizontal, SquareTerminal, Type, Quote, Sparkles,
 } from 'lucide-vue-next'
 import { defaultLayout, isActive, placeBefore, toggleHidden, withDividers } from '../utils/ribbon.js'
@@ -110,6 +134,8 @@ const ICONS = {
 
 const props = defineProps({
   items: { type: Array, required: true },
+  // The items the layout hides, offered under "More".
+  more: { type: Array, default: () => [] },
   layout: { type: Object, required: true },
   activeTab: { type: String, required: true },
   researchView: { type: String, default: 'library' },

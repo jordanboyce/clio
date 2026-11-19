@@ -1,19 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import {
   RIBBON_ITEMS, defaultLayout, isActive, moveItem, normalizeLayout, placeBefore, ribbonItems, toggleHidden,
-  visibleItems, withDividers,
+  moreItems, visibleItems, withDividers,
 } from '../ribbon.js'
 import { buildTree, folderDocIds, folderSelection, sortFiles, visibleRows } from '../sourceTree.js'
 
 describe('ribbon layout', () => {
-  it('shows a short default set, grouped, and hides admin items from non-admins', () => {
+  it('shows Ask, Find, Library and Connect by default, with names, and the rest under More (C4, U5)', () => {
     const ids = visibleItems(defaultLayout()).map(i => i.id)
-    expect(ids).toEqual(['chat', 'search', 'research', 'generate', 'expertise', 'mcp', 'collections', 'add-sources'])
-    expect(ids).not.toContain('admin')
-    expect(ids).not.toContain('graph')            // off by default, reachable in Research
+    expect(ids).toEqual(['chat', 'search', 'research', 'mcp'])
+    expect(defaultLayout().labels).toBe(true)
     const dividers = withDividers(visibleItems(defaultLayout())).filter(r => r.divider).map(r => r.item.id)
-    expect(dividers).toEqual(['research', 'mcp', 'add-sources'])
-    expect(visibleItems(defaultLayout(), { admin: true }).map(i => i.id)).toContain('admin')
+    expect(dividers).toEqual(['research', 'mcp'])
+    const more = moreItems(defaultLayout()).map(i => i.id)
+    expect(more).toEqual(expect.arrayContaining(['generate', 'expertise', 'collections', 'graph', 'add-sources']))
+    expect(more).not.toContain('admin')                                   // not for non-admins
+    expect(moreItems(defaultLayout(), { admin: true }).map(i => i.id)).toContain('admin')
     expect(visibleItems(defaultLayout(), { chat: false }).map(i => i.id)).not.toContain('chat')
   })
 

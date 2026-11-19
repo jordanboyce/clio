@@ -14,10 +14,9 @@ describe('Ribbon', () => {
   it('shows every visible item with the current place marked', async () => {
     const wrapper = mountRibbon()
     const labels = wrapper.findAll('[data-ribbon-item]').map(b => b.attributes('aria-label'))
-    expect(labels.slice(0, 4)).toEqual(['Ask', 'Find', 'Library', 'Reports'])
-    expect(wrapper.findAll('.ribbon-divider').length).toBeGreaterThanOrEqual(4)
+    expect(labels).toEqual(['Ask', 'Find', 'Library', 'Connect'])
+    expect(wrapper.findAll('.ribbon-divider').length).toBeGreaterThanOrEqual(3)
     expect(wrapper.get('[data-ribbon-item="research"]').attributes('aria-current')).toBeUndefined()   // map open
-    expect(wrapper.find('.has-label').exists()).toBe(false)
     await wrapper.get('[data-ribbon-item="mcp"]').trigger('click')
     expect(wrapper.emitted('action')[0][0].tab).toBe('mcp')
     wrapper.unmount()

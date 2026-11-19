@@ -16,6 +16,9 @@
 // Ids are stored in saved layouts, so they never change: the Library item is
 // still `research` (its tab was called Research before R9) and the citation
 // map is still `graph`.
+// C4 (roadmap U5): the default ribbon is Ask, Find, Library and Connect, with
+// their names, and "More" holds the rest. A layout someone saved keeps its
+// own choices; only the default changed.
 export const RIBBON_ITEMS = [
   { id: 'chat', label: 'Ask', tab: 'chat', group: 'ask' },
   { id: 'search', label: 'Find', tab: 'search', group: 'ask' },
@@ -23,12 +26,13 @@ export const RIBBON_ITEMS = [
   { id: 'graph', label: 'Citation map', tab: 'research', view: 'map', group: 'work', hidden: true },
   { id: 'reviews', label: 'Reviews', tab: 'research', view: 'reviews', group: 'work', hidden: true },
   { id: 'cite', label: 'Cite & check', tab: 'research', view: 'write', group: 'work', hidden: true },
-  { id: 'generate', label: 'Reports', tab: 'generate', group: 'work' },
-  { id: 'expertise', label: 'Saved instructions', tab: 'expertise', group: 'work' },
+  { id: 'generate', label: 'Reports', tab: 'generate', group: 'work', hidden: true },
+  { id: 'expertise', label: 'Saved instructions', tab: 'expertise', group: 'work', hidden: true },
   { id: 'mcp', label: 'Connect', tab: 'mcp', group: 'share' },
-  { id: 'collections', label: 'Collections', tab: 'collections', group: 'share' },
-  { id: 'admin', label: 'Administration', tab: 'admin', adminOnly: true, group: 'share' },
-  { id: 'add-sources', label: 'Add sources', action: 'add-sources', group: 'actions' },
+  { id: 'collections', label: 'Collections', tab: 'collections', group: 'share', hidden: true },
+  { id: 'admin', label: 'Administration', tab: 'admin', adminOnly: true, group: 'share', hidden: true },
+  // Sources has its own Add entry point; one is enough by default.
+  { id: 'add-sources', label: 'Add sources', action: 'add-sources', group: 'actions', hidden: true },
   { id: 'new-chat', label: 'New chat', action: 'new-chat', group: 'actions', hidden: true },
   { id: 'notes', label: 'Notes and tools', action: 'notes', group: 'actions', hidden: true },
   { id: 'palette', label: 'Command palette', action: 'palette', group: 'actions', hidden: true },
@@ -55,9 +59,9 @@ export function defaultLayout() {
   return {
     order: RIBBON_ITEMS.map(i => i.id),
     hidden: RIBBON_ITEMS.filter(i => i.hidden).map(i => i.id),
-    // Icons alone suit people who know them; names beside the icons suit
-    // everyone else. A preference, not a mode of the app.
-    labels: false,
+    // Names beside the icons by default (U5: nine unlabeled icons were the
+    // complaint); icons alone stay a preference for people who know them.
+    labels: true,
   }
 }
 
@@ -94,6 +98,12 @@ export function ribbonItems(layout, { admin = false, chat = true } = {}) {
   return normalizeLayout(layout).order
     .map(id => byId[id])
     .filter(item => (!item.adminOnly || admin) && (chat || (item.tab !== 'chat' && item.action !== 'new-chat')))
+}
+
+/** The items a layout hides, for the ribbon's "More" menu. */
+export function moreItems(layout, options) {
+  const hidden = new Set(normalizeLayout(layout).hidden)
+  return ribbonItems(layout, options).filter(item => hidden.has(item.id))
 }
 
 export function visibleItems(layout, options) {

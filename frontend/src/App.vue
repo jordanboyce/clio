@@ -153,6 +153,7 @@
       <AppRibbon
         v-if="!isCompact"
         :items="ribbonVisible"
+        :more="ribbonMore"
         :layout="ribbonLayout"
         :active-tab="activeTab"
         :research-view="ui.researchView"
@@ -1396,7 +1397,7 @@ import StudioSidebar from './components/StudioSidebar.vue'
 import WorkspaceNav from './components/WorkspaceNav.vue'
 import AppRibbon from './components/AppRibbon.vue'
 import RibbonCustomizeDialog from './components/RibbonCustomizeDialog.vue'
-import { RIBBON_ITEMS, resolveTab, ribbonItems, visibleItems } from './utils/ribbon.js'
+import { RIBBON_ITEMS, moreItems, resolveTab, ribbonItems, visibleItems } from './utils/ribbon.js'
 import { parseRoute, routeHash } from './utils/route.js'
 import { fitPanel, panelBudget, readWidth } from './utils/panels.js'
 import { parsePraHref, praOn, setPraEnabled } from './utils/praFormat'
@@ -2154,6 +2155,7 @@ const showRibbonCustomize = computed({
 const ribbonAccess = computed(() => ({ admin: userStore.adminConsole, chat: chatTabEnabled.value }))
 const ribbonAll = computed(() => ribbonItems(ribbonLayout.value, ribbonAccess.value))
 const ribbonVisible = computed(() => visibleItems(ribbonLayout.value, ribbonAccess.value))
+const ribbonMore = computed(() => moreItems(ribbonLayout.value, ribbonAccess.value))
 const setRibbonLayout = (layout) => layoutStore.setRibbon(layout)
 function runRibbonItem(item) {
   if (item.tab) {
