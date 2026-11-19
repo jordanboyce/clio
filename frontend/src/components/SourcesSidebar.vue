@@ -702,7 +702,7 @@
         <p
           v-if="selectedDocuments.length > 0"
           class="basis-full text-[10px] leading-snug text-base-content/50"
-        >Chat and reports use only the selected sources.</p>
+        >Ask, Find and reports use only the selected sources.</p>
       </div>
 
       <!-- Type chips: what kinds of sources are here, and a one-tap filter.
