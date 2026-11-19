@@ -808,6 +808,7 @@ import { useStatsStore } from '../stores/statsStore'
 import { useSelectionStore } from '../stores/selectionStore'
 import { useSearchStore } from '../stores/searchStore'
 import { useUiStore } from '../stores/uiStore'
+import { validationMessage } from '../utils/http'
 import { addSampleSources, isSampleSet, SAMPLE_FILES, SAMPLE_QUESTIONS } from '../utils/sampleSources'
 import { locationLabel } from '../utils/fileTypes'
 import SlashCommandPicker from './SlashCommandPicker.vue'
@@ -1493,7 +1494,19 @@ const sendMessage = async () => {
           `Rate limit reached — try again in ${secs ? `${secs}s` : 'a moment'}.`
         )
       }
-      throw new Error(errBody.detail || `HTTP ${response.status}`)
+      // D3: a list of field errors, a sign-in that ended, or a proxy's HTML
+      // error page each become a sentence, never "HTTP 502".
+      if (Array.isArray(errBody.detail)) throw new Error(validationMessage(errBody.detail))
+      if (response.status === 401) {
+        ui.authRequired = true
+        throw new Error('You are signed out. Sign in again to continue.')
+      }
+      if (!errBody.detail && [502, 503, 504].includes(response.status)) {
+        throw new Error(response.status === 503
+          ? 'The server is busy or still starting. Retrying is safe.'
+          : 'The server or the model did not answer. Retrying is safe.')
+      }
+      throw new Error(errBody.detail || `The request failed (${response.status}).`)
     }
 
     const reader = response.body.getReader()

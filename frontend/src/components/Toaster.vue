@@ -9,6 +9,10 @@ const ui = useUiStore()
 const icons = { success: CheckCircle2, error: CircleAlert, warning: AlertTriangle, info: Info }
 const iconClass = { success: 'text-success', error: 'text-error', warning: 'text-warning', info: 'text-info' }
 
+function signIn() {
+  window.location.reload()
+}
+
 function runAction(toast) {
   ui.dismiss(toast.id)
   toast.action?.run?.()
@@ -46,6 +50,22 @@ function runAction(toast) {
       </div>
     </TransitionGroup>
   </div>
+
+  <!-- D2: signed out. One prompt; signing in again reloads the page through
+       the browser's or the proxy's own sign-in. -->
+  <Transition name="rise">
+    <div
+      v-if="ui.authRequired"
+      class="fixed top-0 inset-x-0 z-[102] flex justify-center pointer-events-none"
+      role="alert"
+      data-testid="signed-out"
+    >
+      <div class="notice notice-warning notice-floating shadow-lg rounded-t-none rounded-b-xl ring-1 ring-base-content/10 max-w-md pointer-events-auto">
+        <span>You are signed out. Background updates have stopped.</span>
+        <button class="btn btn-xs btn-primary" @click="signIn">Sign in again</button>
+      </div>
+    </div>
+  </Transition>
 
   <!-- Backend-unreachable banner: cleared by the first successful request -->
   <Transition name="rise">

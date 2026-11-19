@@ -126,6 +126,13 @@
       class="m-2 flex-shrink-0"
       :collection-id="collectionStore.currentCollectionId"
     />
+    <!-- U2: files that could not be added, kept here with the reason. -->
+    <FailedSources
+      v-if="collectionStore.currentCollectionId"
+      class="mx-2 mb-2 flex-shrink-0"
+      :collection-id="collectionStore.currentCollectionId"
+      :can-retry="collectionStore.canEditCurrent"
+    />
     <SupersedeSuggestions
       v-if="collectionStore.currentCollectionId && collectionStore.canEditCurrent"
       ref="supersedeSuggestions"
@@ -1289,6 +1296,7 @@
 import { ref, computed, markRaw, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import http from '../utils/http'
 import EmbeddingMismatchNotice from './EmbeddingMismatchNotice.vue'
+import FailedSources from './FailedSources.vue'
 import SupersedeDialog from './SupersedeDialog.vue'
 import SupersedeSuggestions from './SupersedeSuggestions.vue'
 import SourcesTree from './SourcesTree.vue'

@@ -79,6 +79,59 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     return summary.failed_files
   }
 
+  // U2: files that could not be added stay listed in the Sources panel, with
+  // the reason and Retry, until retried or dismissed there: dismissing the
+  // job card no longer discards the only record of them. Kept per browser.
+  const FAILED_KEY = 'clio_failed_sources'
+  const failedSources = ref(readFailed())
+  function readFailed() {
+    try {
+      const list = JSON.parse(localStorage.getItem(FAILED_KEY) || '[]')
+      return Array.isArray(list) ? list.slice(0, 200) : []
+    } catch { return [] }
+  }
+  function saveFailed() {
+    try { localStorage.setItem(FAILED_KEY, JSON.stringify(failedSources.value.slice(0, 200))) } catch { /* a convenience */ }
+  }
+  function rememberFailures(job) {
+    if (job.jobType === 'delete') return
+    const known = new Set(failedSources.value.map(f => f.key))
+    const added = failedFilesOf(job)
+      .map(f => ({
+        key: `${job.jobId}:${f.filename}`,
+        collectionId: job.collectionId,
+        filename: f.filename,
+        reason: f.reason || f.error || 'It could not be indexed.',
+        fix: f.fix || '',
+        retry: f.retry || null,
+        at: job.completedAt || new Date().toISOString(),
+      }))
+      .filter(f => !known.has(f.key))
+    if (!added.length) return
+    failedSources.value = [...added, ...failedSources.value]
+    saveFailed()
+  }
+  function failedFor(collectionId) {
+    return failedSources.value.filter(f => f.collectionId === collectionId)
+  }
+  function dismissFailed(keys) {
+    const drop = new Set(Array.isArray(keys) ? keys : [keys])
+    failedSources.value = failedSources.value.filter(f => !drop.has(f.key))
+    saveFailed()
+  }
+  // Index again from the copy the server kept; a file that is gone says so.
+  async function retryFailed(collectionId, entries) {
+    const items = entries.filter(f => f.retry)
+    if (!items.length) return null
+    const { data } = await http.post('/documents/retry-failed', { collection_id: collectionId, items: items.map(f => f.retry) })
+    // The new job carries any failure again; this entry is done.
+    dismissFailed(items.map(f => f.key))
+    if (data?.job_id) {
+      try { addUploadJob(data) } catch { /* the job still runs; the drawer finds it on its next poll */ }
+    }
+    return data
+  }
+
   const allJobs = computed(() => {
     const jobs = []
 
@@ -403,6 +456,7 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
   function announceOutcome(job) {
     const ui = useUiStore()
     const failed = failedFilesOf(job)
+    rememberFailures(job)
     if (job.jobType === 'delete') {
       announceDeletion(ui, job, failed)
       return
@@ -419,9 +473,11 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     if (job.status !== 'completed') return
     const indexed = job.resultSummary?.documents_processed ?? job.processedFiles ?? 0
     if (failed.length > 0) {
+      // D1: one failure says why; several point at the list in Sources.
+      const why = failed.length === 1 ? ` ${failed[0].filename}: ${failed[0].reason || failed[0].error || ''}` : ''
       ui.notify(
         `Indexed ${indexed} file${indexed === 1 ? '' : 's'}, ` +
-        `${failed.length} could not be read — open Background jobs for the list.`,
+        `${failed.length} could not be added.${why || ' The Sources panel lists them with the reason.'}`,
         'warning',
         { duration: 9000 },
       )
@@ -622,16 +678,55 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     stopPollingIfNoActiveJobs()
   }
 
+  // D2: the poll waits longer after each failure in a row (up to 30 s), skips
+  // a hidden tab, and stops for good once the server says the person is
+  // signed out. A self-rescheduling timer, so the wait can change.
+  const POLL_BASE_MS = 1500
+  const POLL_MAX_MS = 30000
+  let pollFailures = 0
+  let pollPaused = false
+
+  function nextPollDelay() {
+    return Math.min(POLL_MAX_MS, POLL_BASE_MS * 2 ** Math.min(pollFailures, 5))
+  }
+
+  function scheduleNextPoll() {
+    pollingInterval.value = setTimeout(async () => {
+      pollingInterval.value = null
+      const ui = useUiStore()
+      if (ui.authRequired) return
+      if (typeof document !== 'undefined' && document.hidden) {
+        pollPaused = true
+        return
+      }
+      const before = ui.offline
+      await pollAllJobs()
+      pollFailures = ui.offline ? pollFailures + 1 : 0
+      if (!before && ui.offline) pollFailures = Math.max(pollFailures, 1)
+      if (hasActiveJobs.value && !pollingInterval.value) scheduleNextPoll()
+    }, nextPollDelay())
+  }
+
   function startPolling() {
     if (pollingInterval.value) return // Already polling
-    pollingInterval.value = setInterval(pollAllJobs, 1500)
+    if (useUiStore().authRequired) return
+    scheduleNextPoll()
   }
 
   function stopPolling() {
     if (pollingInterval.value) {
-      clearInterval(pollingInterval.value)
+      clearTimeout(pollingInterval.value)
       pollingInterval.value = null
     }
+  }
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && pollPaused) {
+        pollPaused = false
+        if (hasActiveJobs.value) startPolling()
+      }
+    })
   }
 
   // Restore state on startup: jobs still running (they live in server
@@ -705,6 +800,12 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     // Live-refresh signal (throttled; watched by App and SourcesSidebar)
     dataRefreshTick,
     dataRefreshCollectionId,
+
+    // U2: failed files, kept until retried or dismissed
+    failedSources,
+    failedFor,
+    dismissFailed,
+    retryFailed,
 
     // Actions
     addUploadJob,

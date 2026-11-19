@@ -1346,7 +1346,9 @@
                   <ul class="mt-1.5 space-y-1 max-h-40 overflow-y-auto">
                     <li v-for="(f, i) in job.failedFiles" :key="i" class="text-base-content/70">
                       <div class="font-medium truncate" :title="f.filename">{{ f.filename }}</div>
-                      <div class="text-base-content/50 line-clamp-2" :title="f.error">{{ f.error }}</div>
+                      <!-- D1: the reason and the next step; the raw error on hover. -->
+                      <div class="text-base-content/60 line-clamp-2" :title="f.error">{{ f.reason || f.error }}</div>
+                      <div v-if="f.fix" class="text-base-content/50 line-clamp-2">{{ f.fix }}</div>
                     </li>
                   </ul>
                 </details>

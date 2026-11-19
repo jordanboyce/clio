@@ -71,3 +71,38 @@ describe('timeouts versus outages', () => {
     expect(useUiStore().offline).toBe(true)
   })
 })
+
+describe('errors that say what happened (D2, D3)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  const answered = (status, data, statusText = '') => ({ config: {}, response: { status, statusText, data } })
+
+  it('turns a 422 field list into "field: message"', async () => {
+    const err = answered(422, { detail: [
+      { loc: ['body', 'chunk_size'], msg: 'Input should be greater than 0' },
+      { loc: ['query', 'collection_id'], msg: 'Field required' },
+    ] }, 'Unprocessable Entity')
+    await expect(reject(err)).rejects.toMatchObject({
+      status: 422, message: 'chunk size: Input should be greater than 0; collection id: Field required',
+    })
+  })
+
+  it("keeps Clio's own 502 sentence and does not call it an outage", async () => {
+    const err = answered(502, { detail: 'A service this needed did not answer as expected. Retrying is safe.', code: 'upstream_error' })
+    await expect(reject(err)).rejects.toMatchObject({ status: 502, message: expect.stringContaining('Retrying is safe') })
+    expect(useUiStore().offline).toBe(false)
+  })
+
+  it("calls a proxy's HTML 502 an outage, in a sentence, not \"HTTP 502\"", async () => {
+    const err = answered(502, '<html><body>Bad Gateway</body></html>', 'Bad Gateway')
+    await expect(reject(err)).rejects.toMatchObject({ isNetwork: true, message: expect.stringContaining('Retrying is safe') })
+    expect(useUiStore().offline).toBe(true)
+  })
+
+  it('a 401 asks once for a sign-in', async () => {
+    await expect(reject(answered(401, { detail: 'Not authenticated' }))).rejects.toMatchObject({ isAuth: true })
+    expect(useUiStore().authRequired).toBe(true)
+  })
+})

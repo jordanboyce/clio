@@ -14,6 +14,9 @@ export const useUiStore = defineStore('ui', () => {
   // True while requests are failing at the network layer (server down or
   // unreachable). Cleared by the first response that makes it through.
   const offline = ref(false)
+  // D2: a request came back 401. One sign-in prompt for the whole app, and
+  // background polling stops until the page is reloaded after signing in.
+  const authRequired = ref(false)
   // Onboarding hand-off: pulses the Add Sources control after provider
   // setup completes with an empty collection; cleared on first interaction.
   const highlightAddSources = ref(false)
@@ -78,5 +81,5 @@ export const useUiStore = defineStore('ui', () => {
     return notify(message, 'error', { duration: 6000 })
   }
 
-  return { toasts, offline, highlightAddSources, sourcesVersion, sourcesChanged, researchView, praViewer, openPra, closePra, notify, dismiss, toastError, settingsRequest, openSettings, connectModel }
+  return { toasts, offline, authRequired, highlightAddSources, sourcesVersion, sourcesChanged, researchView, praViewer, openPra, closePra, notify, dismiss, toastError, settingsRequest, openSettings, connectModel }
 })

@@ -52,6 +52,31 @@ export function startBootstrap(collectionId) {
     .then((r) => r.data))
 }
 
+// D3: FastAPI's 422 answers with a list of {loc, msg}; say "field: message"
+// for each instead of "Unprocessable Entity".
+export function validationMessage(errors) {
+  const parts = (errors || []).slice(0, 4).map((e) => {
+    const loc = Array.isArray(e?.loc) ? e.loc.filter(p => !['body', 'query', 'path', 'header'].includes(p)) : []
+    const field = loc.length ? String(loc[loc.length - 1]).replaceAll('_', ' ') : ''
+    const msg = String(e?.msg || 'is not valid').replace(/^Value error, /, '')
+    return field ? `${field}: ${msg}` : msg
+  })
+  return parts.join('; ') || 'Some of what was sent is not valid.'
+}
+
+// A response Clio wrote itself (its error envelope), as against a proxy's
+// or a gateway's own error page.
+function fromClio(response) {
+  const data = response?.data
+  return Boolean(data && typeof data === 'object' && ('detail' in data || 'code' in data))
+}
+
+function fallbackMessage(status, statusText) {
+  if (status === 502 || status === 504) return 'A service this needed did not answer. Retrying is safe.'
+  if (status === 503) return 'The server is busy or still starting. Retrying is safe.'
+  return statusText || 'Request failed'
+}
+
 // Deduplicate the rate-limit toast: a burst of limited requests should not
 // stack N identical toasts.
 let lastRateLimitToastAt = 0
@@ -96,16 +121,34 @@ http.interceptors.response.use(
     // deployment: a direct connection fails at the network layer (no
     // response), cloudflared answers 502/504 for a dead origin, and the
     // Vite dev proxy answers 502. All of them mean the same thing to the
-    // user: the server is down, not their request.
+    // user: the server is down, not their request. D3: a 502/503/504 that
+    // Clio itself wrote (its JSON envelope: a model provider that did not
+    // answer, the search model still loading) is not an outage, and keeps
+    // its own sentence.
     const gatewayDown =
-      error.response && [502, 503, 504].includes(error.response.status)
+      error.response && [502, 503, 504].includes(error.response.status) && !fromClio(error.response)
     if (!error.response || gatewayDown) {
       ui.offline = true
       return Promise.reject({
         status: error.response?.status || 0,
-        message: 'Cannot reach the server. It may be restarting.',
+        message: error.response
+          ? 'The server did not answer (it may be restarting). Retrying is safe.'
+          : 'Cannot reach the server. It may be restarting.',
         isNetwork: true,
         isRateLimit: false,
+      })
+    }
+
+    // D2: signed out (an expired session, a proxy that dropped the sign-in).
+    // One prompt for the whole app, and the pollers stop asking.
+    if (error.response.status === 401) {
+      ui.authRequired = true
+      return Promise.reject({
+        status: 401,
+        message: 'You are signed out. Sign in again to continue.',
+        isNetwork: false,
+        isRateLimit: false,
+        isAuth: true,
       })
     }
 
@@ -118,7 +161,9 @@ http.interceptors.response.use(
         ? data.detail
         : (data?.detail && typeof data.detail === 'object' && typeof data.detail.detail === 'string')
           ? data.detail.detail
-          : null
+          : Array.isArray(data?.detail)
+            ? validationMessage(data.detail)
+            : null
 
     if (status === 429) {
       const seconds = data?.retry_after_seconds
@@ -144,7 +189,7 @@ http.interceptors.response.use(
 
     return Promise.reject({
       status,
-      message: detailText || error.response.statusText || 'Request failed',
+      message: detailText || fallbackMessage(status, error.response.statusText),
       isNetwork: false,
       isRateLimit: false,
       isStorageLimit: status === 413 && data?.detail?.error === 'storage_limit_exceeded',
