@@ -85,6 +85,23 @@ def _restore_import_time_settings():
     _config.settings = _IMPORT_TIME_SETTINGS
 
 
+# Variables Settings() writes into the process for the hub client: building a
+# Settings with offline_mode=True or a mirror in one test used to leave them
+# set for every later one, so download tests passed or failed by test order.
+_HUB_ENVIRONMENT = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_ENDPOINT", "HF_HUB_DISABLE_XET")
+
+
+@pytest.fixture(autouse=True)
+def _hub_environment_is_not_shared_between_tests():
+    before = {name: os.environ.get(name) for name in _HUB_ENVIRONMENT}
+    yield
+    for name, value in before.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+
+
 @pytest.fixture(autouse=True)
 def _settings_saves_stay_out_of_the_real_env_file(tmp_path, monkeypatch):
     """Saving settings mirrors them into ./.env, which here is the developer's own."""
