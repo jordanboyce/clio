@@ -104,6 +104,9 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
         reason: f.reason || f.error || 'It could not be indexed.',
         fix: f.fix || '',
         retry: f.retry || null,
+        // A file picked from this computer is retried from where it is: the
+        // path came from this browser's own request, never from the server.
+        retryPath: f.retry ? null : (sourcePaths.get(job.jobId)?.get(f.filename) || null),
         at: job.completedAt || new Date().toISOString(),
       }))
       .filter(f => !known.has(f.key))
@@ -119,15 +122,27 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     failedSources.value = failedSources.value.filter(f => !drop.has(f.key))
     saveFailed()
   }
-  // Index again from the copy the server kept; a file that is gone says so.
+  // Index again from the copy the server kept, or from the file's own place
+  // on this computer; a file that is gone says so.
   async function retryFailed(collectionId, entries) {
-    const items = entries.filter(f => f.retry)
-    if (!items.length) return null
-    const { data } = await http.post('/documents/retry-failed', { collection_id: collectionId, items: items.map(f => f.retry) })
-    // The new job carries any failure again; this entry is done.
-    dismissFailed(items.map(f => f.key))
-    if (data?.job_id) {
-      try { addUploadJob(data) } catch { /* the job still runs; the drawer finds it on its next poll */ }
+    const kept = entries.filter(f => f.retry)
+    const picked = entries.filter(f => !f.retry && f.retryPath)
+    let data = null
+    if (kept.length) {
+      data = (await http.post('/documents/retry-failed', { collection_id: collectionId, items: kept.map(f => f.retry) })).data
+      // The new job carries any failure again; these entries are done.
+      dismissFailed(kept.map(f => f.key))
+      if (data?.job_id) {
+        try { addUploadJob(data) } catch { /* the job still runs; the drawer finds it on its next poll */ }
+      }
+    }
+    if (picked.length) {
+      const paths = picked.map(f => f.retryPath)
+      data = (await http.post('/documents/index-local-async', { file_paths: paths, collection_id: collectionId, copy_to_library: false })).data
+      dismissFailed(picked.map(f => f.key))
+      if (data?.job_id) {
+        try { addUploadJob(data, { localPaths: paths }) } catch { /* as above */ }
+      }
     }
     return data
   }
@@ -308,8 +323,13 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
   }
 
   // Actions
-  function addUploadJob(jobData) {
+  // Job id → (file name → the path this browser sent), for Retry (U2).
+  const sourcePaths = new Map()
+  function addUploadJob(jobData, { localPaths = null } = {}) {
     const record = toJobRecord(jobData)
+    if (localPaths?.length) {
+      sourcePaths.set(record.jobId, new Map(localPaths.map(p => [String(p).split(/[\\/]/).pop(), p])))
+    }
     dismissedJobIds.value.delete(record.jobId)
     uploadJobs.value = uploadJobs.value.filter(j => j.jobId !== record.jobId)
     uploadJobs.value.push(record)
@@ -821,6 +841,7 @@ export const useBackgroundJobsStore = defineStore('backgroundJobs', () => {
     failedFor,
     dismissFailed,
     retryFailed,
+    rememberFailures,
 
     // Actions
     addUploadJob,

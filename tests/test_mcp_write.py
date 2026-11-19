@@ -1285,7 +1285,10 @@ def test_a_failed_job_keeps_the_file_already_there(indexer, fresh_db):
     _staged_upload(fresh_db, "note.md", b"")  # nothing to extract, so the file fails
 
     _holds(indexer, "note.md", NOTES)
-    assert _nothing_staged()
+    # U2: the failed upload waits in staging for its Retry (the stale-upload
+    # sweep removes it otherwise); it is not installed over the library file.
+    staged = list(collection_service.get_staging_path("default").glob("*/note.md"))
+    assert len(staged) == 1 and staged[0].read_bytes() == b""
 
 
 def test_a_refused_upload_keeps_the_file_already_there(indexer, fresh_db):

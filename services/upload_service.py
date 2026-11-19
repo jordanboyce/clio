@@ -160,6 +160,9 @@ class _BulkFileWork:
     # A browser upload waiting in the staging folder: kept after a failure,
     # so the failure can offer Retry (U2) without asking for the file again.
     staged_source: Optional[Path] = None
+    # Set when the file failed and its staged copy is kept for that Retry;
+    # the stale-upload sweep removes it if nobody retries.
+    keep_for_retry: bool = False
     held_bytes: int = 0
 
 
@@ -980,7 +983,8 @@ class UploadService:
         try:
             self._process_bulk_job(job_id, works, collection_id, uploaded_by=uploaded_by)
         finally:
-            _remove_staged(collection_id, file_paths)
+            # A failed upload stays for its Retry; the rest are done with.
+            _remove_staged(collection_id, [fp for fp, work in zip(file_paths, works) if not work.keep_for_retry])
 
 
     def start_link_index(
@@ -1842,9 +1846,11 @@ class UploadService:
                 # D1: the reason and the next step beside the raw error.
                 from services import upload_failures
                 entry = {"error": str(error), **upload_failures.explain(work.display_name, error)}
-                if work.staged_source is not None and work.staged_source.exists():
+                if (work.staged_source is not None and work.staged_source.exists()
+                        and upload_failures.retryable(error)):
                     # An opaque handle (staging folder and name), never a path.
                     entry["retry"] = f"{work.staged_source.parent.name}/{work.staged_source.name}"
+                    work.keep_for_retry = True
                 error_code = getattr(error, "code", None)
                 if error_code:
                     entry["code"] = error_code

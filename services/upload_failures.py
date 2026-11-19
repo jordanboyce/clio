@@ -17,6 +17,12 @@ def explain(filename: str, error: BaseException | str) -> Dict[str, str]:
     return {"filename": filename, "reason": reason, "fix": fix}
 
 
+def retryable(error: BaseException | str) -> bool:
+    """False for a refusal the same file meets again: blocked, or rejected by policy."""
+    from services.content_policy import BlockedContentError, ContentRejectedError
+    return not isinstance(error, (BlockedContentError, ContentRejectedError))
+
+
 def _classify(error: BaseException | str) -> tuple:
     name = type(error).__name__ if isinstance(error, BaseException) else ""
     text = str(error or "").lower()

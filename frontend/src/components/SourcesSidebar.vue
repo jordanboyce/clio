@@ -1994,7 +1994,8 @@ const indexFiles = async () => {
           collection_id: collectionId,
           copy_to_library: false,
         })
-        backgroundJobsStore.addUploadJob(data)
+        // Files picked from this computer can be retried from where they are.
+        backgroundJobsStore.addUploadJob(data, { localPaths: files.map(f => f.path) })
         jobsStarted += 1
         filesQueued += data.total_files || localPaths.length
         for (const skipped of data.skipped_files || []) {

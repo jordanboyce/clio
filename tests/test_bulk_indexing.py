@@ -432,3 +432,42 @@ def test_process_bulk_job_cancellation(tmp_path, indexer, monkeypatch):
 
     assert job_updates[-1][1]["status"] == "cancelled"
     assert indexer.list_documents() == []
+
+
+def test_a_failed_staged_upload_is_kept_for_its_retry(tmp_path, indexer, monkeypatch):
+    """U2: the Retry a failed browser upload offers must find the file.
+
+    The job used to delete every staged upload when it ended, failed ones
+    too, so the Retry it had just offered always answered "gone". A file that
+    was indexed moves into the library; one that failed stays in staging,
+    where the stale-upload sweep removes it if nobody retries.
+    """
+    import json
+
+    import services.upload_service as us
+
+    staging = tmp_path / ".staged"
+    library = tmp_path / "library"
+    library.mkdir()
+    good_dir, bad_dir = staging / "tmpgood", staging / "tmpbad"
+    good_dir.mkdir(parents=True)
+    bad_dir.mkdir()
+    good = _write_txt(good_dir, "notes.txt")
+    bad = bad_dir / "scan.unsupported"
+    bad.write_text("nope", encoding="utf-8")
+
+    job_updates = []
+    monkeypatch.setattr(us.app_db, "update_upload_job", lambda job_id, **kw: job_updates.append(kw))
+    monkeypatch.setattr(us.collection_service, "add_document", lambda cid, doc_id: None)
+    monkeypatch.setattr(us.collection_service, "get_staging_path", lambda cid: staging)
+    monkeypatch.setattr(us.indexer_manager, "get_indexer", lambda collection_id: indexer)
+    monkeypatch.setattr(us.indexer_manager, "get_documents_path", lambda collection_id: library)
+
+    service = us.UploadService()
+    service._cancel_flags[5] = False
+    service._run_local_index(5, [str(good), str(bad)], "test-collection", copy_to_library=False)
+
+    failed = json.loads(job_updates[-1]["result_summary"])["failed_files"]
+    assert [f["retry"] for f in failed] == ["tmpbad/scan.unsupported"]
+    assert bad.is_file(), "the failed upload is kept for its Retry"
+    assert not good_dir.exists(), "the indexed upload has moved out of staging"

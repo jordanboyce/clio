@@ -22,7 +22,7 @@
             <p v-if="f.fix" class="text-base-content/55">{{ f.fix }}</p>
           </div>
           <div class="flex flex-col gap-1 shrink-0">
-            <button v-if="canRetry && f.retry" type="button" class="btn btn-xs" :disabled="busy" @click="retry([f])">Retry</button>
+            <button v-if="canRetry && (f.retry || f.retryPath)" type="button" class="btn btn-xs" :disabled="busy" @click="retry([f])">Retry</button>
             <button type="button" class="btn btn-ghost btn-xs" :aria-label="`Dismiss ${f.filename}`" @click="jobs.dismissFailed(f.key)">Dismiss</button>
           </div>
         </div>
@@ -48,7 +48,7 @@ const ui = useUiStore()
 const busy = ref(false)
 const error = ref('')
 const items = computed(() => jobs.failedFor(props.collectionId))
-const retryable = computed(() => items.value.filter(f => f.retry))
+const retryable = computed(() => items.value.filter(f => f.retry || f.retryPath))
 
 async function retry(entries) {
   busy.value = true
