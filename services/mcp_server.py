@@ -4014,8 +4014,8 @@ def ask_documents_sync(
     gate = _acquire_research_slot()
     done: dict[str, Any] | None = None
     try:
-        for event in chat_api._run_turn(request, resolved_collection, base_url,
-                                        provider_args, cache_ctx, cache_entry):
+        for event in chat_api._timed_turn(chat_api._run_turn(request, resolved_collection, base_url,
+                                                             provider_args, cache_ctx, cache_entry)):
             if event["type"] == "error":
                 raise ValueError(str(event.get("message") or "the answer could not be produced"))
             if event["type"] == "done":

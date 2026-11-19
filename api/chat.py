@@ -17,10 +17,11 @@ from services.usage_service import check_daily_budget, record_chat_usage
 from services.ai_service import (
     AIService, AnthropicProvider, DEFAULT_OLLAMA_MODEL, OllamaProvider, create_provider, server_key_allowed,
 )
-from services import authored_text, data_controls, figures, page_preview
+from services import authored_text, data_controls, figures, page_preview, stage_timing
 from services.agent_tools import anthropic_tools, openai_tools
 from services.collection_overview import build_collection_overview as _build_collection_overview
 from services.collection_service import collection_service
+from services.collection_search import search_collections
 from services.chat_evidence import ChatEvidence, CITATION_INSTRUCTIONS
 from services.prompt_injection_detector import mark_passage
 from services.chat_followups import (
@@ -750,7 +751,8 @@ def _model_call(provider, model_name: str, fn, *args, **kwargs):
     yield {"type": "status", "stage": "model", "text": waiting}
     for attempt in (1, 2):
         try:
-            return fn(*args, **kwargs)
+            with stage_timing.stage("model_call"):
+                return fn(*args, **kwargs)
         except Exception as exc:
             trouble = _call_trouble(exc, provider)
             if trouble is None:
@@ -781,6 +783,35 @@ def _search_status(chat_request: ChatRequest, collection_id: str) -> dict:
         except Exception:  # noqa: BLE001 - a label must never fail the turn
             where = "this collection"
     return {"type": "status", "stage": "search", "text": f"Searching {where}…"}
+
+
+def _timed_turn(turn):
+    """Pass a turn's events through, timing it (A4): every stage run inside
+    it (the search's stages, each model call), the time to the first answer
+    text and to the end. One log line per answer; the same numbers in
+    /metrics. Each step of a streamed turn runs in its own worker thread, so
+    the trace is gathered step by step rather than held across steps."""
+    started = time.perf_counter()
+    timings: dict = {}
+    first_text = None
+    while True:
+        with stage_timing.trace() as step:
+            try:
+                event = next(turn)
+            except StopIteration:
+                break
+        for k, v in step.items():
+            timings[k] = timings.get(k, 0.0) + v
+        if first_text is None and event.get("type") == "text":
+            first_text = time.perf_counter() - started
+            stage_timing.observe("first_text", first_text)
+            timings["first_text"] = first_text * 1000.0
+        yield event
+    total = time.perf_counter() - started
+    stage_timing.observe("answer", total)
+    timings["answer"] = total * 1000.0
+    logger.info("Answer timings (ms): %s", ", ".join(
+        f"{k} {v:.0f}" for k, v in stage_timing.rounded(timings).items()))
 
 
 def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
@@ -853,16 +884,16 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
             # Asking across everything leaves out what the model may not be given.
             overview_ids = [c["id"] for c in collection_service.get_all_collections()
                             if not data_controls.collection_withheld(c)]
+            targets = []
             for cid in overview_ids:
                 try:
-                    found = get_indexer(cid).search(
-                        query=search_query, top_k=chat_request.top_k, mode=chat_request.mode,
-                    )
-                    hits.extend((r, cid) for r in found["results"])
+                    targets.append((cid, get_indexer(cid)))
                 except Exception as e:
                     logger.warning(f"Chat: search failed for collection '{cid}': {e}")
-            hits.sort(key=lambda h: h[0].similarity_score, reverse=True)
-            hits = hits[:chat_request.top_k]
+            hits = search_collections(
+                targets, search_query, chat_request.top_k, mode=chat_request.mode,
+                on_error=lambda cid, e: logger.warning(f"Chat: search failed for collection '{cid}': {e}"),
+            )
         else:
             overview_ids = [collection_id]
             try:
@@ -1226,8 +1257,8 @@ def chat_with_documents(  # sync: provider round-trips + tool loop run in FastAP
             return over_budget
 
     done = None
-    for event in _run_turn(chat_request, collection_id, str(request.base_url).rstrip("/"),
-                           provider_args, cache_ctx, cache_entry):
+    for event in _timed_turn(_run_turn(chat_request, collection_id, str(request.base_url).rstrip("/"),
+                                       provider_args, cache_ctx, cache_entry)):
         if event["type"] == "error":
             raise HTTPException(status_code=event["_status"], detail=event["message"])
         if event["type"] == "done":
@@ -1286,8 +1317,8 @@ async def chat_stream_endpoint(
         if over_budget:
             return over_budget
 
-    turn = _run_turn(chat_request, collection_id, str(request.base_url).rstrip("/"),
-                     provider_args, cache_ctx, cache_entry)
+    turn = _timed_turn(_run_turn(chat_request, collection_id, str(request.base_url).rstrip("/"),
+                                 provider_args, cache_ctx, cache_entry))
 
     def sse(payload: dict) -> str:
         return f"data: {json.dumps({k: v for k, v in payload.items() if not k.startswith('_')}, default=str)}\n\n"

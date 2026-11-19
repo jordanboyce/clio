@@ -23,7 +23,7 @@ from services.embedder import (
     EmbeddingDimensionMismatch, EmbeddingService, EmbeddingUnavailable, ensure_embedding_ready,
 )
 from services.vector_store import VectorStore
-from services import audit, content_policy, figure_extractor, figures
+from services import audit, content_policy, figure_extractor, figures, stage_timing
 from services.prompt_injection_detector import mark_passage as _mark_passage
 from services.content_policy import BlockedContentError, ContentRejectedError
 from services.governance import content_hash_of
@@ -1205,7 +1205,16 @@ class DocumentIndexer:
         logger.info(f"Vector index rebuilt with {new_index.ntotal} vectors")
         return new_index.ntotal
 
-    def search(
+    def search(self, *args, **kwargs) -> dict:
+        """Search, with the time spent in each stage (A4) added to the
+        ``retrieval`` block as ``timings_ms``. See ``_search``."""
+        with stage_timing.trace() as timings:
+            out = self._search(*args, **kwargs)
+        if isinstance(out, dict) and isinstance(out.get("retrieval"), dict):
+            out["retrieval"]["timings_ms"] = stage_timing.rounded(timings)
+        return out
+
+    def _search(
         self,
         query: str,
         top_k: int = settings.default_top_k,
@@ -1305,7 +1314,8 @@ class DocumentIndexer:
         if plan is not None:
             from services.embedder import EmbeddingUnavailable
             try:
-                query_embedding = self.embedding_service.embed_query(query)
+                with stage_timing.stage("embed_query"):
+                    query_embedding = self.embedding_service.embed_query(query)
             except EmbeddingUnavailable as e:
                 logger.warning(f"Embeddings unavailable; auto search is using keywords only: {e}")
                 mode = SearchMode.KEYWORD
@@ -1316,7 +1326,8 @@ class DocumentIndexer:
             # Pure BM25 keyword search. When filtering, pull the full ranked list
             # so post-filtering down to fetch_k stays exact.
             bm25_k = self.vector_store.searchable_chunks() if allowed_chunk_ids is not None else fetch_k
-            bm25_results = self.vector_store.bm25_index.search(query, max(bm25_k, 1))
+            with stage_timing.stage("keyword_search"):
+                bm25_results = self.vector_store.bm25_index.search(query, max(bm25_k, 1))
             if allowed_chunk_ids is not None:
                 bm25_results = [
                     (cid, score) for cid, score in bm25_results if cid in allowed_chunk_ids
@@ -1325,7 +1336,8 @@ class DocumentIndexer:
         elif mode == SearchMode.HYBRID:
             # Combined semantic + keyword search
             if query_embedding is None:
-                query_embedding = self.embedding_service.embed_query(query)
+                with stage_timing.stage("embed_query"):
+                    query_embedding = self.embedding_service.embed_query(query)
             results = self.vector_store.search_hybrid(
                 query=query,
                 query_embedding=query_embedding,
@@ -1336,7 +1348,8 @@ class DocumentIndexer:
         else:
             # Default: pure semantic search
             if query_embedding is None:
-                query_embedding = self.embedding_service.embed_query(query)
+                with stage_timing.stage("embed_query"):
+                    query_embedding = self.embedding_service.embed_query(query)
             results = self.vector_store.search(
                 query_embedding, top_k=fetch_k, allowed_chunk_ids=allowed_chunk_ids
             )
@@ -1408,6 +1421,7 @@ class DocumentIndexer:
         reranked_locally = False
         rerank_scores: dict = {}
         if local_reranker is not None and len(results) > 1:
+            rerank_started = time.perf_counter()
             try:
                 # False when the reranker shed the request under load
                 # (RERANK_MAX_CONCURRENT / RERANK_QUEUE_TIMEOUT_SECONDS):
@@ -1419,6 +1433,7 @@ class DocumentIndexer:
                     results, reranked_locally = local_reranker.rerank_with_status(query, results, pool_k)
             except Exception as e:
                 logger.warning(f"Local reranking failed, using retrieval order: {e}")
+            stage_timing.observe("rerank", time.perf_counter() - rerank_started)
 
         # Step 3b: Optionally rerank results with the AI-judgment reranker
         if ai_active and ai_options.rerank and not reranked_locally and len(results) > 0:
@@ -1470,7 +1485,7 @@ class DocumentIndexer:
         if (n_collapsed and len(results) < top_k and not _widen
                 and pool_k < min(top_k + BACKFILL_MARGIN, 50)
                 and not (ai_active and ai_options and ai_options.rerank)):
-            return self.search(
+            return self._search(
                 query, top_k=top_k, ai_service=ai_service, ai_options=ai_options,
                 mode=requested_mode, semantic_weight=requested_weight,
                 collection_overview=collection_overview,

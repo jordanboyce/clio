@@ -13,6 +13,7 @@ import faiss
 from config import DEFAULT_SEMANTIC_WEIGHT, settings
 from models.schemas import ChunkMetadata, SearchResult
 from services.metadata_store import MetadataStore
+from services import stage_timing
 from services.bm25_service import BM25Index
 from services.rw_lock import FifoSemaphore, ReadWriteLock
 from services.structured_store import StructuredStore
@@ -563,7 +564,8 @@ class VectorStore:
             if not allowed_ids:
                 return []
 
-        similarities, labels = self._top_matches(query_normalized, top_k, allowed_ids)
+        with stage_timing.stage("vector_search"):
+            similarities, labels = self._top_matches(query_normalized, top_k, allowed_ids)
 
         # Batch-fetch metadata for just the hits. FAISS pads with -1 when fewer
         # than top_k vectors qualify.
@@ -640,7 +642,8 @@ class VectorStore:
         if vector_limit:
             query_normalized = query_embedding / np.linalg.norm(query_embedding)
             query_normalized = query_normalized.reshape(1, -1).astype(np.float32)
-            semantic_sims, semantic_labels = self._top_matches(query_normalized, vector_limit, allowed_ids)
+            with stage_timing.stage("vector_search"):
+                semantic_sims, semantic_labels = self._top_matches(query_normalized, vector_limit, allowed_ids)
             semantic_hits = [
                 (int(row_id), float(similarity))
                 for similarity, row_id in zip(semantic_sims[0], semantic_labels[0])
@@ -660,7 +663,8 @@ class VectorStore:
 
         # 2. BM25 keyword search
         bm25_k = searchable if filtering else candidate_limit
-        bm25_results = self.bm25_index.search(query, bm25_k)
+        with stage_timing.stage("keyword_search"):
+            bm25_results = self.bm25_index.search(query, bm25_k)
         if filtering:
             bm25_results = [
                 (cid, score) for cid, score in bm25_results if cid in allowed_chunk_ids
