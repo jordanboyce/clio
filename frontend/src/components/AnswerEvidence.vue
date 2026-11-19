@@ -66,7 +66,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, useId } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { renderEvidenceMarkdown, sourceHref } from '../utils/answerEvidence'
 import { locationLabel } from '../utils/fileTypes'
 import { isPlainClick, praHref, praTargetFor } from '../utils/praFormat'
@@ -87,7 +87,24 @@ const props = defineProps({
 const id = useId()
 const selected = ref(null)
 const evidencePanel = ref(null)
-const html = computed(() => renderEvidenceMarkdown(props.content, props.sources))
+// Markdown and sanitising run over the whole answer, so while text streams
+// in they run a few times a second, not once per piece of text (C1).
+const RENDER_EVERY_MS = 150
+const html = ref('')
+let renderTimer = null
+const render = () => {
+  renderTimer = null
+  html.value = renderEvidenceMarkdown(props.content, props.sources)
+}
+watch(() => [props.content, props.sources, props.streaming], () => {
+  if (!props.streaming || !html.value) {
+    clearTimeout(renderTimer)
+    render()
+  } else if (!renderTimer) {
+    renderTimer = setTimeout(render, RENDER_EVERY_MS)
+  }
+}, { immediate: true })
+onBeforeUnmount(() => clearTimeout(renderTimer))
 
 // A PRA model opens in its viewer, here, at the tree the passage is from.
 function openModel(event, source) {

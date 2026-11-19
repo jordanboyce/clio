@@ -191,11 +191,14 @@ def test_a_slow_local_model_is_not_asked_twice(monkeypatch):
     provider.supports_native_tools = lambda: False
     calls = []
 
-    def complete(**kwargs):
+    # The answer pass streams from Ollama (C1); the timeout comes while
+    # waiting for the first piece of text.
+    def streamed(**kwargs):
         calls.append(kwargs)
         raise httpx.ReadTimeout("slow", request=REQUEST)
+        yield  # a generator, as the real one is
 
-    provider.complete = complete
+    provider.stream = streamed
     events = stream(monkeypatch, provider)
     assert len(calls) == 1
     assert events[-1]["message"] == (

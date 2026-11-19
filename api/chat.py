@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import time
 from typing import List, Literal
 
@@ -15,7 +16,8 @@ from middleware.user_context import get_request_user
 from services.usage_service import check_daily_budget, record_chat_usage
 
 from services.ai_service import (
-    AIService, AnthropicProvider, DEFAULT_OLLAMA_MODEL, OllamaProvider, create_provider, server_key_allowed,
+    AIProvider, AIService, AnthropicProvider, DEFAULT_OLLAMA_MODEL, OllamaProvider, create_provider,
+    server_key_allowed,
 )
 from services import authored_text, data_controls, figures, page_preview, stage_timing
 from services.agent_tools import anthropic_tools, openai_tools
@@ -774,6 +776,74 @@ def _model_call(provider, model_name: str, fn, *args, **kwargs):
             yield {"type": "status", "stage": "retry", "text": f"{reason} Trying once more…"}
 
 
+class TurnCancelled(BaseException):
+    """The person stopped the answer (or left): end the turn at once, with
+    no error event and no further model calls. A BaseException so the turn's
+    own ``except Exception`` does not report it as a failure."""
+
+
+def _model_stream(provider, model_name: str, cancel=None, **kwargs):
+    """One answer pass, streamed (C1): ``text, usage = yield from _model_stream(...)``.
+
+    Yields the same status events as _model_call, then each piece of text as
+    a ``text`` event the moment the model writes it. A failure before the
+    first piece gets the same one retry; after it, the text on screen cannot
+    be taken back, so the failure ends the turn. ``cancel`` (a
+    threading.Event) set by the stream endpoint closes the provider's stream,
+    which stops generation on the model server."""
+    label = _provider_label(provider)
+    waiting = f"Waiting for {label} ({model_name})…" if model_name else f"Waiting for {label}…"
+    yield {"type": "status", "stage": "model", "text": waiting}
+    for attempt in (1, 2):
+        pieces: list[str] = []
+        usage: dict = {}
+        try:
+            with stage_timing.stage("model_call"):
+                # A provider that cannot stream answers in one piece.
+                stream = (provider.stream(**kwargs) if getattr(provider, "streams", False) is True
+                          else AIProvider.stream(provider, **kwargs))
+                try:
+                    for item in stream:
+                        if cancel is not None and cancel.is_set():
+                            raise TurnCancelled()
+                        delta = item.get("delta")
+                        if delta:
+                            if not pieces:
+                                delta = delta.lstrip()
+                                if not delta:
+                                    continue
+                            pieces.append(delta)
+                            yield {"type": "text", "text": delta, "_whole": True, "_streamed": True}
+                        if item.get("usage"):
+                            usage = item["usage"]
+                finally:
+                    close = getattr(stream, "close", None)
+                    if callable(close):
+                        close()
+            return "".join(pieces), usage
+        except TurnCancelled:
+            raise
+        except Exception as exc:
+            if pieces:
+                raise
+            trouble = _call_trouble(exc, provider)
+            if trouble is None:
+                raise
+            reason, wait = trouble
+            if attempt == 2 or wait is None:
+                logger.warning(f"Chat model call gave up ({type(exc).__name__}): {exc}")
+                again = " It failed again after one retry." if attempt == 2 else ""
+                raise ProviderStalled(
+                    f"{reason}{again} Try again in a moment, or choose another model."
+                ) from exc
+            logger.info(f"Chat model call will retry once ({type(exc).__name__}): {exc}")
+            if wait >= 3:
+                yield {"type": "status", "stage": "retry", "text": f"{reason} Trying again in {wait:.0f} s…"}
+            if wait > 0:
+                time.sleep(wait)
+            yield {"type": "status", "stage": "retry", "text": f"{reason} Trying once more…"}
+
+
 def _search_status(chat_request: ChatRequest, collection_id: str) -> dict:
     if chat_request.scope == "all":
         where = "all collections"
@@ -800,6 +870,9 @@ def _timed_turn(turn):
                 event = next(turn)
             except StopIteration:
                 break
+            except TurnCancelled:
+                logger.info("Answer stopped by the person asking")
+                return
         for k, v in step.items():
             timings[k] = timings.get(k, 0.0) + v
         if first_text is None and event.get("type") == "text":
@@ -815,7 +888,7 @@ def _timed_turn(turn):
 
 
 def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
-              provider_args: dict, cache_ctx, cache_entry):  # noqa: C901
+              provider_args: dict, cache_ctx, cache_entry, cancel=None):  # noqa: C901
     turn_started = time.time()
     turn_user = get_request_user()
     usage_collection = "all" if chat_request.scope == "all" else collection_id
@@ -1011,6 +1084,7 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
             return results
 
         answer = ""
+        streamed = False
         native = (provider.supports_native_tools()
                   and _tools_key(provider, ai_service.quality_model) not in _MODELS_WITHOUT_TOOLS)
         # ---------- agent loop: native tool calling ------------------------
@@ -1026,6 +1100,18 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
                 + ([f"LARGE TABLES AVAILABLE:\n{tables_block}"] if tables_block else [])
             )
             messages = [{"role": m.role, "content": m.content} for m in chat_request.messages]
+
+            # With no tools to call, the one pass is the answer: stream it.
+            if not tools_spec:
+                answer, usage = yield from _model_stream(
+                    provider, ai_service.quality_model, cancel,
+                    messages=messages, system=system_text,
+                    max_tokens=chat_request.max_output_tokens or 4096, model=ai_service.quality_model,
+                )
+                account(usage)
+                answer = answer.strip() or _FINAL_ANSWER_FALLBACK
+                streamed = True
+                max_iterations = 0
 
             for iteration in range(max_iterations):
                 try:
@@ -1062,14 +1148,17 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
                 # Iteration cap hit mid-research: one more pass with no tools
                 # so the turn always ends in an answer.
                 try:
-                    turn = yield from _model_call(
-                        provider, ai_service.quality_model, provider.complete_with_tools,
-                        messages=messages, tools=[], max_tokens=chat_request.max_output_tokens or 2048,
+                    answer, usage = yield from _model_stream(
+                        provider, ai_service.quality_model, cancel,
+                        messages=messages, max_tokens=chat_request.max_output_tokens or 2048,
                         model=ai_service.quality_model,
                         system=system_text + "\n\nDo not call any more tools. Summarize the final answer.",
                     )
-                    account(turn.get("usage"))
-                    answer = (turn.get("text") or "").strip()
+                    account(usage)
+                    streamed = bool(answer.strip())
+                    answer = answer.strip()
+                except TurnCancelled:
+                    raise
                 except Exception as e:
                     logger.warning(f"Agent final-answer pass failed: {e}")
                 answer = answer or _FINAL_ANSWER_FALLBACK
@@ -1104,8 +1193,22 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
                 account(result.get("usage"))
                 return result["text"]
 
+            def ask_streamed(extra: str):
+                """An answer pass that cannot call tools, streamed."""
+                text, usage = yield from _model_stream(
+                    provider, ai_service.quality_model, cancel,
+                    prompt=compose(extra), max_tokens=chat_request.max_output_tokens or 2048,
+                    model=ai_service.quality_model,
+                )
+                account(usage)
+                return text
+
             suffix = ""
-            for iteration in range(5 if tools_block else 1):
+            if not tools_block:
+                # No tools offered: the one pass is the answer.
+                answer = (yield from ask_streamed("")).strip() or _FINAL_ANSWER_FALLBACK
+                streamed = True
+            for iteration in range(5 if tools_block else 0):
                 raw = yield from ask(suffix)
                 calls = parse_tool_calls(raw)
                 narration = strip_tool_calls(raw)
@@ -1130,14 +1233,21 @@ def _run_turn(chat_request: ChatRequest, collection_id: str, base_url: str,
                 )
             if not answer and suffix:
                 try:
-                    answer = strip_tool_calls((yield from ask(
+                    answer = strip_tool_calls((yield from ask_streamed(
                         suffix + "\n\nDo not call any more tools. Write the final answer now.")))
+                    streamed = bool(answer)
+                except TurnCancelled:
+                    raise
                 except Exception as e:
                     logger.warning(f"Agent final-answer pass failed: {e}")
                 answer = answer or _FINAL_ANSWER_FALLBACK
 
         # ---------- answer, sources, follow-ups ----------------------------
-        yield {"type": "text", "text": answer}
+        # A streamed answer is already on screen; the rest arrives whole.
+        if not streamed:
+            yield {"type": "text", "text": answer}
+        elif answer == _FINAL_ANSWER_FALLBACK:
+            yield {"type": "text", "text": answer}
         sources = _source_dicts(evidence.results, base_url)
         yield {"type": "sources", "sources": sources}
 
@@ -1317,8 +1427,11 @@ async def chat_stream_endpoint(
         if over_budget:
             return over_budget
 
+    # Set when the person stops the answer or leaves: the turn closes the
+    # model's stream at its next piece of text (C1).
+    cancel = threading.Event()
     turn = _timed_turn(_run_turn(chat_request, collection_id, str(request.base_url).rstrip("/"),
-                                 provider_args, cache_ctx, cache_entry))
+                                 provider_args, cache_ctx, cache_entry, cancel=cancel))
 
     def sse(payload: dict) -> str:
         return f"data: {json.dumps({k: v for k, v in payload.items() if not k.startswith('_')}, default=str)}\n\n"
@@ -1347,16 +1460,14 @@ async def chat_stream_endpoint(
                 pending = None
                 if event is exhausted:
                     break
-                if event["type"] != "text" or event.get("_whole"):
-                    yield sse(event if event["type"] != "text" else {"type": "text_delta", "delta": event["text"]})
-                    continue
-                words = event["text"].split(" ")
-                for i, word in enumerate(words):
-                    yield sse({"type": "text_delta", "delta": word + (" " if i < len(words) - 1 else "")})
-                    await asyncio.sleep(0.008)
+                # Text goes out as it arrives: streamed in pieces by a model
+                # that can, whole from one that cannot. No replay pause.
+                yield sse(event if event["type"] != "text" else {"type": "text_delta", "delta": event["text"]})
         except Exception as e:
             logger.exception("Stream chat failed")
             yield sse({"type": "error", "message": str(e)})
+        finally:
+            cancel.set()
 
     return StreamingResponse(
         generate(),

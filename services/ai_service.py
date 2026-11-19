@@ -318,6 +318,27 @@ class AIProvider(ABC):
         """Whether this provider implements `complete_with_tools`."""
         return False
 
+    # Whether ``stream`` sends text as the model writes it (C1). A provider
+    # without real streaming still has ``stream``: it yields the whole reply
+    # at the end.
+    streams = False
+
+    def stream(self, *, max_tokens: int, model: str, prompt: Optional[str] = None,
+               messages: Optional[list] = None, system: Optional[str] = None):
+        """Generate one reply with no tools, yielding ``{"delta": text}`` as
+        it is written and finally ``{"usage": {...}, "finish_reason": ...}``.
+
+        Give ``prompt`` (one user message) or ``messages`` (and ``system``).
+        Closing the generator early stops the call."""
+        if prompt is not None:
+            result = self.complete(prompt=prompt, max_tokens=max_tokens, model=model)
+        else:
+            result = self.complete_with_tools(messages=messages or [], tools=[], max_tokens=max_tokens,
+                                              model=model, system=system)
+        if result.get("text"):
+            yield {"delta": result["text"]}
+        yield {"usage": result.get("usage") or {}, "finish_reason": result.get("finish_reason")}
+
     def list_model_records(self) -> Optional[List[dict]]:
         """What the provider itself reports about each model it offers.
 
@@ -430,6 +451,42 @@ class AnthropicProvider(AIProvider):
 
     def supports_native_tools(self) -> bool:
         return True
+
+    streams = True
+
+    def stream(self, *, max_tokens: int, model: str, prompt: Optional[str] = None,
+               messages: Optional[list] = None, system: Optional[str] = None):
+        kwargs: dict = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}] if prompt is not None else list(messages or []),
+            "stream": True,
+        }
+        if system:
+            kwargs["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        events = self.client.messages.create(**kwargs)
+        usage = {"input_tokens": 0, "output_tokens": 0, "model": model}
+        finish = None
+        try:
+            for event in events:
+                kind = getattr(event, "type", "")
+                if kind == "message_start":
+                    u = getattr(getattr(event, "message", None), "usage", None)
+                    usage["input_tokens"] = getattr(u, "input_tokens", 0) or 0
+                elif kind == "content_block_delta":
+                    delta = getattr(event, "delta", None)
+                    if getattr(delta, "type", "") == "text_delta" and getattr(delta, "text", ""):
+                        yield {"delta": delta.text}
+                elif kind == "message_delta":
+                    u = getattr(event, "usage", None)
+                    usage["output_tokens"] = getattr(u, "output_tokens", 0) or usage["output_tokens"]
+                    stop = getattr(getattr(event, "delta", None), "stop_reason", None)
+                    finish = "length" if stop == "max_tokens" else stop
+        finally:
+            close = getattr(events, "close", None)
+            if callable(close):
+                close()
+        yield {"usage": usage, "finish_reason": finish}
 
     def complete_with_tools(self, messages, tools, max_tokens, model, system=None):
         # Prompt caching on system + tool schemas. Both are reused across every
@@ -650,6 +707,43 @@ class OpenAIProvider(AIProvider):
     def supports_native_tools(self) -> bool:
         return True
 
+    streams = True
+
+    def stream(self, *, max_tokens: int, model: str, prompt: Optional[str] = None,
+               messages: Optional[list] = None, system: Optional[str] = None):
+        payload = [{"role": "user", "content": prompt}] if prompt is not None else list(messages or [])
+        if system and (not payload or payload[0].get("role") != "system"):
+            payload = [{"role": "system", "content": system}] + payload
+        request = {"model": model, "max_tokens": max_tokens, "messages": payload, "stream": True}
+        try:
+            chunks = self.client.chat.completions.create(**request, stream_options={"include_usage": True})
+        except Exception as e:  # noqa: BLE001 - some compatible servers reject stream_options
+            if "stream_options" not in str(e):
+                raise
+            chunks = self.client.chat.completions.create(**request)
+        usage = {"input_tokens": 0, "output_tokens": 0, "model": model}
+        finish = None
+        written = 0
+        try:
+            for chunk in chunks:
+                for choice in getattr(chunk, "choices", None) or []:
+                    text = getattr(getattr(choice, "delta", None), "content", None)
+                    if text:
+                        written += len(text)
+                        yield {"delta": text}
+                    finish = getattr(choice, "finish_reason", None) or finish
+                u = getattr(chunk, "usage", None)
+                if u is not None:
+                    usage["input_tokens"] = getattr(u, "prompt_tokens", 0) or 0
+                    usage["output_tokens"] = getattr(u, "completion_tokens", 0) or 0
+        finally:
+            close = getattr(chunks, "close", None)
+            if callable(close):
+                close()
+        if not usage["output_tokens"]:
+            usage["output_tokens"] = written // 4
+        yield {"usage": usage, "finish_reason": finish}
+
     def complete_with_tools(self, messages, tools, max_tokens, model, system=None):
         import json as _json
         payload_messages = list(messages)
@@ -805,6 +899,46 @@ class OllamaProvider(AIProvider):
                 "model": model,
             },
         }
+
+    streams = True
+
+    def stream(self, *, max_tokens: int, model: str, prompt: Optional[str] = None,
+               messages: Optional[list] = None, system: Optional[str] = None):
+        """Ollama's native /api/chat with ``stream: true``: one JSON object per
+        line. Closing the generator closes the connection, which is what
+        stops Ollama generating."""
+        import httpx
+        import json as _json
+        chat = [{"role": "user", "content": prompt}] if prompt is not None else [
+            {"role": m.get("role"), "content": m.get("content") if isinstance(m.get("content"), str) else str(m.get("content"))}
+            for m in (messages or [])]
+        if system:
+            chat = [{"role": "system", "content": system}] + chat
+        usage = {"input_tokens": 0, "output_tokens": 0, "model": model}
+        finish = None
+        with httpx.Client(timeout=self.call_timeout) as client:
+            with client.stream("POST", f"{self.base_url}/api/chat", json={
+                "model": model,
+                "messages": chat,
+                "stream": True,
+                "options": {"num_predict": max_tokens, "num_ctx": self.num_ctx},
+            }) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line.strip():
+                        continue
+                    data = _json.loads(line)
+                    if data.get("error"):
+                        raise RuntimeError(f"Ollama: {data['error']}")
+                    text = (data.get("message") or {}).get("content") or ""
+                    if text:
+                        yield {"delta": text}
+                    if data.get("done"):
+                        usage["input_tokens"] = data.get("prompt_eval_count", 0) or 0
+                        usage["output_tokens"] = data.get("eval_count", 0) or 0
+                        finish = "length" if data.get("done_reason") == "length" else data.get("done_reason")
+                        break
+        yield {"usage": usage, "finish_reason": finish}
 
     def complete_with_image(self, prompt: str, image_base64: str, media_type: str, max_tokens: int, model: str) -> dict:
         """Send prompt + image using Ollama's native /api/chat endpoint.
