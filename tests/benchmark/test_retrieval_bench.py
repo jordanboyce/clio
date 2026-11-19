@@ -171,3 +171,47 @@ def test_quality_benchmark(tmp_path):
     # Recording "Replaced by" must never make revision safety worse.
     assert by_name["no reranker"].revision_safety >= by_name["no reranker, marks ignored"].revision_safety
     assert by_name["reranker x3"].revision_safety >= by_name["reranker x3, marks ignored"].revision_safety
+
+
+# ── The hard fixture (A1): retrieval that misses ─────────────────────────────
+
+HARD_FIXTURE = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "retrieval_hard"
+
+
+def test_hard_fixture_is_consistent_and_regenerates_byte_for_byte(tmp_path, monkeypatch):
+    corpus = bench.load_corpus(HARD_FIXTURE)
+    assert bench.validate_corpus(corpus) == []
+    assert corpus.collections == ["engineering", "facilities", "finance", "it"]
+    assert len(corpus.documents) >= 300
+    cats = {q["category"] for q in corpus.queries}
+    assert {"near_duplicate", "late_page", "cross_page", "cross_collection", "revision"} <= cats
+
+    spec = importlib.util.spec_from_file_location(
+        "make_retrieval_corpus", pathlib.Path(bench.REPO_ROOT) / "scripts" / "make_retrieval_corpus.py")
+    gen = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = gen
+    spec.loader.exec_module(gen)
+    monkeypatch.setattr(gen, "OUT", tmp_path)
+    gen.main()
+    # Line endings aside: a checkout may have either.
+    for name in ("corpus.json", "queries.json"):
+        made, kept = ((p / name).read_bytes().replace(b"\r\n", b"\n") for p in (tmp_path, HARD_FIXTURE))
+        assert made == kept, name
+
+
+def test_sentence_labels_follow_the_chunker(tmp_path):
+    """A label names the sentence, so it resolves to whatever chunk holds it,
+    and a sentence cut by a page break resolves to nothing until a chunk
+    holds all of it."""
+    corpus = bench.load_corpus(HARD_FIXTURE)
+    indexers = bench.build_index(corpus, tmp_path / "index", tmp_path, embedder=_HashEmbedder())
+    assert set(indexers) == set(corpus.collections)
+    late = next(q for q in corpus.queries if q["category"] == "late_page")
+    assert corpus.resolve(late["relevant"][0])
+    split = [q for q in corpus.queries if q["category"] == "cross_page"]
+    assert split and all(corpus.resolve(q["relevant"][0]) == [] for q in split)
+
+    result = bench.run_config(indexers, corpus, "hash", top_k=10, repeats=1, parallel=1,
+                              queries=[q for q in corpus.queries if q["category"] == "cross_collection"][:5],
+                              enable_reranker=False)
+    assert len(result.outcomes) == 5

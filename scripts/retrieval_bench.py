@@ -120,14 +120,37 @@ class Corpus:
     def has_revision_queries(self) -> bool:
         return any(q.get("stale") for q in self.queries)
 
-    def chunk_ids_of(self, doc_id: str) -> List[str]:
+    # Filled by build_index for documents given as pages: what the chunker
+    # made of each, as ``{document id: [(chunk id, normalised text)]}``.
+    chunked: Dict[str, List[tuple]] = field(default_factory=dict)
+
+    @property
+    def collections(self) -> List[str]:
+        return sorted({d.get("collection") or "main" for d in self.documents})
+
+    def document(self, doc_id: str) -> dict:
         for d in self.documents:
             if d["id"] == doc_id:
-                return [f"{doc_id}#{i}" for i in range(1, len(d["passages"]) + 1)]
+                return d
         raise KeyError(doc_id)
 
+    def chunk_ids_of(self, doc_id: str) -> List[str]:
+        d = self.document(doc_id)
+        if "pages" in d:
+            return [cid for cid, _ in self.chunked.get(doc_id, [])]
+        return [f"{doc_id}#{i}" for i in range(1, len(d["passages"]) + 1)]
+
     def resolve(self, ref: str) -> List[str]:
-        """A labelled unit -> the chunk ids that satisfy it."""
+        """A labelled unit -> the chunk ids that satisfy it.
+
+        ``doc``: any chunk of the document. ``doc#n``: its n-th passage.
+        ``doc::sentence``: a chunk of the document that holds the whole
+        sentence (spaces normalised), so the label survives any chunking."""
+        if "::" in ref:
+            doc_id, _, sentence = ref.partition("::")
+            self.document(doc_id)
+            wanted = _norm_text(sentence)
+            return [cid for cid, text in self.chunked.get(doc_id, []) if wanted in text]
         if "#" in ref:
             doc_id, _, n = ref.partition("#")
             ids = self.chunk_ids_of(doc_id)
@@ -136,6 +159,10 @@ class Corpus:
                 raise KeyError(ref)
             return [ids[idx - 1]]
         return self.chunk_ids_of(ref)
+
+
+def _norm_text(text: str) -> str:
+    return " ".join(text.split())
 
 
 def load_corpus(fixture_dir: Path = FIXTURE_DIR) -> Corpus:
@@ -158,8 +185,10 @@ def validate_corpus(corpus: Corpus) -> List[str]:
     if len(set(doc_ids)) != len(doc_ids):
         problems.append("duplicate document ids")
     for d in corpus.documents:
-        if not d.get("passages") or any(not p.strip() for p in d["passages"]):
+        units = d.get("passages") or d.get("pages")
+        if not units or any(not p.strip() for p in units):
             problems.append(f"{d['id']}: empty passage list or blank passage")
+    collections = set(corpus.collections)
     qids = [q["id"] for q in corpus.queries]
     if len(set(qids)) != len(qids):
         problems.append("duplicate query ids")
@@ -170,23 +199,25 @@ def validate_corpus(corpus: Corpus) -> List[str]:
             problems.append(f"{q['id']}: unknown category {q['category']!r}")
         if (q["category"] == "unanswerable") != (len(q["relevant"]) == 0):
             problems.append(f"{q['id']}: unanswerable queries and only they have no relevant units")
+        where = q.get("collection")
+        if where and where != "*" and where not in collections:
+            problems.append(f"{q['id']}: collection {where!r} holds no documents")
         for ref in q["relevant"]:
-            try:
-                corpus.resolve(ref)
-            except (KeyError, ValueError):
-                problems.append(f"{q['id']}: relevant unit {ref!r} does not exist")
+            problem = _check_ref(corpus, ref)
+            if problem:
+                problems.append(f"{q['id']}: relevant unit {ref!r} {problem}")
         stale = q.get("stale") or []
         if stale and q["category"] != "revision":
             problems.append(f"{q['id']}: only revision queries carry stale units")
         if q["category"] == "revision" and (not stale or not q["relevant"]):
             problems.append(f"{q['id']}: a revision query needs relevant and stale units")
         for ref in stale:
-            try:
-                overlap = set(corpus.resolve(ref)) & {c for r in q["relevant"] for c in corpus.resolve(r)}
-            except (KeyError, ValueError):
-                problems.append(f"{q['id']}: stale unit {ref!r} does not exist")
+            problem = _check_ref(corpus, ref)
+            if problem:
+                problems.append(f"{q['id']}: stale unit {ref!r} {problem}")
                 continue
-            if overlap:
+            if ref in q["relevant"] or ("::" not in ref and set(corpus.resolve(ref)) & {
+                    c for r in q["relevant"] if "::" not in r for c in corpus.resolve(r)}):
                 problems.append(f"{q['id']}: {ref!r} is labelled both relevant and stale")
     known = set(doc_ids)
     for old, new in corpus.supersede_marks.items():
@@ -198,6 +229,22 @@ def validate_corpus(corpus: Corpus) -> List[str]:
     if missing:
         problems.append(f"no queries in categories: {sorted(missing)}")
     return problems
+
+
+def _check_ref(corpus: Corpus, ref: str) -> Optional[str]:
+    """Why a label points at nothing, or None. A sentence label is checked
+    against the document's own text, before any chunking."""
+    try:
+        if "::" in ref:
+            doc_id, _, sentence = ref.partition("::")
+            d = corpus.document(doc_id)
+            if _norm_text(sentence) not in _norm_text(" ".join(d.get("pages") or d.get("passages"))):
+                return "is not in that document"
+            return None
+        corpus.resolve(ref)
+    except (KeyError, ValueError):
+        return "does not exist"
+    return None
 
 
 # ── Index ────────────────────────────────────────────────────────────────────
@@ -219,9 +266,47 @@ def build_index(corpus: Corpus, index_dir: Path, cache_dir: Path, embedder=None,
     if embedder is None:
         from services.embedder import FastEmbedService
         embedder = FastEmbedService(model_name, cache_dir=cache_dir)
-    store = VectorStore(index_dir, embedding_dim=getattr(embedder, "embedding_dim", 384))
-    chunks: List[ChunkMetadata] = []
-    for d in corpus.documents:
+    indexers = {}
+    for collection in corpus.collections:
+        documents = [d for d in corpus.documents if (d.get("collection") or "main") == collection]
+        target = index_dir if len(corpus.collections) == 1 else Path(index_dir) / collection
+        store = VectorStore(target, embedding_dim=getattr(embedder, "embedding_dim", 384))
+        chunks, texts = _chunks_for(corpus, documents, ChunkMetadata)
+        vectors = embedder.embed_texts(texts)
+        store.add_chunks(chunks, vectors)
+        apply_supersede_marks(corpus, store.metadata_store, documents)
+        indexers[collection] = DocumentIndexer(
+            vector_store=store,
+            embedding_service=embedder,
+            document_extractor=MagicMock(),
+            text_chunker=MagicMock(),
+        )
+    return indexers[corpus.collections[0]] if len(indexers) == 1 else indexers
+
+
+def _chunks_for(corpus: Corpus, documents: List[dict], ChunkMetadata) -> tuple:
+    """The chunks to index and the text to embed for each.
+
+    A document given as passages is one chunk per passage. A document given
+    as pages goes through the app's own chunker at the configured size, and
+    its chunks are embedded with the text the indexer would embed."""
+    from config import settings
+    from services.chunker import TextChunker
+    from services.indexing.embedding_text import texts_for_embedding
+
+    chunker = TextChunker(chunk_size=settings.chunk_size, chunk_overlap=settings.chunk_overlap)
+    chunks: List[Any] = []
+    texts: List[str] = []
+    for d in documents:
+        if "pages" in d:
+            made = chunker.chunk_document(
+                {i: p for i, p in enumerate(d["pages"], start=1)}, d["id"], d["filename"],
+                source_format=d.get("format") or "pdf", extraction_method="text",
+            )
+            corpus.chunked[d["id"]] = [(c.chunk_id, _norm_text(c.text)) for c in made]
+            chunks.extend(made)
+            texts.extend(texts_for_embedding(made, title=d.get("title")))
+            continue
         for i, text in enumerate(d["passages"], start=1):
             chunks.append(ChunkMetadata(
                 chunk_id=f"{d['id']}#{i}",
@@ -233,32 +318,28 @@ def build_index(corpus: Corpus, index_dir: Path, cache_dir: Path, embedder=None,
                 source_format=d.get("format"),
                 extraction_method="text",
             ))
-    vectors = embedder.embed_texts([c.text for c in chunks])
-    store.add_chunks(chunks, vectors)
-    apply_supersede_marks(corpus, store.metadata_store)
-    return DocumentIndexer(
-        vector_store=store,
-        embedding_service=embedder,
-        document_extractor=MagicMock(),
-        text_chunker=MagicMock(),
-    )
+            texts.append(text)
+    return chunks, texts
 
 
-def apply_supersede_marks(corpus: Corpus, metadata_store) -> int:
+def apply_supersede_marks(corpus: Corpus, metadata_store, documents: Optional[List[dict]] = None) -> int:
     """Record the fixture's ``superseded_by`` marks the way an owner would.
 
     The replaced-by relation lives on the documents table, which chunk
     ingestion alone does not fill, so each document is registered first.
     Returns the number of marks applied.
     """
-    marks = corpus.supersede_marks
+    documents = corpus.documents if documents is None else documents
+    here = {d["id"] for d in documents}
+    marks = {old: new for old, new in corpus.supersede_marks.items() if old in here and new in here}
     if not marks:
         return 0
     stamp = "2026-01-01T00:00:00+00:00"
-    for d in corpus.documents:
+    for d in documents:
+        units = d.get("passages") or d.get("pages")
         metadata_store.add_document(
-            d["id"], d["filename"], num_pages=len(d["passages"]),
-            num_chunks=len(d["passages"]), upload_timestamp=stamp,
+            d["id"], d["filename"], num_pages=len(units),
+            num_chunks=len(corpus.chunked.get(d["id"], units)), upload_timestamp=stamp,
             source_format=d.get("format"),
         )
     for old, new in marks.items():
@@ -468,11 +549,26 @@ class _SettingsScope:
         return False
 
 
+def _search(indexer, query: dict, top_k: int) -> tuple:
+    """``(results, reranked)`` for one query. ``indexer`` is one indexer or
+    ``{collection: indexer}``; a query names its collection, and ``*``
+    searches them all through the app's own merge."""
+    if not isinstance(indexer, dict):
+        out = indexer.search(query["query"], top_k=top_k)
+        return out["results"], bool(out.get("retrieval", {}).get("reranked"))
+    where = query.get("collection") or next(iter(indexer))
+    if where != "*":
+        out = indexer[where].search(query["query"], top_k=top_k)
+        return out["results"], bool(out.get("retrieval", {}).get("reranked"))
+    from services.collection_search import search_collections
+    hits = search_collections(sorted(indexer.items()), query["query"], top_k)
+    return [r for r, _ in hits], None
+
+
 def _one_query(indexer, corpus: Corpus, query: dict, top_k: int) -> QueryOutcome:
     started = time.perf_counter()
-    out = indexer.search(query["query"], top_k=top_k)
+    results, reranked = _search(indexer, query, top_k)
     elapsed = (time.perf_counter() - started) * 1000.0
-    results = out["results"]
     ids = [r.chunk_id for r in results]
     return QueryOutcome(
         query_id=query["id"],
@@ -480,11 +576,16 @@ def _one_query(indexer, corpus: Corpus, query: dict, top_k: int) -> QueryOutcome
         hit_ranks=score_results(corpus, query, ids),
         units=len(query["relevant"]),
         latency_ms=elapsed,
-        reranked=bool(out.get("retrieval", {}).get("reranked")),
+        reranked=bool(reranked) if reranked is not None else bool(overrides_reranker()),
         top1_score=float(results[0].similarity_score) if results else None,
         stale_rank=first_stale_rank(corpus, query, ids),
         has_stale=bool(query.get("stale")),
     )
+
+
+def overrides_reranker() -> bool:
+    from config import settings
+    return bool(settings.enable_reranker)
 
 
 def run_config(indexer, corpus: Corpus, name: str, *, top_k: int, repeats: int,
@@ -494,7 +595,7 @@ def run_config(indexer, corpus: Corpus, name: str, *, top_k: int, repeats: int,
     chosen = list(queries) if queries is not None else corpus.queries
     with _SettingsScope(**overrides):
         # Warm-up: lazy model load and first-call imports must not count.
-        indexer.search(corpus.queries[0]["query"], top_k=top_k)
+        _search(indexer, corpus.queries[0], top_k)
         jobs = [q for _ in range(repeats) for q in chosen]
         started = time.perf_counter()
         if parallel <= 1:
@@ -530,6 +631,11 @@ class BenchmarkReport:
         }
 
 
+def _chunking() -> tuple:
+    from config import settings
+    return settings.chunk_size, settings.chunk_overlap
+
+
 def _environment(corpus: Corpus, backend: str, cache_dir: Path,
                  model_name: str = EMBEDDING_MODEL) -> Dict[str, Any]:
     import subprocess
@@ -539,7 +645,11 @@ def _environment(corpus: Corpus, backend: str, cache_dir: Path,
         "corpus_version": corpus.version,
         "queries_version": corpus.queries_version,
         "documents": len(corpus.documents),
-        "chunks": sum(len(d["passages"]) for d in corpus.documents),
+        "collections": len(corpus.collections),
+        "chunks": sum(len(corpus.chunked[d["id"]]) if "pages" in d else len(d["passages"])
+                      for d in corpus.documents),
+        "chunk_size": _chunking()[0],
+        "chunk_overlap": _chunking()[1],
         "queries": len(corpus.queries),
         "supersede_marks": len(corpus.supersede_marks),
         "embedding_model": model_name,

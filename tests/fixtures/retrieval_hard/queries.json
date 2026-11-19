@@ -1,0 +1,2077 @@
+{
+ "version": 1,
+ "categories": [
+  "near_duplicate",
+  "late_page",
+  "cross_page",
+  "paraphrase",
+  "identifier",
+  "revision",
+  "cross_collection",
+  "unanswerable"
+ ],
+ "queries": [
+  {
+   "id": "near_duplicate-01",
+   "category": "near_duplicate",
+   "query": "How soon are Ivory incident investigation findings due?",
+   "relevant": [
+    "incident-iv::The findings go to the site manager within fifteen working days."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "near_duplicate-02",
+   "category": "near_duplicate",
+   "query": "How quickly must an injury at Garnet be logged?",
+   "relevant": [
+    "incident-ga::Every injury is reported to the supervisor before the end of the shift and logged within 12 hours."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "near_duplicate-03",
+   "category": "near_duplicate",
+   "query": "What is the calibration record form at the Fjord site?",
+   "relevant": [
+    "calibration-fj::Claims and requests under this document are made on form CP-2991."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-04",
+   "category": "near_duplicate",
+   "query": "Which form records the destruction of records at Juniper?",
+   "relevant": [
+    "retention-jn::Claims and requests under this document are made on form RR-8235."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "near_duplicate-05",
+   "category": "near_duplicate",
+   "query": "After a drawing change is approved at Lakeshore, how quickly is partly built stock assessed?",
+   "relevant": [
+    "change-ls::Work in progress built to the old drawing is assessed within ten days of approval."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-06",
+   "category": "near_duplicate",
+   "query": "What is the purchase requisition form number at Meadow?",
+   "relevant": [
+    "procurement-md::Claims and requests under this document are made on form PR-2772."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "near_duplicate-07",
+   "category": "near_duplicate",
+   "query": "Which form requests a restore from backup at Heron?",
+   "relevant": [
+    "backup-he::Claims and requests under this document are made on form BK-1128."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "near_duplicate-08",
+   "category": "near_duplicate",
+   "query": "Which form books a pool vehicle at Lakeshore?",
+   "relevant": [
+    "vehicle-ls::Claims and requests under this document are made on form VU-6553."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "near_duplicate-09",
+   "category": "near_duplicate",
+   "query": "How many people investigate a lost-time injury at Cedar?",
+   "relevant": [
+    "incident-cd::A lost-time injury is investigated by a team of two that includes a worker representative."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "near_duplicate-10",
+   "category": "near_duplicate",
+   "query": "How much fuel must be in a Birch pool car when returned?",
+   "relevant": [
+    "vehicle-bi::They are returned with at least half of a tank of fuel."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "near_duplicate-11",
+   "category": "near_duplicate",
+   "query": "What is the visitor booking form at the Heron site?",
+   "relevant": [
+    "visitor-he::Claims and requests under this document are made on form VA-2504."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "near_duplicate-12",
+   "category": "near_duplicate",
+   "query": "Which form books a pool vehicle at Aspen?",
+   "relevant": [
+    "vehicle-as::Claims and requests under this document are made on form VU-1680."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "near_duplicate-13",
+   "category": "near_duplicate",
+   "query": "How far ahead can a Orchid pool car be reserved?",
+   "relevant": [
+    "vehicle-or::Pool cars are booked through the facilities desk up to 21 days ahead."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "near_duplicate-14",
+   "category": "near_duplicate",
+   "query": "When are three quotes required for a Ivory purchase?",
+   "relevant": [
+    "procurement-iv::Purchases between 5,000 dollars and the tender limit need three written quotes."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "near_duplicate-15",
+   "category": "near_duplicate",
+   "query": "Which form records the destruction of records at Pioneer?",
+   "relevant": [
+    "retention-pn::Claims and requests under this document are made on form RR-1787."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "near_duplicate-16",
+   "category": "near_duplicate",
+   "query": "How often are torque wrenches calibrated at the Riverside site?",
+   "relevant": [
+    "calibration-rs::Torque wrenches are calibrated every twelve months or every 5,000 cycles, whichever comes first."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-17",
+   "category": "near_duplicate",
+   "query": "Which form records the destruction of records at Falcon?",
+   "relevant": [
+    "retention-fc::Claims and requests under this document are made on form RR-9762."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "near_duplicate-18",
+   "category": "near_duplicate",
+   "query": "How long are calibration certificates kept at Juniper?",
+   "relevant": [
+    "calibration-jn::Calibration certificates are kept for three years after the instrument is scrapped."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-19",
+   "category": "near_duplicate",
+   "query": "What is the calibration record form at the Garnet site?",
+   "relevant": [
+    "calibration-ga::Claims and requests under this document are made on form CP-6385."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-20",
+   "category": "near_duplicate",
+   "query": "What shred size does Cedar require for paper records?",
+   "relevant": [
+    "retention-cd::Paper is destroyed by cross-cut shredding to a particle size of 4 millimetres or less."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "near_duplicate-21",
+   "category": "near_duplicate",
+   "query": "On which day does the Granite change board meet?",
+   "relevant": [
+    "change-gr::The change board meets every Monday and needs four members present to decide."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-22",
+   "category": "near_duplicate",
+   "query": "How many years of accounts does Lakeshore check for a new vendor?",
+   "relevant": [
+    "procurement-ls::A new supplier is checked for two years of filed accounts before the first order."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "near_duplicate-23",
+   "category": "near_duplicate",
+   "query": "What is the charge for losing a visitor badge at Granite?",
+   "relevant": [
+    "visitor-gr::Badges are worn above the waist and handed back before leaving; a lost one costs 15 dollars."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "near_duplicate-24",
+   "category": "near_duplicate",
+   "query": "For how many years does Harbor hold on to bank statements?",
+   "relevant": [
+    "retention-hb::Bank statements stay on file for five years and are then shredded on site."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "near_duplicate-25",
+   "category": "near_duplicate",
+   "query": "What is the charge for losing a visitor badge at Orchid?",
+   "relevant": [
+    "visitor-or::Badges are worn above the waist and handed back before leaving; a lost one costs 25 dollars."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "near_duplicate-26",
+   "category": "near_duplicate",
+   "query": "How long are calibration certificates kept at Delta?",
+   "relevant": [
+    "calibration-dl::Calibration certificates are kept for ten years after the instrument is scrapped."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-27",
+   "category": "near_duplicate",
+   "query": "On which day does the Juniper change board meet?",
+   "relevant": [
+    "change-jn::The change board meets every Monday and needs four members present to decide."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-28",
+   "category": "near_duplicate",
+   "query": "What time do Riverside file server backups run?",
+   "relevant": [
+    "backup-rs::File servers are backed up every night at 02:00 and the job is checked the next morning."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "near_duplicate-29",
+   "category": "near_duplicate",
+   "query": "How long are daily backups retained at Ivory?",
+   "relevant": [
+    "backup-iv::Daily copies are kept for 30 days and monthly copies for a year."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "near_duplicate-30",
+   "category": "near_duplicate",
+   "query": "What is the charge for losing a visitor badge at Cedar?",
+   "relevant": [
+    "visitor-cd::Badges are worn above the waist and handed back before leaving; a lost one costs 15 dollars."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "near_duplicate-31",
+   "category": "near_duplicate",
+   "query": "How long are calibration certificates kept at Meadow?",
+   "relevant": [
+    "calibration-md::Calibration certificates are kept for five years after the instrument is scrapped."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-32",
+   "category": "near_duplicate",
+   "query": "How much can a Juniper line manager approve on their own?",
+   "relevant": [
+    "procurement-jn::A line manager may approve purchases up to 5,000 dollars."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "near_duplicate-33",
+   "category": "near_duplicate",
+   "query": "How long does Quarry keep supplier invoices?",
+   "relevant": [
+    "retention-qr::Accounts payable invoices are kept for six years after the end of the financial year."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "near_duplicate-34",
+   "category": "near_duplicate",
+   "query": "How often are torque wrenches calibrated at the Meadow site?",
+   "relevant": [
+    "calibration-md::Torque wrenches are calibrated every six months or every 5,000 cycles, whichever comes first."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-35",
+   "category": "near_duplicate",
+   "query": "On which day does the Delta change board meet?",
+   "relevant": [
+    "change-dl::The change board meets every Tuesday and needs four members present to decide."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-36",
+   "category": "near_duplicate",
+   "query": "How many years of accounts does Fjord check for a new vendor?",
+   "relevant": [
+    "procurement-fj::A new supplier is checked for three years of filed accounts before the first order."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "near_duplicate-37",
+   "category": "near_duplicate",
+   "query": "What is the visitor booking form at the Cedar site?",
+   "relevant": [
+    "visitor-cd::Claims and requests under this document are made on form VA-9091."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "near_duplicate-38",
+   "category": "near_duplicate",
+   "query": "What is the Pioneer interval for checking test rig pressure gauges?",
+   "relevant": [
+    "calibration-pn::Pressure gauges on test rigs are checked every twelve months."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-39",
+   "category": "near_duplicate",
+   "query": "After a drawing change is approved at Cedar, how quickly is partly built stock assessed?",
+   "relevant": [
+    "change-cd::Work in progress built to the old drawing is assessed within ten days of approval."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "near_duplicate-40",
+   "category": "near_duplicate",
+   "query": "What shred size does Falcon require for paper records?",
+   "relevant": [
+    "retention-fc::Paper is destroyed by cross-cut shredding to a particle size of 4 millimetres or less."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-01",
+   "category": "late_page",
+   "query": "What is the deadline for submitting Orchid travel claims?",
+   "relevant": [
+    "travel-or::They must reach accounts payable within 90 days of the trip or they are refused."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-02",
+   "category": "late_page",
+   "query": "What is the deadline for submitting Delta travel claims?",
+   "relevant": [
+    "travel-dl::They must reach accounts payable within 90 days of the trip or they are refused."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-03",
+   "category": "late_page",
+   "query": "When are three quotes required for a Delta purchase?",
+   "relevant": [
+    "procurement-dl::Purchases between 10,000 dollars and the tender limit need three written quotes."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-04",
+   "category": "late_page",
+   "query": "Where does failed measuring equipment go at Granite?",
+   "relevant": [
+    "calibration-gr::A red label is fixed to it and it is moved to the quarantine shelf in room C04."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "late_page-05",
+   "category": "late_page",
+   "query": "What does Aspen reimburse per mile for using my own car?",
+   "relevant": [
+    "travel-as::Use of a private car is repaid at 61 cents per mile."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-06",
+   "category": "late_page",
+   "query": "How much fuel must be in a Juniper pool car when returned?",
+   "relevant": [
+    "vehicle-jn::They are returned with at least half of a tank of fuel."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "late_page-07",
+   "category": "late_page",
+   "query": "How soon are superseded drawings removed from the Delta shop floor?",
+   "relevant": [
+    "change-dl::Obsolete copies are stamped and withdrawn from the shop floor by the document controller within 72 hours."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "late_page-08",
+   "category": "late_page",
+   "query": "When are interview notes for rejected applicants destroyed at Lakeshore?",
+   "relevant": [
+    "retention-ls::Interview notes for unsuccessful candidates are destroyed after nine months."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-09",
+   "category": "late_page",
+   "query": "Over what lifetime value must Fjord put a contract out to tender?",
+   "relevant": [
+    "procurement-fj::A formal tender is run for any contract worth more than 50,000 dollars over its life."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-10",
+   "category": "late_page",
+   "query": "For how many years does Granite hold on to bank statements?",
+   "relevant": [
+    "retention-gr::Bank statements stay on file for seven years and are then shredded on site."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-11",
+   "category": "late_page",
+   "query": "After a drawing change is approved at Pioneer, how quickly is partly built stock assessed?",
+   "relevant": [
+    "change-pn::Work in progress built to the old drawing is assessed within fifteen days of approval."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "late_page-12",
+   "category": "late_page",
+   "query": "How often does Quarry review user access rights?",
+   "relevant": [
+    "access-qr::Managers confirm the access of each team member every six months."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "late_page-13",
+   "category": "late_page",
+   "query": "How long does Fjord keep admin session recordings?",
+   "relevant": [
+    "access-fj::Administrator sessions are recorded and the recordings kept for 180 days."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "late_page-14",
+   "category": "late_page",
+   "query": "How much is the lunch allowance on a Fjord day trip?",
+   "relevant": [
+    "travel-fj::A day trip with no overnight stay attracts 18 dollars for lunch."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-15",
+   "category": "late_page",
+   "query": "For how many years does Lakeshore hold on to bank statements?",
+   "relevant": [
+    "retention-ls::Bank statements stay on file for seven years and are then shredded on site."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-16",
+   "category": "late_page",
+   "query": "When are three quotes required for a Orchid purchase?",
+   "relevant": [
+    "procurement-or::Purchases between 10,000 dollars and the tender limit need three written quotes."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-17",
+   "category": "late_page",
+   "query": "When are interview notes for rejected applicants destroyed at Riverside?",
+   "relevant": [
+    "retention-rs::Interview notes for unsuccessful candidates are destroyed after six months."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-18",
+   "category": "late_page",
+   "query": "How far in advance must foreign visitors to Ember be cleared?",
+   "relevant": [
+    "visitor-em::Visitors from outside the country also need clearance from security seven working days ahead."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "late_page-19",
+   "category": "late_page",
+   "query": "What is the Quarry interval for checking test rig pressure gauges?",
+   "relevant": [
+    "calibration-qr::Pressure gauges on test rigs are checked every twelve months."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "late_page-20",
+   "category": "late_page",
+   "query": "Where does failed measuring equipment go at Garnet?",
+   "relevant": [
+    "calibration-ga::A red label is fixed to it and it is moved to the quarantine shelf in room D21."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "late_page-21",
+   "category": "late_page",
+   "query": "What is the charge for losing a visitor badge at Delta?",
+   "relevant": [
+    "visitor-dl::Badges are worn above the waist and handed back before leaving; a lost one costs 10 dollars."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "late_page-22",
+   "category": "late_page",
+   "query": "Above what amount does a Orchid expense claim need two signatures?",
+   "relevant": [
+    "travel-or::Claims above 500 dollars need a second signature from the budget holder."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-23",
+   "category": "late_page",
+   "query": "What is the Heron interval for checking test rig pressure gauges?",
+   "relevant": [
+    "calibration-he::Pressure gauges on test rigs are checked every twelve months."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "late_page-24",
+   "category": "late_page",
+   "query": "How often does Garnet review user access rights?",
+   "relevant": [
+    "access-ga::Managers confirm the access of each team member every three months."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "late_page-25",
+   "category": "late_page",
+   "query": "When does an evening trip from Pioneer need two drivers?",
+   "relevant": [
+    "vehicle-pn::No journey longer than 200 miles may start after 18:00 without a second driver."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "late_page-26",
+   "category": "late_page",
+   "query": "Above what amount does a Aspen expense claim need two signatures?",
+   "relevant": [
+    "travel-as::Claims above 500 dollars need a second signature from the budget holder."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-27",
+   "category": "late_page",
+   "query": "What is the charge for losing a visitor badge at Summit?",
+   "relevant": [
+    "visitor-sm::Badges are worn above the waist and handed back before leaving; a lost one costs 25 dollars."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "late_page-28",
+   "category": "late_page",
+   "query": "What is the Garnet interval for checking test rig pressure gauges?",
+   "relevant": [
+    "calibration-ga::Pressure gauges on test rigs are checked every twelve months."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "late_page-29",
+   "category": "late_page",
+   "query": "Where does failed measuring equipment go at Delta?",
+   "relevant": [
+    "calibration-dl::A red label is fixed to it and it is moved to the quarantine shelf in room C04."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "late_page-30",
+   "category": "late_page",
+   "query": "How often does Granite test restoring from backup?",
+   "relevant": [
+    "backup-gr::A sample restore is carried out every fortnight and the result is logged."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "late_page-31",
+   "category": "late_page",
+   "query": "When are three quotes required for a Granite purchase?",
+   "relevant": [
+    "procurement-gr::Purchases between 10,000 dollars and the tender limit need three written quotes."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-32",
+   "category": "late_page",
+   "query": "How many years of accounts does Heron check for a new vendor?",
+   "relevant": [
+    "procurement-he::A new supplier is checked for two years of filed accounts before the first order."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-33",
+   "category": "late_page",
+   "query": "For how many years does Fjord hold on to bank statements?",
+   "relevant": [
+    "retention-fj::Bank statements stay on file for seven years and are then shredded on site."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-34",
+   "category": "late_page",
+   "query": "How soon are superseded drawings removed from the Pioneer shop floor?",
+   "relevant": [
+    "change-pn::Obsolete copies are stamped and withdrawn from the shop floor by the document controller within 72 hours."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "late_page-35",
+   "category": "late_page",
+   "query": "Where may visitors at Delta take photographs?",
+   "relevant": [
+    "visitor-dl::Photography is not allowed beyond the training room without written permission."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "late_page-36",
+   "category": "late_page",
+   "query": "What does Fjord reimburse per mile for using my own car?",
+   "relevant": [
+    "travel-fj::Use of a private car is repaid at 58 cents per mile."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-37",
+   "category": "late_page",
+   "query": "By what time must vehicle keys be returned after hours at Birch?",
+   "relevant": [
+    "vehicle-bi::Keys go back to the night desk by 23:00 and the shift lead signs the log."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "late_page-38",
+   "category": "late_page",
+   "query": "What is the Falcon interval for checking test rig pressure gauges?",
+   "relevant": [
+    "calibration-fc::Pressure gauges on test rigs are checked every eighteen months."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "late_page-39",
+   "category": "late_page",
+   "query": "When are interview notes for rejected applicants destroyed at Birch?",
+   "relevant": [
+    "retention-bi::Interview notes for unsuccessful candidates are destroyed after twelve months."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "late_page-40",
+   "category": "late_page",
+   "query": "How soon are Fjord incident investigation findings due?",
+   "relevant": [
+    "incident-fj::The findings go to the site manager within five working days."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "cross_page-01",
+   "category": "cross_page",
+   "query": "What is the deadline for recording a near miss at Ember?",
+   "relevant": [
+    "incident-em::A near miss is entered in the log within three days."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "cross_page-02",
+   "category": "cross_page",
+   "query": "For how many years does Meadow hold on to bank statements?",
+   "relevant": [
+    "retention-md::Bank statements stay on file for six years and are then shredded on site."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "cross_page-03",
+   "category": "cross_page",
+   "query": "How soon are superseded drawings removed from the Meadow shop floor?",
+   "relevant": [
+    "change-md::Obsolete copies are stamped and withdrawn from the shop floor by the document controller within 72 hours."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "cross_page-04",
+   "category": "cross_page",
+   "query": "For how many years does Quarry hold on to bank statements?",
+   "relevant": [
+    "retention-qr::Bank statements stay on file for six years and are then shredded on site."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "cross_page-05",
+   "category": "cross_page",
+   "query": "Over what lifetime value must Cedar put a contract out to tender?",
+   "relevant": [
+    "procurement-cd::A formal tender is run for any contract worth more than 100,000 dollars over its life."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "cross_page-06",
+   "category": "cross_page",
+   "query": "What is the deadline for recording a near miss at Riverside?",
+   "relevant": [
+    "incident-rs::A near miss is entered in the log within five days."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "cross_page-07",
+   "category": "cross_page",
+   "query": "How long are daily backups retained at Birch?",
+   "relevant": [
+    "backup-bi::Daily copies are kept for 30 days and monthly copies for a year."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "cross_page-08",
+   "category": "cross_page",
+   "query": "What is the deadline for recording a near miss at Ivory?",
+   "relevant": [
+    "incident-iv::A near miss is entered in the log within five days."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "cross_page-09",
+   "category": "cross_page",
+   "query": "What is the Harbor interval for checking test rig pressure gauges?",
+   "relevant": [
+    "calibration-hb::Pressure gauges on test rigs are checked every six months."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "cross_page-10",
+   "category": "cross_page",
+   "query": "How long are daily backups retained at Orchid?",
+   "relevant": [
+    "backup-or::Daily copies are kept for 14 days and monthly copies for a year."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "cross_page-11",
+   "category": "cross_page",
+   "query": "How long are daily backups retained at Harbor?",
+   "relevant": [
+    "backup-hb::Daily copies are kept for 30 days and monthly copies for a year."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "cross_page-12",
+   "category": "cross_page",
+   "query": "How far in advance must foreign visitors to Quarry be cleared?",
+   "relevant": [
+    "visitor-qr::Visitors from outside the country also need clearance from security five working days ahead."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "cross_page-13",
+   "category": "cross_page",
+   "query": "How much fuel must be in a Ivory pool car when returned?",
+   "relevant": [
+    "vehicle-iv::They are returned with at least a quarter of a tank of fuel."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "cross_page-14",
+   "category": "cross_page",
+   "query": "What is the Riverside interval for checking test rig pressure gauges?",
+   "relevant": [
+    "calibration-rs::Pressure gauges on test rigs are checked every eighteen months."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "cross_page-15",
+   "category": "cross_page",
+   "query": "How many wrong passwords lock a Quarry account?",
+   "relevant": [
+    "access-qr::An account locks after five failed sign-in attempts in fifteen minutes."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "cross_page-16",
+   "category": "cross_page",
+   "query": "What is the Delta interval for checking test rig pressure gauges?",
+   "relevant": [
+    "calibration-dl::Pressure gauges on test rigs are checked every twelve months."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "cross_page-17",
+   "category": "cross_page",
+   "query": "What is the deadline for recording a near miss at Garnet?",
+   "relevant": [
+    "incident-ga::A near miss is entered in the log within two days."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "cross_page-18",
+   "category": "cross_page",
+   "query": "For how many years does Falcon hold on to bank statements?",
+   "relevant": [
+    "retention-fc::Bank statements stay on file for six years and are then shredded on site."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "cross_page-19",
+   "category": "cross_page",
+   "query": "How far ahead must Ember employees book hotels?",
+   "relevant": [
+    "travel-em::Hotel bookings are made through the travel desk at least fourteen days before arrival."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "cross_page-20",
+   "category": "cross_page",
+   "query": "How far in advance must foreign visitors to Riverside be cleared?",
+   "relevant": [
+    "visitor-rs::Visitors from outside the country also need clearance from security ten working days ahead."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "cross_page-21",
+   "category": "cross_page",
+   "query": "What is the deadline for recording a near miss at Lakeshore?",
+   "relevant": [
+    "incident-ls::A near miss is entered in the log within three days."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "cross_page-22",
+   "category": "cross_page",
+   "query": "What is the deadline for recording a near miss at Granite?",
+   "relevant": [
+    "incident-gr::A near miss is entered in the log within two days."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "cross_page-23",
+   "category": "cross_page",
+   "query": "How long are daily backups retained at Meadow?",
+   "relevant": [
+    "backup-md::Daily copies are kept for 35 days and monthly copies for a year."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "cross_page-24",
+   "category": "cross_page",
+   "query": "How soon are superseded drawings removed from the Juniper shop floor?",
+   "relevant": [
+    "change-jn::Obsolete copies are stamped and withdrawn from the shop floor by the document controller within 48 hours."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "cross_page-25",
+   "category": "cross_page",
+   "query": "For how many years does Orchid hold on to bank statements?",
+   "relevant": [
+    "retention-or::Bank statements stay on file for six years and are then shredded on site."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-01",
+   "category": "paraphrase",
+   "query": "Who can change a supplier's bank details at Aspen?",
+   "relevant": [
+    "procurement-as::The vendor master file is only changed by two people acting together, never one, so bank details cannot be altered alone."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-02",
+   "category": "paraphrase",
+   "query": "What is the most data the Ivory finance system could lose in a disaster?",
+   "relevant": [
+    "backup-iv::The recovery point objective for the finance system is 24 hours."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "paraphrase-03",
+   "category": "paraphrase",
+   "query": "What is the most data the Fjord finance system could lose in a disaster?",
+   "relevant": [
+    "backup-fj::The recovery point objective for the finance system is 4 hours."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "paraphrase-04",
+   "category": "paraphrase",
+   "query": "Who can change a supplier's bank details at Garnet?",
+   "relevant": [
+    "procurement-ga::The vendor master file is only changed by two people acting together, never one, so bank details cannot be altered alone."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-05",
+   "category": "paraphrase",
+   "query": "Once someone quits Delta, how long before their HR folder can be thrown away?",
+   "relevant": [
+    "retention-dl::A leaver's file is held for eight years from the last day of employment."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-06",
+   "category": "paraphrase",
+   "query": "Once someone quits Meadow, how long before their HR folder can be thrown away?",
+   "relevant": [
+    "retention-md::A leaver's file is held for eight years from the last day of employment."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-07",
+   "category": "paraphrase",
+   "query": "Once someone quits Garnet, how long before their HR folder can be thrown away?",
+   "relevant": [
+    "retention-ga::A leaver's file is held for six years from the last day of employment."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-08",
+   "category": "paraphrase",
+   "query": "What is the most data the Garnet finance system could lose in a disaster?",
+   "relevant": [
+    "backup-ga::The recovery point objective for the finance system is 4 hours."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "paraphrase-09",
+   "category": "paraphrase",
+   "query": "When I drive to a client from home, how much of the distance at Heron goes unpaid?",
+   "relevant": [
+    "travel-he::Nobody is paid for the first 25 miles of a journey, which count as the normal commute."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-10",
+   "category": "paraphrase",
+   "query": "Who can change a supplier's bank details at Summit?",
+   "relevant": [
+    "procurement-sm::The vendor master file is only changed by two people acting together, never one, so bank details cannot be altered alone."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-11",
+   "category": "paraphrase",
+   "query": "Once someone quits Riverside, how long before their HR folder can be thrown away?",
+   "relevant": [
+    "retention-rs::A leaver's file is held for four years from the last day of employment."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-12",
+   "category": "paraphrase",
+   "query": "Who can change a supplier's bank details at Heron?",
+   "relevant": [
+    "procurement-he::The vendor master file is only changed by two people acting together, never one, so bank details cannot be altered alone."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-13",
+   "category": "paraphrase",
+   "query": "When I drive to a client from home, how much of the distance at Garnet goes unpaid?",
+   "relevant": [
+    "travel-ga::Nobody is paid for the first 15 miles of a journey, which count as the normal commute."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-14",
+   "category": "paraphrase",
+   "query": "When I drive to a client from home, how much of the distance at Ember goes unpaid?",
+   "relevant": [
+    "travel-em::Nobody is paid for the first 20 miles of a journey, which count as the normal commute."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-15",
+   "category": "paraphrase",
+   "query": "Once someone quits Harbor, how long before their HR folder can be thrown away?",
+   "relevant": [
+    "retention-hb::A leaver's file is held for six years from the last day of employment."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-16",
+   "category": "paraphrase",
+   "query": "Once someone quits Aspen, how long before their HR folder can be thrown away?",
+   "relevant": [
+    "retention-as::A leaver's file is held for eight years from the last day of employment."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-17",
+   "category": "paraphrase",
+   "query": "What is the most data the Lakeshore finance system could lose in a disaster?",
+   "relevant": [
+    "backup-ls::The recovery point objective for the finance system is 2 hours."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "paraphrase-18",
+   "category": "paraphrase",
+   "query": "What is the most data the Pioneer finance system could lose in a disaster?",
+   "relevant": [
+    "backup-pn::The recovery point objective for the finance system is 4 hours."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "paraphrase-19",
+   "category": "paraphrase",
+   "query": "Who can change a supplier's bank details at Granite?",
+   "relevant": [
+    "procurement-gr::The vendor master file is only changed by two people acting together, never one, so bank details cannot be altered alone."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-20",
+   "category": "paraphrase",
+   "query": "When I drive to a client from home, how much of the distance at Aspen goes unpaid?",
+   "relevant": [
+    "travel-as::Nobody is paid for the first 25 miles of a journey, which count as the normal commute."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-21",
+   "category": "paraphrase",
+   "query": "What is the most data the Meadow finance system could lose in a disaster?",
+   "relevant": [
+    "backup-md::The recovery point objective for the finance system is 12 hours."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "paraphrase-22",
+   "category": "paraphrase",
+   "query": "What is the most data the Harbor finance system could lose in a disaster?",
+   "relevant": [
+    "backup-hb::The recovery point objective for the finance system is 2 hours."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "paraphrase-23",
+   "category": "paraphrase",
+   "query": "Who can change a supplier's bank details at Lakeshore?",
+   "relevant": [
+    "procurement-ls::The vendor master file is only changed by two people acting together, never one, so bank details cannot be altered alone."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-24",
+   "category": "paraphrase",
+   "query": "When I drive to a client from home, how much of the distance at Orchid goes unpaid?",
+   "relevant": [
+    "travel-or::Nobody is paid for the first 10 miles of a journey, which count as the normal commute."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "paraphrase-25",
+   "category": "paraphrase",
+   "query": "Who can change a supplier's bank details at Riverside?",
+   "relevant": [
+    "procurement-rs::The vendor master file is only changed by two people acting together, never one, so bank details cannot be altered alone."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "identifier-01",
+   "category": "identifier",
+   "query": "form VU-9006",
+   "relevant": [
+    "vehicle-hb::Claims and requests under this document are made on form VU-9006."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "identifier-02",
+   "category": "identifier",
+   "query": "form VA-1514",
+   "relevant": [
+    "visitor-md::Claims and requests under this document are made on form VA-1514."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "identifier-03",
+   "category": "identifier",
+   "query": "form IR-9112",
+   "relevant": [
+    "incident-jn::Claims and requests under this document are made on form IR-9112."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "identifier-04",
+   "category": "identifier",
+   "query": "form TE-6902",
+   "relevant": [
+    "travel-sm::Claims and requests under this document are made on form TE-6902."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "identifier-05",
+   "category": "identifier",
+   "query": "form RR-9824",
+   "relevant": [
+    "retention-he::Claims and requests under this document are made on form RR-9824."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "identifier-06",
+   "category": "identifier",
+   "query": "form VA-2077",
+   "relevant": [
+    "visitor-gr::Claims and requests under this document are made on form VA-2077."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "identifier-07",
+   "category": "identifier",
+   "query": "form AC-8333",
+   "relevant": [
+    "access-ga::Claims and requests under this document are made on form AC-8333."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "identifier-08",
+   "category": "identifier",
+   "query": "form IR-8032",
+   "relevant": [
+    "incident-or::Claims and requests under this document are made on form IR-8032."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "identifier-09",
+   "category": "identifier",
+   "query": "form IR-1767",
+   "relevant": [
+    "incident-hb::Claims and requests under this document are made on form IR-1767."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "identifier-10",
+   "category": "identifier",
+   "query": "form RR-6405",
+   "relevant": [
+    "retention-dl::Claims and requests under this document are made on form RR-6405."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "identifier-11",
+   "category": "identifier",
+   "query": "form AC-9027",
+   "relevant": [
+    "access-ls::Claims and requests under this document are made on form AC-9027."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "identifier-12",
+   "category": "identifier",
+   "query": "form IR-1704",
+   "relevant": [
+    "incident-em::Claims and requests under this document are made on form IR-1704."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "identifier-13",
+   "category": "identifier",
+   "query": "form PR-9531",
+   "relevant": [
+    "procurement-dl::Claims and requests under this document are made on form PR-9531."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "identifier-14",
+   "category": "identifier",
+   "query": "form VA-9548",
+   "relevant": [
+    "visitor-as::Claims and requests under this document are made on form VA-9548."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "identifier-15",
+   "category": "identifier",
+   "query": "form CP-7287",
+   "relevant": [
+    "calibration-he::Claims and requests under this document are made on form CP-7287."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "identifier-16",
+   "category": "identifier",
+   "query": "form PR-7481",
+   "relevant": [
+    "procurement-ls::Claims and requests under this document are made on form PR-7481."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "identifier-17",
+   "category": "identifier",
+   "query": "form TE-1392",
+   "relevant": [
+    "travel-rs::Claims and requests under this document are made on form TE-1392."
+   ],
+   "collection": "finance"
+  },
+  {
+   "id": "identifier-18",
+   "category": "identifier",
+   "query": "form BK-5410",
+   "relevant": [
+    "backup-ls::Claims and requests under this document are made on form BK-5410."
+   ],
+   "collection": "it"
+  },
+  {
+   "id": "identifier-19",
+   "category": "identifier",
+   "query": "form CP-3529",
+   "relevant": [
+    "calibration-qr::Claims and requests under this document are made on form CP-3529."
+   ],
+   "collection": "engineering"
+  },
+  {
+   "id": "identifier-20",
+   "category": "identifier",
+   "query": "form IR-1511",
+   "relevant": [
+    "incident-fj::Claims and requests under this document are made on form IR-1511."
+   ],
+   "collection": "facilities"
+  },
+  {
+   "id": "revision-01",
+   "category": "revision",
+   "query": "How long does Granite keep admin session recordings?",
+   "relevant": [
+    "access-gr::Administrator sessions are recorded and the recordings kept for 90 days."
+   ],
+   "collection": "it",
+   "stale": [
+    "access-gr-rev-b::Administrator sessions are recorded and the recordings kept for 30 days."
+   ]
+  },
+  {
+   "id": "revision-02",
+   "category": "revision",
+   "query": "What does Summit reimburse per mile for using my own car?",
+   "relevant": [
+    "travel-sm::Use of a private car is repaid at 64 cents per mile."
+   ],
+   "collection": "finance",
+   "stale": [
+    "travel-sm-rev-b::Use of a private car is repaid at 67 cents per mile."
+   ]
+  },
+  {
+   "id": "revision-03",
+   "category": "revision",
+   "query": "What does Lakeshore reimburse per mile for using my own car?",
+   "relevant": [
+    "travel-ls::Use of a private car is repaid at 61 cents per mile."
+   ],
+   "collection": "finance",
+   "stale": [
+    "travel-ls-rev-b::Use of a private car is repaid at 64 cents per mile."
+   ]
+  },
+  {
+   "id": "revision-04",
+   "category": "revision",
+   "query": "Above what amount does a Falcon expense claim need two signatures?",
+   "relevant": [
+    "travel-fc::Claims above 400 dollars need a second signature from the budget holder."
+   ],
+   "collection": "finance",
+   "stale": [
+    "travel-fc-rev-b::Claims above 500 dollars need a second signature from the budget holder."
+   ]
+  },
+  {
+   "id": "revision-05",
+   "category": "revision",
+   "query": "Above what amount does a Summit expense claim need two signatures?",
+   "relevant": [
+    "travel-sm::Claims above 400 dollars need a second signature from the budget holder."
+   ],
+   "collection": "finance",
+   "stale": [
+    "travel-sm-rev-b::Claims above 750 dollars need a second signature from the budget holder."
+   ]
+  },
+  {
+   "id": "revision-06",
+   "category": "revision",
+   "query": "What is the Cedar per diem for an overnight trip?",
+   "relevant": [
+    "travel-cd::The overnight allowance is 55 dollars per night, which covers meals and incidentals."
+   ],
+   "collection": "finance",
+   "stale": [
+    "travel-cd-rev-b::The overnight allowance is 68 dollars per night, which covers meals and incidentals."
+   ]
+  },
+  {
+   "id": "revision-07",
+   "category": "revision",
+   "query": "How far ahead must Meadow employees book hotels?",
+   "relevant": [
+    "travel-md::Hotel bookings are made through the travel desk at least seven days before arrival."
+   ],
+   "collection": "finance",
+   "stale": [
+    "travel-md-rev-b::Hotel bookings are made through the travel desk at least five days before arrival."
+   ]
+  },
+  {
+   "id": "revision-08",
+   "category": "revision",
+   "query": "What is the Harbor per diem for an overnight trip?",
+   "relevant": [
+    "travel-hb::The overnight allowance is 55 dollars per night, which covers meals and incidentals."
+   ],
+   "collection": "finance",
+   "stale": [
+    "travel-hb-rev-b::The overnight allowance is 81 dollars per night, which covers meals and incidentals."
+   ]
+  },
+  {
+   "id": "revision-09",
+   "category": "revision",
+   "query": "When does an evening trip from Lakeshore need two drivers?",
+   "relevant": [
+    "vehicle-ls::No journey longer than 100 miles may start after 18:00 without a second driver."
+   ],
+   "collection": "facilities",
+   "stale": [
+    "vehicle-ls-rev-b::No journey longer than 150 miles may start after 18:00 without a second driver."
+   ]
+  },
+  {
+   "id": "revision-10",
+   "category": "revision",
+   "query": "How far ahead can a Falcon pool car be reserved?",
+   "relevant": [
+    "vehicle-fc::Pool cars are booked through the facilities desk up to 14 days ahead."
+   ],
+   "collection": "facilities",
+   "stale": [
+    "vehicle-fc-rev-b::Pool cars are booked through the facilities desk up to 7 days ahead."
+   ]
+  },
+  {
+   "id": "revision-11",
+   "category": "revision",
+   "query": "How often does Granite review user access rights?",
+   "relevant": [
+    "access-gr::Managers confirm the access of each team member every three months."
+   ],
+   "collection": "it",
+   "stale": [
+    "access-gr-rev-b::Managers confirm the access of each team member every six months."
+   ]
+  },
+  {
+   "id": "revision-12",
+   "category": "revision",
+   "query": "How quickly are accounts switched off when someone leaves Falcon?",
+   "relevant": [
+    "access-fc::A leaver's accounts are disabled within 8 hours of their last working day."
+   ],
+   "collection": "it",
+   "stale": [
+    "access-fc-rev-b::A leaver's accounts are disabled within 4 hours of their last working day."
+   ]
+  },
+  {
+   "id": "revision-13",
+   "category": "revision",
+   "query": "How far ahead must Lakeshore employees book hotels?",
+   "relevant": [
+    "travel-ls::Hotel bookings are made through the travel desk at least fourteen days before arrival."
+   ],
+   "collection": "finance",
+   "stale": [
+    "travel-ls-rev-b::Hotel bookings are made through the travel desk at least seven days before arrival."
+   ]
+  },
+  {
+   "id": "revision-14",
+   "category": "revision",
+   "query": "By what time must vehicle keys be returned after hours at Riverside?",
+   "relevant": [
+    "vehicle-rs::Keys go back to the night desk by 23:00 and the shift lead signs the log."
+   ],
+   "collection": "facilities",
+   "stale": [
+    "vehicle-rs-rev-b::Keys go back to the night desk by 22:00 and the shift lead signs the log."
+   ]
+  },
+  {
+   "id": "revision-15",
+   "category": "revision",
+   "query": "How often does Lakeshore review user access rights?",
+   "relevant": [
+    "access-ls::Managers confirm the access of each team member every three months."
+   ],
+   "collection": "it",
+   "stale": [
+    "access-ls-rev-b::Managers confirm the access of each team member every six months."
+   ]
+  },
+  {
+   "id": "revision-16",
+   "category": "revision",
+   "query": "How much is the lunch allowance on a Harbor day trip?",
+   "relevant": [
+    "travel-hb::A day trip with no overnight stay attracts 22 dollars for lunch."
+   ],
+   "collection": "finance",
+   "stale": [
+    "travel-hb-rev-b::A day trip with no overnight stay attracts 25 dollars for lunch."
+   ]
+  },
+  {
+   "id": "revision-17",
+   "category": "revision",
+   "query": "What is the minimum password length at Riverside?",
+   "relevant": [
+    "access-rs::Passwords are at least 14 characters long and are never reused across systems."
+   ],
+   "collection": "it",
+   "stale": [
+    "access-rs-rev-b::Passwords are at least 16 characters long and are never reused across systems."
+   ]
+  },
+  {
+   "id": "revision-18",
+   "category": "revision",
+   "query": "What does Harbor reimburse per mile for using my own car?",
+   "relevant": [
+    "travel-hb::Use of a private car is repaid at 67 cents per mile."
+   ],
+   "collection": "finance",
+   "stale": [
+    "travel-hb-rev-b::Use of a private car is repaid at 64 cents per mile."
+   ]
+  },
+  {
+   "id": "revision-19",
+   "category": "revision",
+   "query": "How long does Falcon keep admin session recordings?",
+   "relevant": [
+    "access-fc::Administrator sessions are recorded and the recordings kept for 30 days."
+   ],
+   "collection": "it",
+   "stale": [
+    "access-fc-rev-b::Administrator sessions are recorded and the recordings kept for 180 days."
+   ]
+  },
+  {
+   "id": "revision-20",
+   "category": "revision",
+   "query": "How much is the lunch allowance on a Lakeshore day trip?",
+   "relevant": [
+    "travel-ls::A day trip with no overnight stay attracts 14 dollars for lunch."
+   ],
+   "collection": "finance",
+   "stale": [
+    "travel-ls-rev-b::A day trip with no overnight stay attracts 18 dollars for lunch."
+   ]
+  },
+  {
+   "id": "cross_collection-01",
+   "category": "cross_collection",
+   "query": "How quickly must an injury at Garnet be logged?",
+   "relevant": [
+    "incident-ga::Every injury is reported to the supervisor before the end of the shift and logged within 12 hours."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-02",
+   "category": "cross_collection",
+   "query": "What is the Heron interval for checking test rig pressure gauges?",
+   "relevant": [
+    "calibration-he::Pressure gauges on test rigs are checked every twelve months."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-03",
+   "category": "cross_collection",
+   "query": "Above what amount does a Aspen expense claim need two signatures?",
+   "relevant": [
+    "travel-as::Claims above 500 dollars need a second signature from the budget holder."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-04",
+   "category": "cross_collection",
+   "query": "How far ahead can a Orchid pool car be reserved?",
+   "relevant": [
+    "vehicle-or::Pool cars are booked through the facilities desk up to 21 days ahead."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-05",
+   "category": "cross_collection",
+   "query": "Once someone quits Aspen, how long before their HR folder can be thrown away?",
+   "relevant": [
+    "retention-as::A leaver's file is held for eight years from the last day of employment."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-06",
+   "category": "cross_collection",
+   "query": "How soon are superseded drawings removed from the Delta shop floor?",
+   "relevant": [
+    "change-dl::Obsolete copies are stamped and withdrawn from the shop floor by the document controller within 72 hours."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-07",
+   "category": "cross_collection",
+   "query": "How often are torque wrenches calibrated at the Meadow site?",
+   "relevant": [
+    "calibration-md::Torque wrenches are calibrated every six months or every 5,000 cycles, whichever comes first."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-08",
+   "category": "cross_collection",
+   "query": "How long are calibration certificates kept at Delta?",
+   "relevant": [
+    "calibration-dl::Calibration certificates are kept for ten years after the instrument is scrapped."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-09",
+   "category": "cross_collection",
+   "query": "When are interview notes for rejected applicants destroyed at Lakeshore?",
+   "relevant": [
+    "retention-ls::Interview notes for unsuccessful candidates are destroyed after nine months."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-10",
+   "category": "cross_collection",
+   "query": "How soon are superseded drawings removed from the Pioneer shop floor?",
+   "relevant": [
+    "change-pn::Obsolete copies are stamped and withdrawn from the shop floor by the document controller within 72 hours."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-11",
+   "category": "cross_collection",
+   "query": "How long does Fjord keep admin session recordings?",
+   "relevant": [
+    "access-fj::Administrator sessions are recorded and the recordings kept for 180 days."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-12",
+   "category": "cross_collection",
+   "query": "What is the visitor booking form at the Heron site?",
+   "relevant": [
+    "visitor-he::Claims and requests under this document are made on form VA-2504."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-13",
+   "category": "cross_collection",
+   "query": "When I drive to a client from home, how much of the distance at Garnet goes unpaid?",
+   "relevant": [
+    "travel-ga::Nobody is paid for the first 15 miles of a journey, which count as the normal commute."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-14",
+   "category": "cross_collection",
+   "query": "How often does Granite test restoring from backup?",
+   "relevant": [
+    "backup-gr::A sample restore is carried out every fortnight and the result is logged."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-15",
+   "category": "cross_collection",
+   "query": "What is the deadline for submitting Orchid travel claims?",
+   "relevant": [
+    "travel-or::They must reach accounts payable within 90 days of the trip or they are refused."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-16",
+   "category": "cross_collection",
+   "query": "What is the most data the Pioneer finance system could lose in a disaster?",
+   "relevant": [
+    "backup-pn::The recovery point objective for the finance system is 4 hours."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-17",
+   "category": "cross_collection",
+   "query": "Who can change a supplier's bank details at Granite?",
+   "relevant": [
+    "procurement-gr::The vendor master file is only changed by two people acting together, never one, so bank details cannot be altered alone."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-18",
+   "category": "cross_collection",
+   "query": "For how many years does Lakeshore hold on to bank statements?",
+   "relevant": [
+    "retention-ls::Bank statements stay on file for seven years and are then shredded on site."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-19",
+   "category": "cross_collection",
+   "query": "Which form records the destruction of records at Juniper?",
+   "relevant": [
+    "retention-jn::Claims and requests under this document are made on form RR-8235."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-20",
+   "category": "cross_collection",
+   "query": "Who can change a supplier's bank details at Summit?",
+   "relevant": [
+    "procurement-sm::The vendor master file is only changed by two people acting together, never one, so bank details cannot be altered alone."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-21",
+   "category": "cross_collection",
+   "query": "What is the Pioneer interval for checking test rig pressure gauges?",
+   "relevant": [
+    "calibration-pn::Pressure gauges on test rigs are checked every twelve months."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-22",
+   "category": "cross_collection",
+   "query": "On which day does the Juniper change board meet?",
+   "relevant": [
+    "change-jn::The change board meets every Monday and needs four members present to decide."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-23",
+   "category": "cross_collection",
+   "query": "Over what lifetime value must Fjord put a contract out to tender?",
+   "relevant": [
+    "procurement-fj::A formal tender is run for any contract worth more than 50,000 dollars over its life."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-24",
+   "category": "cross_collection",
+   "query": "Once someone quits Harbor, how long before their HR folder can be thrown away?",
+   "relevant": [
+    "retention-hb::A leaver's file is held for six years from the last day of employment."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-25",
+   "category": "cross_collection",
+   "query": "How much can a Juniper line manager approve on their own?",
+   "relevant": [
+    "procurement-jn::A line manager may approve purchases up to 5,000 dollars."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-26",
+   "category": "cross_collection",
+   "query": "When are three quotes required for a Delta purchase?",
+   "relevant": [
+    "procurement-dl::Purchases between 10,000 dollars and the tender limit need three written quotes."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-27",
+   "category": "cross_collection",
+   "query": "Who can change a supplier's bank details at Lakeshore?",
+   "relevant": [
+    "procurement-ls::The vendor master file is only changed by two people acting together, never one, so bank details cannot be altered alone."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-28",
+   "category": "cross_collection",
+   "query": "Once someone quits Delta, how long before their HR folder can be thrown away?",
+   "relevant": [
+    "retention-dl::A leaver's file is held for eight years from the last day of employment."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-29",
+   "category": "cross_collection",
+   "query": "How often does Quarry review user access rights?",
+   "relevant": [
+    "access-qr::Managers confirm the access of each team member every six months."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-30",
+   "category": "cross_collection",
+   "query": "What is the purchase requisition form number at Meadow?",
+   "relevant": [
+    "procurement-md::Claims and requests under this document are made on form PR-2772."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-31",
+   "category": "cross_collection",
+   "query": "How many years of accounts does Heron check for a new vendor?",
+   "relevant": [
+    "procurement-he::A new supplier is checked for two years of filed accounts before the first order."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-32",
+   "category": "cross_collection",
+   "query": "Where does failed measuring equipment go at Garnet?",
+   "relevant": [
+    "calibration-ga::A red label is fixed to it and it is moved to the quarantine shelf in room D21."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-33",
+   "category": "cross_collection",
+   "query": "What does Fjord reimburse per mile for using my own car?",
+   "relevant": [
+    "travel-fj::Use of a private car is repaid at 58 cents per mile."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-34",
+   "category": "cross_collection",
+   "query": "How far in advance must foreign visitors to Ember be cleared?",
+   "relevant": [
+    "visitor-em::Visitors from outside the country also need clearance from security seven working days ahead."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-35",
+   "category": "cross_collection",
+   "query": "What is the charge for losing a visitor badge at Summit?",
+   "relevant": [
+    "visitor-sm::Badges are worn above the waist and handed back before leaving; a lost one costs 25 dollars."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-36",
+   "category": "cross_collection",
+   "query": "When I drive to a client from home, how much of the distance at Aspen goes unpaid?",
+   "relevant": [
+    "travel-as::Nobody is paid for the first 25 miles of a journey, which count as the normal commute."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-37",
+   "category": "cross_collection",
+   "query": "Which form requests a restore from backup at Heron?",
+   "relevant": [
+    "backup-he::Claims and requests under this document are made on form BK-1128."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-38",
+   "category": "cross_collection",
+   "query": "Who can change a supplier's bank details at Aspen?",
+   "relevant": [
+    "procurement-as::The vendor master file is only changed by two people acting together, never one, so bank details cannot be altered alone."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-39",
+   "category": "cross_collection",
+   "query": "On which day does the Delta change board meet?",
+   "relevant": [
+    "change-dl::The change board meets every Tuesday and needs four members present to decide."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "cross_collection-40",
+   "category": "cross_collection",
+   "query": "How soon are Fjord incident investigation findings due?",
+   "relevant": [
+    "incident-fj::The findings go to the site manager within five working days."
+   ],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-01",
+   "category": "unanswerable",
+   "query": "What is the parental leave entitlement at Pioneer?",
+   "relevant": [],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-02",
+   "category": "unanswerable",
+   "query": "What is the parental leave entitlement at Cedar?",
+   "relevant": [],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-03",
+   "category": "unanswerable",
+   "query": "What is the parental leave entitlement at Birch?",
+   "relevant": [],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-04",
+   "category": "unanswerable",
+   "query": "How many days of remote work per week are allowed at Heron?",
+   "relevant": [],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-05",
+   "category": "unanswerable",
+   "query": "How many days of remote work per week are allowed at Birch?",
+   "relevant": [],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-06",
+   "category": "unanswerable",
+   "query": "How many days of remote work per week are allowed at Harbor?",
+   "relevant": [],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-07",
+   "category": "unanswerable",
+   "query": "What is the Summit policy on company credit card cashback?",
+   "relevant": [],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-08",
+   "category": "unanswerable",
+   "query": "What is the Heron policy on company credit card cashback?",
+   "relevant": [],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-09",
+   "category": "unanswerable",
+   "query": "What is the Aspen policy on company credit card cashback?",
+   "relevant": [],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-10",
+   "category": "unanswerable",
+   "query": "Which hazardous waste contractor does Falcon use?",
+   "relevant": [],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-11",
+   "category": "unanswerable",
+   "query": "Which hazardous waste contractor does Aspen use?",
+   "relevant": [],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-12",
+   "category": "unanswerable",
+   "query": "Which hazardous waste contractor does Quarry use?",
+   "relevant": [],
+   "collection": "*"
+  },
+  {
+   "id": "unanswerable-13",
+   "category": "unanswerable",
+   "query": "What is the Westfield per diem for an overnight trip?",
+   "relevant": [],
+   "collection": "finance"
+  },
+  {
+   "id": "unanswerable-14",
+   "category": "unanswerable",
+   "query": "What is the Bramble per diem for an overnight trip?",
+   "relevant": [],
+   "collection": "finance"
+  },
+  {
+   "id": "unanswerable-15",
+   "category": "unanswerable",
+   "query": "What is the Copperline per diem for an overnight trip?",
+   "relevant": [],
+   "collection": "finance"
+  },
+  {
+   "id": "unanswerable-16",
+   "category": "unanswerable",
+   "query": "What is the Sandpiper per diem for an overnight trip?",
+   "relevant": [],
+   "collection": "finance"
+  }
+ ]
+}
