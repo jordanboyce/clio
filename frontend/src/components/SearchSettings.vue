@@ -64,6 +64,7 @@ import { computed, watch } from 'vue'
 import { Feather, X } from 'lucide-vue-next'
 import { useModal } from '../composables/useModal'
 import { useProviderStore } from '../stores/providerStore'
+import { useUiStore } from '../stores/uiStore'
 import { getProviderDisplayName, isLocalProvider } from '../utils/aiProviders'
 
 // Result count is set in the Find toolbar; this drawer holds the settings that
@@ -89,8 +90,9 @@ const providerStore = useProviderStore()
 const modelName = computed(() => providerStore.activeModel || providerStore.deploymentDefault.model || '')
 const modal = useModal({ onClose: () => { open.value = false } })
 watch(open, value => value ? modal.open() : modal.close(), { flush: 'post' })
+// C3: land on the providers, not on whatever Settings section was open last.
 function openProviderSettings() {
   modal.close()
-  emit('switch-tab', 'settings')
+  useUiStore().connectModel()
 }
 </script>

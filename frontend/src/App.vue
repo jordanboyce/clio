@@ -55,7 +55,7 @@
 
       <!-- The one AI choice: provider and model for Ask, Find and Reports.
            Phones get the provider list in the overflow menu instead. -->
-      <ModelPicker class="hidden md:block" @connect="activeTab = 'settings'" />
+      <ModelPicker class="hidden md:block" @connect="openSettingsSection('providers')" />
 
       <!-- Notes panel toggle: the right-hand twin of the sources one -->
       <!-- v-if, not `hidden md:inline-flex`: .side-icon-btn sets display in
@@ -797,7 +797,7 @@
                 <span v-if="embeddingWarming" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
                 {{ embeddingBanner.kind === 'error' ? 'Try again' : 'Download now' }}
               </button>
-              <button class="btn btn-xs btn-ghost" @click="switchTab('settings')">Choose another provider</button>
+              <button class="btn btn-xs btn-ghost" @click="openSettingsSection('providers')">Choose another provider</button>
               <button
                 v-if="embeddingBanner.detail"
                 class="btn btn-xs btn-ghost text-base-content/60"
@@ -1380,6 +1380,8 @@ import WorkspaceNav from './components/WorkspaceNav.vue'
 import AppRibbon from './components/AppRibbon.vue'
 import RibbonCustomizeDialog from './components/RibbonCustomizeDialog.vue'
 import { RIBBON_ITEMS, resolveTab, ribbonItems, visibleItems } from './utils/ribbon.js'
+import { parseRoute, routeHash } from './utils/route.js'
+import { fitPanel, panelBudget, readWidth } from './utils/panels.js'
 import { parsePraHref, praOn, setPraEnabled } from './utils/praFormat'
 import { useLayoutStore } from './stores/layoutStore'
 import ReviewBell from './components/ReviewBell.vue'
@@ -1479,15 +1481,26 @@ const setGlobalProvider = (pid) => {
   closeMenus()
 }
 
-// Restore the last active tab so a refresh doesn't dump the user back in Chat
+// Restore the last active tab so a refresh doesn't dump the user back in Chat.
+// A view named in the URL (#/library/map, or ?tab=library) wins (U8, C1).
 const savedTab = localStorage.getItem('active_tab')
-const activeTab = ref(resolveTab(savedTab) || 'chat')
+const queryTab = resolveTab(new URLSearchParams(window.location.search).get('tab'))
+const linkedRoute = parseRoute(window.location.hash) || (queryTab ? { tab: queryTab, view: null } : null)
+// The view a link asked for: onboarding returns to it rather than to Find.
+const linkedTab = linkedRoute?.tab || null
+const activeTab = ref(linkedTab || resolveTab(savedTab) || 'chat')
 watch(activeTab, (tab) => localStorage.setItem('active_tab', tab))
+
+// C6: a width saved on a large monitor (or a corrupt one) must not leave a
+// projector with no answer column. Saved widths are read within their
+// limits, and the open panels share what is left after the centre column's
+// minimum (panelBudget, below).
+const savedWidth = (key, fallback, min, max) => readWidth(localStorage.getItem(key), fallback, min, max)
 
 // Resizable sidebar
 const SIDEBAR_MIN = 220
 const SIDEBAR_MAX = 600
-const sidebarWidth = ref(parseInt(localStorage.getItem('sidebar_width') || '320'))
+const sidebarWidth = ref(savedWidth('sidebar_width', 320, SIDEBAR_MIN, SIDEBAR_MAX))
 const isResizing = ref(false)
 
 const startResize = (e) => {
@@ -1548,7 +1561,7 @@ watch(sourcesSidebarOpen, v => {
 // Analysis sidebar state (persisted, resizable)
 const ANALYSIS_MIN = 240
 const ANALYSIS_MAX = 600
-const analysisWidth = ref(parseInt(localStorage.getItem('analysis_width') || '320'))
+const analysisWidth = ref(savedWidth('analysis_width', 320, ANALYSIS_MIN, ANALYSIS_MAX))
 const analysisSidebarOpen = ref(
   isCompact.value ? false : localStorage.getItem('analysis_sidebar_open') === 'true'
 )
@@ -1583,11 +1596,14 @@ const compactPanelWidth = (preferred) =>
   viewportWidth.value < 480
     ? viewportWidth.value
     : Math.min(preferred, Math.round(viewportWidth.value * 0.85))
+// What each open side panel may take so the centre keeps CENTER_MIN_WIDTH.
+const sideBudget = computed(() =>
+  panelBudget(viewportWidth.value, (sourcesSidebarOpen.value ? 1 : 0) + (analysisSidebarOpen.value ? 1 : 0)))
 const effectiveSidebarWidth = computed(() =>
-  isCompact.value ? compactPanelWidth(sidebarWidth.value) : sidebarWidth.value
+  isCompact.value ? compactPanelWidth(sidebarWidth.value) : fitPanel(sidebarWidth.value, SIDEBAR_MIN, sideBudget.value)
 )
 const effectiveAnalysisWidth = computed(() =>
-  isCompact.value ? compactPanelWidth(analysisWidth.value) : analysisWidth.value
+  isCompact.value ? compactPanelWidth(analysisWidth.value) : fitPanel(analysisWidth.value, ANALYSIS_MIN, sideBudget.value)
 )
 
 // Entering compact mode with both panels open would stack two overlays; close them.
@@ -1911,7 +1927,8 @@ const handleOnboardingComplete = () => {
 const handleOnboardingSkip = () => {
   showOnboarding.value = false
   localStorage.setItem('onboarding_dismissed', 'true')
-  activeTab.value = 'search'
+  // C1: a link to a view (?tab=library, #/library) lands there, not on Find.
+  activeTab.value = linkedTab || 'search'
   if (statsStore.documents === 0) sourcesSidebarOpen.value = true
 }
 
@@ -2030,6 +2047,29 @@ const switchTab = (tabName) => {
   // Going anywhere from the ribbon, the tab bar or a shortcut leaves an open model.
   ui.closePra()
 }
+
+// U8: the open view is the URL. A change of view is a new history entry, so
+// Back returns to the previous view instead of leaving the app; Back and
+// Forward (and a pasted link) move the app to the view the URL names.
+if (linkedRoute?.view) ui.researchView = linkedRoute.view
+const currentHash = () => routeHash(activeTab.value, ui.researchView)
+if (window.location.hash !== currentHash()) {
+  window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + currentHash())
+}
+watch([activeTab, () => ui.researchView], () => {
+  const hash = currentHash()
+  if (window.location.hash !== hash) {
+    window.history.pushState(null, '', window.location.pathname + window.location.search + hash)
+  }
+})
+const followUrl = () => {
+  const route = parseRoute(window.location.hash)
+  if (!route) return
+  if (route.tab !== activeTab.value) activeTab.value = route.tab
+  if (route.view && route.view !== ui.researchView) ui.researchView = route.view
+}
+window.addEventListener('popstate', followUrl)
+onBeforeUnmount(() => window.removeEventListener('popstate', followUrl))
 // What the viewer's back arrow returns to, in the ribbon's words.
 const activeTabLabel = computed(() => RIBBON_ITEMS.find(i => i.tab === activeTab.value)?.label
   || (activeTab.value === 'settings' ? 'Settings' : ''))
@@ -2467,10 +2507,12 @@ onMounted(async () => {
   }
   // ?tab=admin deep link (report-notification emails point here).
   // ?tab=library opens the Library, and so does ?tab=research, its old name.
+  // The query becomes the view's URL (#/library), so it survives onboarding,
+  // a refresh and Back.
   const wantedTab = resolveTab(params.get('tab'))
   if (wantedTab) {
     activeTab.value = wantedTab
-    window.history.replaceState({}, '', window.location.pathname)
+    window.history.replaceState({}, '', window.location.pathname + routeHash(wantedTab, ui.researchView))
   }
   // ?pra=<document>&collection_id=… opens a PRA model in its viewer (a
   // citation or "open in a new tab"); ft= / et= name the tree to show.

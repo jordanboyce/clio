@@ -147,7 +147,7 @@
       <div v-if="providerStore.serverLoaded && !hasAnyProvider" class="notice notice-info flex-shrink-0">
         <Info :size="15" class="text-info" aria-hidden="true" />
         <span class="flex-1">Connect a model to ask questions, or find passages without one.</span>
-        <button class="btn btn-xs btn-primary" @click="$emit('switch-tab', 'settings')">Connect a model</button>
+        <button class="btn btn-xs btn-primary" @click="ui.connectModel()">Connect a model</button>
         <button class="btn btn-xs btn-ghost" @click="$emit('switch-tab', 'search')">Find passages</button>
       </div>
 

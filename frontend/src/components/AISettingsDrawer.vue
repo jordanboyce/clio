@@ -46,8 +46,8 @@
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-info shrink-0 w-4 h-4" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
           </svg>
-          <p class="text-sm flex-1">Add an AI provider in Settings to enable AI features.</p>
-          <button class="btn btn-xs btn-primary flex-shrink-0" @click="$emit('switch-tab', 'settings')">Settings</button>
+          <p class="text-sm flex-1">Connect a model to get answers written from your sources.</p>
+          <button class="btn btn-xs btn-primary flex-shrink-0" @click="connectModel">Connect a model</button>
         </div>
 
         <!-- Section 2: Answer depth (presets) -->
@@ -166,6 +166,7 @@ import { computed, ref } from 'vue'
 import { useOverlayFocus } from '../composables/useOverlayFocus'
 import { Feather, X } from 'lucide-vue-next'
 import { useProviderStore } from '../stores/providerStore'
+import { useUiStore } from '../stores/uiStore'
 import { getProviderDisplayName, isLocalProvider } from '../utils/aiProviders.js'
 
 const props = defineProps({
@@ -178,6 +179,8 @@ const props = defineProps({
 })
 
 defineEmits(['switch-tab'])
+// C3: "Connect a model" opens Settings on the providers.
+const connectModel = () => useUiStore().connectModel()
 
 // v-model bindings. semanticWeight / synthesize are optional: when the parent
 // doesn't bind them the corresponding control is hidden.

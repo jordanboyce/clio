@@ -38,7 +38,9 @@ export const RIBBON_ITEMS = [
 // (saved as the last open tab, and in old links); `library` is its name
 // since R9 and is accepted wherever a tab is named, such as ?tab=library.
 export const TABS = ['chat', 'search', 'generate', 'research', 'expertise', 'mcp', 'admin', 'settings', 'collections']
-const TAB_ALIASES = { library: 'research' }
+// The words people see, as used in URLs (#/find, ?tab=connect), as well as
+// the Library's name since R9.
+const TAB_ALIASES = { library: 'research', ask: 'chat', find: 'search', connect: 'mcp', reports: 'generate' }
 
 /** The internal tab id for a name from a link, storage or a caller; null when unknown. */
 export function resolveTab(name) {
