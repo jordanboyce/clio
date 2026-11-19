@@ -492,13 +492,17 @@ Written up by the 2026-11-18 hardening pass; none was made.
 Added by the 2026-11-19 improvement pass; none was made.
 
 6. **Re-indexing existing collections for indexing recipe 2 (B2).** New collections embed each passage under its source line; existing ones stay on recipe 1 (on the benchmark, recall@10 0.32 instead of 0.98 with the reranker).
-   (a) New collections only (what ships). (b) Offer *Re-index in place* on collections still on recipe 1, with its cost. (c) Re-index in the background after an upgrade. (b) and (c) need a re-index that switches the recipe; today only a rebuild from empty does.
+   (a) New collections only. (b) Offer *Re-index in place* on collections still on recipe 1, with its cost. (c) Re-index in the background after an upgrade.
+   *Decided 2026-11-19: (b).* The notice above the Sources list offers it to whoever may re-index, with Not now remembered; a collection re-index rebuilds from empty and so takes the current recipe.
 7. **The default search model.** MiniLM or BGE small for new installs; not yet run on the new benchmark.
    (a) Keep MiniLM. (b) BGE small for new installs only. (c) BGE small as the `:latest` image's model with the documented migration.
+   *Decided 2026-11-19: (a), on the numbers.* On `retrieval_hard` with recipe 2 (BGE's query prefix applied), MiniLM beat BGE small: recall@10 0.829 against 0.600 without the reranker, 0.981 against 0.938 with it; revision safety 90% against 85%. The catalogue no longer calls BGE small "stronger"; it stays available, and the `:bge` images stay for sites that chose it.
 8. **Feedback capture (work order A3): is the question text stored with a verdict**, at sites with classification markings?
    (a) Verdict and source ids only. (b) Text stored unless the collection is marked local-only. (c) Text always.
+   *Decided 2026-11-19: (b).* The question is kept unless the answer could have used local-only data (across all collections, any of them); the answer text is never kept.
 9. **Unknown MCP filter keys now fail (D1).** The always-on rule says a changed MCP shape keeps its old form for one release.
-   (a) Keep the error (what ships). (b) Accept unknown keys with a warning field for one release, then fail.
+   (a) Keep the error. (b) Accept unknown keys with a warning field for one release, then fail.
+   *Decided 2026-11-19: (b).* An unknown key is ignored and the response carries `warnings` naming it and the valid keys; make it an error in the release after next.
 
 ---
 

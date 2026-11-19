@@ -111,15 +111,16 @@ Without the reranker, recipe 2 still has room: late_page 0.62 and cross_collecti
 
 "Answered" counts an answer with no citation as declining; llama3.2:3b often answers without citing, so the drop from 0.773 to 0.682 is partly the scorer's strictness, not the retrieval. The time to first text is the CPU reading the prompt (Ollama ran with no VRAM here).
 
-## Decisions for the owner
+## Decisions
 
-Written up, not made.
+Four were taken on 2026-11-19 at the owner's request, as recommended here.
 
-1. **The default search model.** MiniLM is the default; BGE small is in the catalogue as stronger in the same size class. Not yet measured on `retrieval_hard` (`scripts/retrieval_bench.py --embedding-model BAAI/bge-small-en-v1.5`). Options: keep MiniLM; BGE small for new installs only; BGE small as the `:latest` image's model with the documented migration.
-2. **Re-indexing existing collections for recipe 2 (B2).** Existing collections stay on recipe 1, which on the benchmark means recall@10 0.32 instead of 0.98 with the reranker. Options: (a) new collections only (what ships now); (b) offer *Re-index in place* with its cost (every chunk embedded again; minutes per thousand passages on CPU), shown on collections still on recipe 1; (c) re-index in the background after an upgrade. A re-index today does not change the recipe unless the collection is rebuilt from empty; (b) and (c) need that switch.
-3. **A3: is the question text stored with a verdict**, at sites with classification markings? Options: verdict and ids only; text stored unless the collection is marked local-only; text always.
-4. **Roadmap M9: who may write over MCP.** Unchanged; D1 makes it matter more.
-5. **Unknown filter keys now fail (D1).** The work order asked for this, and the roadmap's rule says a changed MCP shape keeps its old form for one release. An agent that sent a misspelled key used to get unfiltered results; it now gets an error. Options: keep the error (what ships); accept unknown keys with a warning field for one release.
+1. **The default search model: keep MiniLM**, decided on the numbers. On `retrieval_hard` with recipe 2, with BGE's query prefix applied (both local backends add it): MiniLM recall@10 0.829 and BGE small 0.600 without the reranker; 0.981 and 0.938 with it; revision safety 90% and 85%. The catalogue's "stronger than MiniLM" label for BGE small was wrong for this kind of collection and now reads "same size class, reads longer passages". The `:bge` images stay.
+2. **Re-indexing existing collections for recipe 2: offer it.** The notice above the Sources list says a collection still on recipe 1 can search better, what it costs, and offers Re-index now or Not now (remembered per collection), to whoever may re-index. A collection re-index rebuilds from an empty index, so it takes the current recipe; tested with a real re-index of an old collection.
+3. **Question text with feedback: stored unless local-only.** The question is kept so the export is a runnable case, except when the answer could have used local-only data (any collection, when asking across all); not being able to tell counts as local-only. The answer text is never stored.
+4. **Unknown MCP filter keys: a warning for one release.** Following the roadmap's compatibility rule, an unknown key is ignored again, and the response now carries `warnings` naming it, the valid keys and that it becomes an error in the next release (search_collection, search_all_collections, deep_search).
+
+Still open: **roadmap M9, who may write over MCP**, and the decisions the roadmap already lists.
 
 ## Found and not fixed
 

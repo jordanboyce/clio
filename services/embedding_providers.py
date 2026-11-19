@@ -73,7 +73,7 @@ EMBEDDING_PROVIDERS: List[Dict[str, Any]] = [
             # "sentence-transformers" (PyTorch). Both produce the same vectors
             # for a given model, so the choice never forces a re-index.
             {"id": "all-MiniLM-L6-v2", "label": "MiniLM L6 — fast, small", "dimensions": 384, "max_input_tokens": 256, "size_mb": 90, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
-            {"id": "BAAI/bge-small-en-v1.5", "label": "BGE small — stronger than MiniLM, same size class", "dimensions": 384, "max_input_tokens": 512, "size_mb": 130, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
+            {"id": "BAAI/bge-small-en-v1.5", "label": "BGE small — same size class, reads longer passages", "dimensions": 384, "max_input_tokens": 512, "size_mb": 130, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
             {"id": "all-MiniLM-L12-v2", "label": "MiniLM L12 — balanced", "dimensions": 384, "max_input_tokens": 256, "size_mb": 120, "language": "English", "backends": ["sentence-transformers"]},
             {"id": "BAAI/bge-base-en-v1.5", "label": "BGE base — stronger English search", "dimensions": 768, "max_input_tokens": 512, "size_mb": 420, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
             {"id": "nomic-ai/nomic-embed-text-v1.5", "label": "Nomic Embed v1.5 — 8k context, good for code and long passages", "dimensions": 768, "max_input_tokens": 8192, "size_mb": 270, "language": "English", "backends": ["fastembed", "sentence-transformers"]},
