@@ -110,6 +110,17 @@ So the threshold is strict: about half of the paraphrases find their answer, and
 
 The label on a published answer ("Written in advance, not for your question.") is a placeholder until the owner decides its wording.
 
+### Quoting a passage
+
+`<clio-cite>` quotes one passage of an export in an article, with its source's title, its page and a link to it (the same link a search result has). It needs nothing beyond the export: every whole site carries `clio-cite.js`.
+
+```html
+<script type="module" src="/assets/handbook/clio-cite.js"></script>
+<clio-cite src="/assets/handbook/search/" passage="5f0c…_3_0" words="40"></clio-cite>
+```
+
+`passage` is the passage's id, as in `passages.json` or a reader page's anchor (`#p-…` works too); `words` quotes only the start. The passage files are read once for the page, however many quotations it has, and an id the export does not hold shows "Passage … is not in this export" rather than nothing. Parts: `quote`, `caption`, `title`, `meta`, `status`. A page thumbnail beside the quotation is not offered: Clio renders previews of a page on request and does not keep them, so it would mean rendering every quoted page at export.
+
 ### Markdown for a site generator
 
 `markdown` writes the same pages as Markdown, for a site built with Astro, Hugo, MkDocs or Eleventy: copy `markdown/` into the site's content folder (`content/` for Hugo, `docs/` for MkDocs). Each file has YAML front matter, `title`, `source_id`, `source` (the file name), `link` (where the source lives on the web, when it has an address) and `pages`, then the text with `## Page 3` before each page of a source with several. `_index.md` lists the sources; Hugo reads it as the section's page, MkDocs as one more page. It is offered on the command line (`--include markdown`) and over HTTP, not in the dialog.
