@@ -260,6 +260,36 @@ def download_artifact_file(artifact_id: str, collection_id: str = "default") -> 
                         filename=path.name)
 
 
+@router.get("/api/artifacts/{artifact_id}/page", tags=["artifacts"],
+            summary="Download a report as one HTML file that opens with no network")
+def download_artifact_page(artifact_id: str, collection_id: str = "default"):
+    """The report's text, each citation linked to the passage it cites in the
+    same file, and the sources it was built from with their content hashes.
+    No script and no requests when opened. A report from a collection or a
+    source marked local only says so at the top (docs/CLASSIFICATION.md:
+    like a bundle, a file goes to someone who may read the collection and
+    carries its marking). Recorded in the audit trail as `report.exported`."""
+    from fastapi.responses import Response
+
+    from services import report_file
+
+    indexer = _indexer(collection_id)
+    reader = _Reader(indexer)
+    artifact = _visible_or_404(_store(indexer, collection_id), reader, artifact_id)
+    if not (artifact.get("content") or "").strip():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This report has no text yet.")
+    collection = collection_service.get_collection(collection_id) or {"id": collection_id}
+    changes = {c["document_id"]: c["change"] for c in artifact_store.source_changes(artifact, reader.documents)}
+    page = report_file.render(artifact, collection, reader.documents, changes,
+                              sensitivity=governance.collection_sensitivity(collection))
+    audit.record("report.exported", actor=get_request_user(), collection_id=collection_id,
+                 target=artifact_id, detail={"format": "html", "sources": len(artifact.get("sources") or []),
+                                             "marked": "class=\"marking\"" in page})
+    name = report_file.file_name(artifact)
+    return Response(page, media_type="text/html; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @router.delete("/api/artifacts/{artifact_id}", tags=["artifacts"], summary="Delete a saved artifact")
 def delete_artifact(artifact_id: str, collection_id: str = "default") -> dict:
     indexer = _indexer(collection_id)

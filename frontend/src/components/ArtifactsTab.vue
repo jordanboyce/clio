@@ -72,6 +72,12 @@
         <div class="flex gap-1 flex-shrink-0">
           <button class="btn btn-ghost btn-xs" @click="copyMarkdown">{{ copied ? 'Copied' : 'Copy' }}</button>
           <button class="btn btn-ghost btn-xs" @click="downloadMarkdown">Download</button>
+          <a
+            class="btn btn-ghost btn-xs"
+            :href="pageHref"
+            download
+            title="One file with the report, the passages it cites and its sources, that opens with no network"
+          >Download as a page</a>
           <button class="btn btn-ghost btn-xs" @click="closeArtifact">Close</button>
         </div>
       </div>
@@ -385,6 +391,10 @@ const copyMarkdown = async () => {
   copied.value = true
   setTimeout(() => (copied.value = false), 1500)
 }
+
+const pageHref = computed(() => opened.value
+  ? `/api/artifacts/${encodeURIComponent(opened.value.id)}/page?collection_id=${encodeURIComponent(collectionId.value)}`
+  : '#')
 
 const downloadMarkdown = () => {
   if (!opened.value) return

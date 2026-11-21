@@ -56,6 +56,8 @@ Everything in the app itself keeps working: search, reading, tables, and chat wi
 
 ## Bundles and copies
 
+A report downloaded as a page (**Download as a page** in Reports, `GET /api/artifacts/{id}/page`) is one HTML file with the report, the passages it cites and the sources it was built from with their content hashes. It is not an outside service: like a bundle, it goes to someone who may read the collection. And like a bundle it carries its marking: a report from a collection marked local only, or built from a source that is, opens with the marking's name and a line saying to keep the file on systems cleared to hold it. Each download is in the audit trail as `report.exported`.
+
 An exported bundle carries its collection's marking and its sources' markings. An imported one keeps them, known on the importing server or not, and the marking is in place before anything is embedded. A clone copies the marking the same way.
 
 The export for a static website ([STATIC_SEARCH.md](STATIC_SEARCH.md)) publishes what it holds, so it counts as an outside service: a collection that is marked local only, or holds one source that is, cannot be exported that way at all.
