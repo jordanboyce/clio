@@ -37,6 +37,16 @@ Run it with the server's environment (`DATA_DIR` and the rest of `.env`). It onl
 
 **Over HTTP.** `GET /api/collections/{id}/export/static/preview` returns the counts, sizes, model and any `blockers`. `GET /api/collections/{id}/export/static?confirm_public=true` returns the zip (`quantization=int8|float32`, `passages_per_file`, and `site=true` for the whole site, which the preview's `site.available` says this server can make). `GET` and `PUT /api/collections/{id}/export/static/addresses` read and save where results link. All of these are for the collection's owner, and saving addresses is written to the audit trail as `collection.static_addresses`.
 
+### Choosing what else it carries
+
+Besides the search files, an export can carry additions: pages to read, related passages, and the others listed under [What else an export can carry](#what-else-an-export-can-carry). Nothing is added unless you choose it, and an export with nothing chosen is exactly the search files.
+
+- **In the app**, tick them under **Also include**. Each says its size before you download, or why it cannot be made for this collection. One marked "Needs the site ready to serve" uses the site's scripts, so it is offered only with **Include the model** (or **As a site ready to serve**) ticked.
+- **From the command line**, `--include reader,related`, or `--include all` for every one this export can carry. `--check` lists them with their sizes.
+- **Over HTTP**, `include=reader,related` (or `all`) on the download; the preview's `additions` lists each one with `available`, `reason`, `bytes` and `site_only`.
+
+Every addition reads the same sources the export does, after the same checks ([What is allowed out](#what-is-allowed-out)): no file mentions a source that was left out, by id, name, text or count. The manifest lists what an export carries under `additions`, each with its files and their checksums, and the audit entry records which were included. A client that predates an addition ignores it, so a site that copied `clio-search.js` from an earlier export still searches a new one. Replacing an export from the command line removes the previous export's additions, as listed in its manifest, and leaves the folder's other files alone.
+
 ### Reviewing a new export
 
 Passages are ordered by source name, then page, then position, and each sits on its own line. A passage's `id` is Clio's chunk id, built from the source's id, the page and the position, and a source's id comes from the file's content. So an unchanged source produces the same lines every time, and `git diff` on the passage files shows what is new, gone or reworded since the last export. `manifest.json` changes on every export because it carries the date; its `sha256` values tell you whether anything else did.
@@ -54,6 +64,11 @@ Within a collection that passes, sources that are held for review are left out, 
 Each export is recorded in the audit trail as `collection.static_export`, with who made it, the counts, the model and the checksum of the vectors, never the text.
 
 The export does not judge the content. Read the passage diff before you commit it.
+
+## What else an export can carry
+
+| Addition | `include` | Writes | Needs |
+|---|---|---|---|
 
 ## The same model on both sides
 

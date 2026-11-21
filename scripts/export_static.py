@@ -67,6 +67,8 @@ def main(argv=None) -> int:
     parser.add_argument("--files-url", default=None, metavar="URL",
                         help="where the site keeps its copies of the files (each result links to its file there); "
                              "this export only, the address saved in Clio otherwise")
+    parser.add_argument("--include", default=None, metavar="NAMES",
+                        help="what else to carry, separated by commas (or 'all'); --check lists them")
     args = parser.parse_args(argv)
 
     from services import audit, static_export
@@ -93,7 +95,7 @@ def main(argv=None) -> int:
         manifest, detail = static_export.write_export(
             collection_id, staging, confirm_public=args.confirm_public,
             quantization="float32" if args.float32 else "int8", passages_per_file=per_file, site=args.site,
-            files_base_url=args.files_url if args.files_url is not None else ...)
+            files_base_url=args.files_url if args.files_url is not None else ..., include=args.include)
     except static_export.StaticExportError as e:
         shutil.rmtree(staging, ignore_errors=True)
         print(f"Cannot export: {e}", file=sys.stderr)
@@ -115,8 +117,15 @@ def main(argv=None) -> int:
     audit.record("collection.static_export", actor="cli", collection_id=collection_id,
                  detail={**detail, "out": str(args.out)})
     files = [f["file"] for f in manifest["passages"]["files"]]
+    for name, entry in (manifest.get("additions") or {}).items():
+        size = sum(f["bytes"] for f in entry["files"])
+        print(f"Included {name}: {len(entry['files'])} file{'' if len(entry['files']) == 1 else 's'}, {size:,} bytes.")
     print(f"Wrote {manifest['passages']['count']} passages from {len(manifest['documents'])} sources to {args.out}: "
-          f"manifest.json, {', '.join(files)}, vectors.bin ({manifest['vectors']['bytes']:,} bytes).")
+          f"manifest.json, {', '.join(files)}"
+          + (f", vectors.bin ({manifest['vectors']['bytes']:,} bytes)." if manifest["vectors"] else "."))
+    if not manifest["vectors"]:
+        print(f"Searched by keyword: {manifest['embedding']['reason']}")
+        return 0
     bundled = manifest["embedding"]["browser"].get("bundled")
     if bundled:
         print(f"The site carries {bundled['model']} and transformers.js: serve {args.out} as it is.")

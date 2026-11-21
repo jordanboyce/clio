@@ -893,6 +893,7 @@ def export_collection_static(  # sync: reads the index and builds a zip in the t
     quantization: str = "int8",
     passages_per_file: int = 2000,
     site: bool = False,
+    include: Optional[str] = None,
     user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -905,6 +906,10 @@ def export_collection_static(  # sync: reads the index and builds a zip in the t
     transformers.js runtime it needs, so the site loads nothing from Hugging
     Face or a CDN. The preview's `site.available` says whether this server can
     make one, and how much it adds.
+
+    `include` names what else to carry, separated by commas (`reader,related`,
+    or `all`): the preview's `additions` lists each one, whether it can be made,
+    and its size. With nothing named, the export is the search files alone.
 
     Owner only, and everything in it is published. Refused unless the
     collection is labelled Public, holds nothing marked local only, was
@@ -922,7 +927,7 @@ def export_collection_static(  # sync: reads the index and builds a zip in the t
     try:
         path, filename, detail = export_zip(
             collection_id, confirm_public=confirm_public, quantization=quantization,
-            passages_per_file=passages_per_file, site=site)
+            passages_per_file=passages_per_file, site=site, include=include)
     except StaticExportError as e:
         raise _static_export_refusal(collection_id, e)
 

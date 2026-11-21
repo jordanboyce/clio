@@ -112,6 +112,29 @@
               </span>
             </label>
             <p v-else-if="site.site?.reason" class="text-xs text-base-content/60">{{ site.site.reason }}</p>
+            <fieldset v-if="site.additions?.length" class="rounded-box border border-base-300 px-3 pb-2.5 pt-1" data-testid="additions">
+              <legend class="text-sm font-medium px-1">Also include</legend>
+              <label
+                v-for="addition in site.additions"
+                :key="addition.id"
+                class="flex items-start gap-3 py-1"
+                :class="additionOpen(addition) ? 'cursor-pointer' : 'opacity-70'"
+              >
+                <input
+                  v-model="chosen[addition.id]"
+                  :name="`include-${addition.id}`"
+                  type="checkbox"
+                  class="checkbox checkbox-sm mt-0.5"
+                  :disabled="!additionOpen(addition)"
+                />
+                <span class="text-sm">
+                  {{ addition.label }}<span v-if="addition.available" class="text-base-content/60"> (about {{ formatBytes(addition.bytes) }})</span>
+                  <span v-if="!addition.available" class="block text-xs text-base-content/60">{{ addition.reason }}</span>
+                  <span v-else-if="addition.site_only && !wholeSite" class="block text-xs text-base-content/60">Needs the site ready to serve.</span>
+                  <span v-else-if="addition.note" class="block text-xs text-base-content/60">{{ addition.note }}</span>
+                </span>
+              </label>
+            </fieldset>
             <label class="flex items-start gap-3 cursor-pointer">
               <input v-model="confirmPublic" name="confirm-public" type="checkbox" class="checkbox checkbox-sm mt-0.5" />
               <span class="text-sm">
@@ -209,6 +232,12 @@ const confirmPublic = ref(false)
 // On whenever the server can include the model: a site that carries it works
 // anywhere, and its visitors' browsers contact no one else.
 const includeModel = ref(true)
+// Additions to the export, by id (the preview's `additions`).
+const chosen = ref({})
+const wholeSite = computed(() => Boolean(includeModel.value && site.value?.site?.available))
+const additionOpen = (addition) => addition.available && (!addition.site_only || wholeSite.value)
+const included = computed(() => (site.value?.additions || [])
+  .filter((a) => chosen.value[a.id] && additionOpen(a)).map((a) => a.id))
 
 // "Where results link": read when opened, saved with one button.
 const addresses = ref(null)
@@ -272,7 +301,8 @@ async function saveAddresses() {
 
 const siteHref = computed(() => site.value?.ready && confirmPublic.value && target.value
   ? `/api/collections/${encodeURIComponent(target.value.id)}/export/static?confirm_public=true` +
-    (includeModel.value && site.value.site?.available ? '&site=true' : '')
+    (wholeSite.value ? '&site=true' : '') +
+    (included.value.length ? `&include=${encodeURIComponent(included.value.join(','))}` : '')
   : '')
 
 async function setMode(next) {
@@ -301,6 +331,7 @@ async function open(collection) {
   siteError.value = ''
   confirmPublic.value = false
   includeModel.value = true
+  chosen.value = {}
   addresses.value = null
   addressError.value = ''
   addressesSaved.value = false

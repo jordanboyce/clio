@@ -128,8 +128,14 @@ def _survey(collection_id: str) -> Dict[str, Any]:
 
 def preview(collection_id: str, passages_per_file: int = DEFAULT_PASSAGES_PER_FILE) -> Dict[str, Any]:
     """What a static export would hold, and what stands in its way."""
+    from services.static_export import additions
+
     survey = _survey(collection_id)
-    survey["conn"].close()
+    try:
+        # Each addition's size, worked out while the collection is open.
+        extras = additions.offers(collection_id, survey)
+    finally:
+        survey["conn"].close()
     semantic = survey["browser"] is not None
     dimension = int(survey["info"].get("dimension") or 0) if semantic else 0
     passages = survey["passages"]
@@ -160,6 +166,9 @@ def preview(collection_id: str, passages_per_file: int = DEFAULT_PASSAGES_PER_FI
         "passage_files": max(1, -(-passages // max(1, passages_per_file))),
         # A ready-to-serve site with the model and its runtime (site=True).
         "site": _pkg()._site_offer(survey["browser"]),
+        # What else the export can carry (include=...): each with whether it
+        # can be made here, why not, and its size in bytes.
+        "additions": extras,
     }
 
 

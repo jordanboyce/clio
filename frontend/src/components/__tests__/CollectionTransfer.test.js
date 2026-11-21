@@ -125,6 +125,31 @@ describe('Export dialog, for a website', () => {
     expect(wrapper.get('a.btn-primary').attributes('href')).toBe('/api/collections/c1/export/static?confirm_public=true')
   })
 
+  it('offers additions with their size, says why one cannot be made, and names the chosen ones', async () => {
+    const wrapper = await openSite({
+      ...ready,
+      site: { available: true, model: 'BAAI/bge-small-en-v1.5', bytes: 95 * 1024 * 1024 },
+      additions: [
+        { id: 'reader', label: 'A page for each source', available: true, reason: null, bytes: 2 * 1024 * 1024, site_only: false },
+        { id: 'related', label: 'Related passages', available: true, reason: null, bytes: 40 * 1024, site_only: true },
+        { id: 'tables', label: 'Tables', available: false, reason: 'No source in this collection has a table.', bytes: 0, site_only: false },
+      ],
+    })
+    const box = wrapper.get('[data-testid="additions"]')
+    expect(box.text()).toContain('A page for each source (about 2 MB)')
+    expect(box.text()).toContain('No source in this collection has a table.')
+    expect(wrapper.get('input[name="include-tables"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('input[name="confirm-public"]').setValue(true)
+    await wrapper.get('input[name="include-reader"]').setValue(true)
+    await wrapper.get('input[name="include-related"]').setValue(true)
+    const link = wrapper.get('a.btn-primary')
+    expect(link.attributes('href')).toBe('/api/collections/c1/export/static?confirm_public=true&site=true&include=reader%2Crelated')
+    // Without the whole site, an addition that needs it is not sent.
+    await wrapper.get('input[name="include-model"]').setValue(false)
+    expect(link.attributes('href')).toBe('/api/collections/c1/export/static?confirm_public=true&include=reader')
+    expect(wrapper.text()).toContain('Needs the site ready to serve.')
+  })
+
   it('says why a collection cannot be published, and offers no confirmation', async () => {
     const wrapper = await openSite({
       ...ready, ready: false, browser_model: null,

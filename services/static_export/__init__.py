@@ -76,7 +76,7 @@ from services.static_export.site import (  # noqa: F401
 )
 from services.static_export.gate import _index_info, _open, _survey, preview  # noqa: F401
 from services.static_export.vectors import _probe, _read_vectors, _semantic_entries, quantize  # noqa: F401
-from services.static_export.writer import (  # noqa: F401
-    _document_entry, _library_titles, _manifest_text, _passage_file_name, clear_previous, export_zip,
-    write_export,
-)
+from services.static_export.sources import _document_entry, _library_titles  # noqa: F401
+from services.static_export.writer import _manifest_text, _passage_file_name, write_export  # noqa: F401
+from services.static_export.packaging import clear_previous, export_zip  # noqa: F401
+from services.static_export.additions import ADDITIONS, parse_include  # noqa: F401

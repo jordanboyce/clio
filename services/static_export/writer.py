@@ -5,24 +5,24 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import shutil
 import sqlite3
 import uuid
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from services.collection_bundle import _clio_version, _work_dir
+from services.collection_bundle import _clio_version
+from services.static_export import additions
 from services.static_export.common import (
     DEFAULT_PASSAGES_PER_FILE, FORMAT, KEYWORD_VERSION, MANIFEST_FILE, PASSAGES_FILE, QUANTIZATIONS,
-    SITE_DATA_DIR, VECTORS_FILE, VERSION, StaticExportError, _title,
+    SITE_DATA_DIR, VECTORS_FILE, VERSION, StaticExportError,
 )
 from services.static_export.addresses import address_settings, clean_public_url, document_link
 from services.static_export.vectors import _read_vectors, _semantic_entries, quantize
 from services.static_export.site import _write_site
+from services.static_export.sources import _document_entry
 
 logger = logging.getLogger(__name__)
 
@@ -42,19 +42,12 @@ def _manifest_text(manifest: Dict[str, Any]) -> str:
     return text.replace(f'"{marker}"', json.dumps(probe["vector"], separators=(",", ":"))) + "\n"
 
 
-def clear_previous(out_dir: Path) -> None:
-    """Remove a previous export's files from a folder, and nothing else."""
-    for path in list(out_dir.glob("passages-[0-9][0-9][0-9][0-9].json")) + [
-            out_dir / PASSAGES_FILE, out_dir / VECTORS_FILE, out_dir / MANIFEST_FILE]:
-        if path.is_file():
-            path.unlink()
-
-
 def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = False,
                  quantization: str = "int8",
                  passages_per_file: int = DEFAULT_PASSAGES_PER_FILE,
                  site: bool = False,
-                 files_base_url: Any = ...) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+                 files_base_url: Any = ...,
+                 include: Any = ()) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Write manifest.json, the passage file(s) and vectors.bin into ``out_dir``.
 
     With ``site`` they go into ``out_dir/search`` instead, beside the
@@ -66,7 +59,8 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
     A collection whose model has no browser build is written for keyword
     search: no vectors.bin, and a manifest of format v2 saying why.
     ``files_base_url`` overrides the saved base address for files for this
-    export only (see address_settings).
+    export only (see address_settings). ``include`` names the additions to
+    write beside the files (services/static_export/additions.py).
 
     Returns (the manifest, what the audit trail should keep). Raises
     StaticExportError when anything stands in the way; nothing is written in
@@ -79,6 +73,7 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
         raise StaticExportError(f"quantization must be one of {', '.join(QUANTIZATIONS)}", "option")
     if passages_per_file < 1:
         raise StaticExportError("passages_per_file must be at least 1", "option")
+    chosen = additions.parse_include(include)
 
     # An open indexer may hold vectors not yet written to disk.
     cached = indexer_manager._indexers.get(collection_id)
@@ -98,6 +93,7 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
             raise StaticExportError(
                 "Confirm that everything in this collection is cleared for public release: the text of every "
                 "passage is published to every visitor of the site.", "confirm")
+        chosen = additions.resolve(chosen, collection_id, survey, site)
 
         collection, model, browser = survey["collection"], survey["model"], survey["browser"]
         semantic = browser is not None
@@ -144,6 +140,7 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
         per_document: Dict[str, int] = {}
         passage_files: List[Dict[str, Any]] = []
         written: List[Path] = []
+        kept: Optional[List[Dict[str, Any]]] = [] if chosen else None
         try:
             for number in range(1, file_count + 1):
                 name = _passage_file_name(number, file_count)
@@ -170,6 +167,8 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                         if lines_sql and row["line_start"] is not None:
                             entry["lines"] = [row["line_start"], row["line_end"] or row["line_start"]]
                             with_lines = True
+                        if kept is not None:
+                            kept.append(entry)
                         line = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
                         put((",\n" if count else "") .encode() + line.encode("utf-8"))
                         count += 1
@@ -181,8 +180,9 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                     "in Clio so it can finish embedding, then export.", "vectors")
 
             if semantic:
-                data, scale = quantize(matrix[np.asarray(order, dtype=np.int64)] if order
-                                       else np.zeros((0, dimension), dtype=np.float32), quantization)
+                ordered = (matrix[np.asarray(order, dtype=np.int64)] if order
+                           else np.zeros((0, dimension), dtype=np.float32))
+                data, scale = quantize(ordered, quantization)
                 (data_dir / VECTORS_FILE).write_bytes(data)
                 written.append(data_dir / VECTORS_FILE)
                 embedding, vectors = _semantic_entries(browser, model, dimension, site, runtime, model_files), {
@@ -196,6 +196,7 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                 embedding = {"model": model["model"], "signature": model.get("signature"), "browser": None,
                              "probe": None, "search": "keywords", "reason": survey["keywords_reason"]}
                 vectors = None
+                ordered = None
             manifest = {
                 "format": FORMAT,
                 "version": VERSION if semantic else KEYWORD_VERSION,
@@ -211,6 +212,12 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                                               titles.get(d["document_id"]))
                               for d in documents],
             }
+            if chosen:
+                ctx = additions.ExportContext(
+                    collection_id=collection_id, survey=survey, data_dir=data_dir, site=site, manifest=manifest,
+                    passages=kept or [], vectors=ordered, settings=address_settings(collection_id),
+                    written=written)
+                manifest["additions"] = additions.write_all(chosen, ctx)
             (data_dir / MANIFEST_FILE).write_text(_manifest_text(manifest), encoding="utf-8", newline="\n")
             written.append(data_dir / MANIFEST_FILE)
             if site:
@@ -226,67 +233,10 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
             "vectors_sha256": vectors["sha256"] if vectors else None,
             "linked_documents": sum(1 for link in links.values() if link),
             "held_excluded": survey["held"], "not_public_excluded": survey["not_public"],
-            "confirmed_public": True, "site": site,
+            "confirmed_public": True, "site": site, "include": chosen,
         }
     finally:
         conn.close()
-
-
-def _library_titles(collection_id: str, document_ids: List[str]) -> Dict[str, str]:
-    """Titles the Library holds for these sources, where it is sure of them:
-    one marked "needs checking" is left out, and the file name is shown."""
-    from services.collection_service import collection_service
-    from services.research import library
-    from services.research.store import ResearchStore
-
-    try:
-        # The store itself, not an indexer: the export never opens one.
-        store = ResearchStore(collection_service.get_indexes_path(collection_id) / "metadata.db")
-        papers = store.get_papers(document_ids)
-    except Exception as e:  # noqa: BLE001 - a nicer title, never a reason to fail
-        logger.info(f"Static export: no Library titles for {collection_id}: {e}")
-        return {}
-    titles = {}
-    for doc_id, paper in (papers or {}).items():
-        title = str((paper or {}).get("title") or "").strip()
-        if title and "title" not in library.needs_checking(paper):
-            titles[doc_id] = title
-    return titles
-
-
-def _document_entry(doc: Dict[str, Any], passages: int, link: Optional[Dict[str, Any]],
-                    title: Optional[str] = None) -> Dict[str, Any]:
-    entry = {"id": doc["document_id"], "name": doc["filename"], "title": title or _title(doc["filename"]),
-             "pages": doc.get("num_pages"), "passages": passages}
-    if link:
-        entry["link"] = link
-    return entry
-
-
-def export_zip(collection_id: str, **options: Any) -> Tuple[Path, str, Dict[str, Any]]:
-    """The export as one zip. Returns (zip path, download name, audit detail).
-
-    The caller deletes the zip once it has been sent.
-    """
-    work = _work_dir() / f"static-{uuid.uuid4().hex}"
-    work.mkdir()
-    try:
-        manifest, detail = write_export(collection_id, work, **options)
-        zip_path = _work_dir() / f"static-{uuid.uuid4().hex}.zip"
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            if options.get("site"):
-                for path in sorted(p for p in work.rglob("*") if p.is_file()):
-                    zf.write(path, path.relative_to(work).as_posix())
-            else:
-                names = [MANIFEST_FILE, *[f["file"] for f in manifest["passages"]["files"]]]
-                for name in names + ([VECTORS_FILE] if manifest["vectors"] else []):
-                    zf.write(work / name, name)
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
-    name = manifest["collection"]["name"] or collection_id
-    slug = "".join(c if c.isalnum() or c in "-_" else "-" for c in name).strip("-")
-    suffix = "static-site" if options.get("site") else "static-search"
-    return zip_path, f"{slug or collection_id}.{suffix}.zip", detail
 
 
 def _pkg():
