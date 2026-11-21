@@ -66,6 +66,8 @@ footer { margin-top: 3rem; font-size: .85rem; color: #52606d; }
   nav, clio-search, clio-related, footer { display: none; }
   body { max-width: none; margin: 0; }
   .passage:target { background: none; outline: none; }
+  article.source + article.source { break-before: page; }
+  a { color: inherit; text-decoration: none; }
 }
 """
 

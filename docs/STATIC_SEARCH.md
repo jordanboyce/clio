@@ -76,6 +76,7 @@ The export does not judge the content. Read the passage diff before you commit i
 | Spreadsheets as tables | `tables` | `tables/<name>.json` and `tables/<name>.csv` for each table; `<clio-table>` on the reader's pages | a spreadsheet among the sources |
 | What changed since the last export | `changes` | `read/changes.html`, and the feed `changes.xml` when the site's address is set | the pages to read (included with it) |
 | A reference list for the papers | `references` | `read/references.html`, `read/references.bib`, `citation_*` tags on each paper's page | papers in the Library; the pages to read (included) |
+| To print, and as an EPUB | `book` | `read/all.html` and `read/<collection>.epub` | the pages to read (included) |
 | Works offline, installs on a phone | `offline` | `sw.js`, `site.webmanifest` and two icons at the site's root | a whole site |
 | Files for AI agents | `llms` | `llms.txt` and `llms-full.txt`, at a whole site's root | the Markdown pages (included with it) |
 | Passages and vectors for other tools | `tools` | `data/passages.jsonl`, `data/vectors.npy`, `data/embedding.json` | nothing |
@@ -154,6 +155,10 @@ The comparison is with the export being replaced when there is one (the command 
 ### References
 
 For a collection whose sources include papers the Library holds records for, `references` adds a references page to the reader, each exported paper once, formatted as the Library formats it, each linking to its page; the BibTeX file, offered from that page; and on each paper's own page the scholarly `citation_*` meta tags (title, authors, date, journal, volume, DOI and the rest) that Google Scholar and reference managers read. The Library keeps its citation style in the browser, so the dialog sends the one set there; on the command line `--citation-style` and over HTTP `citation_style` choose `apa` (the default), `chicago`, `mla`, `ieee` or `harvard`. Titles and names are written as text.
+
+### To print, and as a book
+
+The reader's stylesheet has print rules: no search box or navigation, each source starting a new page. `book` adds `read/all.html`, every source on one page, to print to PDF from a browser, and an EPUB 3 book of the collection, one chapter per source, made with Python's standard library (a zip of XHTML with the package files the format requires). The contents page links to both. The EPUB's only date is the export's; it has not been run through epubcheck, which was not available here.
 
 ### A site that works offline
 
