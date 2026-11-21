@@ -78,6 +78,13 @@
             download
             title="One file with the report, the passages it cites and its sources, that opens with no network"
           >Download as a page</a>
+          <a
+            v-if="opened?.artifact_type === 'faq'"
+            class="btn btn-ghost btn-xs"
+            :href="`/api/artifacts/${encodeURIComponent(opened.id)}/cards?collection_id=${encodeURIComponent(collectionId)}`"
+            download
+            title="The questions and answers as cards Anki imports"
+          >Study cards</a>
           <button class="btn btn-ghost btn-xs" @click="closeArtifact">Close</button>
         </div>
       </div>

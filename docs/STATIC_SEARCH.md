@@ -205,6 +205,10 @@ These leave the server as files for one person or one tool, not as a public site
 
 It follows the bundle's rules: owner only, an administrator for a restricted collection, held sources left out. And since an agent's model is not this server's to choose, it counts as an outside service ([CLASSIFICATION.md](CLASSIFICATION.md)): a collection that holds anything marked local only is refused whole, with the same 403 and audit entry as MCP. Each download is in the audit trail as `collection.skill_export`.
 
+### A report as a page, and as study cards
+
+A saved report downloads as one HTML file that opens with no network (**Download as a page** in Reports; [CLASSIFICATION.md](CLASSIFICATION.md) says which rule applies). An FAQ report also downloads as **Study cards** (`GET /api/artifacts/{id}/cards`, `format=anki` or `json`): its questions and answers as a tab-separated file Anki imports (with Anki's header lines, and the text as escaped HTML, since Anki shows a card as HTML), or as JSON for a quiz. A citation in an answer becomes the source's name and page. Only a report that holds questions with their answers can become cards: the study guide writes its review questions without answers, so it would need to store each question's answer, and the passages behind it, first.
+
 ### Passages and vectors for other tools
 
 `include=tools` adds, beside the search files, `data/passages.jsonl` (one passage per line: its row, id, source, page, text, the source's title and address), `data/vectors.npy` (the passages' unit vectors as float32, row n for line n) and `data/embedding.json` (the model, its name in fastembed, pooling, normalisation, the query prefix): what DuckDB, LanceDB or pgvector need to load the collection with no Clio code. The vectors are full precision, so a score from them is Clio's own cosine, to within 0.001. An export searched by keyword gets the passages alone. Parquet is not offered: writing it needs a package (pyarrow) Clio does not have.

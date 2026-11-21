@@ -290,6 +290,37 @@ def download_artifact_page(artifact_id: str, collection_id: str = "default"):
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@router.get("/api/artifacts/{artifact_id}/cards", tags=["artifacts"],
+            summary="An FAQ report's questions and answers as study cards (Anki or JSON)")
+def download_artifact_cards(artifact_id: str, collection_id: str = "default", format: str = "anki"):
+    """`format=anki` gives a tab-separated file Anki imports; `format=json`
+    the same pairs for a quiz. Only a report that holds question and answer
+    pairs can be turned into cards: the FAQ does; the study guide writes its
+    review questions without answers, so it gives 422."""
+    from fastapi.responses import Response
+
+    from services import report_cards, report_file
+
+    if format not in ("anki", "json"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="format is anki or json")
+    indexer = _indexer(collection_id)
+    artifact = _visible_or_404(_store(indexer, collection_id), _Reader(indexer), artifact_id)
+    cards = report_cards.pairs(artifact.get("content") or "", list(artifact.get("sources") or []))
+    if not cards:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=(
+            "This report holds no questions with answers to make cards from. An FAQ report does; a study guide "
+            "lists its review questions without answers."))
+    title = artifact.get("title") or "Study cards"
+    stem = report_file.file_name(artifact)[:-len(".html")]
+    audit.record("report.exported", actor=get_request_user(), collection_id=collection_id, target=artifact_id,
+                 detail={"format": f"cards-{format}", "cards": len(cards)})
+    if format == "json":
+        return Response(report_cards.quiz_json(cards, title), media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="{stem}.cards.json"'})
+    return Response(report_cards.anki_tsv(cards, title), media_type="text/tab-separated-values; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{stem}.anki.txt"'})
+
+
 @router.delete("/api/artifacts/{artifact_id}", tags=["artifacts"], summary="Delete a saved artifact")
 def delete_artifact(artifact_id: str, collection_id: str = "default") -> dict:
     indexer = _indexer(collection_id)
