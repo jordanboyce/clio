@@ -15,6 +15,8 @@ _ADDRESS_SETTINGS = "static_export_addresses:{}"
 # no file at an address of its own.
 _FILE_SOURCE_TYPES = (None, "", "upload", "local_reference", "folder_sync")
 _PAGE_EXTENSIONS = (".pdf",)
+_MEDIA_EXTENSIONS = (".mp3", ".wav", ".m4a", ".aac", ".wma", ".opus", ".ogg", ".flac", ".mpga",
+                     ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".mpeg")
 _TEXT_FRAGMENT_EXTENSIONS = (".html", ".htm", ".xhtml", ".md", ".txt")
 
 
@@ -203,6 +205,9 @@ def document_link(doc: Dict[str, Any], files_base_url: Optional[str],
     link: Dict[str, Any] = {"url": url, "from": came_from}
     if lines:
         link["lines"] = lines
+    elif extension in _MEDIA_EXTENSIONS:
+        # A recording: a passage opens it at its first timed line (#t=seconds).
+        link["time"] = True
     elif extension in _PAGE_EXTENSIONS:
         link["page"] = "#page={page}"
     elif extension in _TEXT_FRAGMENT_EXTENSIONS or came_from == "link":

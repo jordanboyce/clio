@@ -39,7 +39,7 @@ SITE_RUNTIME_FILES = ("transformers.min.js", "ort-wasm-simd-threaded.asyncify.js
 SITE_PAGE_DIR = Path(__file__).resolve().parents[2] / "docs" / "static-search"
 SITE_PAGE_FILES = ("index.html", "clio-common.js", "clio-static-search.js", "clio-search.js", "clio-related.js",
                    "clio-answers.js", "clio-cite.js", "clio-table.js",
-                   "clio-offline.js")
+                   "clio-offline.js", "clio-transcript.js")
 # Settings for the common web servers (content types, caching, an optional
 # CORS line), copied to the root of a whole site. Each server reads only its own.
 SITE_HOSTING_DIR = SITE_PAGE_DIR / "hosting"

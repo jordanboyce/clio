@@ -129,6 +129,11 @@ export function passageLink(hit) {
     return url + fill(link.lines, { start: passage.lines[0], end: passage.lines[1] })
   }
   if (link.page && passage.page) return url + fill(link.page, { page: passage.page })
+  if (link.time) {
+    // A recording: open it at the passage's first timed line, [mm:ss], as a media fragment.
+    const at = /\[(\d{1,4}):([0-5]\d)\]/.exec(passage.text || '')
+    return at ? `${url}#t=${Number(at[1]) * 60 + Number(at[2])}` : link.url
+  }
   if (link.text) {
     const directive = textDirective(passage.text)
     if (directive) return `${url}#${fragment}${directive}`

@@ -30,7 +30,7 @@ CONTENTS = f"{FOLDER}/index.html"
 # Pages carry no script but the components', loaded from this site.
 # 'wasm-unsafe-eval' lets the search box run its model; nothing runs inline.
 CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; "
-       "connect-src 'self'; media-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'")
+       "connect-src 'self'; media-src 'self' https:; object-src 'none'; base-uri 'none'; form-action 'none'")
 
 # File names Windows reserves, with any extension.
 _RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))}

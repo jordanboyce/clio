@@ -77,6 +77,7 @@ The export does not judge the content. Read the passage diff before you commit i
 | What changed since the last export | `changes` | `read/changes.html`, and the feed `changes.xml` when the site's address is set | the pages to read (included with it) |
 | A reference list for the papers | `references` | `read/references.html`, `read/references.bib`, `citation_*` tags on each paper's page | papers in the Library; the pages to read (included) |
 | To print, and as an EPUB | `book` | `read/all.html` and `read/<collection>.epub` | the pages to read (included) |
+| Transcripts that play | `transcripts` | `transcripts/<name>.vtt` and `.json` per recording; `<clio-transcript>` on its reader page | a recording among the sources |
 | Works offline, installs on a phone | `offline` | `sw.js`, `site.webmanifest` and two icons at the site's root | a whole site |
 | Files for AI agents | `llms` | `llms.txt` and `llms-full.txt`, at a whole site's root | the Markdown pages (included with it) |
 | Passages and vectors for other tools | `tools` | `data/passages.jsonl`, `data/vectors.npy`, `data/embedding.json` | nothing |
@@ -159,6 +160,12 @@ For a collection whose sources include papers the Library holds records for, `re
 ### To print, and as a book
 
 The reader's stylesheet has print rules: no search box or navigation, each source starting a new page. `book` adds `read/all.html`, every source on one page, to print to PDF from a browser, and an EPUB 3 book of the collection, one chapter per source, made with Python's standard library (a zip of XHTML with the package files the format requires). The contents page links to both. The EPUB's only date is the export's; it has not been run through epubcheck, which was not available here.
+
+### Transcripts that play
+
+Clio transcribes a recording into lines that start with their time (`[03:07] what was said`), and does not keep the segments' own start and end times once the recording is indexed, so the times in the text are what the export has. `transcripts` turns each recording's lines into cues, each starting at its line's time and ending where the next begins (the last runs five seconds), and writes `transcripts/<name>.vtt` (WebVTT, for a `<track>` or any player) and `transcripts/<name>.json` (the cues, each with the passage it is in). `<clio-transcript>` shows the transcript beside a player: choose a line and the recording plays from there; open the page at a passage (`#p-…`) or a time (`#t=95`) and it starts there. With the reader, a recording's page carries it.
+
+The player plays the recording from the source's own address (Where results link); the export does not carry recordings. A search result from a recording links to its address at the passage's first line (`#t=` seconds, a media fragment). A recording with no address gets its transcript without a player.
 
 ### A site that works offline
 
