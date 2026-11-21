@@ -128,6 +128,8 @@ A result's title links to its source when the export gave the source a web addre
 3. **the file at the commit last synced**, for a file synced from a repository on GitHub, GitLab (gitlab.com, or a host whose name starts `gitlab.`), Bitbucket, Codeberg, Gitea or Forgejo; credentials in the clone's remote are never published, and other hosts get no address of their own;
 4. **the base address for files** plus the file's name, for files the site keeps copies of (`/files/handbook/` for `/files/handbook/leave-policy.pdf`). Pasted text and agents' notes have no file and get no address this way.
 
+5. **its page in the export's reader**, when the export carries one (`include=reader`), at the passage's anchor. This is a page of the export, not an address on the web, so the dialog's count of sources that link to a page does not include it.
+
 A source with none is shown without a link. The addresses are kept with the collection, carried through a re-index and in a bundle (an imported one keeps only addresses a browser may open), and checked again when exported, so a stored address that is not a web address is never published.
 
 ### Several collections on one site

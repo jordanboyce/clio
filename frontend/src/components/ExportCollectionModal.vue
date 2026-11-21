@@ -252,7 +252,12 @@ const linkSummary = computed(() => {
   const counts = addresses.value || site.value?.addresses
   if (!counts) return ''
   if (!counts.total) return 'no sources'
-  return `${counts.with_address} of ${counts.total} source${counts.total === 1 ? '' : 's'} link to a page`
+  const line = `${counts.with_address} of ${counts.total} source${counts.total === 1 ? '' : 's'} link to a page`
+  // The reader is a page in the export, not an address on the web: said apart.
+  if (included.value.includes('reader') && counts.with_address < counts.total) {
+    return `${line} on the web; the rest to their page in the export`
+  }
+  return line
 })
 
 const addressesChanged = computed(() => {

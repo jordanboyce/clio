@@ -19,7 +19,7 @@
 // For a search box to drop into a page, see clio-search.js beside this file;
 // what every component shares is in clio-common.js, which this file imports.
 
-import { FORMAT, VERSION, getListed, loadManifest } from './clio-common.js'
+import { FORMAT, VERSION, anchorOf, getListed, loadManifest } from './clio-common.js'
 
 // The format this client reads (v1: searched by meaning; v2: no vectors,
 // searched by keyword). Kept here for pages that imported them from this file.
@@ -196,11 +196,13 @@ function textDirective(text, wordCount = 8) {
  * Where a hit's passage is on the web, or null when the export gave its
  * source no address. The document's `link` (from the manifest) says how to
  * point inside it: a PDF opens at the page, a file in a repository at its
- * lines, and a web page scrolls to the passage's opening words.
+ * lines, and a web page scrolls to the passage's opening words. A source
+ * with no address of its own links to its page in the export's reader
+ * (include=reader), at the passage, when the export has one.
  */
 export function passageLink(hit) {
   const link = hit?.document?.link
-  if (!link?.url) return null
+  if (!link?.url) return readerLink(hit)
   const passage = hit.passage || {}
   const [url, fragment = ''] = link.url.split('#')
   if (link.lines && passage.lines) {
@@ -212,6 +214,16 @@ export function passageLink(hit) {
     if (directive) return `${url}#${fragment}${directive}`
   }
   return link.url
+}
+
+/** The passage on its source's reader page, or null when the export has no reader. */
+export function readerLink(hit) {
+  const page = hit?.document?.reader
+  const base = hit?.index?.baseUrl
+  if (!page || base == null) return null
+  const here = globalThis.document?.baseURI || globalThis.location?.href
+  const folder = here ? new URL(base, here) : new URL(base)
+  return new URL(page, folder).href + (hit.passage?.id != null ? anchorOf(hit.passage.id) : '')
 }
 
 // ── The model ──────────────────────────────────────────────────────────────

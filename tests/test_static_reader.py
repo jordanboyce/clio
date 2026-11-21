@@ -175,3 +175,33 @@ def test_overlap_is_dropped_once(previous, text, expected):
         assert got.endswith("end") and len(text) - len(got) <= 210 and got.count("ab") >= 30
     else:
         assert got == expected
+
+
+def test_from_a_reader_page_every_result_is_a_link_that_lands_on_its_passage(kit, handbook, browser, tmp_path):
+    cid, ids = handbook
+    out = tmp_path / "site"
+    # One source keeps an address on the web, which still comes first.
+    se.save_addresses(cid, documents={ids[0]: "https://example.org/holidays.html"})
+    manifest, _ = se.write_export(cid, out, confirm_public=True, site=True, include="reader")
+    with static_server(out) as server:
+        page = browser.page()
+        page.goto(server.url("search/read/travel-policy.html"))
+        box = "document.querySelector('clio-search')"
+        page.wait_for(f"!{box}.shadowRoot.querySelector('input').disabled")
+        page.eval(f"{box}.setAttribute('results', '20')")
+        page.type_into(f"{box}.shadowRoot.querySelector('input')", "policy holiday visitor clause")
+        hits = page.wait_for(f"(() => {{ const r = [...{box}.shadowRoot.querySelectorAll('li')];"
+                             " return r.length > 3 ? r.map(li => { const a = li.querySelector('a.title');"
+                             " return a ? a.href : null }) : null })()")
+        assert all(hits), hits
+        on_web = [h for h in hits if h.startswith("https://example.org/holidays.html")]
+        in_reader = [h for h in hits if h.startswith(server.url("search/read/"))]
+        assert on_web and in_reader and len(on_web) + len(in_reader) == len(hits)
+        assert all(re.search(r"\.html#p-[A-Za-z0-9_-]+$", h) for h in in_reader)
+        page.goto(in_reader[0])
+        target = in_reader[0].split("#", 1)[1]
+        assert page.eval(f"document.getElementById({target!r}) !== null && "
+                         f"document.querySelector(':target')?.id === {target!r}")
+        assert page.eval("window.__errors === undefined || window.__errors.length === 0")
+        assert not [u for u in page.requested() if not u.startswith(server.url())]
+        page.close()

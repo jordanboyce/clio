@@ -150,6 +150,18 @@ describe('Export dialog, for a website', () => {
     expect(wrapper.text()).toContain('Needs the site ready to serve.')
   })
 
+  it('keeps addresses on the web apart from pages in the export when the reader is chosen', async () => {
+    const wrapper = await openSite({
+      ...ready, addresses: { with_address: 1, total: 3, files_base_url: null },
+      additions: [{ id: 'reader', label: 'A page for each source', available: true, reason: null, bytes: 1024, site_only: false }],
+    })
+    const summary = () => wrapper.get('[data-testid="result-links"] summary').text()
+    expect(summary()).toContain('1 of 3 sources link to a page')
+    expect(summary()).not.toContain('in the export')
+    await wrapper.get('input[name="include-reader"]').setValue(true)
+    expect(summary()).toContain('1 of 3 sources link to a page on the web; the rest to their page in the export')
+  })
+
   it('says why a collection cannot be published, and offers no confirmation', async () => {
     const wrapper = await openSite({
       ...ready, ready: false, browser_model: null,
