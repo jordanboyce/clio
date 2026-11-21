@@ -1,6 +1,6 @@
 # Report: more to publish from a collection
 
-The work order (pasted into the session on 2026-11-20, written from a read of `8c257c3`) asked for 27 items in eight workstreams. This is what happened to each, from `8c257c3` to the commit that adds this file, all on `master`, one item per commit with its id in the message. Nothing was pushed.
+The work order ([EXPORTS_PROMPT.md](../EXPORTS_PROMPT.md), written from a read of `8c257c3`) asked for 27 items in eight workstreams. This is what happened to each, from `8c257c3` to the commit that adds this file, all on `master`, one item per commit with its id in the message. Nothing was pushed.
 
 Everything below was run on this machine (Windows 11, i7-8750H). Browser checks used headless Edge 152 over the DevTools protocol, with every host but `127.0.0.1` unreachable. "Real model" means `all-MiniLM-L6-v2` from the fastembed cache and the transformers.js 4.3.2 runtime copied out of the local `clio:hardening-slim` image (`/opt/clio/static-search/vendor`); nothing was downloaded.
 
