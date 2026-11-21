@@ -59,7 +59,7 @@ def register(addition: Addition) -> Addition:
 
 
 # The modules that register additions, in the order their additions are offered.
-_MODULES: tuple = ("reader", "related", "answers", "terms", "tables", "tools", "markdown", "llms")
+_MODULES: tuple = ("reader", "related", "answers", "terms", "tables", "tools", "changes", "markdown", "llms")
 
 
 def _load() -> None:
@@ -141,6 +141,8 @@ class ExportContext:
     # The folder the whole export was asked for: the site's root, which holds
     # data_dir as search/ in a whole site, and is data_dir itself otherwise.
     root_dir: Optional[Path] = None
+    # What the previous export held (services/static_export/changes.py), or None.
+    previous: Optional[Dict[str, Any]] = None
     results: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # earlier additions' manifest entries
     files: List[Dict[str, Any]] = field(default_factory=list)  # this addition's files so far
 

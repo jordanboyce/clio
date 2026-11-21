@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from services.collection_bundle import _clio_version
-from services.static_export import additions
+from services.static_export import additions, changes
 from services.static_export.common import (
     DEFAULT_PASSAGES_PER_FILE, FORMAT, KEYWORD_VERSION, MANIFEST_FILE, PASSAGES_FILE, QUANTIZATIONS,
     SITE_DATA_DIR, VECTORS_FILE, VERSION, StaticExportError,
@@ -47,7 +47,8 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                  passages_per_file: int = DEFAULT_PASSAGES_PER_FILE,
                  site: bool = False,
                  files_base_url: Any = ...,
-                 include: Any = ()) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+                 include: Any = (),
+                 previous: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Write manifest.json, the passage file(s) and vectors.bin into ``out_dir``.
 
     With ``site`` they go into ``out_dir/search`` instead, beside the
@@ -60,7 +61,9 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
     search: no vectors.bin, and a manifest of format v2 saying why.
     ``files_base_url`` overrides the saved base address for files for this
     export only (see address_settings). ``include`` names the additions to
-    write beside the files (services/static_export/additions.py).
+    write beside the files (services/static_export/additions.py). ``previous``
+    is the manifest of the export being replaced, when there is one; without
+    it the changes are told against what the server remembers of the last.
 
     Returns (the manifest, what the audit trail should keep). Raises
     StaticExportError when anything stands in the way; nothing is written in
@@ -216,12 +219,15 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                 ctx = additions.ExportContext(
                     collection_id=collection_id, survey=survey, data_dir=data_dir, site=site, manifest=manifest,
                     passages=kept or [], vectors=ordered, settings=address_settings(collection_id),
-                    written=written, root_dir=out_dir)
+                    written=written, root_dir=out_dir,
+                    previous=changes.from_manifest(previous) or changes.remembered(collection_id))
                 manifest["additions"] = additions.write_all(chosen, ctx)
             (data_dir / MANIFEST_FILE).write_text(_manifest_text(manifest), encoding="utf-8", newline="\n")
             written.append(data_dir / MANIFEST_FILE)
             if site:
                 written += _write_site(out_dir, runtime, browser["clio_model"] if semantic else None, model_files)
+            # What the next export is compared with (ids, names, titles; never text).
+            changes.remember(collection_id, manifest, {d["document_id"]: d.get("superseded_by") for d in documents})
         except Exception:
             for path in written:
                 path.unlink(missing_ok=True)

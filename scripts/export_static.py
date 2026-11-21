@@ -87,6 +87,14 @@ def main(argv=None) -> int:
             print("\nNothing written: pass --out FOLDER and --confirm-public to export.", file=sys.stderr)
         return 0 if summary["ready"] else 1
 
+    # The export being replaced, so the changes since can be told.
+    previous = None
+    old = (args.out / static_export.SITE_DATA_DIR if args.site else args.out) / static_export.MANIFEST_FILE
+    try:
+        previous = json.loads(old.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+
     # Into a folder beside the files first: a refused export leaves last
     # year's files as they were.
     staging = args.out / ".clio-static-export"
@@ -95,7 +103,8 @@ def main(argv=None) -> int:
         manifest, detail = static_export.write_export(
             collection_id, staging, confirm_public=args.confirm_public,
             quantization="float32" if args.float32 else "int8", passages_per_file=per_file, site=args.site,
-            files_base_url=args.files_url if args.files_url is not None else ..., include=args.include)
+            files_base_url=args.files_url if args.files_url is not None else ..., include=args.include,
+            previous=previous)
     except static_export.StaticExportError as e:
         shutil.rmtree(staging, ignore_errors=True)
         print(f"Cannot export: {e}", file=sys.stderr)

@@ -74,6 +74,7 @@ The export does not judge the content. Read the passage diff before you commit i
 | Answers written in advance | `answers` | `answers.json`; the search box shows one above its results, `<clio-answers>` lists them | answers written and approved |
 | An index of terms | `terms` | `read/terms.html`, linked from the contents page | the pages to read (included with it) |
 | Spreadsheets as tables | `tables` | `tables/<name>.json` and `tables/<name>.csv` for each table; `<clio-table>` on the reader's pages | a spreadsheet among the sources |
+| What changed since the last export | `changes` | `read/changes.html`, and the feed `changes.xml` when the site's address is set | the pages to read (included with it) |
 | Files for AI agents | `llms` | `llms.txt` and `llms-full.txt`, at a whole site's root | the Markdown pages (included with it) |
 | Passages and vectors for other tools | `tools` | `data/passages.jsonl`, `data/vectors.npy`, `data/embedding.json` | nothing |
 | The pages as Markdown | `markdown` | `markdown/_index.md` and `markdown/<name>.md` for each source | command line and HTTP only |
@@ -141,6 +142,12 @@ Clio keeps a spreadsheet as typed tables as well as passages, and `tables` expor
 ```
 
 `table` is a file the manifest lists under `additions.tables`, or a source's id for its first table. Parts: `label`, `filter`, `status`, `table`, `header`, `cell`, `pages`, `download`.
+
+### What changed
+
+`changes` adds a page to the reader, and with the site's address an Atom feed (`changes.xml`), saying which sources were added, changed, replaced or removed since the last export, newest first. A passage's id comes from its source's content, page and position, so a reworded source has new ids throughout: changes are told per source, not per sentence. A source whose file name stayed but whose content changed is "changed"; one marked in Clio as replaced by another exported source is "replaced by" it; new and gone sources are "added" and "removed". Re-exporting an unchanged collection adds nothing and leaves the files as they were.
+
+The comparison is with the export being replaced when there is one (the command line reads the old `manifest.json` in `--out` first), and otherwise with what the server remembers of the collection's last export: each source's id, file name and title, and the change history, never any text. The history (the last 50 changes) travels in the manifest, so the next export carries it on. A source that is still in the collection but left out of this export, held or labelled more strictly, is not named, not even in an earlier entry.
 
 ### Files for AI agents
 
