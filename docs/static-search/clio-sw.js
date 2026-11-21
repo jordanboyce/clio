@@ -24,7 +24,7 @@ const STATE = 'clio-manifest'  // the manifest last read with a connection
 
 // The site's own pages and scripts. The first visit loads them before this
 // worker is in charge, so they are fetched again here to be kept.
-const SHELL = ['index.html', 'clio-common.js', 'clio-static-search.js', 'clio-search.js', 'clio-related.js',
+const SHELL = ['index.html', 'clio-page.js', 'clio-common.js', 'clio-static-search.js', 'clio-search.js', 'clio-related.js',
   'clio-answers.js', 'clio-cite.js', 'clio-table.js', 'clio-offline.js', 'clio-transcript.js', 'site.webmanifest',
   'icon-192.png',
   'icon-512.png']
