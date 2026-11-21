@@ -141,7 +141,7 @@ def page(title: str, body: str, *, depth: int, site: bool, head: str = "", compo
     if site:
         # The whole site keeps the scripts at its root, one level above the export.
         search = (f'<script type="module" src="{up}../clio-search.js"></script>\n'
-                  f'<clio-search src="{up}" label="Search"></clio-search>\n')
+                  f'<clio-search src="{up}" label="Search" index="focus"></clio-search>\n')
     return (
         "<!doctype html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'

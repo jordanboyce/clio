@@ -19,11 +19,11 @@
 // For a search box to drop into a page, see clio-search.js beside this file;
 // what every component shares is in clio-common.js, which this file imports.
 
-import { FORMAT, VERSION, anchorOf, getListed, loadManifest } from './clio-common.js'
+import { FORMAT, VERSION, getListed, loadManifest, passageLink, readerLink } from './clio-common.js'
 
 // The format this client reads (v1: searched by meaning; v2: no vectors,
 // searched by keyword). Kept here for pages that imported them from this file.
-export { FORMAT, VERSION }
+export { FORMAT, VERSION, passageLink, readerLink }
 
 // How close the site's vector for the manifest's probe sentence must be to
 // Clio's. The same model at full or half precision scores above 0.9999; an
@@ -178,53 +178,8 @@ export function keywordRank(index, query, { k = 10 } = {}) {
 }
 
 // ── Where a passage is on the web ──────────────────────────────────────────
-
-const fill = (template, values) => template.replace(/\{(\w+)\}/g, (_, key) => String(values[key] ?? ''))
-
-// A text directive (#:~:text=) the browser scrolls to and highlights. Only the
-// start of the passage, a few words: the page's own text may differ from
-// what Clio extracted further on, and a directive that does not match is
-// simply ignored.
-function textDirective(text, wordCount = 8) {
-  const start = (text || '').replace(/\s+/g, ' ').trim().split(' ').slice(0, wordCount).join(' ')
-  if (!start) return ''
-  const encode = (s) => encodeURIComponent(s).replace(/-/g, '%2D').replace(/,/g, '%2C').replace(/&/g, '%26')
-  return `:~:text=${encode(start)}`
-}
-
-/**
- * Where a hit's passage is on the web, or null when the export gave its
- * source no address. The document's `link` (from the manifest) says how to
- * point inside it: a PDF opens at the page, a file in a repository at its
- * lines, and a web page scrolls to the passage's opening words. A source
- * with no address of its own links to its page in the export's reader
- * (include=reader), at the passage, when the export has one.
- */
-export function passageLink(hit) {
-  const link = hit?.document?.link
-  if (!link?.url) return readerLink(hit)
-  const passage = hit.passage || {}
-  const [url, fragment = ''] = link.url.split('#')
-  if (link.lines && passage.lines) {
-    return url + fill(link.lines, { start: passage.lines[0], end: passage.lines[1] })
-  }
-  if (link.page && passage.page) return url + fill(link.page, { page: passage.page })
-  if (link.text) {
-    const directive = textDirective(passage.text)
-    if (directive) return `${url}#${fragment}${directive}`
-  }
-  return link.url
-}
-
-/** The passage on its source's reader page, or null when the export has no reader. */
-export function readerLink(hit) {
-  const page = hit?.document?.reader
-  const base = hit?.index?.baseUrl
-  if (!page || base == null) return null
-  const here = globalThis.document?.baseURI || globalThis.location?.href
-  const folder = here ? new URL(base, here) : new URL(base)
-  return new URL(page, folder).href + (hit.passage?.id != null ? anchorOf(hit.passage.id) : '')
-}
+// passageLink and readerLink live in clio-common.js, shared with the other
+// components; they are exported from here too, as before.
 
 // ── The model ──────────────────────────────────────────────────────────────
 

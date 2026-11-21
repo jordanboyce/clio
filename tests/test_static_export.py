@@ -397,7 +397,7 @@ def test_a_whole_site_carries_the_page_the_runtime_and_clios_own_model(kit, site
     assert detail["site"] is True
     files = sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
     assert files == sorted([
-        "index.html", "clio-common.js", "clio-static-search.js", "clio-search.js",
+        "index.html", "clio-common.js", "clio-static-search.js", "clio-search.js", "clio-related.js",
         "_headers", ".htaccess", "web.config", "README.txt",
         "search/manifest.json", "search/passages.json", "search/vectors.bin",
         "vendor/LICENSE.onnxruntime-web.txt", "vendor/runtime.json", *[f"vendor/{n}" for n in se.SITE_RUNTIME_FILES],

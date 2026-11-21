@@ -15,6 +15,9 @@
 //                bundled, cdn, or off (keywords only)
 //   load         focus (default: the model downloads when someone first uses
 //                the box; keyword results until then) or now
+//   index        now (default: the passages and vectors download with the
+//                page) or focus (only when someone first uses the box, for a
+//                page that shows the box but is mostly read)
 //   results      how many results to show (default 8)
 //   label, placeholder   the box's label and placeholder text
 //   target       where result links open: _self (default) or _blank
@@ -75,8 +78,12 @@ export class ClioSearch extends HTMLElement {
     // The model starts loading when someone first uses the box: on focus, or
     // on the first input (focus does not fire for autofill, a script, or a
     // window that is not in front).
-    this.$input.addEventListener('input', () => { this.upgrade(); this.run(this.$input.value) })
-    this.$input.addEventListener('focus', () => this.upgrade())
+    this.$input.addEventListener('input', () => {
+      if (this.ensureLoaded()) return // the search runs once the index is in
+      this.upgrade()
+      this.run(this.$input.value)
+    })
+    this.$input.addEventListener('focus', () => { if (!this.ensureLoaded()) this.upgrade() })
     this.$input.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { this.$input.value = ''; this.run('') }
     })
@@ -84,7 +91,26 @@ export class ClioSearch extends HTMLElement {
 
   connectedCallback() {
     this.render()
-    if (!this.loading) this.loading = this.load()
+    if (this.loading) return
+    if (this.getAttribute('index') === 'focus') {
+      this.$input.disabled = false
+      this.status('Type to search.')
+      return
+    }
+    this.loading = this.load()
+  }
+
+  /** With index="focus": start loading on first use. True while it is loading. */
+  ensureLoaded() {
+    if (this.search) return false
+    if (!this.loading) {
+      this.loading = this.load().then(() => {
+        if (!this.search) return
+        this.upgrade()
+        if (this.$input.value.trim()) this.run(this.$input.value)
+      })
+    }
+    return true
   }
 
   attributeChangedCallback(name) {
@@ -110,7 +136,9 @@ export class ClioSearch extends HTMLElement {
 
   async load() {
     this.status('Loading the index…')
-    this.$input.disabled = true
+    // A box that waited for its first use keeps the focus and what was typed.
+    const lazy = this.getAttribute('index') === 'focus'
+    if (!lazy) this.$input.disabled = true
     try {
       const searches = await Promise.all(this.sources().map((src) => createSearch(src)))
       this.searches = searches

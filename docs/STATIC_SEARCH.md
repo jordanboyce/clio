@@ -70,7 +70,21 @@ The export does not judge the content. Read the passage diff before you commit i
 | Addition | `include` | Writes | Needs |
 |---|---|---|---|
 | A page for each source | `reader` | `read/index.html` (the contents), `read/<name>.html` for each source, `read/reader.css`, and `sitemap.xml` when the site's address is set | nothing |
+| Related passages from other sources | `related` | `related/<name>.json` for each source, and `<clio-related>` on the reader's pages | a whole site, searched by meaning |
 | The pages as Markdown | `markdown` | `markdown/_index.md` and `markdown/<name>.md` for each source | command line and HTTP only |
+
+### Related passages
+
+`related` works out, when you export, which passages of other sources are closest in meaning to each source, and `<clio-related>` shows them on a page: "see also", each linking to its passage. For every passage it finds the four nearest passages in other sources, from the vectors the export already has; a source then gets the six best of those, no more than two from any one other source, each with its id, source, page, score and the first 240 characters of its text, in `related/<name>.json`. The box reads the manifest and that one file: it never downloads the model, the vectors or the passage files.
+
+```html
+<script type="module" src="/assets/handbook/clio-related.js"></script>
+<clio-related src="/assets/handbook/search/"></clio-related>
+```
+
+Without a `source` attribute (a source's id) it shows the source whose page it is on: the reader's page, or the source's own address. On a page that is neither, or with an export that has no related passages, it hides itself. It takes the shared `--clio-*` properties, has parts `label`, `status`, `results`, `result`, `title`, `meta` and `snippet`, and sends `clio-related-ready` (`{ source, count }`). With the reader in the same export, each source's page carries the box.
+
+It needs an export searched by meaning, and a whole site, since the component ships with the site's scripts. The similarities are worked out a block of 64 passages at a time, never as one table of every pair: at 50,000 passages the work needs 66 MB on top of the vectors (77 MB, which the server holds anyway to search them) and took about 75 seconds on a 2018 laptop.
 
 ### Markdown for a site generator
 
@@ -114,7 +128,7 @@ A whole-site export carries `clio-search.js`, a search box for any page of your 
 <clio-search src="/assets/handbook/search/" label="Search the handbook"></clio-search>
 ```
 
-It works from any folder of the site: paths are read relative to the page, as a link's would be. It searches by keyword as soon as the passages arrive, and loads the model the first time someone uses the box, so a page that only shows it costs a visitor nothing more. It is a standard custom element in its own shadow DOM: the site's styles do not reach inside it, and its own do not leak out.
+It works from any folder of the site: paths are read relative to the page, as a link's would be. It searches by keyword as soon as the passages arrive (or, with `index="focus"`, fetches them only when someone first uses the box), and loads the model the first time someone uses the box, so a page that only shows it costs a visitor nothing more. It is a standard custom element in its own shadow DOM: the site's styles do not reach inside it, and its own do not leak out.
 
 | Attribute | Default | Does |
 |---|---|---|
@@ -122,6 +136,7 @@ It works from any folder of the site: paths are read relative to the page, as a 
 | `runtime` | beside `clio-search.js` | The folder holding `vendor/` and `models/`, so several exports can share one copy. |
 | `model` | `auto` | `auto` uses the model the export carries, else the CDN; `bundled` never the CDN; `cdn`; `off` searches by keyword and downloads no model. |
 | `load` | `focus` | `now` fetches the model with the page instead of on first use. |
+| `index` | `now` | `focus` fetches the passages and vectors only when someone first uses the box, for a page that is mostly read (the reader's pages use it). |
 | `results` | `8` | How many results to show. |
 | `label`, `placeholder` | | The box's label and placeholder. |
 | `target` | | `_blank` opens results in a new tab (with `rel="noopener"`). |

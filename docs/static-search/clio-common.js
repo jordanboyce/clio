@@ -97,6 +97,55 @@ export function folderOf(element, attribute, fallback, here) {
 /** Where a passage is on a page of the export (its anchor is the passage's id). */
 export const anchorOf = (id) => `#p-${String(id).replace(/[^A-Za-z0-9_-]/g, '_')}`
 
+// ── Where a passage is on the web ──────────────────────────────────────────
+
+const fill = (template, values) => template.replace(/\{(\w+)\}/g, (_, key) => String(values[key] ?? ''))
+
+// A text directive (#:~:text=) the browser scrolls to and highlights. Only the
+// start of the passage, a few words: the page's own text may differ from
+// what Clio extracted further on, and a directive that does not match is
+// simply ignored.
+function textDirective(text, wordCount = 8) {
+  const start = (text || '').replace(/\s+/g, ' ').trim().split(' ').slice(0, wordCount).join(' ')
+  if (!start) return ''
+  const encode = (s) => encodeURIComponent(s).replace(/-/g, '%2D').replace(/,/g, '%2C').replace(/&/g, '%26')
+  return `:~:text=${encode(start)}`
+}
+
+/**
+ * Where a hit's passage is on the web, or null when the export gave its
+ * source no address. The document's `link` (from the manifest) says how to
+ * point inside it: a PDF opens at the page, a file in a repository at its
+ * lines, and a web page scrolls to the passage's opening words. A source
+ * with no address of its own links to its page in the export's reader
+ * (include=reader), at the passage, when the export has one.
+ */
+export function passageLink(hit) {
+  const link = hit?.document?.link
+  if (!link?.url) return readerLink(hit)
+  const passage = hit.passage || {}
+  const [url, fragment = ''] = link.url.split('#')
+  if (link.lines && passage.lines) {
+    return url + fill(link.lines, { start: passage.lines[0], end: passage.lines[1] })
+  }
+  if (link.page && passage.page) return url + fill(link.page, { page: passage.page })
+  if (link.text) {
+    const directive = textDirective(passage.text)
+    if (directive) return `${url}#${fragment}${directive}`
+  }
+  return link.url
+}
+
+/** The passage on its source's reader page, or null when the export has no reader. */
+export function readerLink(hit) {
+  const page = hit?.document?.reader
+  const base = hit?.index?.baseUrl
+  if (!page || base == null) return null
+  const here = globalThis.document?.baseURI || globalThis.location?.href
+  const folder = here ? new URL(base, here) : new URL(base)
+  return new URL(page, folder).href + (hit.passage?.id != null ? anchorOf(hit.passage.id) : '')
+}
+
 // ── Look ───────────────────────────────────────────────────────────────────
 // Every component takes the page's font and colours. A site sets these once
 // for all of them: --clio-font, --clio-color, --clio-muted, --clio-accent,
