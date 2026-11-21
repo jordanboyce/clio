@@ -75,6 +75,7 @@ The export does not judge the content. Read the passage diff before you commit i
 | An index of terms | `terms` | `read/terms.html`, linked from the contents page | the pages to read (included with it) |
 | Spreadsheets as tables | `tables` | `tables/<name>.json` and `tables/<name>.csv` for each table; `<clio-table>` on the reader's pages | a spreadsheet among the sources |
 | What changed since the last export | `changes` | `read/changes.html`, and the feed `changes.xml` when the site's address is set | the pages to read (included with it) |
+| Works offline, installs on a phone | `offline` | `sw.js`, `site.webmanifest` and two icons at the site's root | a whole site |
 | Files for AI agents | `llms` | `llms.txt` and `llms-full.txt`, at a whole site's root | the Markdown pages (included with it) |
 | Passages and vectors for other tools | `tools` | `data/passages.jsonl`, `data/vectors.npy`, `data/embedding.json` | nothing |
 | The pages as Markdown | `markdown` | `markdown/_index.md` and `markdown/<name>.md` for each source | command line and HTTP only |
@@ -148,6 +149,12 @@ Clio keeps a spreadsheet as typed tables as well as passages, and `tables` expor
 `changes` adds a page to the reader, and with the site's address an Atom feed (`changes.xml`), saying which sources were added, changed, replaced or removed since the last export, newest first. A passage's id comes from its source's content, page and position, so a reworded source has new ids throughout: changes are told per source, not per sentence. A source whose file name stayed but whose content changed is "changed"; one marked in Clio as replaced by another exported source is "replaced by" it; new and gone sources are "added" and "removed". Re-exporting an unchanged collection adds nothing and leaves the files as they were.
 
 The comparison is with the export being replaced when there is one (the command line reads the old `manifest.json` in `--out` first), and otherwise with what the server remembers of the collection's last export: each source's id, file name and title, and the change history, never any text. The history (the last 50 changes) travels in the manifest, so the next export carries it on. A source that is still in the collection but left out of this export, held or labelled more strictly, is not named, not even in an earlier entry.
+
+### A site that works offline
+
+`offline` turns a whole site into one a visitor can install on a phone and search with no connection, after one visit: a web app manifest (`site.webmanifest`, with two plain icons in the reader's colour) and a service worker (`sw.js`, from [clio-sw.js](static-search/clio-sw.js)) at the site's root, registered by `clio-offline.js`, which the search page and the reader's pages load. A service worker needs `https://` (or `localhost`).
+
+It keeps the rules the components keep. The manifest is asked of the network first, past every cache, whenever there is a connection; only without one is the copy from the last visit used. Every other file the manifest lists is kept under its checksum address (`passages.json?v=…`), exactly as the components ask for it, so an old manifest can only find its own files and a new one never finds old ones; when a new manifest arrives the worker fetches what it lists and drops what it no longer does. Pages and scripts are asked of the network first and kept for when there is none, and the pages the manifest lists are kept from the same export as the manifest beside them. So the next visit with a connection after a new export shows the new content. The model is kept the first time it is used: a visitor who never searched by meaning online searches offline by keyword.
 
 ### Files for AI agents
 

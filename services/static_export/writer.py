@@ -225,7 +225,8 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
             (data_dir / MANIFEST_FILE).write_text(_manifest_text(manifest), encoding="utf-8", newline="\n")
             written.append(data_dir / MANIFEST_FILE)
             if site:
-                written += _write_site(out_dir, runtime, browser["clio_model"] if semantic else None, model_files)
+                written += _write_site(out_dir, runtime, browser["clio_model"] if semantic else None, model_files,
+                                       manifest.get("additions"))
             # What the next export is compared with (ids, names, titles; never text).
             changes.remember(collection_id, manifest, {d["document_id"]: d.get("superseded_by") for d in documents})
         except Exception:

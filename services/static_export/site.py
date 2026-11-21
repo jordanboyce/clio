@@ -96,10 +96,11 @@ def _site_offer(browser: Optional[Dict[str, str]]) -> Dict[str, Any]:
 
 
 def _write_site(out_dir: Path, runtime: Optional[Dict[str, Any]], clio_model: Optional[str],
-                model_files: Optional[Dict[str, Any]]) -> List[Path]:
+                model_files: Optional[Dict[str, Any]], additions: Optional[Dict[str, Any]] = None) -> List[Path]:
     """Put the page, the element, the web server settings, the runtime and the
     model beside search/. A keyword-only site has no runtime or model.
-    Returns what it wrote."""
+    ``additions`` (the manifest's) can add to the search page: a link to the
+    reader's pages, the offline worker. Returns what it wrote."""
     written: List[Path] = []
 
     def put(source: Path, target: Path) -> None:
@@ -108,6 +109,20 @@ def _write_site(out_dir: Path, runtime: Optional[Dict[str, Any]], clio_model: Op
         shutil.copyfile(source, target)
 
     for name in SITE_PAGE_FILES:
+        if name == "index.html" and additions:
+            page = (SITE_PAGE_DIR / name).read_text(encoding="utf-8")
+            if "offline" in additions:
+                from services.static_export.offline import HEAD_AT_ROOT
+
+                page = page.replace("<head>\n", "<head>\n" + HEAD_AT_ROOT, 1)
+            if "reader" in additions:
+                page = page.replace('<h1 id="title">Search</h1>\n', '<h1 id="title">Search</h1>\n'
+                                    '  <p><a href="search/read/index.html">Read the sources</a></p>\n', 1)
+            target = out_dir / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            written.append(target)
+            target.write_text(page, encoding="utf-8", newline="")
+            continue
         put(SITE_PAGE_DIR / name, out_dir / name)
     for name in SITE_HOSTING_FILES:
         put(SITE_HOSTING_DIR / name, out_dir / name)

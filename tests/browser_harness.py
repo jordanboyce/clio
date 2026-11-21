@@ -72,10 +72,14 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
 
+class _Reusable(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+
+
 class StaticServer:
-    def __init__(self, folder: Path):
+    def __init__(self, folder: Path, port: int = 0):
         handler = partial(_Handler, directory=str(folder))
-        self.httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
+        self.httpd = _Reusable(("127.0.0.1", port), handler)
         self.httpd.daemon_threads = True
         self.httpd.requests = []
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -92,8 +96,9 @@ class StaticServer:
 
 
 @contextlib.contextmanager
-def static_server(folder: Path):
-    server = StaticServer(folder)
+def static_server(folder: Path, port: int = 0):
+    """Serve a folder on 127.0.0.1 (on port, to come back on the same origin)."""
+    server = StaticServer(folder, port)
     server.thread.start()
     try:
         yield server

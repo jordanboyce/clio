@@ -59,7 +59,7 @@ def register(addition: Addition) -> Addition:
 
 
 # The modules that register additions, in the order their additions are offered.
-_MODULES: tuple = ("reader", "related", "answers", "terms", "tables", "tools", "changes", "markdown", "llms")
+_MODULES: tuple = ("reader", "related", "answers", "terms", "tables", "tools", "changes", "offline", "markdown", "llms")
 
 
 def _load() -> None:
