@@ -150,6 +150,19 @@ describe('Export dialog, for a website', () => {
     expect(wrapper.text()).toContain('Needs the site ready to serve.')
   })
 
+  it('sends the Library\'s citation style with the references', async () => {
+    localStorage.setItem('clio.research.citationStyle', 'chicago')
+    const wrapper = await openSite({
+      ...ready,
+      additions: [{ id: 'references', label: 'A reference list for the papers, with BibTeX', available: true, reason: null, bytes: 1024, site_only: false }],
+    })
+    await wrapper.get('input[name="confirm-public"]').setValue(true)
+    await wrapper.get('input[name="include-references"]').setValue(true)
+    expect(wrapper.get('a.btn-primary').attributes('href'))
+      .toBe('/api/collections/c1/export/static?confirm_public=true&include=references&citation_style=chicago')
+    localStorage.removeItem('clio.research.citationStyle')
+  })
+
   it('lists answers to publish with why each is or is not ready, and approves one', async () => {
     const list = {
       ready: 0, threshold: 0.58,

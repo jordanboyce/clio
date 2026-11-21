@@ -67,6 +67,8 @@ def main(argv=None) -> int:
     parser.add_argument("--files-url", default=None, metavar="URL",
                         help="where the site keeps its copies of the files (each result links to its file there); "
                              "this export only, the address saved in Clio otherwise")
+    parser.add_argument("--citation-style", default=None, metavar="STYLE",
+                        help="for the references page: apa (default), chicago, mla, ieee or harvard")
     parser.add_argument("--include", default=None, metavar="NAMES",
                         help="what else to carry, separated by commas (or 'all'); --check lists them")
     args = parser.parse_args(argv)
@@ -104,7 +106,7 @@ def main(argv=None) -> int:
             collection_id, staging, confirm_public=args.confirm_public,
             quantization="float32" if args.float32 else "int8", passages_per_file=per_file, site=args.site,
             files_base_url=args.files_url if args.files_url is not None else ..., include=args.include,
-            previous=previous)
+            previous=previous, citation_style=args.citation_style)
     except static_export.StaticExportError as e:
         shutil.rmtree(staging, ignore_errors=True)
         print(f"Cannot export: {e}", file=sys.stderr)

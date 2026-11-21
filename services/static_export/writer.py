@@ -48,7 +48,8 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                  site: bool = False,
                  files_base_url: Any = ...,
                  include: Any = (),
-                 previous: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+                 previous: Optional[Dict[str, Any]] = None,
+                 citation_style: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Write manifest.json, the passage file(s) and vectors.bin into ``out_dir``.
 
     With ``site`` they go into ``out_dir/search`` instead, beside the
@@ -77,6 +78,10 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
     if passages_per_file < 1:
         raise StaticExportError("passages_per_file must be at least 1", "option")
     chosen = additions.parse_include(include)
+    if citation_style is not None:
+        from services.static_export.references import style_of
+
+        citation_style = style_of(citation_style)
 
     # An open indexer may hold vectors not yet written to disk.
     cached = indexer_manager._indexers.get(collection_id)
@@ -218,7 +223,8 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
             if chosen:
                 ctx = additions.ExportContext(
                     collection_id=collection_id, survey=survey, data_dir=data_dir, site=site, manifest=manifest,
-                    passages=kept or [], vectors=ordered, settings=address_settings(collection_id),
+                    passages=kept or [], vectors=ordered,
+                    settings={**address_settings(collection_id), "citation_style": citation_style},
                     written=written, root_dir=out_dir,
                     previous=changes.from_manifest(previous) or changes.remembered(collection_id))
                 manifest["additions"] = additions.write_all(chosen, ctx)

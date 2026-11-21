@@ -936,6 +936,7 @@ def export_collection_static(  # sync: reads the index and builds a zip in the t
     passages_per_file: int = 2000,
     site: bool = False,
     include: Optional[str] = None,
+    citation_style: Optional[str] = None,
     user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -969,7 +970,7 @@ def export_collection_static(  # sync: reads the index and builds a zip in the t
     try:
         path, filename, detail = export_zip(
             collection_id, confirm_public=confirm_public, quantization=quantization,
-            passages_per_file=passages_per_file, site=site, include=include)
+            passages_per_file=passages_per_file, site=site, include=include, citation_style=citation_style)
     except StaticExportError as e:
         raise _static_export_refusal(collection_id, e)
 

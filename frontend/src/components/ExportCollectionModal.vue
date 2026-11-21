@@ -416,8 +416,18 @@ const removeAnswer = (row) => changeAnswer(row, () => http.delete(`${answersUrl(
 const siteHref = computed(() => site.value?.ready && confirmPublic.value && target.value
   ? `/api/collections/${encodeURIComponent(target.value.id)}/export/static?confirm_public=true` +
     (wholeSite.value ? '&site=true' : '') +
-    (included.value.length ? `&include=${encodeURIComponent(included.value.join(','))}` : '')
+    (included.value.length ? `&include=${encodeURIComponent(included.value.join(','))}` : '') +
+    (included.value.includes('references') ? `&citation_style=${encodeURIComponent(libraryStyle())}` : '')
   : '')
+
+// The Library keeps its citation style in this browser (utils/citations.js).
+function libraryStyle() {
+  try {
+    return localStorage.getItem('clio.research.citationStyle') || 'apa'
+  } catch {
+    return 'apa'
+  }
+}
 
 async function setMode(next) {
   mode.value = next
