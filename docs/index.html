@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Clio: the record remembers</title>
+<meta name="description" content="Clio is a self-hosted, open source knowledge base for people and the AI agents they use. Ask your sources, check the evidence, and connect your AI tools over MCP.">
+<meta name="theme-color" content="#1F1538">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Clio: the record remembers">
+<meta property="og:description" content="Clio is a self-hosted, open source knowledge base for people and the AI agents they use. Ask your sources, check the evidence, and connect your AI tools over MCP.">
+<meta property="og:image" content="https://raw.githubusercontent.com/jordanboyce/clio/master/docs/screenshots/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="landing/favicon.ico" sizes="any">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400..700&display=swap">
+<!-- The project's landing page. One file: its screenshots are the README's (screenshots/), its
+     mark and icon are copies of the app's (landing/). It loads nothing else but the fonts above,
+     and reads well without them. tests/test_landing_page.py checks every file it names exists. -->
+<style>
+/* Layout: an aubergine opening band with one highlighted word, a product shot that straddles
+   the band's edge, then a reading column where every claim carries a bracketed citation chip. */
+:root {
+  --paper: #F5F3F9;
+  --surface: #FFFFFF;
+  --ink: #1C1530;
+  --ink-soft: #5A5370;
+  --rule: #DCD6E8;
+  --accent: #7A2FA0;
+  --accent-ink: #FFFFFF;
+  --slate: #2E3B57;
+  --mark: #FFDD7A;
+  --mark-ink: #1C1530;
+  --lit: #F3E9FA;
+  --band-bg: #1F1538;
+  --band-glow: #3A2163;
+  --band-fg: #F3EEFB;
+  --band-soft: #BDB2D8;
+  --band-rule: #3F3160;
+  --band-accent: #DDB1F5;
+  --shadow: 0 30px 60px -30px rgba(28, 21, 48, 0.45);
+
+  --display: "Bricolage Grotesque", "Arial Narrow", system-ui, sans-serif;
+  --body: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #130F1E; --surface: #1C172D; --ink: #EEEAF6; --ink-soft: #A69EBD; --rule: #322A4B;
+    --accent: #CB98EC; --accent-ink: #1C1530; --slate: #9DB0D6; --mark: #F5CE5C; --mark-ink: #1C1530;
+    --lit: #2A1F45; --band-bg: #1B1232; --band-glow: #34205A; --band-fg: #F3EEFB; --band-soft: #BDB2D8;
+    --band-rule: #3F3160; --band-accent: #DDB1F5; --shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.8);
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+html { color-scheme: light dark; -webkit-text-size-adjust: 100%; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 17px; line-height: 1.6; }
+.wrap { max-width: 1160px; margin-inline: auto; padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); }
+img { max-width: 100%; }
+a { color: var(--accent); text-underline-offset: 0.18em; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; letter-spacing: -0.02em; }
+p { margin: 0; }
+mark { background: var(--mark); color: var(--mark-ink); padding: 0 0.12em; border-radius: 0.12em; }
+
+/* citation chip: the page's recurring device */
+.cite { font-family: var(--mono); font-size: 0.72em; font-weight: 500; white-space: nowrap; text-decoration: none; color: var(--accent); margin-left: 0.25em; }
+.cite:hover { text-decoration: underline; }
+.eyebrow { font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+
+/* ---------- opening band ---------- */
+.band { background: radial-gradient(90rem 40rem at 85% -10%, var(--band-glow), transparent 60%) var(--band-bg); color: var(--band-fg); }
+.band a { color: var(--band-accent); }
+.band :focus-visible { outline-color: var(--band-accent); }
+.nav { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding-block: 1.25rem; }
+.brand { display: flex; align-items: center; gap: 0.6rem; font-family: var(--display); font-weight: 700; font-size: 1.35rem; letter-spacing: 0.04em; color: var(--band-fg); }
+.brand img { width: 38px; height: 38px; }
+.nav-links { display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: 0.95rem; }
+.nav-links a { color: var(--band-soft); text-decoration: none; }
+.nav-links a:hover { color: var(--band-fg); }
+.hero { padding-block: clamp(2.5rem, 7vw, 5.5rem) clamp(9rem, 24vw, 19rem); }
+.hero .eyebrow { color: var(--band-soft); }
+.hero h1 { font-size: clamp(3.1rem, 11.5vw, 9rem); font-weight: 800; line-height: 1; letter-spacing: -0.045em; margin-top: 1.1rem; }
+.hero h1 mark { display: inline-block; line-height: 0.95; padding: 0.02em 0.1em 0.07em; margin: 0.1em 0 0 -0.06em; border-radius: 0.06em; }
+.hero-row { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: clamp(2rem, 5vw, 5rem); margin-top: clamp(2rem, 4vw, 3.25rem); align-items: start; }
+.lede { font-size: clamp(1.1rem, 1.6vw, 1.3rem); line-height: 1.5; color: var(--band-fg); max-width: 34em; }
+.verbs { list-style: none; margin: 0; padding: 0; display: grid; gap: 1rem; }
+.verbs li { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: 1rem; padding-top: 1rem; border-top: 1px solid var(--band-rule); color: var(--band-soft); font-size: 0.98rem; line-height: 1.45; }
+.verbs b { font-family: var(--display); font-size: 1.25rem; font-weight: 700; color: var(--band-fg); line-height: 1.2; }
+
+.cmd { margin-top: 1.75rem; border: 1px solid var(--band-rule); border-radius: 12px; background: rgba(0, 0, 0, 0.22); max-width: 44rem; }
+.cmd-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.55rem 0.6rem 0.55rem 1rem; border-bottom: 1px solid var(--band-rule); font-size: 0.85rem; color: var(--band-soft); }
+.cmd pre { margin: 0; padding: 0.9rem 1rem; overflow-x: auto; font-family: var(--mono); font-size: 0.82rem; line-height: 1.5; color: var(--band-fg); }
+.copy { font: 600 0.82rem var(--body); color: var(--band-bg); background: var(--band-fg); border: 0; border-radius: 7px; padding: 0.4rem 0.8rem; cursor: pointer; }
+.copy:hover { background: var(--mark); }
+.hero-links { display: flex; gap: 1.5rem; flex-wrap: wrap; margin-top: 1.1rem; font-size: 0.95rem; color: var(--band-soft); }
+
+/* ---------- product shots ---------- */
+.shot { margin: 0; border-radius: 14px; overflow: hidden; border: 1px solid var(--rule); box-shadow: var(--shadow); background: var(--surface); }
+.shot img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; }
+.hero-shot { margin-top: calc(-1 * clamp(7rem, 20vw, 16rem)); }
+.hero-shot .shot { border-color: var(--band-rule); }
+.callouts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.5rem 2.5rem; margin-top: 1.75rem; }
+.callouts h3 { font-size: 1.1rem; font-weight: 700; }
+.callouts p { color: var(--ink-soft); font-size: 0.95rem; margin-top: 0.3rem; }
+.self-cite { margin-top: 2.25rem; padding-top: 1.1rem; border-top: 1px solid var(--rule); color: var(--ink-soft); font-size: 0.92rem; max-width: 46rem; }
+
+/* ---------- sections ---------- */
+section { padding-block: clamp(3.5rem, 8vw, 6.5rem); }
+.sec-head { display: grid; gap: 0.8rem; max-width: 46rem; margin-bottom: clamp(1.75rem, 4vw, 3rem); }
+.sec-head h2 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 750; line-height: 1.02; letter-spacing: -0.035em; }
+.sec-head p { color: var(--ink-soft); font-size: 1.08rem; }
+
+/* tabs */
+.tabs { display: flex; gap: 0.4rem; overflow-x: auto; padding-bottom: 2px; border-bottom: 1px solid var(--rule); scrollbar-width: thin; }
+.tab { flex: none; font: 600 1rem var(--body); color: var(--ink-soft); background: none; border: 0; border-bottom: 3px solid transparent; padding: 0.7rem 0.9rem; margin-bottom: -1px; cursor: pointer; }
+.tab:hover { color: var(--ink); }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.panel { padding-top: 1.75rem; }
+@media (prefers-reduced-motion: no-preference) {
+  .panel:not([hidden]) { animation: rise 0.28s ease-out; }
+  @keyframes rise { from { opacity: 0.4; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+}
+.tour-text { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 0.75rem 3rem; align-items: baseline; margin-bottom: 1.5rem; }
+.tour-text h3 { font-size: clamp(1.4rem, 2.6vw, 1.9rem); font-weight: 700; line-height: 1.1; }
+.tour-text p { color: var(--ink-soft); }
+
+/* evidence demo */
+.demo { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2rem 3rem; align-items: start; }
+.demo-answer { font-size: clamp(1.15rem, 1.9vw, 1.4rem); line-height: 1.5; }
+.demo-q { font-family: var(--mono); font-size: 0.8rem; color: var(--ink-soft); margin-bottom: 0.9rem; }
+.src { font: 500 0.78em var(--mono); color: var(--accent); background: none; border: 0; padding: 0 0.1em; cursor: pointer; text-decoration: underline; text-underline-offset: 0.2em; white-space: nowrap; }
+.verdict { display: inline-block; margin-top: 1.1rem; font: 500 0.78rem var(--mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--slate); border: 1px solid var(--rule); border-radius: 999px; padding: 0.25rem 0.7rem; }
+.passages { display: grid; gap: 0.9rem; }
+.passage { border-left: 3px solid var(--rule); padding: 0.2rem 0 0.2rem 1rem; transition: background-color 0.2s, border-color 0.2s; }
+.passage.is-lit { border-left-color: var(--accent); background: var(--lit); }
+.passage-head { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-soft); margin-bottom: 0.3rem; overflow-wrap: anywhere; }
+.passage-head b { color: var(--ink); font-weight: 500; }
+.passage p { font-size: 0.98rem; }
+.fine { color: var(--ink-soft); font-size: 0.88rem; margin-top: 1.75rem; max-width: 46rem; }
+
+/* capabilities: ruled rows, no cards */
+.caps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2.5rem 3rem; }
+.caps h3 { font-size: 0.8rem; font-family: var(--mono); font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); padding-bottom: 0.8rem; border-bottom: 2px solid var(--ink); }
+.caps dl { margin: 0; }
+.caps dt { font-family: var(--display); font-weight: 700; font-size: 1.15rem; letter-spacing: -0.01em; padding-top: 1rem; }
+.caps dd { margin: 0.2rem 0 0; padding-bottom: 1rem; border-bottom: 1px solid var(--rule); color: var(--ink-soft); font-size: 0.95rem; line-height: 1.5; }
+
+/* industries */
+.ind { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.6fr); gap: 2rem 4rem; align-items: start; }
+.ind-tabs { display: grid; gap: 0; }
+.ind-tab { text-align: left; font: 700 clamp(1.15rem, 2vw, 1.45rem) var(--display); letter-spacing: -0.015em; color: var(--ink-soft); background: none; border: 0; border-top: 1px solid var(--rule); padding: 0.85rem 0.75rem 0.85rem 0; cursor: pointer; display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+.ind-tab:last-child { border-bottom: 1px solid var(--rule); }
+.ind-tab:hover { color: var(--ink); }
+.ind-tab[aria-selected="true"] { color: var(--ink); }
+.ind-tab[aria-selected="true"]::after { content: "→"; color: var(--accent); font-family: var(--body); }
+.ind-panel { padding-top: 0; }
+.ind-panel h3 { font-size: clamp(1.5rem, 3vw, 2.1rem); font-weight: 750; line-height: 1.08; letter-spacing: -0.03em; }
+.ind-panel > p { color: var(--ink-soft); margin-top: 0.7rem; max-width: 40rem; }
+.ask { margin: 1.5rem 0 0; padding: 1.1rem 1.25rem; border-radius: 12px; background: var(--surface); border: 1px solid var(--rule); }
+.ask span { display: block; font: 500 0.74rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 0.4rem; }
+.ask q { font-family: var(--display); font-size: clamp(1.1rem, 1.8vw, 1.3rem); font-weight: 600; line-height: 1.3; quotes: "“" "”"; }
+.facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.25rem 2rem; margin: 1.5rem 0 0; }
+.facts dt { font: 500 0.74rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); padding-bottom: 0.4rem; border-bottom: 1px solid var(--rule); }
+.facts dd { margin: 0.5rem 0 0; font-size: 0.95rem; line-height: 1.5; }
+
+/* deployment */
+.shapes { border-top: 2px solid var(--ink); }
+.shape { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1.3fr); gap: 0.4rem 2.5rem; padding-block: 1rem; border-bottom: 1px solid var(--rule); align-items: baseline; }
+.shape h3 { font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em; }
+.shape p { color: var(--ink-soft); font-size: 0.95rem; line-height: 1.5; }
+.shape p b { color: var(--ink); font-weight: 600; }
+.privacy { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.5rem 3rem; margin-top: 3rem; }
+.privacy h3 { font-size: 1.15rem; font-weight: 700; }
+.privacy p { color: var(--ink-soft); font-size: 0.95rem; margin-top: 0.35rem; }
+
+/* closing band */
+.close { padding-block: clamp(3.5rem, 8vw, 6rem); }
+.close h2 { font-size: clamp(2.2rem, 6.5vw, 4.8rem); font-weight: 800; line-height: 0.98; letter-spacing: -0.04em; max-width: 14em; }
+.close .lede { margin-top: 1.25rem; color: var(--band-soft); }
+.steps { list-style: none; counter-reset: s; margin: 2rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.5rem 2.5rem; }
+.steps li { counter-increment: s; border-top: 1px solid var(--band-rule); padding-top: 1rem; color: var(--band-soft); font-size: 0.96rem; }
+.steps li::before { content: counter(s); display: block; font: 800 2rem var(--display); color: var(--mark); line-height: 1; margin-bottom: 0.5rem; }
+.steps b { color: var(--band-fg); font-weight: 600; }
+.steps code { font-family: var(--mono); font-size: 0.82em; color: var(--band-fg); overflow-wrap: anywhere; }
+footer { padding-block: 2rem 3rem; color: var(--ink-soft); font-size: 0.88rem; }
+footer .wrap { display: grid; gap: 0.6rem; max-width: 1160px; }
+footer p { max-width: 52rem; }
+
+@media (max-width: 860px) {
+  .hero-row, .tour-text, .demo, .ind { grid-template-columns: minmax(0, 1fr); }
+  .callouts, .caps, .privacy, .steps, .facts { grid-template-columns: minmax(0, 1fr); }
+  .shape { grid-template-columns: minmax(0, 1fr); }
+  .caps { gap: 2.25rem; }
+}
+</style>
+</head>
+<body>
+<header class="band">
+  <div class="wrap">
+    <nav class="nav" aria-label="Page">
+      <span class="brand"><img src="landing/clio-mark-dark.png" alt="" width="38" height="38">CLIO</span>
+      <span class="nav-links">
+        <a href="#tour">A look around</a>
+        <a href="#industries">Who it's for</a>
+        <a href="#deploy">Where it runs</a>
+        <a href="https://github.com/jordanboyce/clio">GitHub</a>
+      </span>
+    </nav>
+    <div class="hero">
+      <p class="eyebrow">Self-hosted · open source · MIT</p>
+      <h1>The record <mark>remembers.</mark></h1>
+      <div class="hero-row">
+        <div>
+          <p class="lede">Clio is a knowledge base you run yourself, for people and for the AI agents they use. Add your documents, ask questions that are answered with citations, and hand the same knowledge to Claude, ChatGPT or any MCP client.<a class="cite" href="https://github.com/jordanboyce/clio#readme">[README]</a></p>
+          <div class="cmd">
+            <div class="cmd-head"><span>Try it in two minutes. No documents, model or API key needed.</span><button class="copy" type="button" id="copy-top" data-copy="cmd-text">Copy</button></div>
+            <pre id="cmd-text">docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 -v clio-data:/app/data ghcr.io/jordanboyce/clio:slim</pre>
+          </div>
+          <p class="hero-links"><span>Then open localhost:8473</span><a href="https://github.com/jordanboyce/clio">View the source on GitHub</a></p>
+        </div>
+        <ul class="verbs">
+          <li><b>Ask</b><span>your sources, and get an answer that names the passage behind each claim.</span></li>
+          <li><b>Check</b><span>the evidence. Open the passage, the page and the original file.</span></li>
+          <li><b>Connect</b><span>your AI tools, so agents read the same record you do.</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap hero-shot">
+  <figure class="shot">
+    <img src="screenshots/01-ask-cited-answer-dark.png" width="3200" height="2000" fetchpriority="high" alt="Clio's Ask view. A question about equipment checkouts is answered in two sentences with Source 1, Source 4 and Source 2 citations, and the Review evidence panel shows each cited passage beside a thumbnail of the PDF page it came from.">
+  </figure>
+  <div class="callouts">
+    <div><h3>The answer cites as it goes</h3><p>Each claim carries a [Source N] marker. The sources sit in a strip under the answer, with their page numbers.</p></div>
+    <div><h3>Review evidence is one click</h3><p>Every cited passage opens in place, labelled with where it sits in the file and how sensitive it is.</p></div>
+    <div><h3>The page is right there</h3><p>A thumbnail of the page, the chart embedded in it, and a link to the original. You read the source, never a paraphrase of it.</p></div>
+  </div>
+  <p class="self-cite">This page follows the product's own rule. A bracketed marker like <a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/BRAND.md">[BRAND]</a> links to the document in the repository that backs the claim beside it. Screenshots show the fictional sample records that ship with Clio.</p>
+</div>
+
+<section id="tour">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">A look around</p>
+      <h2>Ask is one room. Here are four more.</h2>
+    </div>
+    <div class="tabs" role="tablist" aria-label="Product tour" data-tabs>
+      <button class="tab" role="tab" id="t-find" aria-controls="p-find" aria-selected="true">Find</button>
+      <button class="tab" role="tab" id="t-connect" aria-controls="p-connect" aria-selected="false" tabindex="-1">Connect</button>
+      <button class="tab" role="tab" id="t-reports" aria-controls="p-reports" aria-selected="false" tabindex="-1">Reports</button>
+      <button class="tab" role="tab" id="t-models" aria-controls="p-models" aria-selected="false" tabindex="-1">Models</button>
+    </div>
+
+    <div class="panel" role="tabpanel" id="p-find" aria-labelledby="t-find">
+      <div class="tour-text">
+        <h3>The exact passage, with no model</h3>
+        <p>Find searches by meaning and by exact words at once, then a local reranker orders the best candidates. Codes, names, numbers and quotes stay intact, and nothing leaves the machine.<a class="cite" href="https://github.com/jordanboyce/clio#what-people-do-with-it">[README]</a></p>
+      </div>
+      <figure class="shot">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="screenshots/02-find-results-dark.png">
+          <img src="screenshots/02-find-results.png" width="3200" height="2000" loading="lazy" alt="The Find view: ten matching passages for a query, matched words highlighted, with page thumbnails beside a PDF result and an image result.">
+        </picture>
+      </figure>
+    </div>
+
+    <div class="panel" role="tabpanel" id="p-connect" aria-labelledby="t-connect" hidden>
+      <div class="tour-text">
+        <h3>The same knowledge for your agents</h3>
+        <p>Turn on agent access and give each device its own token. A token can be limited to certain collections, kept read-only, set to expire, and revoked at any time. Clio writes out the exact settings each client wants.<a class="cite" href="https://github.com/jordanboyce/clio#connect-an-ai-client">[README]</a></p>
+      </div>
+      <figure class="shot">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="screenshots/03-connect-agents-dark.png">
+          <img src="screenshots/03-connect-agents.png" width="3200" height="2000" loading="lazy" alt="The Connect view: the MCP server switch, the personal access token form with write and collection-scope options, and connection details for a client.">
+        </picture>
+      </figure>
+    </div>
+
+    <div class="panel" role="tabpanel" id="p-reports" aria-labelledby="t-reports" hidden>
+      <div class="tour-text">
+        <h3>A collection turned into a document</h3>
+        <p>An executive summary, FAQ, timeline, briefing, study guide or podcast script, written from your sources with citations to review before you share it. Reports stay with the collection after you leave the page.<a class="cite" href="https://github.com/jordanboyce/clio#a-look-around">[README]</a></p>
+      </div>
+      <figure class="shot">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="screenshots/05-reports-dark.png">
+          <img src="screenshots/05-reports.png" width="3200" height="2000" loading="lazy" alt="The Reports view: six report types with optional focus and instructions, and a Generate button.">
+        </picture>
+      </figure>
+    </div>
+
+    <div class="panel" role="tabpanel" id="p-models" aria-labelledby="t-models" hidden>
+      <div class="tour-text">
+        <h3>Whatever model you trust</h3>
+        <p>A cloud key, a local Ollama model, or your own OpenAI-compatible endpoint. A hosted model receives only the passages it is asked about. Search and Find need no model at all.<a class="cite" href="https://github.com/jordanboyce/clio#what-people-do-with-it">[README]</a></p>
+      </div>
+      <figure class="shot">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="screenshots/06-settings-providers-dark.png">
+          <img src="screenshots/06-settings-providers.png" width="3200" height="2000" loading="lazy" alt="Settings, AI providers: Anthropic, OpenAI, Grok, Google Gemini, GitHub Models, OpenRouter, a connected local Ollama, Ollama Cloud, and an option to add your own endpoint.">
+        </picture>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="evidence">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Keeper of the record</p>
+      <h2>It cites. It never claims to know.</h2>
+      <p>Pick a question and press a source marker to see the passage behind it. The third question asks for something the records leave out.</p>
+    </div>
+    <div class="tabs" role="tablist" aria-label="Example questions" data-tabs>
+      <button class="tab" role="tab" id="q1" aria-controls="a1" aria-selected="true">When must equipment be returned?</button>
+      <button class="tab" role="tab" id="q2" aria-controls="a2" aria-selected="false" tabindex="-1">Is it different for field teams?</button>
+      <button class="tab" role="tab" id="q3" aria-controls="a3" aria-selected="false" tabindex="-1">Who approved the amendment?</button>
+    </div>
+
+    <div class="panel demo" role="tabpanel" id="a1" aria-labelledby="q1">
+      <div>
+        <p class="demo-q">Under EQ-17, when must equipment be returned?</p>
+        <p class="demo-answer">Within five working days of checkout <button class="src" type="button" data-src="a1s1">[Source 1]</button>. The operations desk can approve an extension, as long as it does so before the original return date <button class="src" type="button" data-src="a1s2">[Source 2]</button>.</p>
+      </div>
+      <div class="passages">
+        <div class="passage" id="a1s1"><p class="passage-head">[Source 1] <b>01-equipment-policy.md</b> · Standard return period</p><p><mark>Employees must return shared equipment within five working days of checkout.</mark> The operations desk records checkout and return dates in the equipment register.</p></div>
+        <div class="passage" id="a1s2"><p class="passage-head">[Source 2] <b>01-equipment-policy.md</b> · Extensions</p><p><mark>The operations desk may approve an extension before the original return date.</mark> Employees must record the new return date in the equipment register.</p></div>
+      </div>
+    </div>
+
+    <div class="panel demo" role="tabpanel" id="a2" aria-labelledby="q2" hidden>
+      <div>
+        <p class="demo-q">Does the rule differ for field teams after July 1, 2026?</p>
+        <p class="demo-answer">Yes. Field-team assignments that begin on or after July 1, 2026 get ten working days, and everyone else stays on five <button class="src" type="button" data-src="a2s1">[Source 1]</button>. An older desk note still gives five days for all, and it says itself that it predates the amendment <button class="src" type="button" data-src="a2s2">[Source 2]</button>.</p>
+      </div>
+      <div class="passages">
+        <div class="passage" id="a2s1"><p class="passage-head">[Source 1] <b>02-equipment-amendment.md</b> · Field-team exception</p><p><mark>For field-team assignments beginning on or after July 1, 2026, shared equipment may be checked out for ten working days.</mark> This replaces the five-working-day standard in EQ-17 only for those assignments. Other employees remain subject to the five-working-day standard.</p></div>
+        <div class="passage" id="a2s2"><p class="passage-head">[Source 2] <b>03-equipment-desk-note.md</b> · Section 1</p><p>Return shared equipment within five working days. Ask the operations desk for an extension before the return date. <mark>This note predates the July field-team amendment and does not describe its exception.</mark></p></div>
+      </div>
+    </div>
+
+    <div class="panel demo" role="tabpanel" id="a3" aria-labelledby="q3" hidden>
+      <div>
+        <p class="demo-q">Who approved the amendment?</p>
+        <p class="demo-answer">The records do not say. The amendment states that the approver's name and the meeting date are not in this copy, and it points to the approval register for them <button class="src" type="button" data-src="a3s1">[Source 1]</button>.</p>
+        <span class="verdict">Not in the records. No name guessed.</span>
+      </div>
+      <div class="passages">
+        <div class="passage" id="a3s1"><p class="passage-head">[Source 1] <b>02-equipment-amendment.md</b> · Approval record</p><p><mark>The approving person's name and the approval meeting date are not included in this copy.</mark> Consult the approval register to establish those facts.</p></div>
+      </div>
+    </div>
+    <p class="fine">The passages are quoted from the four sample records Clio offers on first run. The answers here were written for this page to show the behaviour; the wording of a real answer depends on the model you connect.<a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/AGENCY_PILOT.md">[AGENCY_PILOT]</a></p>
+  </div>
+</section>
+
+<section id="capabilities">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">What it does</p>
+      <h2>Real work, quietly.</h2>
+      <p>Indexing, search and reranking run on your machine. Answers come from whichever model you choose.</p>
+    </div>
+    <div class="caps">
+      <div>
+        <h3>For people</h3>
+        <dl>
+          <dt>Cited answers</dt><dd>Every answer carries [Source N] markers that open the passage, the page and the original file.</dd>
+          <dt>Search without a model</dt><dd>Meaning and keywords balanced per query, reranked locally. Exact strings, numbers and negation survive.</dd>
+          <dt>Spreadsheets as tables</dt><dd>CSV and XLSX become typed tables. Counts, sums, filters and rankings run as SQL, never as guessed passage search.</dd>
+          <dt>Reports</dt><dd>Summaries, FAQs, timelines, briefings and study guides, grounded in the collection and cited.</dd>
+          <dt>A library for papers</dt><dd>Screens sources against your question with verdicts backed by verified quotes. Metadata comes from catalogues, never a model.<a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/RESEARCH.md">[RESEARCH]</a></dd>
+        </dl>
+      </div>
+      <div>
+        <h3>For agents</h3>
+        <dl>
+          <dt>One endpoint, every client</dt><dd>Claude Desktop, claude.ai, ChatGPT, Grok, Claude Code, Codex, VS Code, Cursor, Windsurf and any MCP SDK.</dd>
+          <dt>Scoped tokens</dt><dd>Each token sees only the collections it was given. Reading is the default; writing is a separate permission.</dd>
+          <dt>Deep search as a tool</dt><dd>Agents run focused subqueries across collections and get told where the evidence is weak.</dd>
+          <dt>Notes that write back</dt><dd>Agents can save notes and summaries beside the sources. Every write is attributed and audited.</dd>
+          <dt>Tables over MCP</dt><dd>List tables, read a schema, query rows. An agent can audit a register row by row and cite the rule it applied.</dd>
+        </dl>
+      </div>
+      <div>
+        <h3>For whoever runs it</h3>
+        <dl>
+          <dt>Almost any source</dt><dd>PDFs, Office files, scanned pages by OCR, photos, audio by Whisper, and code in more than sixty languages, split by function and class.</dd>
+          <dt>Folders and repositories in sync</dt><dd>Point it at a folder or a git repository once. Later syncs re-index only what changed and post it to the Updates feed.</dd>
+          <dt>An accountable corpus</dt><dd>Attribution on every source, an append-only audit trail, sensitivity labels and content-policy scanning.</dd>
+          <dt>Collections that travel</dt><dd>Export one file another Clio can import, with nothing scanned or OCR'd again.</dd>
+          <dt>Search for a static website</dt><dd>Publish a public collection as files a site searches in the visitor's browser, with no server behind it.<a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/STATIC_SEARCH.md">[STATIC_SEARCH]</a></dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="industries">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Who it's for</p>
+      <h2>Built for people who have to be able to show where an answer came from.</h2>
+    </div>
+    <div class="ind">
+      <div class="ind-tabs" role="tablist" aria-label="Industries" aria-orientation="vertical" data-tabs>
+        <button class="ind-tab" role="tab" id="i1" aria-controls="ip1" aria-selected="true">Aerospace and precision manufacturing</button>
+        <button class="ind-tab" role="tab" id="i2" aria-controls="ip2" aria-selected="false" tabindex="-1">Government and public agencies</button>
+        <button class="ind-tab" role="tab" id="i3" aria-controls="ip3" aria-selected="false" tabindex="-1">Nuclear and risk engineering</button>
+        <button class="ind-tab" role="tab" id="i4" aria-controls="ip4" aria-selected="false" tabindex="-1">Research groups and universities</button>
+        <button class="ind-tab" role="tab" id="i5" aria-controls="ip5" aria-selected="false" tabindex="-1">Software and platform teams</button>
+        <button class="ind-tab" role="tab" id="i6" aria-controls="ip6" aria-selected="false" tabindex="-1">Law, finance and other confidential work</button>
+      </div>
+      <div>
+        <div class="ind-panel" role="tabpanel" id="ip1" aria-labelledby="i1">
+          <h3>Which revision applied to this lot?</h3>
+          <p>Quality teams at AS9100 suppliers answer that by opening several files. Clio answers from the released revision, labels the older one when it turns up, and says plainly when the records do not say.<a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/QUALITY_PILOT.md">[QUALITY_PILOT]</a></p>
+          <div class="ask"><span>A question it answers</span><q>Lot 2608 of the 7731-204 bracket: which torque applied when it was built?</q></div>
+          <dl class="facts">
+            <div><dt>What goes in</dt><dd>Procedures, work instructions, ECNs, deviations, NCR logs and audit reports from the shared drive.</dd></div>
+            <div><dt>Why it fits</dt><dd>Mark rev D as replacing rev C and search demotes the old one. The NCR log is queried with SQL.</dd></div>
+            <div><dt>How to run it</dt><dd>On your own hardware with your own model. It sits beside the QMS and does not replace it.</dd></div>
+          </dl>
+        </div>
+        <div class="ind-panel" role="tabpanel" id="ip2" aria-labelledby="i2" hidden>
+          <h3>Policy, amendment, desk note. Which one holds?</h3>
+          <p>Staff find procedures, compare revisions and prepare briefings with the evidence attached. A reviewer stays responsible for the decision and can check every date and exception in the original.<a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/AGENCY_PILOT.md">[AGENCY_PILOT]</a></p>
+          <div class="ask"><span>A question it answers</span><q>Does the rule differ for field teams after July 1, 2026?</q></div>
+          <dl class="facts">
+            <div><dt>What goes in</dt><dd>Policies, amendments, guidance, registers and the informal notes that disagree with them.</dd></div>
+            <div><dt>Why it fits</dt><dd>Copy with evidence takes the answer, its numbered references and excerpts straight into a draft briefing.</dd></div>
+            <div><dt>How to run it</dt><dd>Sign-in from Keycloak, Entra ID, Okta, mTLS or Kerberos, sensitivity labels, and a full audit trail.<a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/IDENTITY.md">[IDENTITY]</a></dd></div>
+          </dl>
+        </div>
+        <div class="ind-panel" role="tabpanel" id="ip3" aria-labelledby="i3" hidden>
+          <h3>A PRA model you can question in words.</h3>
+          <p>Clio reads fault trees, event trees, basic events and computed cut sets. Each tree, gate and sequence becomes a passage you can open and cite, and the model's events and cut sets become SQL tables.<a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/PRA.md">[PRA]</a></p>
+          <div class="ask"><span>A question it answers</span><q>What feeds gate SYS-B-FAILS, and which sequences end in core damage?</q></div>
+          <dl class="facts">
+            <div><dt>What goes in</dt><dd>Open-PSA MEF files and SAPHIRE MAR-D exports, beside the reports and procedures that describe them.</dd></div>
+            <div><dt>Why it fits</dt><dd>Clio does not quantify a model. Probabilities and cut sets are the ones the model carries, and anything it cannot represent is listed as a warning.</dd></div>
+            <div><dt>How to run it</dt><dd>Fully disconnected, with cloud providers and model downloads switched off.<a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/AIRGAP.md">[AIRGAP]</a></dd></div>
+          </dl>
+        </div>
+        <div class="ind-panel" role="tabpanel" id="ip4" aria-labelledby="i4" hidden>
+          <h3>Two hundred downloads, sorted by what they actually say.</h3>
+          <p>The Library screens papers and books against your question and backs each verdict with a quote it has verified in the text. It maps citations between your sources and prepares reviews overnight.<a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/RESEARCH.md">[RESEARCH]</a></p>
+          <div class="ask"><span>A question it answers</span><q>Which of these papers test the claim directly, and what page says so?</q></div>
+          <dl class="facts">
+            <div><dt>What goes in</dt><dd>PDFs of papers and books, plus the internal reports and memos that have no DOI.</dd></div>
+            <div><dt>Why it fits</dt><dd>Files are renamed to year, authors and title. References export as BibTeX, RIS or CSL-JSON, and a draft's citations can be checked.</dd></div>
+            <div><dt>How to run it</dt><dd>On a laptop, for one person, with nothing to configure. Much of it works without a model.</dd></div>
+          </dl>
+        </div>
+        <div class="ind-panel" role="tabpanel" id="ip5" aria-labelledby="i5" hidden>
+          <h3>Your codebase and runbooks, inside the tools you already code with.</h3>
+          <p>Index a source tree and Clio splits it by function, class, SQL object and Terraform resource. Claude Code, Codex, Cursor and VS Code then search it over MCP, each with its own token.<a class="cite" href="https://github.com/jordanboyce/clio#what-people-do-with-it">[README]</a></p>
+          <div class="ask"><span>A task for an agent</span><q>Audit the equipment register against EQ-17 and its amendment, cite the rule behind each row, and write the result to audit.md.</q></div>
+          <dl class="facts">
+            <div><dt>What goes in</dt><dd>Repositories, design documents, runbooks, incident notes and the spreadsheets nobody wants to open.</dd></div>
+            <div><dt>Why it fits</dt><dd>Every passage keeps its symbol name and line range. A watched repository re-indexes only what a commit changed.</dd></div>
+            <div><dt>How to run it</dt><dd>One container on a team server, a personal token per device, read-only unless you allow writes.</dd></div>
+          </dl>
+        </div>
+        <div class="ind-panel" role="tabpanel" id="ip6" aria-labelledby="i6" hidden>
+          <h3>Documents that are not allowed to leave the building.</h3>
+          <p>Documents and indexes live in a data directory on your machine. A collection marked local only is refused by every outside service, and offline mode disables cloud providers entirely.<a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/CLASSIFICATION.md">[CLASSIFICATION]</a></p>
+          <div class="ask"><span>A question it answers</span><q>Which of these agreements allow termination for convenience, and on what notice?</q></div>
+          <dl class="facts">
+            <div><dt>What goes in</dt><dd>Contracts, policies, case files, board papers and scanned correspondence.</dd></div>
+            <div><dt>Why it fits</dt><dd>Private collections, an append-only audit trail that can include agent reads, and a model on your own hardware.</dd></div>
+            <div><dt>What it is not</dt><dd>A certification. Clio keeps documents where your rules say they must stay; meeting those rules is still yours to show.</dd></div>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="deploy">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Where it runs</p>
+      <h2>One image, from a laptop to an air gap.</h2>
+      <p>Every shape uses the same code path for authorisation, whether a request comes from the browser, the API or an agent.<a class="cite" href="https://github.com/jordanboyce/clio#where-people-run-it">[README]</a></p>
+    </div>
+    <div class="shapes">
+      <div class="shape"><h3>Just you</h3><p><b>One Docker command</b> or a Python install.</p><p>Reachable from your machine only. No sign-in, nothing to configure.</p></div>
+      <div class="shape"><h3>A few people on a LAN</h3><p><b>Docker with a shared password.</b></p><p>Everyone who knows the password works on one shared corpus.</p></div>
+      <div class="shape"><h3>A team over HTTPS</h3><p><b>Behind a TLS reverse proxy,</b> or on a Tailscale or WireGuard network.</p><p>The password, plus the proxy or private network as the only route in.</p></div>
+      <div class="shape"><h3>Agents, lots of them</h3><p><b>The same image,</b> with a personal token for each agent.</p><p>Each token sees the collections it was given and nothing else.</p></div>
+      <div class="shape"><h3>An organisation with sign-in</h3><p><b>Your identity provider and your own models.</b></p><p>Private collections, OAuth sign-in for connector clients, a full audit trail.<a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/ENTERPRISE.md">[ENTERPRISE]</a></p></div>
+      <div class="shape"><h3>Fully air-gapped</h3><p><b>The offline bundle with the secure profile.</b></p><p>Cloud providers and model downloads disabled. It refuses to start when unsafely exposed and reports exactly where data can go.<a class="cite" href="https://github.com/jordanboyce/clio/blob/master/docs/SECURE_PROFILE.md">[SECURE_PROFILE]</a></p></div>
+    </div>
+    <div class="privacy">
+      <div><h3>What stays on your machine</h3><p>Your documents, the index, embeddings, keyword search and reranking.</p></div>
+      <div><h3>What a hosted model sees</h3><p>Only the passages it is asked about, and only if you connect one. A local model sees them on your hardware instead.</p></div>
+      <div><h3>What Clio depends on</h3><p>No cloud service and no account. The default install needs no configuration at all.</p></div>
+    </div>
+  </div>
+</section>
+
+<div class="band">
+  <div class="wrap close">
+    <p class="eyebrow" style="color: var(--band-soft)">Try it</p>
+    <h2>Two minutes to a cited answer.</h2>
+    <div class="cmd">
+      <div class="cmd-head"><span>The slim image. Free and MIT licensed.</span><button class="copy" type="button" id="copy-bottom" data-copy="cmd-text-2">Copy</button></div>
+      <pre id="cmd-text-2">docker run -d --name clio -p 127.0.0.1:8473:8473 -e BIND_ADDRESS=127.0.0.1 -v clio-data:/app/data ghcr.io/jordanboyce/clio:slim</pre>
+    </div>
+    <ol class="steps">
+      <li><b>Open localhost:8473</b> and choose Explore with sample documents. Four short fictional records arrive, already searchable.</li>
+      <li><b>Pick a suggested question.</b> With no model connected it runs as a Find search. Connect a model and the same questions get written, cited answers.</li>
+      <li><b>Hand the records to your agent.</b> For Claude Code: <code>claude mcp add --transport http clio http://localhost:8473/mcp</code></li>
+    </ol>
+    <p class="hero-links"><a href="https://github.com/jordanboyce/clio">github.com/jordanboyce/clio</a><a href="https://github.com/jordanboyce/clio/blob/master/docs/DEPLOYMENT.md">Deployment guide</a><a href="https://github.com/jordanboyce/clio/blob/master/docs/ROADMAP.md">Roadmap</a></p>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <p>Clio is named for the Muse of history, daughter of Memory, who saw that deeds and events were written down so they would not be forgotten.</p>
+    <p>Every screenshot and example on this page uses invented demonstration records. Product names of AI clients belong to their owners.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  // Tabs: click or arrow keys, one panel visible per group.
+  document.querySelectorAll('[data-tabs]').forEach(function (list) {
+    var tabs = Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));
+    function select(index, focus) {
+      tabs.forEach(function (tab, i) {
+        var on = i === index;
+        tab.setAttribute('aria-selected', on ? 'true' : 'false');
+        tab.tabIndex = on ? 0 : -1;
+        var panel = document.getElementById(tab.getAttribute('aria-controls'));
+        if (panel) panel.hidden = !on;
+      });
+      if (focus) tabs[index].focus();
+    }
+    tabs.forEach(function (tab, i) {
+      tab.addEventListener('click', function () { select(i, false); });
+      tab.addEventListener('keydown', function (event) {
+        var step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+        if (!step) return;
+        event.preventDefault();
+        select((i + step + tabs.length) % tabs.length, true);
+      });
+    });
+  });
+
+  // A source marker lights the passage it cites.
+  document.querySelectorAll('.src').forEach(function (button) {
+    button.addEventListener('click', function () {
+      var target = document.getElementById(button.dataset.src);
+      if (!target) return;
+      target.parentNode.querySelectorAll('.passage').forEach(function (p) { p.classList.remove('is-lit'); });
+      target.classList.add('is-lit');
+      if (target.scrollIntoView) target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+  });
+
+  // Copy the command; select it when the clipboard is refused.
+  document.querySelectorAll('.copy').forEach(function (button) {
+    button.addEventListener('click', function () {
+      var pre = document.getElementById(button.dataset.copy);
+      function selectText() {
+        var range = document.createRange();
+        range.selectNodeContents(pre);
+        var selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        button.textContent = 'Selected';
+      }
+      try {
+        navigator.clipboard.writeText(pre.textContent).then(function () {
+          button.textContent = 'Copied';
+          setTimeout(function () { button.textContent = 'Copy'; }, 1800);
+        }, selectText);
+      } catch (error) { selectText(); }
+    });
+  });
+})();
+</script>
+</body>
+</html>

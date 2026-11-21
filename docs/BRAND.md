@@ -46,7 +46,8 @@ surface:
 - the README introduction,
 - the About dialog (`frontend/src/components/AboutDialog.vue`),
 - the API description on `/docs` (`main.py`),
-- the Open Graph description in `frontend/index.html`.
+- the Open Graph description in `frontend/index.html`,
+- the foot of the landing page (`docs/index.html`).
 
 ## Iconography and assets
 
