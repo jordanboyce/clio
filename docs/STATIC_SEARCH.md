@@ -73,6 +73,7 @@ The export does not judge the content. Read the passage diff before you commit i
 | Related passages from other sources | `related` | `related/<name>.json` for each source, and `<clio-related>` on the reader's pages | a whole site, searched by meaning |
 | Answers written in advance | `answers` | `answers.json`; the search box shows one above its results, `<clio-answers>` lists them | answers written and approved |
 | An index of terms | `terms` | `read/terms.html`, linked from the contents page | the pages to read (included with it) |
+| Spreadsheets as tables | `tables` | `tables/<name>.json` and `tables/<name>.csv` for each table; `<clio-table>` on the reader's pages | a spreadsheet among the sources |
 | The pages as Markdown | `markdown` | `markdown/_index.md` and `markdown/<name>.md` for each source | command line and HTTP only |
 
 ### Related passages
@@ -125,6 +126,19 @@ The label on a published answer ("Written in advance, not for your question.") i
 ### An index of terms
 
 `terms` adds an A to Z index to the reader: each term with links to the passages that mention it, on their sources' pages. The terms are the names and acronyms Clio picks out of passages for its own search (capitalised phrases such as "Regional Analysis Unit", and acronyms), kept when they appear in at least two passages and in no more than 30% of them, as Clio's search does, and at most the 400 most widely used. Clio stores them only in a normalised form (lower case, plurals stripped: "analysis" is kept as "analysi"), so the export reads the exported passages again and shows each term the way it is written most often. Only exported passages are read: no term, link or count comes from a source that was left out. Terms are not turned into links inside the pages. A term in more than twelve passages links to the first twelve and says how many more.
+
+### Spreadsheets
+
+Clio keeps a spreadsheet as typed tables as well as passages, and `tables` exports each table of an exported source: `tables/<name>.json` (its columns and their types, then one row per line) and `tables/<name>.csv` for a spreadsheet program. Every CSV cell a spreadsheet would read as a formula (one starting `=`, `+`, `-`, `@`, a tab or a carriage return) starts with a `'`, so it opens as text ([services/csv_safety.py](../services/csv_safety.py)). A cell is shown as the source wrote it where Clio kept that text (dates and amounts, which sort by their value), and a true/false column as yes and no. A table of more than 5,000 rows is left out and counted in the dialog.
+
+`<clio-table>` shows one: sort by any column (again to reverse), filter by words in any cell, page through 25 rows at a time, and download its CSV. With the reader, a spreadsheet's page carries its tables.
+
+```html
+<script type="module" src="/assets/handbook/clio-table.js"></script>
+<clio-table src="/assets/handbook/search/" table="tables/equipment-register.json"></clio-table>
+```
+
+`table` is a file the manifest lists under `additions.tables`, or a source's id for its first table. Parts: `label`, `filter`, `status`, `table`, `header`, `cell`, `pages`, `download`.
 
 ### Markdown for a site generator
 
@@ -210,7 +224,7 @@ A whole site carries settings for the common servers at its root; each reads onl
 
 | File | For | Sets |
 |---|---|---|
-| `web.config` | IIS | the types of `.bin`, `.onnx`, `.wasm`, `.json` and `.mjs`, which IIS otherwise refuses to serve (a 404.3); no caching for the manifest |
+| `web.config` | IIS | the types of `.bin`, `.onnx`, `.wasm`, `.json` and `.mjs`, and of the files additions write (`.csv`, `.tsv`, `.md`, `.vtt`, `.webmanifest`, `.epub`, `.bib`, `.npy`, `.jsonl`), which IIS otherwise refuses to serve (a 404.3); no caching for the manifest |
 | `.htaccess` | Apache | the same types, caching, compression |
 | `_headers` | Netlify, Cloudflare Pages | caching and the `.wasm` type; read only at the site's root, so for a folder inside a bigger site, copy its lines into the site's own file with the folder's path in front |
 
@@ -285,7 +299,7 @@ These settings are transformers.js's own and have changed between its major vers
 
 - Search is by meaning only, with a simple keyword fallback. Clio's hybrid ranking, reranker, entity boosts and table search stay in Clio.
 - Every visitor downloads the whole index and the model. Past a few tens of thousands of passages, use a server.
-- Spreadsheets are not in the export: Clio keeps them as tables, not passages.
+- A spreadsheet goes out as a table (`include=tables`) only up to 5,000 rows; a bigger one is left out, and the dialog counts it. Reading a large table in the browser from the SQLite file itself would mean shipping a WebAssembly build of SQLite with the site, which is the owner's decision.
 - A result links only where its source has an address; the export cannot know where a file is published unless someone says so.
 - The Markdown pages follow the conventions MkDocs and Hugo document, but have not been built with either here: neither was installed where this was written. Links in `_index.md` are to the `.md` files, which MkDocs resolves and Hugo does not without a link render hook.
 - A published answer is shown only for a query close to its question by a fixed threshold, measured on a small fixture; it recognises about half of fair paraphrases. It is not a search over the answers' text.

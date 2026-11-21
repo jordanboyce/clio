@@ -6,6 +6,16 @@ AddType application/wasm .wasm
 AddType application/octet-stream .onnx .bin
 AddType text/javascript .js .mjs
 AddType application/json .json
+# What an export's additions write.
+AddType "text/csv; charset=utf-8" .csv
+AddType "text/tab-separated-values; charset=utf-8" .tsv
+AddType "text/markdown; charset=utf-8" .md
+AddType text/vtt .vtt
+AddType application/manifest+json .webmanifest
+AddType application/epub+zip .epub
+AddType "application/x-bibtex; charset=utf-8" .bib
+AddType application/octet-stream .npy
+AddType "application/jsonl; charset=utf-8" .jsonl
 
 <IfModule mod_headers.c>
   # The manifest names every other file with its checksum, so it is read
@@ -21,5 +31,5 @@ AddType application/json .json
 </IfModule>
 
 <IfModule mod_deflate.c>
-  AddOutputFilterByType DEFLATE application/json text/javascript application/wasm
+  AddOutputFilterByType DEFLATE application/json text/javascript application/wasm text/html text/css text/csv text/markdown text/vtt application/xml
 </IfModule>

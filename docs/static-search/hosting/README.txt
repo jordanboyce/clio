@@ -10,6 +10,11 @@ What is here
   index.html              a page with the search box, ready to serve
   clio-search.js          the search box, <clio-search>, for your own pages
   clio-static-search.js   the search library the box uses
+  clio-common.js          what the box and the other components share
+  clio-related.js, clio-answers.js, clio-cite.js, clio-table.js
+                          components for related passages, answers
+                          written in advance, quotations and tables
+                          (docs/STATIC_SEARCH.md in Clio says how)
   search/                 the collection: manifest.json, the passages, and
                           vectors.bin when it is searched by meaning
   vendor/, models/        the model and the library that runs it (when the
