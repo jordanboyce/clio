@@ -161,6 +161,20 @@ Clio does not keep a page's whole text, only its passages, and the passages on a
 
 The pages carry no script of their own and a Content-Security-Policy that allows none inline; source text is always written as text. Their look is `read/reader.css`: replace it to give them your site's. In a whole site each page also carries the search box. The pages are deterministic: an unchanged collection gives the same files.
 
+## How far it scales
+
+Every visitor downloads every passage and every vector. `scripts/static_scale_bench.py` measures where that stops being acceptable: it writes exports in the real format from generated text (800 characters a passage, 384-dimension vectors at 8 bits), opens each in headless Chromium with every other host blocked and the connection throttled to 20 Mbit/s with 40 ms of latency, and times the first result. The static server it uses does not compress, so the times are the worst case; the gzipped sizes say what a server that compresses sends. Measured 2026-11-20 on a 2018 laptop (i7-8750H):
+
+| Passages | Download | Gzipped | First keyword result | First result by meaning | Ranking alone | Browser heap |
+|---|---|---|---|---|---|---|
+| 10,000 | 12.5 MB (8.7 text, 3.8 vectors) | 4.7 MB | 6.0 s | 5.8 s | 13 ms | 24 MB |
+| 50,000 | 62.6 MB (43.3 text, 19.2 vectors) | 23.4 MB | 30.6 s | 29.4 s | 107 ms | 87 MB |
+| 200,000 | 250.6 MB (173.2 text, 76.8 vectors) | 92.9 MB | 114 s | 109 s | 376 ms | 316 MB |
+
+"By meaning" here is given its query vector directly; the model is a separate, one-time download (above). The generated text uses a small vocabulary and compresses about six times; real prose compresses about three times, so a real collection's gzipped text is about twice the figure shown. Vectors barely compress (8-bit numbers look random).
+
+The ranking is never the problem: a plain loop over 200,000 vectors takes under half a second. The download is. Up to about 10,000 passages the whole index is a few megabytes compressed and arrives in seconds. At 50,000 a first visit waits half a minute on a good connection and the page holds nearly 90 MB; at 200,000 it is two minutes and a third of a gigabyte, which a phone will not manage. So past about 10,000 passages, split the collection, use a server, or wait for an index in pieces (the owner's decision on keyword search is open: docs/ROADMAP.md).
+
 ## Exports that are not a website
 
 These leave the server as files for one person or one tool, not as a public site, so the website's gate does not apply; each follows the rule named below.
@@ -313,7 +327,7 @@ These settings are transformers.js's own and have changed between its major vers
 ## Limits
 
 - Search is by meaning only, with a simple keyword fallback. Clio's hybrid ranking, reranker, entity boosts and table search stay in Clio.
-- Every visitor downloads the whole index and the model. Past a few tens of thousands of passages, use a server.
+- Every visitor downloads the whole index and the model. Past about 10,000 passages a first visit waits many seconds, and past 50,000 it is too slow for most visitors ([How far it scales](#how-far-it-scales)): split the collection or use a server.
 - A spreadsheet goes out as a table (`include=tables`) only up to 5,000 rows; a bigger one is left out, and the dialog counts it. Reading a large table in the browser from the SQLite file itself would mean shipping a WebAssembly build of SQLite with the site, which is the owner's decision.
 - A result links only where its source has an address; the export cannot know where a file is published unless someone says so.
 - The Markdown pages follow the conventions MkDocs and Hugo document, but have not been built with either here: neither was installed where this was written. Links in `_index.md` are to the `.md` files, which MkDocs resolves and Hugo does not without a link render hook.
