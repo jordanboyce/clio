@@ -145,7 +145,7 @@ try {
     const { license } = JSON.parse(file('package.json').toString('utf8'))
     runtime.packages[pkg.name] = { version: pkg.version, license }
   }
-  // What an export records about the runtime it ships (services/static_export.py).
+  // What an export records about the runtime it ships (services/static_export/).
   writeFileSync(join(vendor, 'runtime.json'), JSON.stringify(runtime, null, 2) + '\n')
   console.log(`static-search runtime ready in ${vendor}`)
 } finally {

@@ -186,7 +186,7 @@ class MetadataStore:
                     -- classification marking (services/data_controls.py)
                     classification TEXT DEFAULT NULL,
                     -- where the source is published on the web, for a static
-                    -- export used on a website (services/static_export.py)
+                    -- export used on a website (services/static_export/)
                     public_url TEXT DEFAULT NULL
                 )
             """)
