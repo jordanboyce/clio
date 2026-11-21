@@ -2,8 +2,10 @@
 
 Its screenshots are the README's, which scripts/screenshots.py rewrites and
 could rename, so every file it names is checked here. So is what it loads
-from elsewhere: the fonts and nothing more.
+from elsewhere, which is nothing: the fonts are beside it, under landing/.
 """
+
+import re
 
 from html.parser import HTMLParser
 from pathlib import Path
@@ -12,14 +14,13 @@ from urllib.parse import urlparse
 DOCS = Path(__file__).resolve().parent.parent / "docs"
 PAGE = DOCS / "index.html"
 
-# Hosts the page may load from. A link a visitor follows is not a load.
-FONT_HOSTS = {"fonts.googleapis.com", "fonts.gstatic.com"}
-
 
 class _Page(HTMLParser):
     def __init__(self):
         super().__init__()
-        self.loads = []       # addresses the browser fetches to draw the page
+        # Addresses the browser fetches to draw the page. A link a visitor
+        # follows is not one of them.
+        self.loads = []
         self.ids = set()
         self.references = []  # ids another element points at
 
@@ -41,8 +42,11 @@ class _Page(HTMLParser):
 
 
 def _page() -> _Page:
+    text = PAGE.read_text(encoding="utf-8")
     parser = _Page()
-    parser.feed(PAGE.read_text(encoding="utf-8"))
+    parser.feed(text)
+    # What the stylesheet fetches: the fonts.
+    parser.loads.extend(m.strip("'\"") for m in re.findall(r"url\(([^)]+)\)", text))
     return parser
 
 
@@ -53,9 +57,11 @@ def test_every_file_the_page_names_exists():
     assert not missing, f"docs/index.html names files that are not in docs/: {missing}"
 
 
-def test_the_page_loads_only_its_fonts_from_elsewhere():
-    hosts = {urlparse(u).netloc for u in _page().loads} - {""}
-    assert hosts <= FONT_HOSTS, f"docs/index.html loads from {sorted(hosts - FONT_HOSTS)}"
+def test_the_page_loads_nothing_from_another_site():
+    page = _page()
+    assert any(u.endswith(".woff2") for u in page.loads), "the page names no fonts"
+    elsewhere = sorted(u for u in page.loads if urlparse(u).netloc or u.startswith("//"))
+    assert not elsewhere, f"docs/index.html loads from another site: {elsewhere}"
 
 
 def test_every_tab_and_marker_points_at_something():
