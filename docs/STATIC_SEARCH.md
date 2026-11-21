@@ -72,6 +72,7 @@ The export does not judge the content. Read the passage diff before you commit i
 | A page for each source | `reader` | `read/index.html` (the contents), `read/<name>.html` for each source, `read/reader.css`, and `sitemap.xml` when the site's address is set | nothing |
 | Related passages from other sources | `related` | `related/<name>.json` for each source, and `<clio-related>` on the reader's pages | a whole site, searched by meaning |
 | Answers written in advance | `answers` | `answers.json`; the search box shows one above its results, `<clio-answers>` lists them | answers written and approved |
+| An index of terms | `terms` | `read/terms.html`, linked from the contents page | the pages to read (included with it) |
 | The pages as Markdown | `markdown` | `markdown/_index.md` and `markdown/<name>.md` for each source | command line and HTTP only |
 
 ### Related passages
@@ -120,6 +121,10 @@ The label on a published answer ("Written in advance, not for your question.") i
 ```
 
 `passage` is the passage's id, as in `passages.json` or a reader page's anchor (`#p-…` works too); `words` quotes only the start. The passage files are read once for the page, however many quotations it has, and an id the export does not hold shows "Passage … is not in this export" rather than nothing. Parts: `quote`, `caption`, `title`, `meta`, `status`. A page thumbnail beside the quotation is not offered: Clio renders previews of a page on request and does not keep them, so it would mean rendering every quoted page at export.
+
+### An index of terms
+
+`terms` adds an A to Z index to the reader: each term with links to the passages that mention it, on their sources' pages. The terms are the names and acronyms Clio picks out of passages for its own search (capitalised phrases such as "Regional Analysis Unit", and acronyms), kept when they appear in at least two passages and in no more than 30% of them, as Clio's search does, and at most the 400 most widely used. Clio stores them only in a normalised form (lower case, plurals stripped: "analysis" is kept as "analysi"), so the export reads the exported passages again and shows each term the way it is written most often. Only exported passages are read: no term, link or count comes from a source that was left out. Terms are not turned into links inside the pages. A term in more than twelve passages links to the first twelve and says how many more.
 
 ### Markdown for a site generator
 
