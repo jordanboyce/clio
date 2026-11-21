@@ -150,6 +150,30 @@ describe('Export dialog, for a website', () => {
     expect(wrapper.text()).toContain('Needs the site ready to serve.')
   })
 
+  it('lists answers to publish with why each is or is not ready, and approves one', async () => {
+    const list = {
+      ready: 0, threshold: 0.58,
+      answers: [{ id: 'a1', question: 'When must equipment be returned?', approved_at: null, status: 'waiting',
+        status_text: 'Waiting for approval.' }],
+    }
+    const wrapper = await openSite(ready)
+    http.get.mockImplementation((url) => Promise.resolve({ data: url.endsWith('/answers') ? list : ready }))
+    http.post = vi.fn(() => Promise.resolve({ data: {} }))
+    const details = wrapper.get('[data-testid="published-answers"]')
+    details.element.open = true
+    await details.trigger('toggle')
+    await flushPromises()
+    expect(details.text()).toContain('Waiting for approval.')
+    const approve = wrapper.get('button[aria-label="Approve When must equipment be returned?"]')
+    list.answers[0] = { ...list.answers[0], approved_at: '2026-11-20T10:00:00+00:00', status: 'ready', status_text: 'Ready to publish.' }
+    list.ready = 1
+    await approve.trigger('click')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledWith('/api/collections/c1/export/static/answers/a1/approval', { approved: true })
+    expect(details.text()).toContain('Ready to publish.')
+    expect(details.text()).toContain('1 ready')
+  })
+
   it('keeps addresses on the web apart from pages in the export when the reader is chosen', async () => {
     const wrapper = await openSite({
       ...ready, addresses: { with_address: 1, total: 3, files_base_url: null },

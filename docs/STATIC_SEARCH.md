@@ -71,6 +71,7 @@ The export does not judge the content. Read the passage diff before you commit i
 |---|---|---|---|
 | A page for each source | `reader` | `read/index.html` (the contents), `read/<name>.html` for each source, `read/reader.css`, and `sitemap.xml` when the site's address is set | nothing |
 | Related passages from other sources | `related` | `related/<name>.json` for each source, and `<clio-related>` on the reader's pages | a whole site, searched by meaning |
+| Answers written in advance | `answers` | `answers.json`; the search box shows one above its results, `<clio-answers>` lists them | answers written and approved |
 | The pages as Markdown | `markdown` | `markdown/_index.md` and `markdown/<name>.md` for each source | command line and HTTP only |
 
 ### Related passages
@@ -85,6 +86,29 @@ The export does not judge the content. Read the passage diff before you commit i
 Without a `source` attribute (a source's id) it shows the source whose page it is on: the reader's page, or the source's own address. On a page that is neither, or with an export that has no related passages, it hides itself. It takes the shared `--clio-*` properties, has parts `label`, `status`, `results`, `result`, `title`, `meta` and `snippet`, and sends `clio-related-ready` (`{ source, count }`). With the reader in the same export, each source's page carries the box.
 
 It needs an export searched by meaning, and a whole site, since the component ships with the site's scripts. The similarities are worked out a block of 64 passages at a time, never as one table of every pair: at 50,000 passages the work needs 66 MB on top of the vectors (77 MB, which the server holds anyway to search them) and took about 75 seconds on a 2018 laptop.
+
+### Answers written in advance
+
+`answers` publishes questions with answers written beforehand, each citing the passages it rests on. Nothing is generated in the browser: a visitor whose query is close enough in meaning to a published question sees its answer above the search results, with its citations as links and a line saying it was written in advance, when, and from which sources. `<clio-answers>` lists them all.
+
+An answer is written over HTTP (`POST /api/collections/{id}/export/static/answers` with `question`, `answer` and `citations`, a list of passage ids; the answer cites them as `[Source 1]`, `[Source 2]`, ... in that order) and waits for approval. The dialog lists every answer under **Answers written in advance**, says whether each would be published and why not, and approves or removes it (`POST .../answers/{answer}/approval`, `DELETE .../answers/{answer}`). Every change is in the audit trail as `collection.static_answers`. An answer is published only when:
+
+- someone has approved it;
+- every passage it cites is still in the collection, and in a source this export carries: one citing a held source, or one with a stricter label, is left out, so no answer mentions a source the gate left out;
+- it passes the check Ask's answers get ([services/answer_check.py](../services/answer_check.py)): the figures, identifiers and quotes in each sentence that cites a passage are in that passage. The check does not judge meaning; read the answers before you approve them.
+
+`answers.json` carries each question, its answer, the date it was approved, its sources' titles, its citations (passage id, source, page and the start of the passage's text) and the question's vector, embedded by Clio's own model as a query. The answers travel in a bundle and come back unapproved.
+
+**How close is close enough** was measured, not guessed. `scripts/answer_threshold.py` embeds the questions in [tests/fixtures/static_answers.json](../tests/fixtures/static_answers.json): 20 published questions, two paraphrases of each, and 50 queries that should match none (25 off-topic, 25 on the same topics but not published, such as "Can I take unpaid leave?" beside "How many days of annual leave do staff get?"). The threshold is the lowest score with no false match and no wrong answer on the fixture, plus 0.02:
+
+| Model | Threshold | Paraphrases answered | Wrong answer | False matches (50 unrelated) |
+|---|---|---|---|---|
+| `all-MiniLM-L6-v2` | 0.58 | 55% | 0% | 0% |
+| `BAAI/bge-small-en-v1.5` | 0.77 | 40% | 0% | 0% |
+
+So the threshold is strict: about half of the paraphrases find their answer, and the rest get the ordinary results. Lower it and more paraphrases match, at a cost the script prints (MiniLM at 0.50: 80% answered, 2% a wrong answer, 2% false matches). The closest unrelated query was "How do I book a desk for tomorrow?" against "How do I book a meeting room?". The threshold is in `answers.json`; a site that wants another can change it there. A model with no measured threshold, or an export searched by keyword, lists its answers but never shows one above the results.
+
+The label on a published answer ("Written in advance, not for your question.") is a placeholder until the owner decides its wording.
 
 ### Markdown for a site generator
 
@@ -141,7 +165,7 @@ It works from any folder of the site: paths are read relative to the page, as a 
 | `label`, `placeholder` | | The box's label and placeholder. |
 | `target` | | `_blank` opens results in a new tab (with `rel="noopener"`). |
 
-It uses the page's own font and colours. Every Clio component reads the same shared properties, so a site can set them once: `--clio-accent`, `--clio-muted`, `--clio-border`, `--clio-background`, `--clio-radius`, `--clio-mark`, `--clio-font`, `--clio-color`. To set the search box alone, use its own, which win over the shared ones: `--clio-search-accent` (links and focus), `--clio-search-muted`, `--clio-search-border`, `--clio-search-background`, `--clio-search-radius`, `--clio-search-mark` (highlighted words), `--clio-search-font`, `--clio-search-color`; or style its parts with `::part()`: `label`, `input`, `status`, `results`, `result`, `title`, `meta`, `snippet`. The status line is a polite live region, so a screen reader hears how many passages are searched, how, and when nothing matches. It sends `clio-search-ready` (`{ semantic, reason }`) and `clio-search-results` (`{ query, hits }`) events, which bubble out of the shadow DOM.
+It uses the page's own font and colours. Every Clio component reads the same shared properties, so a site can set them once: `--clio-accent`, `--clio-muted`, `--clio-border`, `--clio-background`, `--clio-radius`, `--clio-mark`, `--clio-font`, `--clio-color`. To set the search box alone, use its own, which win over the shared ones: `--clio-search-accent` (links and focus), `--clio-search-muted`, `--clio-search-border`, `--clio-search-background`, `--clio-search-radius`, `--clio-search-mark` (highlighted words), `--clio-search-font`, `--clio-search-color`; or style its parts with `::part()`: `label`, `input`, `status`, `answer` (a published answer above the results), `results`, `result`, `title`, `meta`, `snippet`. The status line is a polite live region, so a screen reader hears how many passages are searched, how, and when nothing matches. It sends `clio-search-ready` (`{ semantic, reason }`) and `clio-search-results` (`{ query, hits }`) events, which bubble out of the shadow DOM.
 
 ### Where results link
 
@@ -248,5 +272,6 @@ These settings are transformers.js's own and have changed between its major vers
 - Spreadsheets are not in the export: Clio keeps them as tables, not passages.
 - A result links only where its source has an address; the export cannot know where a file is published unless someone says so.
 - The Markdown pages follow the conventions MkDocs and Hugo document, but have not been built with either here: neither was installed where this was written. Links in `_index.md` are to the `.md` files, which MkDocs resolves and Hugo does not without a link render hook.
+- A published answer is shown only for a query close to its question by a fixed threshold, measured on a small fixture; it recognises about half of fair paraphrases. It is not a search over the answers' text.
 - A reader page is the text Clio extracted, in passage order: no layout, images or tables, and a page boundary only where the source had one.
 - A source marked as replaced by a newer version is exported like any other. Remove it from the collection first if the site should not show it.

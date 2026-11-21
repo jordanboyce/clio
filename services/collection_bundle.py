@@ -246,6 +246,15 @@ def _static_addresses(collection_id: str) -> Optional[Dict[str, Any]]:
     return saved if any(saved.values()) else None
 
 
+def _static_answers(collection_id: str) -> Optional[List[Dict[str, Any]]]:
+    try:
+        from services.static_export import answers
+
+        return answers.carried(collection_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def describe_model(info: Dict[str, Any], documents: Iterable[Dict[str, Any]] = ()) -> Dict[str, Any]:
     """Say, in words a person can check, which embedding model made the vectors.
 
@@ -409,6 +418,8 @@ def export_collection(collection_id: str, include_sources: bool = False,
                 "chunk_overlap": collection.get("chunk_overlap"),
                 # Where its static export links and is served (services/static_export).
                 "static_export": _static_addresses(collection_id),
+                # Answers to publish with it; imported ones wait for approval there.
+                "static_answers": _static_answers(collection_id),
             },
             "embedding": {**info, **{k: v for k, v in describe_model(info, documents).items()
                                      if k in ("provider", "label", "recorded")}},
@@ -1058,6 +1069,10 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
                 from services.static_export import restore_address_settings
 
                 restore_address_settings(cid, meta.get("static_export"))
+            if meta.get("static_answers"):
+                from services.static_export import answers as static_answers
+
+                static_answers.restore(cid, meta.get("static_answers"))
 
             indexes_dir = collection_service.get_indexes_path(cid)
             documents_dir = collection_service.get_documents_path(cid)

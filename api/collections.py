@@ -1022,6 +1022,108 @@ def save_static_export_addresses(collection_id: str, request: StaticAddressesReq
     return addresses(collection_id)
 
 
+class StaticAnswerRequest(BaseModel):
+    """An answer to publish with a static export: it cites passages by id as
+    [Source 1], [Source 2], ... in the order given."""
+    question: str = Field(..., min_length=1, max_length=300)
+    answer: str = Field(..., min_length=1, max_length=4000)
+    citations: List[str] = Field(..., min_length=1, max_length=12)
+
+
+class StaticAnswerApproval(BaseModel):
+    approved: bool = True
+
+
+def _answer_refusal(e) -> HTTPException:
+    if e.code == "not_found":
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+
+
+@router.get(
+    "/api/collections/{collection_id}/export/static/answers",
+    summary="Answers to publish with a static export, and whether each would be",
+    tags=["collections"],
+)
+def static_export_answers(collection_id: str, user_id: str = Depends(get_current_user_id)):
+    """Each answer with `status` (`ready`, `waiting`, `missing_passage`,
+    `left_out_source`, `no_citation`, `check_failed`) and why, and the
+    `threshold` a visitor's query must reach to be shown it."""
+    from api.deps import require_collection_access
+    from services.static_export import StaticExportError
+    from services.static_export import answers
+
+    require_collection_access(collection_id, user_id, owner=True)
+    try:
+        return answers.review(collection_id)
+    except StaticExportError as e:
+        raise _answer_refusal(e)
+
+
+@router.post(
+    "/api/collections/{collection_id}/export/static/answers",
+    summary="Write an answer to publish with a static export",
+    tags=["collections"],
+    status_code=status.HTTP_201_CREATED,
+)
+def add_static_export_answer(collection_id: str, request: StaticAnswerRequest,
+                             user_id: str = Depends(get_current_user_id)):
+    """Owner only. The answer waits for approval before it can be published."""
+    from api.deps import require_collection_access
+    from services.static_export import StaticExportError
+    from services.static_export import answers
+
+    require_collection_access(collection_id, user_id, owner=True)
+    try:
+        row = answers.add_answer(collection_id, request.question, request.answer, request.citations, actor=user_id)
+    except StaticExportError as e:
+        raise _answer_refusal(e)
+    audit.record("collection.static_answers", actor=user_id, collection_id=collection_id,
+                 detail={"action": "added", "answer": row["id"], "citations": len(row["citations"])})
+    return row
+
+
+@router.post(
+    "/api/collections/{collection_id}/export/static/answers/{answer_id}/approval",
+    summary="Approve an answer for publishing, or take the approval back",
+    tags=["collections"],
+)
+def approve_static_export_answer(collection_id: str, answer_id: str, request: StaticAnswerApproval,
+                                 user_id: str = Depends(get_current_user_id)):
+    from api.deps import require_collection_access
+    from services.static_export import StaticExportError
+    from services.static_export import answers
+
+    require_collection_access(collection_id, user_id, owner=True)
+    try:
+        row = answers.approve_answer(collection_id, answer_id, actor=user_id, approved=request.approved)
+    except StaticExportError as e:
+        raise _answer_refusal(e)
+    audit.record("collection.static_answers", actor=user_id, collection_id=collection_id,
+                 detail={"action": "approved" if request.approved else "unapproved", "answer": answer_id})
+    return row
+
+
+@router.delete(
+    "/api/collections/{collection_id}/export/static/answers/{answer_id}",
+    summary="Remove an answer from those to publish",
+    tags=["collections"],
+)
+def remove_static_export_answer(collection_id: str, answer_id: str, user_id: str = Depends(get_current_user_id)):
+    from api.deps import require_collection_access
+    from services.static_export import StaticExportError
+    from services.static_export import answers
+
+    require_collection_access(collection_id, user_id, owner=True)
+    try:
+        answers.remove_answer(collection_id, answer_id)
+    except StaticExportError as e:
+        raise _answer_refusal(e)
+    audit.record("collection.static_answers", actor=user_id, collection_id=collection_id,
+                 detail={"action": "removed", "answer": answer_id})
+    return {"removed": answer_id}
+
+
 @router.post(
     "/api/collections/import/preview",
     summary="Look inside a bundle before importing it",

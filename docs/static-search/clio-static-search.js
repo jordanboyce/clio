@@ -261,7 +261,10 @@ export async function createSearch(baseUrl, { embedder, fetch: fetchFn, minProbe
   let ready = null
   const search = async (query, { k = 10 } = {}) => {
     if (!ready) return keywordRank(index, query, { k })
-    return rank(index, await ready.embed(query), { k })
+    // Kept for a page that compares the query with something else of its own
+    // (the published answers, say) without embedding it twice.
+    search.lastVector = await ready.embed(query)
+    return rank(index, search.lastVector, { k })
   }
   search.index = index
   search.semantic = false
@@ -302,8 +305,10 @@ export function combineSearches(searches) {
     let hits
     if (searches.length && sameModel()) {
       const vector = await searches[0].embedder.embed(query)
+      combined.lastVector = vector
       hits = searches.flatMap((s) => rank(s.index, vector, { k }))
     } else {
+      combined.lastVector = null
       hits = searches.flatMap((s) => keywordRank(s.index, query, { k }))
     }
     return hits.sort((a, b) => b.score - a.score).slice(0, k)

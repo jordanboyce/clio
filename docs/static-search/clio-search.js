@@ -67,12 +67,14 @@ export class ClioSearch extends HTMLElement {
     root.innerHTML = `<label part="label" for="q"></label>
       <input part="input" id="q" type="search" autocomplete="off" disabled>
       <div part="status" class="status" role="status" aria-live="polite"></div>
+      <div part="answer" class="answer" hidden></div>
       <ol part="results" aria-label="Results"></ol>`
     adoptStyles(root, BASE_STYLE, STYLE)
     this.$label = root.querySelector('label')
     this.$input = root.querySelector('input')
     this.$status = root.querySelector('.status')
     this.$results = root.querySelector('ol')
+    this.$answer = root.querySelector('.answer')
     this.search = null
     this.latest = 0
     // The model starts loading when someone first uses the box: on focus, or
@@ -216,10 +218,45 @@ export class ClioSearch extends HTMLElement {
     const k = Number(this.getAttribute('results')) || 8
     const hits = query ? await this.search(query, { k }) : []
     if (turn !== this.latest) return
+    const answer = query ? await this.answerFor() : null
+    if (turn !== this.latest) return
+    this.showAnswer(answer)
     this.$results.replaceChildren(...hits.map((hit) => this.result(hit, query)))
     if (query && !hits.length) this.status('Nothing matches. Try other words.')
     else if (query) this.describe()
     this.emit('clio-search-results', { query, hits })
+  }
+
+  /**
+   * A published answer (include=answers) whose question is close enough in
+   * meaning to the query just searched, or null. Only when searching by
+   * meaning: a keyword score cannot be compared with the measured threshold.
+   */
+  async answerFor() {
+    const vector = this.search?.semantic ? this.search.lastVector : null
+    const carrying = (this.searches || []).filter((s) => s.index.manifest.additions?.answers)
+    if (!vector || !carrying.length) return null
+    try {
+      if (!this.answers) {
+        this.answers = (async () => {
+          const { loadAnswers, closestAnswer, answerBlock, ANSWER_STYLE } = await import('./clio-answers.js')
+          adoptStyles(this.shadowRoot, ANSWER_STYLE)
+          const sets = (await Promise.all(carrying.map((s) => loadAnswers(s.index.manifest)))).filter(Boolean)
+          return { sets, closestAnswer, answerBlock }
+        })()
+      }
+      const { sets, closestAnswer, answerBlock } = await this.answers
+      const model = this.searches[0].index.manifest.embedding.model
+      const found = closestAnswer(sets, vector, model)
+      return found ? answerBlock(found.answer, found.set) : null
+    } catch {
+      return null // the results still show
+    }
+  }
+
+  showAnswer(block) {
+    this.$answer.replaceChildren(...(block ? [block] : []))
+    this.$answer.hidden = !block
   }
 
   result(hit, query) {

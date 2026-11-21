@@ -111,6 +111,49 @@
               </div>
             </details>
 
+            <details class="rounded-box border border-base-300 text-sm" data-testid="published-answers" @toggle="loadAnswers">
+              <summary class="cursor-pointer px-3 py-2">
+                <span class="font-medium">Answers written in advance</span>
+                <span v-if="answerList" class="text-base-content/60"> · {{ answerList.ready }} ready</span>
+              </summary>
+              <div class="px-3 pb-3 space-y-2">
+                <p class="text-xs text-base-content/60">
+                  Published with the export, each one only once someone approves it and it passes the same check as
+                  Ask's answers. A visitor whose question is close enough in meaning sees it above the results.
+                  Answers are written through the API (POST /api/collections/{id}/export/static/answers).
+                </p>
+                <div v-if="answersLoading" class="py-2 text-center"><span class="loading loading-spinner loading-xs"></span></div>
+                <p v-else-if="answerList && !answerList.answers.length" class="text-xs text-base-content/60">None written yet.</p>
+                <ul v-else-if="answerList" class="max-h-56 overflow-y-auto space-y-2" aria-label="Answers to publish">
+                  <li v-for="row in answerList.answers" :key="row.id" class="text-xs border-b border-base-200 pb-2">
+                    <span class="block font-medium">{{ row.question }}</span>
+                    <span class="block text-base-content/70">{{ row.status_text }}</span>
+                    <span class="flex gap-2 mt-1">
+                      <button
+                        type="button"
+                        class="btn btn-xs"
+                        :disabled="answerBusy === row.id"
+                        :aria-label="`${row.approved_at ? 'Take back approval of' : 'Approve'} ${row.question}`"
+                        @click="approveAnswer(row, !row.approved_at)"
+                      >
+                        {{ row.approved_at ? 'Take back approval' : 'Approve' }}
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-xs btn-ghost"
+                        :disabled="answerBusy === row.id"
+                        :aria-label="`Remove ${row.question}`"
+                        @click="removeAnswer(row)"
+                      >
+                        Remove
+                      </button>
+                    </span>
+                  </li>
+                </ul>
+                <p v-if="answerError" class="text-xs text-error" role="alert">{{ answerError }}</p>
+              </div>
+            </details>
+
             <label v-if="site.site?.available" class="flex items-start gap-3 cursor-pointer">
               <input v-model="includeModel" name="include-model" type="checkbox" class="checkbox checkbox-sm mt-0.5" />
               <span v-if="site.site.model" class="text-sm">
@@ -327,6 +370,49 @@ async function saveAddresses() {
   }
 }
 
+// "Answers written in advance": read when opened; approve and remove one at a time.
+const answerList = ref(null)
+const answersLoading = ref(false)
+const answerBusy = ref('')
+const answerError = ref('')
+const answersUrl = () => `/api/collections/${encodeURIComponent(target.value.id)}/export/static/answers`
+
+async function refreshSite() {
+  site.value = (await http.get(`/api/collections/${encodeURIComponent(target.value.id)}/export/static/preview`)).data
+}
+
+async function loadAnswers(event) {
+  if (event && !event?.target?.open) return
+  if (answerList.value || answersLoading.value || !target.value) return
+  answersLoading.value = true
+  answerError.value = ''
+  try {
+    answerList.value = (await http.get(answersUrl())).data
+  } catch (err) {
+    answerError.value = err?.message || 'Could not read the answers.'
+  } finally {
+    answersLoading.value = false
+  }
+}
+
+async function changeAnswer(row, request) {
+  answerBusy.value = row.id
+  answerError.value = ''
+  try {
+    await request()
+    answerList.value = (await http.get(answersUrl())).data
+    await refreshSite()
+  } catch (err) {
+    answerError.value = err?.message || 'The answer was not changed.'
+  } finally {
+    answerBusy.value = ''
+  }
+}
+
+const approveAnswer = (row, approved) => changeAnswer(row, () =>
+  http.post(`${answersUrl()}/${encodeURIComponent(row.id)}/approval`, { approved }))
+const removeAnswer = (row) => changeAnswer(row, () => http.delete(`${answersUrl()}/${encodeURIComponent(row.id)}`))
+
 const siteHref = computed(() => site.value?.ready && confirmPublic.value && target.value
   ? `/api/collections/${encodeURIComponent(target.value.id)}/export/static?confirm_public=true` +
     (wholeSite.value ? '&site=true' : '') +
@@ -360,6 +446,8 @@ async function open(collection) {
   confirmPublic.value = false
   includeModel.value = true
   chosen.value = {}
+  answerList.value = null
+  answerError.value = ''
   addresses.value = null
   addressError.value = ''
   addressesSaved.value = false
