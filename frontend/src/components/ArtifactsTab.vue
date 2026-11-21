@@ -85,6 +85,13 @@
             download
             title="The questions and answers as cards Anki imports"
           >Study cards</a>
+          <a
+            v-if="opened?.artifact_type === 'briefing'"
+            class="btn btn-ghost btn-xs"
+            :href="`/api/artifacts/${encodeURIComponent(opened.id)}/slides?collection_id=${encodeURIComponent(collectionId)}`"
+            download
+            title="The briefing as slides, in Markdown for Marp or Reveal.js"
+          >Slides</a>
           <button class="btn btn-ghost btn-xs" @click="closeArtifact">Close</button>
         </div>
       </div>

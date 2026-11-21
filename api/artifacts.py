@@ -321,6 +321,31 @@ def download_artifact_cards(artifact_id: str, collection_id: str = "default", fo
                     headers={"Content-Disposition": f'attachment; filename="{stem}.anki.txt"'})
 
 
+@router.get("/api/artifacts/{artifact_id}/slides", tags=["artifacts"],
+            summary="A report as slides, in Markdown for Marp or Reveal.js")
+def download_artifact_slides(artifact_id: str, collection_id: str = "default", format: str = "marp"):
+    """A title slide, a slide for each section (long ones split), and the
+    sources its citations name. `format=marp` starts with Marp's front
+    matter; `format=reveal` leaves it out."""
+    from fastapi.responses import Response
+
+    from services import report_file, report_slides
+
+    if format not in ("marp", "reveal"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="format is marp or reveal")
+    indexer = _indexer(collection_id)
+    artifact = _visible_or_404(_store(indexer, collection_id), _Reader(indexer), artifact_id)
+    if not (artifact.get("content") or "").strip():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This report has no text yet.")
+    collection = collection_service.get_collection(collection_id) or {}
+    text = report_slides.slides(artifact, collection.get("name") or "", format)
+    audit.record("report.exported", actor=get_request_user(), collection_id=collection_id, target=artifact_id,
+                 detail={"format": f"slides-{format}"})
+    stem = report_file.file_name(artifact)[:-len(".html")]
+    return Response(text, media_type="text/markdown; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{stem}.slides.md"'})
+
+
 @router.delete("/api/artifacts/{artifact_id}", tags=["artifacts"], summary="Delete a saved artifact")
 def delete_artifact(artifact_id: str, collection_id: str = "default") -> dict:
     indexer = _indexer(collection_id)
