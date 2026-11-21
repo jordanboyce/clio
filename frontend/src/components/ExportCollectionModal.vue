@@ -69,6 +69,22 @@
                     Each file's name is added to it. A path on the site, such as /files/handbook/, works too.
                   </span>
                 </label>
+                <label class="block">
+                  <span class="text-xs font-medium">Where the site will be served</span>
+                  <input
+                    v-model="siteUrl"
+                    name="site-url"
+                    type="text"
+                    inputmode="url"
+                    class="input input-sm w-full mt-1"
+                    placeholder="https://www.example.org/handbook/"
+                    aria-describedby="site-url-hint"
+                  />
+                  <span id="site-url-hint" class="block text-xs text-base-content/60 mt-1">
+                    The whole address of the folder you upload the export to. Pages to read get a sitemap and
+                    canonical links with it.
+                  </span>
+                </label>
                 <div v-if="addressesLoading" class="py-2 text-center"><span class="loading loading-spinner loading-xs"></span></div>
                 <ul v-else-if="addresses" class="max-h-48 overflow-y-auto space-y-1.5" aria-label="Each source's address">
                   <li v-for="row in addresses.documents" :key="row.id" class="text-xs">
@@ -246,6 +262,7 @@ const addressesSaving = ref(false)
 const addressesSaved = ref(false)
 const addressError = ref('')
 const baseUrl = ref('')
+const siteUrl = ref('')
 const ownUrls = ref({})
 
 const linkSummary = computed(() => {
@@ -263,12 +280,14 @@ const linkSummary = computed(() => {
 const addressesChanged = computed(() => {
   if (!addresses.value) return false
   if ((baseUrl.value || '').trim() !== (addresses.value.files_base_url || '')) return true
+  if ((siteUrl.value || '').trim() !== (addresses.value.site_url || '')) return true
   return addresses.value.documents.some((row) => (ownUrls.value[row.id] || '').trim() !== (row.own_url || ''))
 })
 
 function takeAddresses(data) {
   addresses.value = data
   baseUrl.value = data.files_base_url || ''
+  siteUrl.value = data.site_url || ''
   ownUrls.value = Object.fromEntries(data.documents.map((row) => [row.id, row.own_url || '']))
 }
 
@@ -294,8 +313,10 @@ async function saveAddresses() {
     .map((row) => [row.id, (ownUrls.value[row.id] || '').trim() || null]))
   try {
     const { data } = await http.put(`/api/collections/${encodeURIComponent(target.value.id)}/export/static/addresses`,
-      { files_base_url: (baseUrl.value || '').trim() || null, documents })
+      { files_base_url: (baseUrl.value || '').trim() || null, site_url: (siteUrl.value || '').trim() || null, documents })
     takeAddresses(data)
+    // The additions' notes (a sitemap needs the site's address) follow what was saved.
+    site.value = (await http.get(`/api/collections/${encodeURIComponent(target.value.id)}/export/static/preview`)).data
     addressesSaved.value = true
   } catch (err) {
     addressError.value = err?.message || 'The addresses were not saved.'

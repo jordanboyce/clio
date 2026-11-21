@@ -35,7 +35,7 @@ python scripts/export_static.py "Staff handbook" --out ../site/public/search --f
 
 Run it with the server's environment (`DATA_DIR` and the rest of `.env`). It only reads, needs no network, and replaces a previous export in `--out` while leaving the folder's other files alone. If the export is refused, last time's files stay as they were. `--float32` writes full-precision vectors, four times the size, for anyone who wants scores identical to Clio's. `--site` writes the whole site into `--out`, with the export in `search/`. `--files-url` sets where the site keeps its copies of the files for that export only; without it the address saved in Clio is used.
 
-**Over HTTP.** `GET /api/collections/{id}/export/static/preview` returns the counts, sizes, model and any `blockers`. `GET /api/collections/{id}/export/static?confirm_public=true` returns the zip (`quantization=int8|float32`, `passages_per_file`, and `site=true` for the whole site, which the preview's `site.available` says this server can make). `GET` and `PUT /api/collections/{id}/export/static/addresses` read and save where results link. All of these are for the collection's owner, and saving addresses is written to the audit trail as `collection.static_addresses`.
+**Over HTTP.** `GET /api/collections/{id}/export/static/preview` returns the counts, sizes, model and any `blockers`. `GET /api/collections/{id}/export/static?confirm_public=true` returns the zip (`quantization=int8|float32`, `passages_per_file`, and `site=true` for the whole site, which the preview's `site.available` says this server can make). `GET` and `PUT /api/collections/{id}/export/static/addresses` read and save where results link and where the site will be served (`files_base_url`, `site_url`, and each source's own address). All of these are for the collection's owner, and saving addresses is written to the audit trail as `collection.static_addresses`.
 
 ### Choosing what else it carries
 
@@ -69,13 +69,15 @@ The export does not judge the content. Read the passage diff before you commit i
 
 | Addition | `include` | Writes | Needs |
 |---|---|---|---|
-| A page for each source | `reader` | `read/index.html` (the contents), `read/<name>.html` for each source, `read/reader.css` | nothing |
+| A page for each source | `reader` | `read/index.html` (the contents), `read/<name>.html` for each source, `read/reader.css`, and `sitemap.xml` when the site's address is set | nothing |
 
 ### Pages to read
 
 `reader` writes a plain page for each source, built from its passages, and a contents page listing them. Each passage on a page has an anchor, `#p-` and its id (characters other than letters, digits, `-` and `_` become `_`), and a source with several pages has a marker before each, `#page-3`. A page's name comes from its source's file name (`Leave Policy (2024).pdf` gives `read/leave-policy-2024.html`): lower-case letters, digits and hyphens, the same in every export while the file keeps its name, with the start of the source's id added when two sources share a name. The manifest gives each source's page as `reader` on its entry.
 
 Clio does not keep a page's whole text, only its passages, and the passages on a page overlap: each starts with up to the last 200 or so characters of the one before (the collection's chunk overlap, or a short last paragraph). The reader drops what each passage repeats, matching no more than the chunker can have carried over, so nothing is read twice. The text is as Clio extracted it: a PDF's layout, a table's cells and a page's images are not there.
+
+**The site's own address.** A sitemap and canonical links need whole addresses, so they are written only when the collection says where the export will be served: **Where the site will be served** under **Where results link** (`site_url` over HTTP), an `https://` address checked like the others. For a whole site it is the address of the folder holding `index.html`; for the files alone, of the folder holding `manifest.json`. With it, the reader writes `sitemap.xml` beside the manifest, listing the contents page and every source's page, and each page carries `<link rel="canonical">`. Without it there is neither, and the dialog says why. The setting is kept with the collection, through a re-index, and travels in a bundle with the base address for files; an imported one is checked again and dropped if it is not a web address.
 
 The pages carry no script of their own and a Content-Security-Policy that allows none inline; source text is always written as text. Their look is `read/reader.css`: replace it to give them your site's. In a whole site each page also carries the search box. The pages are deterministic: an unchanged collection gives the same files.
 

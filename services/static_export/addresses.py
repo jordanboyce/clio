@@ -43,12 +43,47 @@ def clean_public_url(value: Optional[str]) -> Optional[str]:
     return text
 
 
+def clean_site_url(value: Optional[str]) -> Optional[str]:
+    """Where the export will be served, or None: an absolute http(s) address
+    (a sitemap, canonical links and a feed need one), ending with "/"."""
+    text = clean_public_url(value)
+    if text is None:
+        return None
+    if text.startswith("/"):
+        raise StaticExportError(
+            "Where the site will be served must be a whole address, starting with https://, since a sitemap and "
+            "a feed need one.", "address")
+    return text if text.endswith("/") else text + "/"
+
+
+ADDRESS_FIELDS = ("files_base_url", "site_url")
+
+
 def address_settings(collection_id: str) -> Dict[str, Any]:
-    """The collection's saved export addresses: ``{"files_base_url": ...}``."""
+    """The collection's saved export addresses: ``{"files_base_url", "site_url"}``."""
     from services.app_database import app_db
 
     saved = app_db.get_config(_ADDRESS_SETTINGS.format(collection_id), {}) or {}
-    return {"files_base_url": saved.get("files_base_url") if isinstance(saved, dict) else None}
+    saved = saved if isinstance(saved, dict) else {}
+    return {name: saved.get(name) for name in ADDRESS_FIELDS}
+
+
+def restore_address_settings(collection_id: str, saved: Any) -> Dict[str, Any]:
+    """Settings carried in a bundle, kept only where each is still an address
+    a browser may open (an imported bundle is data, not trusted)."""
+    from services.app_database import app_db
+
+    saved = saved if isinstance(saved, dict) else {}
+    kept: Dict[str, Any] = {}
+    for name, clean in (("files_base_url", clean_public_url), ("site_url", clean_site_url)):
+        value = saved.get(name)
+        try:
+            kept[name] = clean(value if isinstance(value, str) else None)
+        except StaticExportError:
+            kept[name] = None
+    if any(kept.values()):
+        app_db.set_config(_ADDRESS_SETTINGS.format(collection_id), kept)
+    return kept
 
 
 def _web_page(path: str) -> str:
@@ -187,15 +222,17 @@ def addresses(collection_id: str) -> Dict[str, Any]:
         rows.append({"id": d["document_id"], "name": d["filename"], "source_type": d.get("source_type") or "upload",
                      "own_url": d.get("public_url"), "url": (link or {}).get("url"),
                      "from": (link or {}).get("from")})
-    return {"files_base_url": settings_["files_base_url"], "documents": rows,
+    return {"files_base_url": settings_["files_base_url"], "site_url": settings_["site_url"], "documents": rows,
             "with_address": sum(1 for r in rows if r["url"]), "total": len(rows)}
 
 
-def save_addresses(collection_id: str, *, files_base_url: Any = ...,
+def save_addresses(collection_id: str, *, files_base_url: Any = ..., site_url: Any = ...,
                    documents: Optional[Dict[str, Optional[str]]] = None) -> Dict[str, Any]:
-    """Save the base address for files and any source's own address.
+    """Save the base address for files, where the site will be served, and
+    any source's own address.
 
-    ``files_base_url`` left out keeps the saved one; None or "" clears it.
+    ``files_base_url`` or ``site_url`` left out keeps the saved one; None or
+    "" clears it.
     ``documents`` maps a source's id to its address (None or "" clears it).
     Every address is checked first, so a refusal saves nothing.
     """
@@ -203,6 +240,7 @@ def save_addresses(collection_id: str, *, files_base_url: Any = ...,
     from services.indexer_manager import indexer_manager
 
     base = clean_public_url(files_base_url) if files_base_url is not ... else ...
+    site = clean_site_url(site_url) if site_url is not ... else ...
     cleaned = {doc_id: clean_public_url(url) for doc_id, url in (documents or {}).items()}
     if cleaned:
         store = indexer_manager.get_indexer(collection_id).vector_store.metadata_store
@@ -211,10 +249,12 @@ def save_addresses(collection_id: str, *, files_base_url: Any = ...,
             raise StaticExportError(f"This collection has no source {unknown[0]}.", "address")
         for doc_id, url in cleaned.items():
             store.set_document_public_url(doc_id, url)
-    if base is not ...:
-        app_db.set_config(_ADDRESS_SETTINGS.format(collection_id), {"files_base_url": base})
-    return {"files_base_url": base if base is not ... else address_settings(collection_id)["files_base_url"],
-            "documents": len(cleaned)}
+    saved = address_settings(collection_id)
+    if base is not ... or site is not ...:
+        saved = {**saved, **({"files_base_url": base} if base is not ... else {}),
+                 **({"site_url": site} if site is not ... else {})}
+        app_db.set_config(_ADDRESS_SETTINGS.format(collection_id), saved)
+    return {**saved, "documents": len(cleaned)}
 
 
 def _pkg():

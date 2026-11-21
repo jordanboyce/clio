@@ -235,6 +235,17 @@ def _index_info(db_path: Path) -> Dict[str, Any]:
     return {k: json.loads(v) for k, v in rows}
 
 
+def _static_addresses(collection_id: str) -> Optional[Dict[str, Any]]:
+    """The static export's saved addresses, or None when none are set."""
+    try:
+        from services.static_export import address_settings
+
+        saved = address_settings(collection_id)
+    except Exception:  # noqa: BLE001 - a nicety of the bundle, never a reason to fail
+        return None
+    return saved if any(saved.values()) else None
+
+
 def describe_model(info: Dict[str, Any], documents: Iterable[Dict[str, Any]] = ()) -> Dict[str, Any]:
     """Say, in words a person can check, which embedding model made the vectors.
 
@@ -396,6 +407,8 @@ def export_collection(collection_id: str, include_sources: bool = False,
                 "classification": collection.get("classification") or None,
                 "chunk_size": collection.get("chunk_size"),
                 "chunk_overlap": collection.get("chunk_overlap"),
+                # Where its static export links and is served (services/static_export).
+                "static_export": _static_addresses(collection_id),
             },
             "embedding": {**info, **{k: v for k, v in describe_model(info, documents).items()
                                      if k in ("provider", "label", "recorded")}},
@@ -1041,6 +1054,10 @@ def import_collection(zip_path: Path, owner_id: str, name: Optional[str] = None,
                 # Kept as it came, known here or not, and set before anything is embedded.
                 updates["classification"] = marking
             collection_service.update_collection(cid, **{k: v for k, v in updates.items() if v})
+            if meta.get("static_export"):
+                from services.static_export import restore_address_settings
+
+                restore_address_settings(cid, meta.get("static_export"))
 
             indexes_dir = collection_service.get_indexes_path(cid)
             documents_dir = collection_service.get_documents_path(cid)

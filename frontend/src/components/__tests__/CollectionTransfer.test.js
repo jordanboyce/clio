@@ -207,11 +207,12 @@ describe('Export dialog, for a website', () => {
     const save = wrapper.findAll('button').find((b) => b.text() === 'Save addresses')
     expect(save.attributes('disabled')).toBeDefined()
     await wrapper.get('input[name="files-base-url"]').setValue(' /files/handbook/ ')
+    expect(wrapper.find('input[name="site-url"]').exists()).toBe(true)
     http.put = vi.fn(() => Promise.resolve({ data: { ...addresses, files_base_url: '/files/handbook/', with_address: 2 } }))
     await save.trigger('click')
     await flushPromises()
     expect(http.put).toHaveBeenCalledWith('/api/collections/c1/export/static/addresses',
-      { files_base_url: '/files/handbook/', documents: {} })
+      { files_base_url: '/files/handbook/', site_url: null, documents: {} })
     expect(details.text()).toContain('2 of 2 sources link to a page')
     expect(wrapper.text()).toContain('Saved')
   })
@@ -229,7 +230,7 @@ describe('Export dialog, for a website', () => {
     http.put = vi.fn(() => Promise.reject(new Error('javascript:alert(1) is not a web address')))
     await wrapper.findAll('button').find((b) => b.text() === 'Save addresses').trigger('click')
     await flushPromises()
-    expect(http.put.mock.calls[0][1]).toEqual({ files_base_url: null, documents: { a: 'javascript:alert(1)' } })
+    expect(http.put.mock.calls[0][1]).toEqual({ files_base_url: null, site_url: null, documents: { a: 'javascript:alert(1)' } })
     expect(details.get('[role="alert"]').text()).toContain('is not a web address')
   })
 

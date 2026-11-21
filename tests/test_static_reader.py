@@ -205,3 +205,73 @@ def test_from_a_reader_page_every_result_is_a_link_that_lands_on_its_passage(kit
         assert page.eval("window.__errors === undefined || window.__errors.length === 0")
         assert not [u for u in page.requested() if not u.startswith(server.url())]
         page.close()
+
+
+# ── B3: where the site is served ─────────────────────────────────────────────
+
+
+def test_with_the_sites_address_the_reader_has_a_sitemap_and_canonical_links(handbook, tmp_path):
+    cid, ids = handbook
+    assert "No sitemap" in next(a for a in se.preview(cid)["additions"] if a["id"] == "reader")["note"]
+    plain, _ = se.write_export(cid, tmp_path / "plain", confirm_public=True, include="reader")
+    assert "sitemap" not in plain["additions"]["reader"] and not (tmp_path / "plain" / "sitemap.xml").exists()
+    assert "canonical" not in (tmp_path / "plain" / "read/index.html").read_text(encoding="utf-8")
+
+    saved = se.save_addresses(cid, site_url="https://www.example.org/handbook")
+    assert saved["site_url"] == "https://www.example.org/handbook/" and saved["files_base_url"] is None
+    offer = next(a for a in se.preview(cid)["additions"] if a["id"] == "reader")
+    assert offer["sitemap"] is True and "https://www.example.org/handbook/" in offer["note"]
+
+    prefix = "https://www.example.org/handbook/"
+    out = tmp_path / "out"
+    manifest, _ = se.write_export(cid, out, confirm_public=True, include="reader")
+    locs = re.findall(r"<loc>(.*?)</loc>", (out / "sitemap.xml").read_text(encoding="utf-8"))
+    pages = [d["reader"] for d in manifest["documents"]]
+    assert locs == [prefix + "read/index.html", *[prefix + p for p in pages]]
+    assert manifest["additions"]["reader"]["sitemap"] == "sitemap.xml"
+    assert "sitemap.xml" in {f["file"] for f in manifest["additions"]["reader"]["files"]}
+    page = (out / pages[0]).read_text(encoding="utf-8")
+    assert f'<link rel="canonical" href="{prefix}{pages[0]}">' in page
+    check_page(page)
+
+
+def test_a_whole_sites_sitemap_names_the_export_folder(kit, handbook, tmp_path):
+    cid, _ = handbook
+    se.save_addresses(cid, site_url="https://www.example.org/")
+    manifest, _ = se.write_export(cid, tmp_path / "s", confirm_public=True, include="reader", site=True)
+    locs = re.findall(r"<loc>(.*?)</loc>", (tmp_path / "s/search/sitemap.xml").read_text(encoding="utf-8"))
+    assert locs[0] == "https://www.example.org/search/read/index.html" and len(locs) == len(manifest["documents"]) + 1
+
+
+@pytest.mark.parametrize("bad", ["/handbook/", "javascript:alert(1)", "https://user:pw@example.org/", "ftp://x.org/"])
+def test_the_sites_address_must_be_a_whole_web_address(site, bad):
+    cid, _ = _public(site)
+    with pytest.raises(se.StaticExportError):
+        se.save_addresses(cid, site_url=bad)
+    assert se.address_settings(cid)["site_url"] is None
+
+
+def test_saving_one_address_keeps_the_other(site):
+    cid, _ = _public(site)
+    se.save_addresses(cid, files_base_url="/files/")
+    se.save_addresses(cid, site_url="https://example.org/h/")
+    assert se.address_settings(cid) == {"files_base_url": "/files/", "site_url": "https://example.org/h/"}
+    se.save_addresses(cid, files_base_url=None)
+    assert se.address_settings(cid) == {"files_base_url": None, "site_url": "https://example.org/h/"}
+
+
+def test_both_addresses_travel_in_a_bundle_and_are_checked_again(site, tmp_path):
+    from services import collection_bundle as cb
+
+    cid, _ = _public(site)
+    se.save_addresses(cid, files_base_url="/files/handbook/", site_url="https://example.org/handbook/")
+    path, _ = cb.export_collection(cid)
+    try:
+        copy = cb.import_collection(path, owner_id="default", name="Copy")
+    finally:
+        path.unlink(missing_ok=True)
+    assert se.address_settings(copy["id"]) == {
+        "files_base_url": "/files/handbook/", "site_url": "https://example.org/handbook/"}
+    other = collection_service.create_collection(name="Other", embedding_model="fake-embed")["id"]
+    kept = se.restore_address_settings(other, {"files_base_url": "javascript:x", "site_url": "/relative/"})
+    assert kept == {"files_base_url": None, "site_url": None} and se.address_settings(other)["site_url"] is None

@@ -68,7 +68,7 @@ from services.static_export.common import (  # noqa: F401
     VERSION, StaticExportError, _sha256_file, _supported, _title, browser_model,
 )
 from services.static_export.addresses import (  # noqa: F401
-    MAX_ADDRESS_CHARS, _repositories, _repository_link, address_settings, addresses, clean_public_url,
+    ADDRESS_FIELDS, MAX_ADDRESS_CHARS, _repositories, clean_site_url, restore_address_settings, _repository_link, address_settings, addresses, clean_public_url,
     document_link, repository_file_link, save_addresses,
 )
 from services.static_export.site import (  # noqa: F401

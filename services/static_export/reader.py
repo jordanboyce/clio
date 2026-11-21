@@ -202,13 +202,43 @@ def _contents(ctx: ExportContext, names: Dict[str, str], collection: str) -> str
             + "</header>\n<main>\n<ol class=\"sources\">\n" + "".join(items) + "</ol>\n</main>\n")
 
 
+SITEMAP = "sitemap.xml"
+
+
+def public_address(ctx_or_settings: Any, name: str, site: bool) -> Optional[str]:
+    """The absolute address of a file of the export, when the collection says
+    where the site will be served (B3), else None. For a whole site that
+    address is the site's root, with the export in search/; for the files
+    alone, it is the folder holding manifest.json."""
+    settings = getattr(ctx_or_settings, "settings", ctx_or_settings) or {}
+    root = settings.get("site_url")
+    if not root:
+        return None
+    from services.static_export.common import SITE_DATA_DIR
+
+    return root + (f"{SITE_DATA_DIR}/" if site else "") + name
+
+
+def _sitemap(urls: List[str]) -> str:
+    rows = "".join(f"  <url><loc>{html.escape(u, quote=False)}</loc></url>\n" for u in urls)
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + rows + "</urlset>\n")
+
+
 def _offer(o) -> Dict[str, Any]:
+    from services.static_export.addresses import address_settings
+
     survey = o.survey
     # The text once (overlaps go), plus about 60 bytes of markup a passage
     # and 1.5 kB a page.
     size = survey["text_bytes"] + survey["passages"] * 60 + (len(survey["documents"]) + 1) * 1500 + len(STYLE)
+    site_url = address_settings(o.collection_id).get("site_url")
+    note = (f"With a sitemap and canonical links for {site_url}." if site_url else
+            "No sitemap or canonical links: they need the address the site will be served at, under "
+            "Where results link.")
     return {"available": bool(survey["passages"]), "reason": None if survey["passages"] else "No passages.",
-            "bytes": size}
+            "bytes": size + (len(survey["documents"]) + 1) * 120 if site_url else size, "note": note,
+            "sitemap": bool(site_url)}
 
 
 def by_document(passages: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -227,15 +257,26 @@ def _write(ctx: ExportContext) -> Dict[str, Any]:
         # The last address a source can have (B2): older clients ignore the field.
         doc["reader"] = names[doc["id"]]
     ctx.put(STYLESHEET, STYLE)
+
+    def canonical(name: str) -> str:
+        url = public_address(ctx, name, ctx.site)
+        return f'<link rel="canonical" href="{html.escape(url)}">\n' if url else ""
+
     parts = ctx.page_parts(None)
     ctx.put(CONTENTS, page(collection, _contents(ctx, names, collection), depth=1, site=ctx.site,
-                           head=parts["head"], components=parts["body"]))
+                           head=canonical(CONTENTS) + parts["head"], components=parts["body"]))
     for doc in ctx.documents:
         body = _source_page(ctx, doc, grouped.get(doc["id"], []), collection, limits.get(doc["id"], 208))
         parts = ctx.page_parts(doc)
         ctx.put(names[doc["id"]], page(f"{doc.get('title') or doc.get('name')} · {collection}", body, depth=1,
-                                       site=ctx.site, head=parts["head"], components=parts["body"]))
-    return {"contents": CONTENTS, "stylesheet": STYLESHEET, "anchor": "#p-{id}"}
+                                       site=ctx.site, head=canonical(names[doc["id"]]) + parts["head"],
+                                       components=parts["body"]))
+    entry = {"contents": CONTENTS, "stylesheet": STYLESHEET, "anchor": "#p-{id}"}
+    urls = [public_address(ctx, n, ctx.site) for n in [CONTENTS, *[names[d["id"]] for d in ctx.documents]]]
+    if all(urls):
+        ctx.put(SITEMAP, _sitemap(urls))
+        entry["sitemap"] = SITEMAP
+    return entry
 
 
 register(Addition(id="reader", label="A page for each source", offer=_offer, write=_write, stage=10))

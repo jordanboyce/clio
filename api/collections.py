@@ -967,6 +967,10 @@ class StaticAddressesRequest(BaseModel):
                     "Empty clears it.")
     documents: Optional[Dict[str, Optional[str]]] = Field(
         default=None, description="Source id -> its own web address (empty or null clears it).")
+    site_url: Optional[str] = Field(
+        default=None, max_length=2048,
+        description="Where the export will be served (https://...), for its sitemap, canonical links and feed. "
+                    "Empty clears it.")
 
 
 @router.get(
@@ -1008,11 +1012,13 @@ def save_static_export_addresses(collection_id: str, request: StaticAddressesReq
     try:
         saved = save_addresses(collection_id,
                                files_base_url=fields["files_base_url"] if "files_base_url" in fields else ...,
+                               site_url=fields["site_url"] if "site_url" in fields else ...,
                                documents=fields.get("documents"))
     except StaticExportError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     audit.record("collection.static_addresses", actor=user_id, collection_id=collection_id,
-                 detail={"files_base_url": saved["files_base_url"], "documents": saved["documents"]})
+                 detail={"files_base_url": saved["files_base_url"], "site_url": saved["site_url"],
+                         "documents": saved["documents"]})
     return addresses(collection_id)
 
 
