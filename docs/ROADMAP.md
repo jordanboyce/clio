@@ -8,6 +8,8 @@ On 2026-11-18 the hardening work order ([docs/prompts/HARDENING_PROMPT.md](promp
 
 On 2026-11-19 the improvement work order ([docs/prompts/IMPROVEMENT_PROMPT.md](prompts/IMPROVEMENT_PROMPT.md); report in [docs/prompts/improvement-report/REPORT.md](prompts/improvement-report/REPORT.md)) shipped a retrieval benchmark that can tell configurations apart and an answer-level run (A1, A2), per-stage timings (A4), cross-collection merging on the reranker's score (B1), passages embedded with their source and heading under a per-collection indexing recipe (B2: recall@10 with the reranker 0.31 → 0.98 on the new benchmark), streaming answers with a working Stop (C1), Ask that survives tab switches and failures (C2, C3), Ask checking its own citations (C4), Find honouring the source selection (C7), a top-level error handler (C8), the collection in the URL (C9), MCP tool profiles with typed filters and writing instructions (D1, roadmap M2, M4, M6), and a release gated on tests and the smoke test (E1, E2). Later the same day: feedback capture with an admin export (A3), filtered keyword search inside the query (B5), upload progress, cancel and drag and drop (C6, U6), authorship and agent writes in the change feed (D2, roadmap B3 and part of B4), and tests that hold the settings and tool counts (E7). Rank fusion (B3) was measured and not adopted. New decisions are added under [Decisions waiting for the owner](#decisions-waiting-for-the-owner).
 
+On 2026-11-20 the publishing work order ([docs/prompts/PUBLISH_PROMPT.md](prompts/PUBLISH_PROMPT.md); report in [docs/prompts/publish-report/REPORT.md](prompts/publish-report/REPORT.md)) extended the static-website export ([STATIC_SEARCH.md](STATIC_SEARCH.md)): one `include` option for what an export carries; a page to read for each source, which results fall back to, with a sitemap and canonical links once the site's address is set (and that address and the base address for files now travel in a bundle); the same pages as Markdown; components for related passages, answers written in advance (approved, checked, matched by a measured threshold), quotations, tables and transcripts; an A to Z index; `llms.txt`; a skill an agent can load without MCP; passages and vectors for other tools; a changes page and Atom feed; a site that works offline; a reference list with `citation_*` tags; one page to print and an EPUB; and, for a report, one HTML file that opens with no network, study cards and slides. The components are now tested in a real browser. All eleven acceptance steps pass. Stopped: a timeline (the report holds no events), an index in pieces (keyword search is the owner's call; the measurement shows the need past about 10,000 passages) and share cards (Pillow is not in the base install). The decisions are listed under [Decisions waiting for the owner](#decisions-waiting-for-the-owner).
+
 ## Guiding frame
 
 Clio owns the trustworthy data layer; the intelligence layer lives upstream in whatever LLM the user trusts. Our job: make a user's own documents and tabular data faithfully agent-queryable, and never be silently wrong.
@@ -506,6 +508,22 @@ Added by the 2026-11-19 improvement pass; none was made.
 
 ---
 
+### From the 2026-11-20 publishing pass
+
+Details and options in [docs/prompts/publish-report/REPORT.md](prompts/publish-report/REPORT.md); none was made.
+
+1. **Answers written in advance: approval and label.** Approval is required today (`services/static_export/answers.py`); keep it, or approve automatically when the citation check passes. The label is a placeholder.
+2. **Where an answer to publish is written.** Today over the API only: a "Publish this answer" action in Ask, a form in the Export dialog, or from an FAQ report's pairs.
+3. **Reader page or the file's own address first** when a source has both (today the reader is the fallback).
+4. **Additions in the data-only export**, or for a whole site only.
+5. **Large tables**: left out above 5,000 rows (today), or read in the browser from SQLite compiled to WebAssembly.
+6. **Keyword search in an index in pieces** (E2): a separate word index, keyword search off, or the text always downloaded whole.
+7. **Parquet** for other tools needs pyarrow.
+8. **A speech engine** for the podcast script, if any (Piper, Kokoro, espeak-ng, XTTS: licences and sizes in the report).
+9. **Share cards** need Pillow and a font in the base install, or only where Pillow is installed, or none.
+10. **An edge bundle** (search or read-only MCP as a function on someone else's platform): after E2, and measured against it.
+11. **Storing timeline events and the study guide's answers** as data, so both can be published.
+
 ## Standing backlog (carried over unchanged)
 
 Items below predate this plan. Where one overlaps a numbered item above, the numbered item is the current plan.
@@ -526,7 +544,7 @@ Items below predate this plan. Where one overlaps a numbered item above, the num
 
 - **MCP expansion** — let external agents trigger re-indexing and metadata updates, not just read documents (`write_document` shipped 2026-09-11; cross-collection `research_documents`, `corpus_version` freshness tokens and MCP prompts shipped 2026-09-17; `reindex_document`, `update_document_metadata`, `list_index_jobs`/`get_index_job`, ChatGPT-shape `search`/`fetch`, schema limits and titles on every tool, and a live `GET /api/mcp/catalog` shipped 2026-10-08; shipped 2026-10-23: `ask_documents` for a finished cited answer in one call when the deployment runs its own model, every synchronous tool off the event loop with a `WORKER_THREADS`-sized pool, `scripts/mcp_load.py` to measure a host's envelope, and Connect-tab entries for Hermes Agent and any streamable-HTTP client). Progress notifications during long deep searches need the streamable transport switched from JSON responses to SSE, which is a deployment-affecting change to make deliberately.
 - **Agents in the browser (WebMCP)** — prototype shipped 2026-11-04: the page registers the read-only MCP tools with `document.modelContext` where a browser has it (Chromium origin trial, Chrome 149 to 162, flag `enable-webmcp-testing`), calls go through `/mcp` with the page's own session, and the Connect tab reports what this browser supports. Decided by feature detection, not the user agent. Open: the API is a moving W3C draft (the namespace already moved from `navigator` to `document`), so re-check it when the trial ends; whether to offer write tools behind a confirmation; an origin-trial token for hosted deployments; and a check against a real in-browser agent (Gemini in Chrome, an agent extension) once one can call page tools on a stable channel. Of the other built-in browser AI surfaces, only on-device translate/summarize of a passage (Translator, Summarizer, stable since Chrome 138) looks worth a display-only enhancement; the Prompt API as a zero-setup answer model is held back because Clio's answer pipeline, citation checks and cache are server-side, and the browser embedder would tie an index to a Chrome build.
-- **PWA** — a web manifest and theme-color meta shipped 2026-09-12 (installable from the browser menu); an offline service worker is the remaining step.
+- **PWA** — a web manifest and theme-color meta shipped 2026-09-12 (installable from the browser menu); an offline service worker is the remaining step for the app itself. (An exported static site can now work offline: `include=offline`, 2026-11-20.)
 
 ### Access & limits
 

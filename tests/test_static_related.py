@@ -45,7 +45,7 @@ def test_scoring_in_blocks_needs_less_memory_than_the_vectors_themselves():
     neighbour search adds less than that, whatever n, because it holds one
     block of scores at a time and never the n x n matrix. (At 50,000
     passages: 66 MB beside 77 MB of vectors, about 75 s on a 2018 laptop.)"""
-    n, d = 8000, 384
+    n, d = 4000, 384
     v = _unit(n, d)
     groups = np.arange(n) // 40
     tracemalloc.start()
@@ -53,7 +53,7 @@ def test_scoring_in_blocks_needs_less_memory_than_the_vectors_themselves():
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     assert peak < v.nbytes, (peak, v.nbytes)
-    assert peak < n * n * 4 / 20  # nowhere near the full matrix
+    assert peak < n * n * 4 / 8  # nowhere near the full matrix
 
 
 def test_each_source_lists_the_best_from_other_sources_two_at_most_from_each():

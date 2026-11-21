@@ -68,7 +68,7 @@ export async function loadManifest(baseUrl, { fetch: fetchFn = globalThis.fetch,
   if (manifest.version > maxVersion) {
     throw new Error(`This export is format v${manifest.version}; this page reads up to v${maxVersion}.`)
   }
-  Object.defineProperty(manifest, 'baseUrl', { value: baseUrl, enumerable: false })
+  Object.defineProperty(manifest, 'baseUrl', { value: baseUrl, enumerable: false, configurable: true, writable: true })
   return manifest
 }
 
