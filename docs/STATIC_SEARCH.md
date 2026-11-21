@@ -69,6 +69,15 @@ The export does not judge the content. Read the passage diff before you commit i
 
 | Addition | `include` | Writes | Needs |
 |---|---|---|---|
+| A page for each source | `reader` | `read/index.html` (the contents), `read/<name>.html` for each source, `read/reader.css` | nothing |
+
+### Pages to read
+
+`reader` writes a plain page for each source, built from its passages, and a contents page listing them. Each passage on a page has an anchor, `#p-` and its id (characters other than letters, digits, `-` and `_` become `_`), and a source with several pages has a marker before each, `#page-3`. A page's name comes from its source's file name (`Leave Policy (2024).pdf` gives `read/leave-policy-2024.html`): lower-case letters, digits and hyphens, the same in every export while the file keeps its name, with the start of the source's id added when two sources share a name. The manifest gives each source's page as `reader` on its entry.
+
+Clio does not keep a page's whole text, only its passages, and the passages on a page overlap: each starts with up to the last 200 or so characters of the one before (the collection's chunk overlap, or a short last paragraph). The reader drops what each passage repeats, matching no more than the chunker can have carried over, so nothing is read twice. The text is as Clio extracted it: a PDF's layout, a table's cells and a page's images are not there.
+
+The pages carry no script of their own and a Content-Security-Policy that allows none inline; source text is always written as text. Their look is `read/reader.css`: replace it to give them your site's. In a whole site each page also carries the search box. The pages are deterministic: an unchanged collection gives the same files.
 
 ## The same model on both sides
 
@@ -212,4 +221,5 @@ These settings are transformers.js's own and have changed between its major vers
 - Every visitor downloads the whole index and the model. Past a few tens of thousands of passages, use a server.
 - Spreadsheets are not in the export: Clio keeps them as tables, not passages.
 - A result links only where its source has an address; the export cannot know where a file is published unless someone says so.
+- A reader page is the text Clio extracted, in passage order: no layout, images or tables, and a page boundary only where the source had one.
 - A source marked as replaced by a newer version is exported like any other. Remove it from the collection first if the site should not show it.

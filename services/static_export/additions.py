@@ -35,11 +35,20 @@ class Addition:
     write: Callable[["ExportContext"], Optional[Dict[str, Any]]]
     # Only in a whole site (it needs the page's scripts).
     site_only: bool = False
-    # Ids of additions this one reads from (written first).
+    # Ids of additions this one needs (chosen with it).
     after: tuple = ()
+    # Written in this order; the reader goes last, so the pages can show
+    # what the others wrote.
+    stage: int = 0
 
 
 ADDITIONS: Dict[str, Addition] = {}
+
+# What other additions put on the reader's pages, by addition id:
+# hook(ctx, doc or None for the contents page) -> {"head": html, "body": html}.
+# A hook runs only when its addition is in the export; one registered under
+# "" runs always (the site's own address, say).
+PAGE_HOOKS: Dict[str, Callable[["ExportContext", Optional[Dict[str, Any]]], Dict[str, str]]] = {}
 
 
 def register(addition: Addition) -> Addition:
@@ -48,7 +57,7 @@ def register(addition: Addition) -> Addition:
 
 
 # The modules that register additions, in the order their additions are offered.
-_MODULES: tuple = ()
+_MODULES: tuple = ("reader",)
 
 
 def _load() -> None:
@@ -125,6 +134,7 @@ class ExportContext:
     vectors: Any = None  # the passages' float32 vectors, same order, or None (keyword export)
     settings: Dict[str, Any] = field(default_factory=dict)  # the collection's saved export settings
     written: List[Path] = field(default_factory=list)
+    chosen: List[str] = field(default_factory=list)
     results: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # earlier additions' manifest entries
     files: List[Dict[str, Any]] = field(default_factory=list)  # this addition's files so far
 
@@ -136,6 +146,17 @@ class ExportContext:
     def documents(self) -> List[Dict[str, Any]]:
         """The manifest's source entries (id, name, title, pages, passages, link)."""
         return self.manifest["documents"]
+
+    def page_parts(self, doc: Optional[Dict[str, Any]]) -> Dict[str, str]:
+        """What the other additions in this export put on one reader page."""
+        head, body = [], []
+        for name, hook in PAGE_HOOKS.items():
+            if name and name not in self.chosen:
+                continue
+            part = hook(self, doc) or {}
+            head.append(part.get("head", ""))
+            body.append(part.get("body", ""))
+        return {"head": "".join(head), "body": "".join(body)}
 
     def put(self, name: str, data: Any) -> Dict[str, Any]:
         """Write one file under the export folder (``name`` uses "/"), and list it."""
@@ -152,14 +173,15 @@ class ExportContext:
 def write_all(chosen: Iterable[str], ctx: ExportContext) -> Dict[str, Dict[str, Any]]:
     """Run each chosen addition; returns the manifest's ``additions``."""
     out: Dict[str, Dict[str, Any]] = {}
-    for name in chosen:
+    ctx.chosen = list(chosen)
+    for name in sorted(chosen, key=lambda n: ADDITIONS[n].stage):
         addition = ADDITIONS[name]
         ctx.files = []
         extra = addition.write(ctx) or {}
         entry = {**extra, "files": sorted(ctx.files, key=lambda f: f["file"])}
         out[name] = entry
         ctx.results[name] = entry
-    return out
+    return {name: out[name] for name in chosen}
 
 
 def resolve(chosen: List[str], collection_id: str, survey: Dict[str, Any], site: bool) -> List[str]:
