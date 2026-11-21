@@ -30,28 +30,29 @@
 // clio-search-results ({ query, hits }) after each search.
 
 import { combineSearches, createSearch, localTransformers, passageLink, transformersEmbedder, words } from './clio-static-search.js'
+import { BASE_STYLE, adoptStyles, emit } from './clio-common.js'
 
 const HERE = new URL('./', import.meta.url)
 const CDN_TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2'
 
+// Its own properties win; the --clio-* ones every component shares are the fallback.
 const STYLE = `
-:host { display: block; font: var(--clio-search-font, inherit); color: var(--clio-search-color, inherit); }
-:host([hidden]) { display: none; }
+:host { display: block; font: var(--clio-search-font, var(--clio-font, inherit)); color: var(--clio-search-color, var(--clio-color, inherit)); }
 label { display: block; margin-bottom: .35em; font-weight: 600; }
 input {
   font: inherit; color: inherit; width: 100%; box-sizing: border-box; padding: .55em .75em;
-  background: var(--clio-search-background, transparent);
-  border: 1px solid var(--clio-search-border, currentColor); border-radius: var(--clio-search-radius, .4em);
+  background: var(--clio-search-background, var(--clio-background, transparent));
+  border: 1px solid var(--clio-search-border, var(--clio-border, currentColor)); border-radius: var(--clio-search-radius, var(--clio-radius, .4em));
 }
-input:focus-visible { outline: 2px solid var(--clio-search-accent, Highlight); outline-offset: 1px; }
-.status { font-size: .85em; color: var(--clio-search-muted, GrayText); margin: .4em 0 .8em; min-height: 1.2em; }
+input:focus-visible { outline: 2px solid var(--clio-search-accent, var(--clio-accent, Highlight)); outline-offset: 1px; }
+.status { color: var(--clio-search-muted, var(--clio-muted, GrayText)); margin: .4em 0 .8em; }
 ol { list-style: none; margin: 0; padding: 0; }
 li { margin: 0 0 1em; }
-.title { font-weight: 600; color: var(--clio-search-accent, LinkText); }
+.title { font-weight: 600; color: var(--clio-search-accent, var(--clio-accent, LinkText)); }
 a.title { text-decoration: underline; text-underline-offset: .15em; }
-.meta { font-size: .8em; color: var(--clio-search-muted, GrayText); }
+.meta { color: var(--clio-search-muted, var(--clio-muted, GrayText)); }
 .snippet { margin: .2em 0 0; }
-mark { background: var(--clio-search-mark, Mark); color: inherit; padding: 0 .1em; }
+mark { background: var(--clio-search-mark, var(--clio-mark, Mark)); }
 `
 
 export class ClioSearch extends HTMLElement {
@@ -60,11 +61,11 @@ export class ClioSearch extends HTMLElement {
   constructor() {
     super()
     const root = this.attachShadow({ mode: 'open' })
-    root.innerHTML = `<style>${STYLE}</style>
-      <label part="label" for="q"></label>
+    root.innerHTML = `<label part="label" for="q"></label>
       <input part="input" id="q" type="search" autocomplete="off" disabled>
       <div part="status" class="status" role="status" aria-live="polite"></div>
       <ol part="results" aria-label="Results"></ol>`
+    adoptStyles(root, BASE_STYLE, STYLE)
     this.$label = root.querySelector('label')
     this.$input = root.querySelector('input')
     this.$status = root.querySelector('.status')
@@ -227,9 +228,7 @@ export class ClioSearch extends HTMLElement {
     return item
   }
 
-  emit(name, detail) {
-    this.dispatchEvent(new CustomEvent(name, { detail, bubbles: true, composed: true }))
-  }
+  emit(name, detail) { emit(this, name, detail) }
 }
 
 /** About `length` characters of a passage, around the first query word in it. */

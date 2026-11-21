@@ -108,7 +108,7 @@ It works from any folder of the site: paths are read relative to the page, as a 
 | `label`, `placeholder` | | The box's label and placeholder. |
 | `target` | | `_blank` opens results in a new tab (with `rel="noopener"`). |
 
-It uses the page's own font and colours. To match a design, set its custom properties: `--clio-search-accent` (links and focus), `--clio-search-muted`, `--clio-search-border`, `--clio-search-background`, `--clio-search-radius`, `--clio-search-mark` (highlighted words), `--clio-search-font`, `--clio-search-color`; or style its parts with `::part()`: `label`, `input`, `status`, `results`, `result`, `title`, `meta`, `snippet`. The status line is a polite live region, so a screen reader hears how many passages are searched, how, and when nothing matches. It sends `clio-search-ready` (`{ semantic, reason }`) and `clio-search-results` (`{ query, hits }`) events, which bubble out of the shadow DOM.
+It uses the page's own font and colours. Every Clio component reads the same shared properties, so a site can set them once: `--clio-accent`, `--clio-muted`, `--clio-border`, `--clio-background`, `--clio-radius`, `--clio-mark`, `--clio-font`, `--clio-color`. To set the search box alone, use its own, which win over the shared ones: `--clio-search-accent` (links and focus), `--clio-search-muted`, `--clio-search-border`, `--clio-search-background`, `--clio-search-radius`, `--clio-search-mark` (highlighted words), `--clio-search-font`, `--clio-search-color`; or style its parts with `::part()`: `label`, `input`, `status`, `results`, `result`, `title`, `meta`, `snippet`. The status line is a polite live region, so a screen reader hears how many passages are searched, how, and when nothing matches. It sends `clio-search-ready` (`{ semantic, reason }`) and `clio-search-results` (`{ query, hits }`) events, which bubble out of the shadow DOM.
 
 ### Where results link
 
@@ -143,7 +143,7 @@ Each has the `Access-Control-Allow-Origin` line for serving to other origins, tu
 
 ## The reference client
 
-[static-search/clio-static-search.js](static-search/clio-static-search.js) is a single JavaScript module with no dependencies, and [static-search/index.html](static-search/index.html) is a page that uses it. Copy both beside a `search/` folder holding the export and serve the folder with any static web server.
+[static-search/clio-static-search.js](static-search/clio-static-search.js) is a JavaScript module with no dependencies beyond [clio-common.js](static-search/clio-common.js) beside it, and [static-search/index.html](static-search/index.html) is a page that uses it. Copy the three files beside a `search/` folder holding the export and serve the folder with any static web server. (Before this release the client was one file; a page that copies the new `clio-static-search.js` needs `clio-common.js` beside it too.)
 
 ```js
 import { createSearch, transformersEmbedder } from './clio-static-search.js'
@@ -159,6 +159,14 @@ const hits = await search('how much holiday do staff get', { k: 5 })
 
 It loads the files, checks the model against the probe, embeds the query with the manifest's prefix and pooling, and ranks every passage. Ranking is a plain loop: 5,000 passages take about 3 ms. `passageLink(hit)` gives the address of a hit's passage ([Where results link](#where-results-link)); `search.upgrade(embedder)` switches a search that started with keywords to search by meaning; `combineSearches([...])` searches several exports as one. `loadIndex`, `checkModel`, `rank` and `keywordRank` are exported for a site that wants to assemble these differently. The search box is built on exactly these.
 
+### Writing a component
+
+`clio-common.js` holds what every component needs and nothing of the search: `loadManifest(folder)` reads the manifest past every cache and refuses a format it cannot read; `loadListed(manifest, file)` fetches a file the manifest lists by its checksum and checks it; `folderOf(element, 'src', 'search/', import.meta.url)` resolves an attribute the way a link on the page would be; `addition(manifest, id)` is an addition's manifest entry, or null; `adoptStyles`, `BASE_STYLE`, `el` and `emit` give a shadow root the shared look, build elements from text only, and send events out of the shadow DOM. A component that shows how many passages an export holds is twenty lines ([tests/browser/clio-count.js](../tests/browser/clio-count.js)).
+
+Two rules every component follows. Source text is set as text, never as markup: it was written by whoever wrote the sources. And styles go in through `adoptStyles`, a constructed stylesheet, so a page whose Content-Security-Policy allows no inline script or style can still use the component.
+
+The components are tested in a real browser: `tests/browser_harness.py` drives an installed Edge, Chrome or Chromium headless over the DevTools protocol, with every host but `127.0.0.1` blocked, against an exported folder served by a plain static server. The tests skip where no such browser is installed; `CLIO_TEST_BROWSER` names one.
+
 ### A site that carries its own model
 
 The example page, given only the three files, fetches transformers.js from jsDelivr and the model from the Hugging Face hub. An export made as a whole site carries both instead, and the same page loads them from beside itself:
@@ -166,6 +174,8 @@ The example page, given only the three files, fetches transformers.js from jsDel
 ```
 index.html                 the reference page
 clio-static-search.js      the reference client
+clio-common.js             what it and every component share
+clio-search.js             the search box
 search/                    manifest.json, passages.json, vectors.bin
 vendor/                    transformers.min.js, its WebAssembly runtime, their licences, runtime.json
 models/<model>/            config.json, tokenizer files, onnx/model.onnx, SOURCE.txt

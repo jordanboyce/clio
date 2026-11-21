@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'">
+  <title>Components</title>
+  <script src="/watch.js"></script>
+  <script type="module" src="/clio-search.js"></script>
+  <script type="module" src="/clio-count.js"></script>
+</head>
+<body>
+  <clio-search src="search/" model="off" label="Search the handbook"></clio-search>
+  <clio-count src="search/"></clio-count>
+</body>
+</html>

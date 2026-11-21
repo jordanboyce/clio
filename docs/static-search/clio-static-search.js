@@ -16,12 +16,14 @@
 // No dependencies. The embedder is passed in, so a site decides where the
 // model and the library come from (a CDN, or its own files on a closed network).
 // An export made as a whole site carries both: see localTransformers below.
-// For a search box to drop into a page, see clio-search.js beside this file.
+// For a search box to drop into a page, see clio-search.js beside this file;
+// what every component shares is in clio-common.js, which this file imports.
 
-export const FORMAT = 'clio-static-search'
-// v1: searched by meaning. v2: no vectors, searched by keyword (the
-// collection's model has no browser build).
-export const VERSION = 2
+import { FORMAT, VERSION, getListed, loadManifest } from './clio-common.js'
+
+// The format this client reads (v1: searched by meaning; v2: no vectors,
+// searched by keyword). Kept here for pages that imported them from this file.
+export { FORMAT, VERSION }
 
 // How close the site's vector for the manifest's probe sentence must be to
 // Clio's. The same model at full or half precision scores above 0.9999; an
@@ -35,55 +37,14 @@ export class ModelMismatch extends Error {
   }
 }
 
-const join = (base, file) => (base.endsWith('/') ? base : base + '/') + file
-
-async function get(fetchFn, url, kind, init) {
-  const response = await fetchFn(url, init)
-  if (!response.ok) throw new Error(`Could not load ${url} (${response.status})`)
-  if (kind === 'bytes') return response.arrayBuffer()
-  return kind === 'json' ? response.json() : response.arrayBuffer()
-}
-
-async function sha256(buffer) {
-  const subtle = globalThis.crypto?.subtle
-  if (!subtle) return null // a page on plain http has no SubtleCrypto: nothing to check with
-  const digest = new Uint8Array(await subtle.digest('SHA-256', buffer))
-  return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('')
-}
-
-/**
- * One file the manifest names. It is asked for by its checksum (?v=...), so a
- * cache that still holds last year's file cannot hand it over; and with
- * `verify` its bytes are checked against the manifest, once more with the
- * cache bypassed, so a half-updated site says so instead of ranking the
- * wrong passages.
- */
-async function getListed(fetchFn, baseUrl, entry, kind, verify) {
-  const url = join(baseUrl, entry.file) + (entry.sha256 ? `?v=${entry.sha256.slice(0, 16)}` : '')
-  if (!verify || !entry.sha256 || !globalThis.crypto?.subtle) return get(fetchFn, url, kind)
-  for (const init of [undefined, { cache: 'reload' }]) {
-    const buffer = await get(fetchFn, url, 'bytes', init)
-    if ((await sha256(buffer)) === entry.sha256) {
-      return kind === 'json' ? JSON.parse(new TextDecoder().decode(buffer)) : buffer
-    }
-  }
-  throw new Error(`${entry.file} does not match its manifest: the site holds files from two different ` +
-    'exports. Upload the whole export again.')
-}
-
 /**
  * Load manifest.json, the passage file(s) and vectors.bin (when the export
  * has vectors) from a folder. The manifest is never read from a cache; `verify`
  * (on by default) checks each file against its checksum.
  */
 export async function loadIndex(baseUrl, { fetch: fetchFn = globalThis.fetch, verify = true } = {}) {
-  // Never from a cache, not even after revalidation: a server that validates by
-  // date answers "not modified" for a manifest restored with an older date.
-  const manifest = await get(fetchFn, join(baseUrl, 'manifest.json'), 'json', { cache: 'no-store' })
-  if (manifest.format !== FORMAT) throw new Error('That folder is not a Clio static search export.')
-  if (manifest.version > VERSION) {
-    throw new Error(`This export is format v${manifest.version}; this client reads up to v${VERSION}.`)
-  }
+  // Never from a cache (clio-common.js says why).
+  const manifest = await loadManifest(baseUrl, { fetch: fetchFn })
   const vectorsEntry = manifest.vectors
     ? { file: manifest.vectors.file, sha256: manifest.vectors.sha256 } : null
   const [buffer, ...parts] = await Promise.all([

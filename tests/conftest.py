@@ -178,3 +178,15 @@ def _review_badge_counts_are_not_shared_between_tests():
     governance.invalidate_review_summary()
     yield
     governance.invalidate_review_summary()
+
+
+@pytest.fixture(scope="session")
+def browser():
+    """A headless Chromium-based browser for the static-search components
+    (tests/browser_harness.py). Skipped where none is installed."""
+    from tests import browser_harness
+
+    if not browser_harness.find_browser():
+        pytest.skip("no Chromium-based browser is installed (set CLIO_TEST_BROWSER to one)")
+    with browser_harness.chromium() as b:
+        yield b
