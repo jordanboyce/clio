@@ -59,7 +59,7 @@ def register(addition: Addition) -> Addition:
 
 
 # The modules that register additions, in the order their additions are offered.
-_MODULES: tuple = ("reader", "related", "answers", "terms", "tables", "markdown")
+_MODULES: tuple = ("reader", "related", "answers", "terms", "tables", "markdown", "llms")
 
 
 def _load() -> None:
@@ -138,6 +138,9 @@ class ExportContext:
     settings: Dict[str, Any] = field(default_factory=dict)  # the collection's saved export settings
     written: List[Path] = field(default_factory=list)
     chosen: List[str] = field(default_factory=list)
+    # The folder the whole export was asked for: the site's root, which holds
+    # data_dir as search/ in a whole site, and is data_dir itself otherwise.
+    root_dir: Optional[Path] = None
     results: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # earlier additions' manifest entries
     files: List[Dict[str, Any]] = field(default_factory=list)  # this addition's files so far
 
@@ -160,6 +163,23 @@ class ExportContext:
             head.append(part.get("head", ""))
             body.append(part.get("body", ""))
         return {"head": "".join(head), "body": "".join(body)}
+
+    def put_root(self, name: str, data: Any) -> Dict[str, Any]:
+        """Write a file at the root of the export (a whole site's root, where
+        crawlers and agents look for llms.txt or a service worker must sit).
+        Listed in the manifest as a path from the export folder, ``../name``
+        in a whole site."""
+        root = self.root_dir or self.data_dir
+        if root == self.data_dir:
+            return self.put(name, data)
+        raw = data.encode("utf-8") if isinstance(data, str) else bytes(data)
+        path = root / Path(*name.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.written.append(path)
+        path.write_bytes(raw)
+        entry = {"file": "../" + name, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+        self.files.append(entry)
+        return entry
 
     def put(self, name: str, data: Any) -> Dict[str, Any]:
         """Write one file under the export folder (``name`` uses "/"), and list it."""

@@ -74,6 +74,7 @@ The export does not judge the content. Read the passage diff before you commit i
 | Answers written in advance | `answers` | `answers.json`; the search box shows one above its results, `<clio-answers>` lists them | answers written and approved |
 | An index of terms | `terms` | `read/terms.html`, linked from the contents page | the pages to read (included with it) |
 | Spreadsheets as tables | `tables` | `tables/<name>.json` and `tables/<name>.csv` for each table; `<clio-table>` on the reader's pages | a spreadsheet among the sources |
+| Files for AI agents | `llms` | `llms.txt` and `llms-full.txt`, at a whole site's root | the Markdown pages (included with it) |
 | The pages as Markdown | `markdown` | `markdown/_index.md` and `markdown/<name>.md` for each source | command line and HTTP only |
 
 ### Related passages
@@ -139,6 +140,10 @@ Clio keeps a spreadsheet as typed tables as well as passages, and `tables` expor
 ```
 
 `table` is a file the manifest lists under `additions.tables`, or a source's id for its first table. Parts: `label`, `filter`, `status`, `table`, `header`, `cell`, `pages`, `download`.
+
+### Files for AI agents
+
+`llms` writes `llms.txt`, the index the [llms.txt convention](https://llmstxt.org) describes: the collection's name and description, then each exported source with one line (the first sentence of its text) and a link to its Markdown page. `llms-full.txt` is the text of every source, one after the other. Both are made from the Markdown pages, which come with them, so they hold what the export holds and nothing it left out. In a whole site they sit at the site's root, where agents look; the manifest lists them as `../llms.txt`. With the site's address set the links are absolute, otherwise relative to the file. Re-exporting from the command line replaces them; a site that stops including them keeps the old files at its root until you delete them.
 
 ### Markdown for a site generator
 

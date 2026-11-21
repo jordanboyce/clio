@@ -56,6 +56,8 @@ def export_zip(collection_id: str, **options: Any) -> Tuple[Path, str, Dict[str,
                     zf.write(path, path.relative_to(work).as_posix())
             else:
                 for name in [MANIFEST_FILE, *listed_files(manifest)]:
+                    if name.startswith("../"):
+                        continue  # only a whole site has files above the export folder
                     zf.write(work / Path(*name.split("/")), name)
     finally:
         shutil.rmtree(work, ignore_errors=True)

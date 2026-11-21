@@ -216,7 +216,7 @@ def write_export(collection_id: str, out_dir: Path, *, confirm_public: bool = Fa
                 ctx = additions.ExportContext(
                     collection_id=collection_id, survey=survey, data_dir=data_dir, site=site, manifest=manifest,
                     passages=kept or [], vectors=ordered, settings=address_settings(collection_id),
-                    written=written)
+                    written=written, root_dir=out_dir)
                 manifest["additions"] = additions.write_all(chosen, ctx)
             (data_dir / MANIFEST_FILE).write_text(_manifest_text(manifest), encoding="utf-8", newline="\n")
             written.append(data_dir / MANIFEST_FILE)
