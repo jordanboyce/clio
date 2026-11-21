@@ -75,6 +75,7 @@ The export does not judge the content. Read the passage diff before you commit i
 | An index of terms | `terms` | `read/terms.html`, linked from the contents page | the pages to read (included with it) |
 | Spreadsheets as tables | `tables` | `tables/<name>.json` and `tables/<name>.csv` for each table; `<clio-table>` on the reader's pages | a spreadsheet among the sources |
 | Files for AI agents | `llms` | `llms.txt` and `llms-full.txt`, at a whole site's root | the Markdown pages (included with it) |
+| Passages and vectors for other tools | `tools` | `data/passages.jsonl`, `data/vectors.npy`, `data/embedding.json` | nothing |
 | The pages as Markdown | `markdown` | `markdown/_index.md` and `markdown/<name>.md` for each source | command line and HTTP only |
 
 ### Related passages
@@ -184,6 +185,24 @@ These leave the server as files for one person or one tool, not as a public site
 `GET /api/collections/{id}/export/skill` gives `<name>-collection.skill.zip`: one folder an agent client such as Claude Code loads as a skill without MCP (unpack it into `.claude/skills/`). `SKILL.md` says what the collection covers and how to look things up (search `references/`, read the page, answer only from the files and name the source and page) and lists the sources with what each opens with; `references/<source>.md` holds each source's text, page by page, overlaps removed. It is for a small collection: above 300 sources or 1,000,000 characters of text it is refused with a message pointing to MCP, which searches a collection rather than reading all of it.
 
 It follows the bundle's rules: owner only, an administrator for a restricted collection, held sources left out. And since an agent's model is not this server's to choose, it counts as an outside service ([CLASSIFICATION.md](CLASSIFICATION.md)): a collection that holds anything marked local only is refused whole, with the same 403 and audit entry as MCP. Each download is in the audit trail as `collection.skill_export`.
+
+### Passages and vectors for other tools
+
+`include=tools` adds, beside the search files, `data/passages.jsonl` (one passage per line: its row, id, source, page, text, the source's title and address), `data/vectors.npy` (the passages' unit vectors as float32, row n for line n) and `data/embedding.json` (the model, its name in fastembed, pooling, normalisation, the query prefix): what DuckDB, LanceDB or pgvector need to load the collection with no Clio code. The vectors are full precision, so a score from them is Clio's own cosine, to within 0.001. An export searched by keyword gets the passages alone. Parquet is not offered: writing it needs a package (pyarrow) Clio does not have.
+
+From the export folder, with fastembed installed and the model on disk:
+
+```python
+import json, numpy as np
+from fastembed import TextEmbedding
+emb = json.load(open("data/embedding.json"))
+rows = [json.loads(line) for line in open("data/passages.jsonl", encoding="utf-8")]
+vectors = np.load("data/vectors.npy")
+q = next(TextEmbedding(emb["fastembed_model"]).embed([emb["query_prefix"] + "When must shared equipment be returned?"]))
+scores = vectors @ (q / np.linalg.norm(q))
+for i in np.argsort(-scores)[:5]:
+    print(f"{scores[i]:.3f}", rows[i]["title"], rows[i]["page"], rows[i]["text"][:80])
+```
 
 ## The same model on both sides
 
