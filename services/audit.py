@@ -60,6 +60,7 @@ ACTIONS: List[str] = [
     "collection.static_export",  # exported for a public website (counts, model, who confirmed)
     "collection.static_addresses",  # where its sources are published on the web, for a static export
     "report.exported",          # a report downloaded as one HTML file
+    "collection.skill_export",  # downloaded as an agent skill (counts, never the text)
     "collection.static_answers",  # an answer to publish with a static export added, approved or removed
     "collection.imported",      # collection created from a bundle
     "collection.guide",         # guide text changed (length/digest/scan verdict, never the text)

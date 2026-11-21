@@ -161,6 +161,16 @@ Clio does not keep a page's whole text, only its passages, and the passages on a
 
 The pages carry no script of their own and a Content-Security-Policy that allows none inline; source text is always written as text. Their look is `read/reader.css`: replace it to give them your site's. In a whole site each page also carries the search box. The pages are deterministic: an unchanged collection gives the same files.
 
+## Exports that are not a website
+
+These leave the server as files for one person or one tool, not as a public site, so the website's gate does not apply; each follows the rule named below.
+
+### A collection as an agent skill
+
+`GET /api/collections/{id}/export/skill` gives `<name>-collection.skill.zip`: one folder an agent client such as Claude Code loads as a skill without MCP (unpack it into `.claude/skills/`). `SKILL.md` says what the collection covers and how to look things up (search `references/`, read the page, answer only from the files and name the source and page) and lists the sources with what each opens with; `references/<source>.md` holds each source's text, page by page, overlaps removed. It is for a small collection: above 300 sources or 1,000,000 characters of text it is refused with a message pointing to MCP, which searches a collection rather than reading all of it.
+
+It follows the bundle's rules: owner only, an administrator for a restricted collection, held sources left out. And since an agent's model is not this server's to choose, it counts as an outside service ([CLASSIFICATION.md](CLASSIFICATION.md)): a collection that holds anything marked local only is refused whole, with the same 403 and audit entry as MCP. Each download is in the audit trail as `collection.skill_export`.
+
 ## The same model on both sides
 
 A query vector is only comparable with passage vectors from the same model, pooled and normalised the same way, with the same query prefix. The browser has to run the model itself, so the export is offered only for a collection embedded **on this machine** with a model that has a browser build whose vectors were compared with Clio's:

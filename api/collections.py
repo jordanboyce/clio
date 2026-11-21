@@ -850,6 +850,48 @@ def export_collection(  # sync: builds a zip in the threadpool
 
 
 @router.get(
+    "/api/collections/{collection_id}/export/skill",
+    summary="Download a small collection as a skill an agent can load without MCP",
+    tags=["collections"],
+)
+def export_collection_skill(collection_id: str, user_id: str = Depends(get_current_user_id)):
+    """
+    A zip of one folder: `SKILL.md` (what the collection covers and how to
+    look things up) and `references/<source>.md` with each source's text.
+
+    The bundle's rules: owner only, an administrator for a restricted
+    collection, held sources left out. And, since an agent's model is an
+    outside service, a collection holding anything marked local only is
+    refused (403). Above 300 sources or 1,000,000 characters it is refused
+    with a message pointing to MCP.
+    """
+    from fastapi.responses import Response
+
+    from api.deps import require_admin, require_collection_access
+    from services import agent_skill, data_controls, governance
+
+    require_collection_access(collection_id, user_id, owner=True)
+    row = collection_service.get_collection(collection_id)
+    if governance.is_restricted(row):
+        require_admin("export a restricted collection")
+    try:
+        data, filename, detail = agent_skill.build(collection_id)
+    except agent_skill.SkillExportError as e:
+        if e.code == "not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        if e.code == "local_only":
+            data_controls._record_block(row, agent_skill.DESTINATION)
+            raise data_controls.ExternalServiceBlocked(
+                str(e), classification=data_controls.collection_classification(row),
+                service=agent_skill.DESTINATION)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    audit.record("collection.skill_export", actor=user_id, collection_id=collection_id,
+                 detail={**detail, "bytes": len(data)})
+    return Response(data, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get(
     "/api/collections/{collection_id}/export/preview",
     summary="What an export would contain, and which model indexed it",
     tags=["collections"],
