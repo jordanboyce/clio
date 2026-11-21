@@ -70,6 +70,13 @@ The export does not judge the content. Read the passage diff before you commit i
 | Addition | `include` | Writes | Needs |
 |---|---|---|---|
 | A page for each source | `reader` | `read/index.html` (the contents), `read/<name>.html` for each source, `read/reader.css`, and `sitemap.xml` when the site's address is set | nothing |
+| The pages as Markdown | `markdown` | `markdown/_index.md` and `markdown/<name>.md` for each source | command line and HTTP only |
+
+### Markdown for a site generator
+
+`markdown` writes the same pages as Markdown, for a site built with Astro, Hugo, MkDocs or Eleventy: copy `markdown/` into the site's content folder (`content/` for Hugo, `docs/` for MkDocs). Each file has YAML front matter, `title`, `source_id`, `source` (the file name), `link` (where the source lives on the web, when it has an address) and `pages`, then the text with `## Page 3` before each page of a source with several. `_index.md` lists the sources; Hugo reads it as the section's page, MkDocs as one more page. It is offered on the command line (`--include markdown`) and over HTTP, not in the dialog.
+
+Markdown renders HTML, links and, in Hugo, shortcodes, and the text was written by whoever wrote the sources. So everything that could start one is escaped: `<`, `>`, `&`, `{` and `}` as entities, and the punctuation Markdown reads as syntax with a backslash. The text reads the same and can only be text. Passages have no anchors here; link to the HTML reader for that.
 
 ### Pages to read
 
@@ -225,5 +232,6 @@ These settings are transformers.js's own and have changed between its major vers
 - Every visitor downloads the whole index and the model. Past a few tens of thousands of passages, use a server.
 - Spreadsheets are not in the export: Clio keeps them as tables, not passages.
 - A result links only where its source has an address; the export cannot know where a file is published unless someone says so.
+- The Markdown pages follow the conventions MkDocs and Hugo document, but have not been built with either here: neither was installed where this was written. Links in `_index.md` are to the `.md` files, which MkDocs resolves and Hugo does not without a link render hook.
 - A reader page is the text Clio extracted, in passage order: no layout, images or tables, and a page boundary only where the source had one.
 - A source marked as replaced by a newer version is exported like any other. Remove it from the collection first if the site should not show it.

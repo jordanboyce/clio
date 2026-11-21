@@ -128,10 +128,10 @@
               </span>
             </label>
             <p v-else-if="site.site?.reason" class="text-xs text-base-content/60">{{ site.site.reason }}</p>
-            <fieldset v-if="site.additions?.length" class="rounded-box border border-base-300 px-3 pb-2.5 pt-1" data-testid="additions">
+            <fieldset v-if="dialogAdditions.length" class="rounded-box border border-base-300 px-3 pb-2.5 pt-1" data-testid="additions">
               <legend class="text-sm font-medium px-1">Also include</legend>
               <label
-                v-for="addition in site.additions"
+                v-for="addition in dialogAdditions"
                 :key="addition.id"
                 class="flex items-start gap-3 py-1"
                 :class="additionOpen(addition) ? 'cursor-pointer' : 'opacity-70'"
@@ -251,8 +251,10 @@ const includeModel = ref(true)
 // Additions to the export, by id (the preview's `additions`).
 const chosen = ref({})
 const wholeSite = computed(() => Boolean(includeModel.value && site.value?.site?.available))
+// Some additions (Markdown for a site generator) are for the command line and HTTP only.
+const dialogAdditions = computed(() => (site.value?.additions || []).filter((a) => a.in_dialog !== false))
 const additionOpen = (addition) => addition.available && (!addition.site_only || wholeSite.value)
-const included = computed(() => (site.value?.additions || [])
+const included = computed(() => dialogAdditions.value
   .filter((a) => chosen.value[a.id] && additionOpen(a)).map((a) => a.id))
 
 // "Where results link": read when opened, saved with one button.

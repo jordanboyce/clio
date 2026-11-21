@@ -275,3 +275,54 @@ def test_both_addresses_travel_in_a_bundle_and_are_checked_again(site, tmp_path)
     other = collection_service.create_collection(name="Other", embedding_model="fake-embed")["id"]
     kept = se.restore_address_settings(other, {"files_base_url": "javascript:x", "site_url": "/relative/"})
     assert kept == {"files_base_url": None, "site_url": None} and se.address_settings(other)["site_url"] is None
+
+
+# ── B4: the same pages as Markdown ───────────────────────────────────────────
+
+
+def _front_matter(text):
+    import yaml
+
+    assert text.startswith("---\n")
+    head, body = text[4:].split("\n---\n", 1)
+    return yaml.safe_load(head), body
+
+
+def test_markdown_pages_carry_front_matter_and_the_text_once(handbook, tmp_path):
+    from services.static_export import markdown
+
+    cid, ids = handbook
+    se.save_addresses(cid, documents={ids[0]: "https://example.org/holidays.html"})
+    out = tmp_path / "out"
+    manifest, _ = se.write_export(cid, out, confirm_public=True, include="markdown")
+    entry = manifest["additions"]["markdown"]
+    assert entry["contents"] == "markdown/_index.md" and set(entry["pages"]) == set(ids)
+    assert next(a for a in se.preview(cid)["additions"] if a["id"] == "markdown")["in_dialog"] is False
+
+    meta, body = _front_matter((out / entry["pages"][ids[0]]).read_text(encoding="utf-8"))
+    assert meta == {"title": "holidays", "source_id": ids[0], "source": "holidays.txt",
+                    "link": "https://example.org/holidays.html", "pages": 1}
+    meta, body = _front_matter((out / "markdown/travel-policy.md").read_text(encoding="utf-8"))
+    assert meta["source_id"] == ids[2] and "link" not in meta
+    plain = _flat(body.replace("\\", ""))
+    assert plain == _flat(LONG) and plain.count("Clause 60 of") == 1
+
+    contents_meta, contents = _front_matter((out / "markdown/_index.md").read_text(encoding="utf-8"))
+    assert contents_meta["title"] == "Handbooks"
+    assert "- [travel policy](travel-policy.md)" in contents and contents.count("\n- [") == len(ids)
+    again, _ = se.write_export(cid, tmp_path / "again", confirm_public=True, include="markdown")
+    assert again["additions"] == manifest["additions"]
+
+
+def test_markdown_can_only_ever_be_text():
+    from services.static_export.markdown import escape
+
+    hostile = ("<script>alert(1)</script> {{< shortcode >}} {{% x %}} {{ .Site.Title }} [click](javascript:alert(1))\n"
+               "# Not a heading\n> not a quote\n1. not a list\n- not a bullet\n    not code\n`tick` *em* _u_ ![i](x)")
+    out = escape(hostile)
+    assert "<" not in out and ">" not in out.replace("&gt;", "") and "{" not in out and "}" not in out
+    assert "](" not in out.replace(r"\](", "")
+    lines = out.split("\n")
+    assert lines[1].startswith(r"\#") and lines[2].startswith("&gt;") and lines[3].startswith(r"1\.")
+    assert lines[4].startswith(r"\-") and not lines[5].startswith(" ")
+    assert r"\`tick\`" in out and r"\*em\*" in out and r"\!\[i\]" in out

@@ -50,7 +50,7 @@ def test_nothing_chosen_is_the_export_as_it_was(site, tmp_path):
 def test_an_addition_is_listed_with_checksums_audited_and_zipped(site, echo, tmp_path):
     cid, ids = _public(site)
     pre = se.preview(cid)
-    assert {"id": "echo", "label": "Echo", "site_only": False, "available": True, "reason": None,
+    assert {"id": "echo", "label": "Echo", "site_only": False, "in_dialog": True, "available": True, "reason": None,
             "bytes": 10} in pre["additions"]
 
     manifest, detail = se.write_export(cid, tmp_path / "out", confirm_public=True, include="echo")

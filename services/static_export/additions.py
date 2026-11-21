@@ -40,6 +40,8 @@ class Addition:
     # Written in this order; the reader goes last, so the pages can show
     # what the others wrote.
     stage: int = 0
+    # Offered in the Export dialog (False: the command line and HTTP only).
+    in_dialog: bool = True
 
 
 ADDITIONS: Dict[str, Addition] = {}
@@ -57,7 +59,7 @@ def register(addition: Addition) -> Addition:
 
 
 # The modules that register additions, in the order their additions are offered.
-_MODULES: tuple = ("reader",)
+_MODULES: tuple = ("reader", "markdown")
 
 
 def _load() -> None:
@@ -116,7 +118,8 @@ def offers(collection_id: str, survey: Dict[str, Any]) -> List[Dict[str, Any]]:
             o = a.offer(offer)
         except Exception as e:  # noqa: BLE001 - one addition's trouble never hides the export
             o = {"available": False, "reason": f"It could not be worked out: {e}", "bytes": 0}
-        rows.append({"id": a.id, "label": a.label, "site_only": a.site_only, "available": bool(o.get("available")),
+        rows.append({"id": a.id, "label": a.label, "site_only": a.site_only, "in_dialog": a.in_dialog,
+                     "available": bool(o.get("available")),
                      "reason": o.get("reason"), "bytes": int(o.get("bytes") or 0),
                      **{k: v for k, v in o.items() if k not in ("available", "reason", "bytes")}})
     return rows
